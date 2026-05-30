@@ -14,9 +14,35 @@ re-hydrate credentials from environment secrets.
 | Path | What it is |
 |---|---|
 | `skills/designer/` | Creative-director skill — Claude drives icon / illustration / app-icon / App Store screenshot / video / voiceover generation. Brand-profile driven (works per project). Wraps OpenAI DALL·E 3 + GPT-image-1, Vertex AI Imagen 4 (GA) + Veo 2, ElevenLabs. |
-| `setup/session-start.sh` | Idempotent installer: copies the skill into `~/.claude/skills/`, runs `npm install`, and writes `~/.designer/credentials.env` + the GCP SA key from environment secrets. |
-| `setup/credentials.env.template` | Reference list of the env secrets the installer expects. |
+| `setup/session-start.sh` | Idempotent installer: copies the skill into `~/.claude/skills/`, runs `npm install`, writes the GCP SA key, then fetches API keys from Secret Manager into `~/.designer/credentials.env`. |
+| `setup/fetch-secrets.mjs` | Pulls `openai-api-key` / `elevenlabs-api-key` (and optional `recraft-api-key`) from GCP Secret Manager using the SA key. No gcloud CLI needed. |
+| `setup/credentials.env.template` | Reference for the one env secret + the Secret Manager secret IDs. |
 | `.claude/settings.json` | SessionStart hook — runs the installer automatically when this repo is the project dir. |
+
+## Secrets model — ONE env secret
+
+Only **`GCP_CLAUDE_DRIVER_SA_JSON`** (the SA key) is set in the Claude Code
+environment. Everything else lives in **GCP Secret Manager** and is fetched at
+session start using that SA (which already holds `roles/secretmanager.secretAccessor`).
+Nothing sensitive ever touches git or the env config beyond that one key.
+
+### Create the Secret Manager secrets (once, as org admin)
+
+The SA can *read* secrets but not *create* them, so create these once:
+
+```bash
+gcloud config set project otchealth-shared-prod
+printf '%s' "sk-proj-YOUR-OPENAI-KEY"  | gcloud secrets create openai-api-key     --data-file=-
+printf '%s' "sk_YOUR-ELEVENLABS-KEY"   | gcloud secrets create elevenlabs-api-key --data-file=-
+# optional:
+printf '%s' "YOUR-RECRAFT-KEY"         | gcloud secrets create recraft-api-key    --data-file=-
+```
+
+To rotate a key later, add a new version (no code change, picks up `latest`):
+
+```bash
+printf '%s' "sk-proj-NEW-KEY" | gcloud secrets versions add openai-api-key --data-file=-
+```
 
 ## One-time setup
 
@@ -33,19 +59,18 @@ gh repo create gbgolfmatt/otchealth-claude-tools --private --source=. --push
 #   git push -u origin main
 ```
 
-### 2. Add the secrets to each Claude Code environment
+### 2. Add the ONE secret to each Claude Code environment
 
 In the Claude Code web environment settings (per project, or a shared default),
-add these **environment secrets**:
+add a single **environment secret**:
 
 | Secret | Value |
 |---|---|
-| `OPENAI_API_KEY` | your `sk-proj-…` key |
-| `ELEVENLABS_API_KEY` | your `sk_…` key |
 | `GCP_CLAUDE_DRIVER_SA_JSON` | the **entire** JSON of the `claude-driver` SA key (from the Notion vault → "Google Cloud — Claude Driver SA") |
 
-Optional: `GOOGLE_CLOUD_PROJECT`, `RECRAFT_API_KEY`, and the `VERTEX_DEFAULT_*`
-model overrides.
+The OpenAI + ElevenLabs keys are NOT set here — they're pulled from Secret
+Manager at session start (see "Create the Secret Manager secrets" above).
+Optional env overrides: `GOOGLE_CLOUD_PROJECT`, `VERTEX_DEFAULT_*`.
 
 ### 3. Point each environment's setup script at the installer
 
