@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // gen-image.mjs — single-image generation for illustrations, icons, hero art,
-// empty states, social graphics. Defaults to OpenAI DALL-E 3 (best general
-// model) with optional --model imagen3 to route through Google Vertex AI
-// Imagen 3 instead (better text rendering for store screenshot headlines).
+// empty states, social graphics. Defaults to OpenAI GPT-image-1 (best general
+// model) with optional --model imagen4 to route through Google Vertex AI
+// Imagen 4 instead (better text rendering for store screenshot headlines).
 //
 // Usage:
 //   node gen-image.mjs --prompt "..." [--kind illustration|icon|empty-state|hero|social]
 //                      [--name slug] [--size 1024x1024] [--variants N]
-//                      [--model dalle3|imagen3|gpt-image-1] [--output path]
-//                      [--brand path/to/brand.json] [--dry-run]
+//                      [--model gpt-image-1|dall-e-3|imagen4] [--quality high|medium|low]
+//                      [--output path] [--brand path/to/brand.json] [--dry-run]
 //
 // Output: PNG at brand.output_root/<kind>/<slug>.png + <slug>.meta.json
 //         Path is printed to stdout for the caller to pick up.
@@ -30,18 +30,23 @@ if (!prompt) {
 const kind = args.kind || 'illustration';
 const size = args.size || (kind === 'icon' ? '1024x1024' : '1024x1024');
 const variants = parseInt(args.variants || '1', 10);
-const model = args.model || 'dalle3';
+const model = args.model || 'gpt-image-1';
+const quality = args.quality || 'high';
 const brand = resolveBrand(args.brand);
 const creds = loadCredentials();
+
+// dall-e-3 (aliases: dalle3, dall-e-3) routes to the DALL-E 3 endpoint;
+// every other OpenAI request uses gpt-image-1 (the default model).
+const isDalle3 = model === 'dalle3' || model === 'dall-e-3';
 
 // Per-call estimated cost (May-2026 published rates; verify in vendor dashboard).
 // Imagen 4 GA as of late 2025; Imagen 3 superseded. Veo 3/3.1 are Preview as
 // of May 2026 and are deliberately not supported here — use Veo 2 via
 // gen-video.mjs for video.
 const COST_PER_IMAGE = {
-    'dalle3': size === '1792x1024' || size === '1024x1792' ? 0.08 : 0.04,
-    'dalle3-hd': 0.12,
     'gpt-image-1': 0.04,
+    'dalle3': size === '1792x1024' || size === '1024x1792' ? 0.08 : 0.04,
+    'dall-e-3': size === '1792x1024' || size === '1024x1792' ? 0.08 : 0.04,
     'imagen4': 0.04,
     'imagen4-fast': 0.02,
     'imagen4-ultra': 0.06,
@@ -69,18 +74,25 @@ if (dryRun) {
     process.exit(0);
 }
 
-async function callDalle3({ prompt, size, n }) {
+async function callOpenAIImage({ prompt, size, n }) {
     requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${creds.openaiKey}` };
     if (creds.openaiOrg) headers['OpenAI-Organization'] = creds.openaiOrg;
+    // No response_format: gpt-image-1 always returns b64_json and rejects the
+    // parameter; dall-e-3 returns a URL, which we fetch below.
     const body = {
-        model: model === 'gpt-image-1' ? 'gpt-image-1' : 'dall-e-3',
+        model: isDalle3 ? 'dall-e-3' : 'gpt-image-1',
         prompt,
-        n: model === 'dall-e-3' ? 1 : n,
+        n: isDalle3 ? 1 : n,
         size,
-        response_format: 'b64_json',
     };
-    if (model === 'dalle3') body.quality = 'hd';
+    if (isDalle3) {
+        // DALL-E 3 quality is standard|hd; map high -> hd, otherwise standard.
+        body.quality = quality === 'high' ? 'hd' : 'standard';
+    } else {
+        // gpt-image-1 quality is high|medium|low.
+        body.quality = quality;
+    }
     const res = await fetch('https://api.openai.com/v1/images/generations', {
         method: 'POST', headers, body: JSON.stringify(body),
     });
@@ -88,7 +100,11 @@ async function callDalle3({ prompt, size, n }) {
         throw new Error(`OpenAI image API ${res.status}: ${await res.text()}`);
     }
     const data = await res.json();
-    return data.data.map(d => Buffer.from(d.b64_json, 'base64'));
+    return Promise.all((data.data || []).map(async (d) => {
+        if (d.b64_json) return Buffer.from(d.b64_json, 'base64');
+        const img = await fetch(d.url);
+        return Buffer.from(await img.arrayBuffer());
+    }));
 }
 
 async function callImagen({ prompt, n }) {
@@ -113,7 +129,7 @@ async function callImagen({ prompt, n }) {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`Vertex Imagen 3 ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new Error(`Vertex Imagen 4 ${res.status}: ${await res.text()}`);
     const data = await res.json();
     return (data.predictions || []).map(p => Buffer.from(p.bytesBase64Encoded, 'base64'));
 }
@@ -151,16 +167,15 @@ let buffers;
 try {
     if (model.startsWith('imagen')) {
         buffers = await callImagen({ prompt: fullPrompt, n: variants });
-    } else {
-        if (model === 'dall-e-3' || model === 'dalle3') {
-            buffers = [];
-            for (let i = 0; i < variants; i++) {
-                const [buf] = await callDalle3({ prompt: fullPrompt, size, n: 1 });
-                buffers.push(buf);
-            }
-        } else {
-            buffers = await callDalle3({ prompt: fullPrompt, size, n: variants });
+    } else if (isDalle3) {
+        // DALL-E 3 only supports n=1, so loop to produce variants.
+        buffers = [];
+        for (let i = 0; i < variants; i++) {
+            const [buf] = await callOpenAIImage({ prompt: fullPrompt, size, n: 1 });
+            buffers.push(buf);
         }
+    } else {
+        buffers = await callOpenAIImage({ prompt: fullPrompt, size, n: variants });
     }
 } catch (e) {
     console.error(`ERROR: ${e.message}`);
@@ -179,7 +194,7 @@ buffers.forEach((buf, i) => {
     writeMeta(outputPath, {
         prompt: fullPrompt,
         user_prompt: prompt,
-        kind, size, model, variant: i + 1,
+        kind, size, model, quality, variant: i + 1,
         brand_name: brand.name, brand_source: brand._source,
         cost_estimate_usd: costUsd / buffers.length,
     });

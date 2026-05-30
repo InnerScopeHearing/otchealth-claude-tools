@@ -1,6 +1,6 @@
 ---
 name: designer
-description: Creative-director skill — Claude drives end-to-end visual asset generation across any project (icons, illustrations, app icons, App Store screenshots, video, voiceover). Brand-profile driven so the same skill produces on-brand assets for AWARE, iHEARtest, MedReview, OTCHealthMart, Companion, InnerEase, or any future project. Wraps OpenAI (DALL-E 3, GPT-image-1), Google Vertex AI (Imagen 4 GA, Veo 2), and ElevenLabs. Outputs land in the project's assets/ directory and are returned inline for Claude to display.
+description: Creative-director skill — Claude drives end-to-end visual asset generation across any project (icons, illustrations, app icons, App Store screenshots, video, voiceover). Brand-profile driven so the same skill produces on-brand assets for AWARE, iHEARtest, MedReview, OTCHealthMart, Companion, InnerEase, or any future project. Wraps OpenAI (GPT-image-1, DALL-E 3), Google Vertex AI (Imagen 4 GA, Veo 2), and ElevenLabs. Outputs land in the project's assets/ directory and are returned inline for Claude to display.
 ---
 
 # Designer Skill — Claude as creative quarterback
@@ -20,10 +20,10 @@ Invoke this skill whenever a project needs a visual or audio asset and the user 
 
 | Need | Script | Backed by | Approx cost |
 |---|---|---|---|
-| Single illustration / hero image | `gen-image.mjs` | OpenAI DALL-E 3 (default) or Vertex Imagen 4 GA | $0.04-0.12 |
+| Single illustration / hero image | `gen-image.mjs` | OpenAI GPT-image-1 (default) or Vertex Imagen 4 GA | $0.04-0.12 |
 | Brand-consistent icon | `gen-image.mjs --kind icon` | OpenAI GPT-image-1 | $0.04 |
 | Style-locked icon batch (20+ icons in matching aesthetic) | `gen-icon-batch.mjs` | GPT-image-1 + reference image conditioning | $0.04/icon |
-| Empty-state illustration | `gen-image.mjs --kind empty-state` | DALL-E 3 | $0.08 |
+| Empty-state illustration | `gen-image.mjs --kind empty-state` | GPT-image-1 | $0.04 |
 | App icon family (1024 master + all iOS + Android sizes) | `gen-app-icon-family.mjs` | DALL-E 3 HD + sharp post-processing | $0.12 + free |
 | App Store screenshot (device frame + headline overlay) | `compose-screenshot.mjs` | sharp + Imagen 4 for headline text rendering | $0.04 + free |
 | AI video (App Preview, marketing, walkthrough) | `gen-video.mjs` | Google Vertex Veo 2 (Veo 3/3.1 excluded — Preview) | ~$0.35/sec |
@@ -48,7 +48,7 @@ Set these env vars (or paste into a one-time `~/.designer/credentials.env` file 
 
 | Env var | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | DALL-E 3, GPT-image-1, GPT-4 Vision (for asset review) |
+| `OPENAI_API_KEY` | GPT-image-1, DALL-E 3, GPT-4 Vision (for asset review) |
 | `OPENAI_ORG_ID` | optional, for multi-org accounts |
 | `GOOGLE_APPLICATION_CREDENTIALS` | path to service account JSON for Vertex AI |
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID for Vertex AI |
