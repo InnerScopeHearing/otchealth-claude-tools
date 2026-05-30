@@ -32,16 +32,16 @@ The SA can *read* secrets but not *create* them, so create these once:
 
 ```bash
 gcloud config set project otchealth-shared-prod
-printf '%s' "sk-proj-YOUR-OPENAI-KEY"  | gcloud secrets create openai-api-key     --data-file=-
-printf '%s' "sk_YOUR-ELEVENLABS-KEY"   | gcloud secrets create elevenlabs-api-key --data-file=-
+printf '%s' "<PASTE-OPENAI-KEY>"      | gcloud secrets create openai-api-key     --data-file=-
+printf '%s' "<PASTE-ELEVENLABS-KEY>"  | gcloud secrets create elevenlabs-api-key --data-file=-
 # optional:
-printf '%s' "YOUR-RECRAFT-KEY"         | gcloud secrets create recraft-api-key    --data-file=-
+printf '%s' "<PASTE-RECRAFT-KEY>"     | gcloud secrets create recraft-api-key    --data-file=-
 ```
 
 To rotate a key later, add a new version (no code change, picks up `latest`):
 
 ```bash
-printf '%s' "sk-proj-NEW-KEY" | gcloud secrets versions add openai-api-key --data-file=-
+printf '%s' "<PASTE-NEW-KEY>" | gcloud secrets versions add openai-api-key --data-file=-
 ```
 
 ## One-time setup
