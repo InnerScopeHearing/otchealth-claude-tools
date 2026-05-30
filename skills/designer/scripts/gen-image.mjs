@@ -30,7 +30,7 @@ if (!prompt) {
 const kind = args.kind || 'illustration';
 const size = args.size || (kind === 'icon' ? '1024x1024' : '1024x1024');
 const variants = parseInt(args.variants || '1', 10);
-const model = args.model || 'dalle3';
+const model = args.model || 'gpt-image-1';
 const brand = resolveBrand(args.brand);
 const creds = loadCredentials();
 
@@ -39,9 +39,13 @@ const creds = loadCredentials();
 // of May 2026 and are deliberately not supported here — use Veo 2 via
 // gen-video.mjs for video.
 const COST_PER_IMAGE = {
-    'dalle3': size === '1792x1024' || size === '1024x1792' ? 0.08 : 0.04,
-    'dalle3-hd': 0.12,
     'gpt-image-1': 0.04,
+    'gpt-image-1.5': 0.06,
+    'gpt-image-1-mini': 0.02,
+    // dall-e-3 was retired on OpenAI accounts in the gpt-image era; these aliases
+    // route to gpt-image-1 so older invocations keep working.
+    'dalle3': 0.04,
+    'dall-e-3': 0.04,
     'imagen4': 0.04,
     'imagen4-fast': 0.02,
     'imagen4-ultra': 0.06,
@@ -69,18 +73,18 @@ if (dryRun) {
     process.exit(0);
 }
 
-async function callDalle3({ prompt, size, n }) {
+// OpenAI Images via the gpt-image-* family. Notes (verified against the live API,
+// May 2026): dall-e-3 is retired on current accounts; the model is gpt-image-1
+// (or 1.5/mini). The `response_format` parameter was removed — these models always
+// return base64 in data[i].b64_json. `quality` takes high|medium|low (not hd).
+async function callOpenAIImage({ prompt, size, n }) {
     requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${creds.openaiKey}` };
     if (creds.openaiOrg) headers['OpenAI-Organization'] = creds.openaiOrg;
-    const body = {
-        model: model === 'gpt-image-1' ? 'gpt-image-1' : 'dall-e-3',
-        prompt,
-        n: model === 'dall-e-3' ? 1 : n,
-        size,
-        response_format: 'b64_json',
-    };
-    if (model === 'dalle3') body.quality = 'hd';
+    // Retired/alias model names route to the current default.
+    const apiModel = (model === 'dalle3' || model === 'dall-e-3') ? 'gpt-image-1' : model;
+    const body = { model: apiModel, prompt, n, size };
+    if (args.quality) body.quality = args.quality;  // high|medium|low, optional
     const res = await fetch('https://api.openai.com/v1/images/generations', {
         method: 'POST', headers, body: JSON.stringify(body),
     });
@@ -152,15 +156,7 @@ try {
     if (model.startsWith('imagen')) {
         buffers = await callImagen({ prompt: fullPrompt, n: variants });
     } else {
-        if (model === 'dall-e-3' || model === 'dalle3') {
-            buffers = [];
-            for (let i = 0; i < variants; i++) {
-                const [buf] = await callDalle3({ prompt: fullPrompt, size, n: 1 });
-                buffers.push(buf);
-            }
-        } else {
-            buffers = await callDalle3({ prompt: fullPrompt, size, n: variants });
-        }
+        buffers = await callOpenAIImage({ prompt: fullPrompt, size, n: variants });
     }
 } catch (e) {
     console.error(`ERROR: ${e.message}`);
