@@ -1,0 +1,18 @@
+# Node deps (installed by setup/session-start.sh at session start)
+node_modules/
+package-lock.json
+
+# NEVER commit real credentials
+credentials.env
+*.credentials.env
+.designer/
+.gcp_*.json
+*-sa.json
+gcp-*-sa.json
+*.pem
+*.p12
+
+# Generated assets (designer output lands in project repos, not here)
+assets/generated/
+*.log
+.DS_Store

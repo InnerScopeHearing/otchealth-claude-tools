@@ -1,0 +1,55 @@
+{
+  "name": "AWARE",
+  "tagline": "Hearing & brain fitness. Works alongside hearing aids, AirPods, or nothing at all.",
+  "palette": {
+    "primary": "#0d9488",
+    "primary_deep": "#0f766e",
+    "secondary": "#115e59",
+    "accent": "#f59e0b",
+    "ink_dark": "#0f172a",
+    "ink_soft": "#334155",
+    "surface": "#FAF7F2",
+    "background": "#FFFCF7",
+    "ink_dark_dm": "#ECEAE4",
+    "surface_dm": "#1B2026",
+    "background_dm": "#14181D"
+  },
+  "typography": {
+    "family": "Inter",
+    "family_fallback": "system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
+    "weight_display": 800,
+    "weight_body": 400
+  },
+  "voice": {
+    "tone": "Audiologist who is also a friend. Clinical authority + plain language. Second person. Celebrate consistency over scores. Acknowledge emotional weight without drama.",
+    "second_person": true,
+    "do": [
+      "Use plain language ('trouble hearing in noise', not 'auditory processing deficit')",
+      "Celebrate consistency over performance",
+      "Acknowledge difficulty",
+      "Position AWARE as bolt-on to ANY hearing aid"
+    ],
+    "do_not": [
+      "Claim AWARE prevents/treats/slows dementia or cognitive decline",
+      "Claim FDA approval",
+      "Promise specific hearing outcomes",
+      "Use iHEARtest brand green #81bc03",
+      "Use medical-diagnostic language without 'may help' framing"
+    ]
+  },
+  "style_references": ["Calm", "Headspace", "Mira (fertility)", "Apple Health", "DuoLingo"],
+  "style_anti_references": [
+    "Stock photo silver-haired couple in wheat field",
+    "Generic hearing aid manufacturer marketing imagery",
+    "Anything that looks like a senior living home brochure"
+  ],
+  "illustration_style": "Flat geometric illustration, teal #0d9488 dominant, generous whitespace, soft cream background, 2-3 color limit, no photorealism. Audiogram-curve motif when natural. Style of Magoz meets Headspace's Christoph Niemann meets Apple Health.",
+  "icon_style": "Rounded line icons, 2px stroke, brand teal #0d9488 fill, slightly playful, consistent corner radius 4px, viewBox 24x24, SVG output. Match Phosphor Icons aesthetic with audiogram-curve influences.",
+  "audience": "Adults 50-75 with mild-to-moderate hearing loss. Often resistant to 'hearing aid' identity. Tech comfort ranges from low (Doris persona) to high (Robert Sterling). Default text scale supports 1.5x.",
+  "platform_targets": { "ios": true, "android": true, "watchos": true, "web": true },
+  "output_root": "assets/generated",
+  "brand_mark": {
+    "description": "Audiogram curve descending through 6 frequency points (500Hz / 1k / 2k / 4k / 6k / 8k). White curve + 6 white dots on teal background. NEVER add ear or person silhouette.",
+    "source_svg": "assets/logo/icon-app-1024.svg"
+  }
+}

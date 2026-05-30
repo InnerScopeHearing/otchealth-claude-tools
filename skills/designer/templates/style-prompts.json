@@ -1,0 +1,58 @@
+{
+  "_description": "Reusable prompt fragments per asset class. Scripts pull these in and combine with the brand profile + user prompt. Edit to tune the default look for your org.",
+  "illustration": {
+    "default_suffix": "Flat geometric illustration, soft cream background, generous whitespace, 2-3 color limit using brand palette, no photorealism, modern editorial feel.",
+    "anti_patterns": [
+      "stock photo aesthetic",
+      "hyper-realistic 3D render",
+      "AI fingers / hands artifacts",
+      "sketch lines",
+      "watermark"
+    ]
+  },
+  "icon": {
+    "default_suffix": "Rounded line icon, 2px stroke, consistent corner radius 4px, 24x24 viewBox, centered on flat solid white background, no drop shadow, no text. Belongs to a matching set.",
+    "anti_patterns": [
+      "drop shadow",
+      "text labels",
+      "gradient fills (unless brand profile uses gradients)",
+      "skeuomorphism",
+      "multiple icons in one frame"
+    ]
+  },
+  "empty-state": {
+    "default_suffix": "Friendly illustration suitable for an empty-state screen. Single subject, large whitespace, brand-color accents. Conveys 'nothing here yet — and that's fine' without being patronizing.",
+    "anti_patterns": [
+      "crying or sad characters",
+      "dramatic stress imagery",
+      "404 / broken-page tropes"
+    ]
+  },
+  "hero": {
+    "default_suffix": "Hero illustration for the top of a landing page. Wide composition (16:9 or 21:9). High contrast. Clear focal point. Background calm enough that overlaid copy stays legible.",
+    "anti_patterns": [
+      "centered subject with no copy room",
+      "busy background that fights text"
+    ]
+  },
+  "social": {
+    "default_suffix": "Designed for square or vertical social posts (Instagram, LinkedIn, X). Bold composition, scroll-stopping color, copy-room reserved if a headline is needed.",
+    "anti_patterns": [
+      "Pinterest cottagecore",
+      "Twitter screenshot of a tweet",
+      "memes"
+    ]
+  },
+  "video_intro": {
+    "default_suffix": "Cinematic intro, soft natural light, shallow depth of field, warm tone grading. 24fps feel. End on a calm beat suitable for a logo reveal.",
+    "anti_patterns": [
+      "stock video transitions",
+      "lower thirds",
+      "logo bug in corner"
+    ]
+  },
+  "voiceover": {
+    "default_voice_traits": "Warm, calm, mid-range pitch, friendly authority. Imagine a 40-something therapist who never raises their voice.",
+    "delivery_notes": "Natural pace (155 wpm), short sentences, slight pause after the brand name. Don't over-emote."
+  }
+}

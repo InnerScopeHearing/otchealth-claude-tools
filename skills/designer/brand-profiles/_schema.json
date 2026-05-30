@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Designer Skill Brand Profile",
+  "description": "Brand identity contract — colors, typography, voice, and constraints. The designer skill reads this to lock visual + verbal consistency across generated assets for a project.",
+  "type": "object",
+  "required": ["name", "palette", "typography", "voice"],
+  "properties": {
+    "name": { "type": "string", "description": "Project / app name as it should appear in copy" },
+    "tagline": { "type": "string", "description": "Single-sentence positioning used in App Store / hero copy" },
+    "palette": {
+      "type": "object",
+      "required": ["primary"],
+      "properties": {
+        "primary": { "type": "string", "description": "Brand color hex, e.g. #0d9488" },
+        "primary_deep": { "type": "string", "description": "Darker brand color for text-background contrast (used when primary fails WCAG)" },
+        "secondary": { "type": "string" },
+        "accent": { "type": "string" },
+        "ink_dark": { "type": "string", "description": "Primary text color in light mode" },
+        "ink_soft": { "type": "string", "description": "Secondary text color in light mode" },
+        "surface": { "type": "string", "description": "Card / surface background in light mode" },
+        "background": { "type": "string", "description": "Page background in light mode" },
+        "ink_dark_dm": { "type": "string", "description": "Primary text color in dark mode" },
+        "surface_dm": { "type": "string", "description": "Surface in dark mode" },
+        "background_dm": { "type": "string", "description": "Background in dark mode" }
+      }
+    },
+    "typography": {
+      "type": "object",
+      "required": ["family"],
+      "properties": {
+        "family": { "type": "string", "description": "Primary typeface (e.g. Inter)" },
+        "family_fallback": { "type": "string", "description": "System-stack fallback" },
+        "weight_display": { "type": "number", "description": "Weight for hero/display type" },
+        "weight_body": { "type": "number" }
+      }
+    },
+    "voice": {
+      "type": "object",
+      "required": ["tone"],
+      "properties": {
+        "tone": { "type": "string", "description": "1-2 sentence voice guide. Imagine you're briefing a copywriter." },
+        "second_person": { "type": "boolean", "default": true },
+        "do": { "type": "array", "items": { "type": "string" } },
+        "do_not": { "type": "array", "items": { "type": "string" }, "description": "Forbidden claims, regulatory red lines, brand-conflict colors, etc." }
+      }
+    },
+    "style_references": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reference brands to mimic (e.g. ['Calm', 'Headspace', 'Mira'])"
+    },
+    "style_anti_references": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Things to look NOTHING like (e.g. ['stock photo of senior couple in wheat field'])"
+    },
+    "illustration_style": {
+      "type": "string",
+      "description": "Free-text style description used in every illustration prompt. E.g., 'flat geometric, 2-color, generous whitespace'"
+    },
+    "icon_style": {
+      "type": "string",
+      "description": "Used in every icon prompt. E.g., 'rounded line icons, 2px stroke, brand teal fill, slightly playful'"
+    },
+    "audience": {
+      "type": "string",
+      "description": "Primary audience description, used to age- and culturally-tune generated content"
+    },
+    "platform_targets": {
+      "type": "object",
+      "description": "Which platforms ship assets (affects icon family generation, screenshot dimensions)",
+      "properties": {
+        "ios": { "type": "boolean", "default": false },
+        "android": { "type": "boolean", "default": false },
+        "watchos": { "type": "boolean", "default": false },
+        "web": { "type": "boolean", "default": false }
+      }
+    },
+    "output_root": {
+      "type": "string",
+      "default": "assets/generated",
+      "description": "Where generated assets land relative to project root"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "Default",
+  "tagline": "(no project-specific tagline set)",
+  "palette": {
+    "primary": "#0d9488",
+    "primary_deep": "#0f766e",
+    "ink_dark": "#0f172a",
+    "ink_soft": "#334155",
+    "surface": "#ffffff",
+    "background": "#f8fafc"
+  },
+  "typography": {
+    "family": "Inter",
+    "family_fallback": "system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
+    "weight_display": 800,
+    "weight_body": 400
+  },
+  "voice": {
+    "tone": "Plain language, second person, calm authority. No jargon as status. Celebrate small wins. Acknowledge difficulty without drama.",
+    "second_person": true,
+    "do": ["Use plain language", "Be specific", "Respect the reader's time"],
+    "do_not": ["Use medical-diagnostic claims", "Promise outcomes", "Talk down to the reader"]
+  },
+  "style_references": ["Calm", "Headspace", "Mira", "Linear"],
+  "style_anti_references": ["stock photo silver-haired couple in wheat field", "fake clinical iconography"],
+  "illustration_style": "Flat geometric illustration, 2-3 color limit using brand palette, generous whitespace, no photorealism, soft edges, modern editorial feel. Style of Magoz meets Headspace's Christoph Niemann.",
+  "icon_style": "Rounded line icons, 2px stroke, brand primary color fill, slightly playful but professional. Match Phosphor / Heroicons aesthetic.",
+  "audience": "Adults 35-75 with mixed tech comfort. Default to clarity over cleverness.",
+  "platform_targets": { "ios": false, "android": false, "watchos": false, "web": true },
+  "output_root": "assets/generated"
+}
