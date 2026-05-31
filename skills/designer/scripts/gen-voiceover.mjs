@@ -4,7 +4,7 @@
 //
 // Usage:
 //   node gen-voiceover.mjs --text "..." [--voice-id <id>]
-//                           [--model eleven_turbo_v2_5]
+//                           [--model eleven_v3]
 //                           [--output marketing/preview-vo.mp3]
 //                           [--dry-run]
 //
@@ -30,7 +30,7 @@ const creds = loadCredentials();
 
 const voiceId = args['voice-id'] || brand.voiceover_default_voice_id
     || '21m00Tcm4TlvDq8ikWAM'; // Rachel — ElevenLabs default warm female
-const model = args.model || 'eleven_turbo_v2_5';
+const model = args.model || 'eleven_v3';
 
 // ElevenLabs pricing: ~$0.30 per 1000 characters on the creator plan, less on higher tiers
 const costUsd = (text.length / 1000) * 0.30;
