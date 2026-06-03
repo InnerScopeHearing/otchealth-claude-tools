@@ -55,6 +55,15 @@ third-party SaaS: `gen-avatar.mjs` (presenter) + `gen-video.mjs` (B-roll) +
 `gen-music.mjs` (bed) + `gen-sfx.mjs` (UI sounds) + `gen-voiceover.mjs`
 (any extra VO), stitched in an editor.
 
+**Avatar RAI note (learned from live testing):** Veo's Responsible-AI filter
+blocks some realistic-human renders (support code 15236754) — you are *not*
+charged for filtered outputs. Neutral presenters + plain scripts pass cleanly;
+renders that imply a medical professional ("audiologist") or make health claims
+("check your hearing") tend to get filtered. Keep avatar scripts neutral and
+non-clinical, let the brand voice carry warmth, and add disease/outcome claims
+as on-screen text in the editor rather than in the spoken line. `personGeneration`
+defaults to `allow_adult`; override with `--person`.
+
 ## Brand-profile resolution (project-agnostic)
 
 When invoked from inside a project directory, the skill resolves the active brand in this order:
