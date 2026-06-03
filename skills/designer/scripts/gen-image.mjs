@@ -39,10 +39,9 @@ const creds = loadCredentials();
 // every other OpenAI request uses gpt-image-1 (the default model).
 const isDalle3 = model === 'dalle3' || model === 'dall-e-3';
 
-// Per-call estimated cost (May-2026 published rates; verify in vendor dashboard).
-// Imagen 4 GA as of late 2025; Imagen 3 superseded. Veo 3/3.1 are Preview as
-// of May 2026 and are deliberately not supported here — use Veo 2 via
-// gen-video.mjs for video.
+// Per-call estimated cost (2026 published rates; verify in vendor dashboard).
+// Imagen 4 GA as of late 2025; Imagen 3 superseded. For video/avatars use
+// gen-video.mjs / gen-avatar.mjs (Veo 3.1, native audio).
 const COST_PER_IMAGE = {
     'gpt-image-1': 0.04,
     'dalle3': size === '1792x1024' || size === '1024x1792' ? 0.08 : 0.04,

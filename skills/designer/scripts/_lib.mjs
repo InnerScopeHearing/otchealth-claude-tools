@@ -177,4 +177,91 @@ export function brandPromptPrefix(brand, assetKind) {
     return parts.join(' ');
 }
 
+// ─── Vertex AI / Veo helpers ──────────────────────────────────────────
+// Shared by gen-video.mjs and gen-avatar.mjs. The Veo family (2.0, 3.0,
+// 3.1) all use the same asynchronous predictLongRunning + poll contract,
+// so the auth + submit + poll loop lives here once.
+
+// Mint a short-lived Vertex access token from a service-account key object
+// (the parsed JSON of GOOGLE_APPLICATION_CREDENTIALS).
+export async function getVertexAccessToken(sa) {
+    const crypto = await import('node:crypto');
+    const header = { alg: 'RS256', typ: 'JWT' };
+    const now = Math.floor(Date.now() / 1000);
+    const claim = {
+        iss: sa.client_email,
+        scope: 'https://www.googleapis.com/auth/cloud-platform',
+        aud: 'https://oauth2.googleapis.com/token',
+        iat: now, exp: now + 3600,
+    };
+    const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const signingInput = `${enc(header)}.${enc(claim)}`;
+    const signer = crypto.createSign('RSA-SHA256');
+    signer.update(signingInput);
+    const sig = signer.sign(sa.private_key, 'base64url');
+    const jwt = `${signingInput}.${sig}`;
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}`,
+    });
+    if (!res.ok) throw new Error(`Token exchange ${res.status}: ${await res.text()}`);
+    return (await res.json()).access_token;
+}
+
+// Submit a Veo predictLongRunning job and poll until it finishes.
+// Returns the raw `response` object from the completed operation so the
+// caller can pull bytes/uri out of it (see extractVeoVideoB64).
+export async function runVeoJob({
+    token, project, location = 'us-central1', model,
+    instances, parameters, maxPolls = 120, intervalMs = 5000, log = console.error,
+}) {
+    const base = `https://${location}-aiplatform.googleapis.com/v1`;
+    const submitUrl = `${base}/projects/${project}/locations/${location}/publishers/google/models/${model}:predictLongRunning`;
+    log(`Submitting ${model} job...`);
+    const submitRes = await fetch(submitUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instances, parameters }),
+    });
+    if (!submitRes.ok) {
+        throw new Error(`Submit failed ${submitRes.status}: ${await submitRes.text()}`);
+    }
+    const operationName = (await submitRes.json()).name;
+    log(`  job: ${operationName}`);
+
+    const opUrl = `${base}/${operationName}`;
+    for (let i = 0; i < maxPolls; i++) {
+        await new Promise(r => setTimeout(r, intervalMs));
+        process.stderr.write(`  polling (${i + 1})... `);
+        const pollRes = await fetch(opUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (!pollRes.ok) {
+            process.stderr.write(`HTTP ${pollRes.status}\n`);
+            continue;
+        }
+        const poll = await pollRes.json();
+        if (poll.done) {
+            process.stderr.write('done\n');
+            if (poll.error) throw new Error(`Job failed: ${JSON.stringify(poll.error)}`);
+            return poll.response;
+        }
+        process.stderr.write('still running\n');
+    }
+    throw new Error(`Timed out polling ${model} after ${(maxPolls * intervalMs / 60000).toFixed(0)} minutes.`);
+}
+
+// Pull the generated MP4 (base64) out of a completed Veo response. Veo
+// returns inline bytes by default; a gcsUri appears only when an output
+// storageUri was requested, which these scripts don't do.
+export function extractVeoVideoB64(response) {
+    const b64 = response?.videos?.[0]?.bytesBase64Encoded
+        || response?.predictions?.[0]?.bytesBase64Encoded;
+    if (b64) return b64;
+    const uri = response?.videos?.[0]?.gcsUri || response?.predictions?.[0]?.gcsUri;
+    if (uri) {
+        throw new Error(`Veo returned a GCS URI (${uri}) instead of inline bytes — fetch it from Cloud Storage, or omit any output storageUri.`);
+    }
+    throw new Error(`Job done but no video bytes in response: ${JSON.stringify(response).slice(0, 500)}`);
+}
+
 export const PATHS = { SKILL_HOME, USER_HOME };

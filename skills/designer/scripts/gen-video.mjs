@@ -1,21 +1,25 @@
 #!/usr/bin/env node
-// gen-video.mjs — Generate AI video via Google Vertex AI Veo 2 (best
-// general-purpose model as of Jan 2026). Supports text-to-video for hero
-// marketing clips and image-to-video for animating still illustrations.
+// gen-video.mjs — Generate AI video via Google Vertex AI Veo. Defaults to
+// Veo 3.1 (native audio + lip-synced dialogue, GA on Vertex). Supports
+// text-to-video for hero marketing clips and image-to-video for animating
+// still illustrations. For a talking presenter reading a script, use the
+// purpose-built gen-avatar.mjs instead.
 //
 // Usage:
 //   node gen-video.mjs --prompt "..." [--duration 8] [--ratio 16:9|9:16|1:1]
+//                      [--resolution 720p|1080p] [--audio]
+//                      [--model veo-3.1-generate-001|veo-2.0-generate-001]
 //                      [--seed-image path.png] [--output marketing/preview.mp4]
 //                      [--dry-run]
 //
 // Output: MP4 at brand.output_root/video/<slug>.mp4 + .meta.json.
-//         Veo 2 jobs are asynchronous — script polls until ready then downloads.
+//         Veo jobs are asynchronous — script polls until ready then downloads.
 
 import { writeFileSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import {
     loadCredentials, requireCredential, resolveBrand, pickOutputPath,
     writeMeta, reportCost, parseArgs, brandPromptPrefix,
+    getVertexAccessToken, runVeoJob, extractVeoVideoB64,
 } from './_lib.mjs';
 
 const args = parseArgs(process.argv);
@@ -23,21 +27,32 @@ const dryRun = Boolean(args['dry-run']);
 const prompt = args.prompt || args.p;
 const duration = parseInt(args.duration || '8', 10);
 const ratio = args.ratio || '16:9';
+const resolution = args.resolution || '1080p';
 const seedImage = args['seed-image'];
+const model = args.model || 'veo-3.1-generate-001';
+const audio = Boolean(args.audio); // off by default for plain B-roll; on for talkies
 
 if (!prompt) {
-    console.error('Usage: gen-video.mjs --prompt "..." [--duration N] [--ratio 16:9|9:16|1:1]');
+    console.error('Usage: gen-video.mjs --prompt "..." [--duration N] [--ratio 16:9|9:16|1:1] [--resolution 720p|1080p] [--audio] [--model ...]');
     process.exit(1);
 }
 
 const brand = resolveBrand(args.brand);
 const creds = loadCredentials();
 
-// Veo 2 published rate (Jan 2026): ~$0.35/sec
-const costUsd = duration * 0.35;
+// Per-second list-price estimates (Jun 2026). Veo 2 has no native audio.
+const RATE = {
+    'veo-3.1-generate-001':      { video: 0.50, audio: 0.75 },
+    'veo-3.1-fast-generate-001': { video: 0.25, audio: 0.40 },
+    'veo-3.0-generate-001':      { video: 0.50, audio: 0.75 },
+    'veo-2.0-generate-001':      { video: 0.35, audio: 0.35 },
+};
+const rate = RATE[model] || RATE['veo-3.1-generate-001'];
+const useAudio = audio && model !== 'veo-2.0-generate-001';
+const costUsd = duration * rate[useAudio ? 'audio' : 'video'];
 reportCost({
-    provider: 'google-vertex', model: 'veo-2',
-    units: `${duration}s ${ratio}${seedImage ? ' (i2v)' : ''}`,
+    provider: 'google-vertex', model,
+    units: `${duration}s ${ratio} ${resolution}${useAudio ? ' +audio' : ''}${seedImage ? ' (i2v)' : ''}`,
     costUsd, dryRun,
 });
 
@@ -46,7 +61,7 @@ const fullPrompt = `${brandPromptPrefix(brand, 'illustration')} ${prompt}`.trim(
 if (dryRun) {
     console.log('PROMPT:');
     console.log(`  ${fullPrompt}`);
-    console.log(`Would have written ~${duration}s MP4 to ${brand.output_root}/video/`);
+    console.log(`Would have written ~${duration}s MP4 to ${brand.output_root || 'assets/generated'}/video/`);
     process.exit(0);
 }
 
@@ -54,103 +69,29 @@ requireCredential(creds, 'googleProject', 'GOOGLE_CLOUD_PROJECT');
 requireCredential(creds, 'googleCredsPath', 'GOOGLE_APPLICATION_CREDENTIALS');
 
 const sa = JSON.parse(readFileSync(creds.googleCredsPath, 'utf8'));
+const token = await getVertexAccessToken(sa);
 
-async function getToken() {
-    const crypto = await import('node:crypto');
-    const header = { alg: 'RS256', typ: 'JWT' };
-    const now = Math.floor(Date.now() / 1000);
-    const claim = {
-        iss: sa.client_email,
-        scope: 'https://www.googleapis.com/auth/cloud-platform',
-        aud: 'https://oauth2.googleapis.com/token',
-        iat: now, exp: now + 3600,
-    };
-    const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-    const signingInput = `${enc(header)}.${enc(claim)}`;
-    const signer = crypto.createSign('RSA-SHA256');
-    signer.update(signingInput);
-    const sig = signer.sign(sa.private_key, 'base64url');
-    const jwt = `${signingInput}.${sig}`;
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}`,
-    });
-    if (!res.ok) throw new Error(`Token exchange ${res.status}: ${await res.text()}`);
-    return (await res.json()).access_token;
-}
-
-const token = await getToken();
-const LOCATION = 'us-central1';
-const MODEL = 'veo-2.0-generate-001';
-
-// Submit job
 const instance = { prompt: fullPrompt };
 if (seedImage) {
     instance.image = {
         bytesBase64Encoded: readFileSync(seedImage).toString('base64'),
-        mimeType: 'image/png',
+        mimeType: seedImage.toLowerCase().endsWith('.jpg') || seedImage.toLowerCase().endsWith('.jpeg')
+            ? 'image/jpeg' : 'image/png',
     };
 }
-const body = {
-    instances: [instance],
-    parameters: {
-        durationSeconds: duration,
-        aspectRatio: ratio,
-        sampleCount: 1,
-    },
+const parameters = {
+    durationSeconds: duration,
+    aspectRatio: ratio,
+    resolution,
+    sampleCount: 1,
 };
+// Only Veo 3.x understands generateAudio; sending it to Veo 2 would error.
+if (model !== 'veo-2.0-generate-001') parameters.generateAudio = useAudio;
 
-console.log('Submitting Veo 2 job...');
-const submitRes = await fetch(
-    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${creds.googleProject}/locations/${LOCATION}/publishers/google/models/${MODEL}:predictLongRunning`,
-    {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    }
-);
-if (!submitRes.ok) {
-    console.error(`Submit failed ${submitRes.status}: ${await submitRes.text()}`);
-    process.exit(2);
-}
-const submitData = await submitRes.json();
-const operationName = submitData.name;
-console.log(`  job: ${operationName}`);
-
-// Poll
-const opUrl = `https://${LOCATION}-aiplatform.googleapis.com/v1/${operationName}`;
-let videoB64 = null;
-for (let i = 0; i < 120; i++) {  // up to ~10 min
-    await new Promise(r => setTimeout(r, 5000));
-    process.stderr.write(`  polling (${i + 1})... `);
-    const pollRes = await fetch(opUrl, { headers: { 'Authorization': `Bearer ${token}` } });
-    if (!pollRes.ok) {
-        process.stderr.write(`HTTP ${pollRes.status}\n`);
-        continue;
-    }
-    const poll = await pollRes.json();
-    if (poll.done) {
-        process.stderr.write('done\n');
-        if (poll.error) {
-            console.error(`Job failed: ${JSON.stringify(poll.error)}`);
-            process.exit(2);
-        }
-        // Veo 2 returns the video bytes in poll.response.videos[0].bytesBase64Encoded
-        videoB64 = poll.response?.videos?.[0]?.bytesBase64Encoded
-            || poll.response?.predictions?.[0]?.bytesBase64Encoded;
-        if (!videoB64) {
-            console.error('Job done but no video bytes in response:', JSON.stringify(poll.response).slice(0, 500));
-            process.exit(2);
-        }
-        break;
-    }
-    process.stderr.write('still running\n');
-}
-if (!videoB64) {
-    console.error('Timed out polling Veo 2 job after 10 minutes.');
-    process.exit(2);
-}
+const response = await runVeoJob({
+    token, project: creds.googleProject, model, instances: [instance], parameters,
+});
+const videoB64 = extractVeoVideoB64(response);
 
 const slug = args.name || prompt.split(/\s+/).slice(0, 6).join(' ');
 const outputPath = pickOutputPath({
@@ -163,8 +104,10 @@ writeMeta(outputPath, {
     full_prompt: fullPrompt,
     duration_sec: duration,
     aspect_ratio: ratio,
+    resolution,
+    native_audio: useAudio,
     seed_image: seedImage,
-    model: MODEL,
+    model,
     brand_name: brand.name,
     cost_estimate_usd: costUsd,
 });

@@ -47,6 +47,14 @@
   "icon_style": "Rounded line icons, 2px stroke, brand teal #0d9488 fill, slightly playful, consistent corner radius 4px, viewBox 24x24, SVG output. Match Phosphor Icons aesthetic with audiogram-curve influences.",
   "audience": "Adults 50-75 with mild-to-moderate hearing loss. Often resistant to 'hearing aid' identity. Tech comfort ranges from low (Doris persona) to high (Robert Sterling). Default text scale supports 1.5x.",
   "platform_targets": { "ios": true, "android": true, "watchos": true, "web": true },
+  "avatar": {
+    "presenter": "warm, credible female audiologist in her 40s, plain navy blazer, calm and friendly, direct eye contact",
+    "setting": "soft, evenly-lit modern studio with a subtle teal #0d9488 backdrop",
+    "default_model": "veo-3.1-generate-001"
+  },
+  "music": {
+    "default_style": "calm ambient piano with gentle warmth, hopeful but unobtrusive, no percussion-heavy build, suitable behind a soft-spoken narrator"
+  },
   "output_root": "assets/generated",
   "brand_mark": {
     "description": "Audiogram curve descending through 6 frequency points (500Hz / 1k / 2k / 4k / 6k / 8k). White curve + 6 white dots on teal background. NEVER add ear or person silhouette.",

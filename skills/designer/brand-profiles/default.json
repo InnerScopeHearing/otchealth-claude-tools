@@ -27,5 +27,13 @@
   "icon_style": "Rounded line icons, 2px stroke, brand primary color fill, slightly playful but professional. Match Phosphor / Heroicons aesthetic.",
   "audience": "Adults 35-75 with mixed tech comfort. Default to clarity over cleverness.",
   "platform_targets": { "ios": false, "android": false, "watchos": false, "web": true },
+  "avatar": {
+    "presenter": "a warm, approachable presenter, business-casual, calm and clear, direct eye contact",
+    "setting": "a clean, softly-lit studio with the brand primary color as a subtle backdrop",
+    "default_model": "veo-3.1-generate-001"
+  },
+  "music": {
+    "default_style": "calm ambient underscore, warm and modern, unobtrusive behind narration"
+  },
   "output_root": "assets/generated"
 }
