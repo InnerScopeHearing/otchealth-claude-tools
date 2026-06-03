@@ -230,11 +230,18 @@ export async function runVeoJob({
     const operationName = (await submitRes.json()).name;
     log(`  job: ${operationName}`);
 
-    const opUrl = `${base}/${operationName}`;
+    // Veo long-running ops are NOT polled with a GET on the operation URL —
+    // that 404s. You POST the operation name to :fetchPredictOperation on the
+    // same model endpoint and read `done` / `response` off the result.
+    const fetchUrl = `${base}/projects/${project}/locations/${location}/publishers/google/models/${model}:fetchPredictOperation`;
     for (let i = 0; i < maxPolls; i++) {
         await new Promise(r => setTimeout(r, intervalMs));
         process.stderr.write(`  polling (${i + 1})... `);
-        const pollRes = await fetch(opUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+        const pollRes = await fetch(fetchUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operationName }),
+        });
         if (!pollRes.ok) {
             process.stderr.write(`HTTP ${pollRes.status}\n`);
             continue;

@@ -84,6 +84,9 @@ const parameters = {
     aspectRatio: ratio,
     resolution,
     sampleCount: 1,
+    // Open Veo's person-generation gate so clips containing people aren't
+    // silently RAI-filtered. Override with --person dont_allow|allow_all.
+    personGeneration: args.person || 'allow_adult',
 };
 // Only Veo 3.x understands generateAudio; sending it to Veo 2 would error.
 if (model !== 'veo-2.0-generate-001') parameters.generateAudio = useAudio;

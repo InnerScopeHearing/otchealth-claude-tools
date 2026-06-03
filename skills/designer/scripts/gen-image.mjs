@@ -30,14 +30,17 @@ if (!prompt) {
 const kind = args.kind || 'illustration';
 const size = args.size || (kind === 'icon' ? '1024x1024' : '1024x1024');
 const variants = parseInt(args.variants || '1', 10);
-const model = args.model || 'gpt-image-1';
+let model = args.model || 'gpt-image-1';
 const quality = args.quality || 'high';
 const brand = resolveBrand(args.brand);
 const creds = loadCredentials();
 
-// dall-e-3 (aliases: dalle3, dall-e-3) routes to the DALL-E 3 endpoint;
-// every other OpenAI request uses gpt-image-1 (the default model).
-const isDalle3 = model === 'dalle3' || model === 'dall-e-3';
+// DALL-E 3 was retired (Mar 2026). Keep the old aliases working by routing
+// them to gpt-image-1 instead of a dead endpoint.
+const isDalle3 = false;
+if (model === 'dalle3' || model === 'dall-e-3') {
+    console.error('NOTE: dall-e-3 was retired (Mar 2026); using gpt-image-1 instead.');
+}
 
 // Per-call estimated cost (2026 published rates; verify in vendor dashboard).
 // Imagen 4 GA as of late 2025; Imagen 3 superseded. For video/avatars use

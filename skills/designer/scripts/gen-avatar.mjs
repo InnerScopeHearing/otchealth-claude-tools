@@ -123,6 +123,10 @@ const parameters = {
     resolution,
     generateAudio: audio,
     sampleCount: 1,
+    // A talking avatar IS a realistic adult human, so Veo's person-generation
+    // safety gate must be opened explicitly or every render is RAI-filtered.
+    // Override with --person dont_allow|allow_adult|allow_all.
+    personGeneration: args.person || 'allow_adult',
 };
 
 const response = await runVeoJob({
