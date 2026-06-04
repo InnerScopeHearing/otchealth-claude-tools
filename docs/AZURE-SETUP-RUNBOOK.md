@@ -66,33 +66,34 @@ az cognitiveservices account list-models \
 Note the exact **version** strings shown for `gpt-image-1`, `gpt-4o`, and
 `sora` (or `sora-2`). Plug them into A6.
 
-### A6. Deploy the three models (fill in the versions from A5)
+### A6. Deploy the three models (versions confirmed in eastus2, Jun 2026)
 ```bash
-# Image model
-az cognitiveservices account deployment create \
-  --name "$AOAI" --resource-group "$RG" \
-  --deployment-name gpt-image-1 \
-  --model-name gpt-image-1 --model-version "<VER-FROM-A5>" --model-format OpenAI \
+# Image model (the proven path the skill's code targets)
+az cognitiveservices account deployment create --name "$AOAI" -g "$RG" \
+  --deployment-name gpt-image-1 --model-name gpt-image-1 \
+  --model-version 2025-04-15 --model-format OpenAI \
   --sku-name GlobalStandard --sku-capacity 1
 
-# Vision/review model
-az cognitiveservices account deployment create \
-  --name "$AOAI" --resource-group "$RG" \
-  --deployment-name gpt-4o \
-  --model-name gpt-4o --model-version "<VER-FROM-A5>" --model-format OpenAI \
+# Vision / review model
+az cognitiveservices account deployment create --name "$AOAI" -g "$RG" \
+  --deployment-name gpt-4o --model-name gpt-4o \
+  --model-version 2024-11-20 --model-format OpenAI \
   --sku-name GlobalStandard --sku-capacity 10
 
-# Video model (Sora) — OPTIONAL to start; skip if not listed in A5
-az cognitiveservices account deployment create \
-  --name "$AOAI" --resource-group "$RG" \
-  --deployment-name sora \
-  --model-name sora --model-version "<VER-FROM-A5>" --model-format OpenAI \
+# Sora 2 video (newest build)
+az cognitiveservices account deployment create --name "$AOAI" -g "$RG" \
+  --deployment-name sora-2 --model-name sora-2 \
+  --model-version 2025-12-08 --model-format OpenAI \
   --sku-name GlobalStandard --sku-capacity 1
 ```
-> If a deployment errors on `GlobalStandard`, retry with `--sku-name Standard`.
-> If a model isn't listed in A5, it isn't available in `$REGION` yet — either
-> pick a different region or do that one deployment in the Foundry portal
-> (https://ai.azure.com → your resource → Deployments → Deploy model).
+> Always verify with A5 first — version strings change over time. If a
+> deployment errors on `GlobalStandard`, retry that line with `--sku-name
+> Standard` (drop `--sku-capacity`). The deployment NAME you choose is what goes
+> in the matching `azure-openai-*-deployment` secret (here: `gpt-image-1`,
+> `gpt-4o`, `sora-2`).
+> Upgrade path (optional, after first validation): eastus2 also has
+> `gpt-image-2` and `gpt-4.1`/`gpt-5.x` — deploy those and repoint the secrets
+> once the proven path works.
 
 ### A7. Create the Azure AI Speech resource (for TTS-Avatar)
 ```bash
@@ -138,7 +139,7 @@ printf '%s' "<AZURE_OPENAI_ENDPOINT>"  | gcloud secrets create azure-openai-endp
 printf '%s' "<AZURE_OPENAI_API_KEY>"   | gcloud secrets create azure-openai-key               --data-file=-
 printf '%s' "gpt-image-1"              | gcloud secrets create azure-openai-image-deployment  --data-file=-
 printf '%s' "gpt-4o"                   | gcloud secrets create azure-openai-vision-deployment --data-file=-
-printf '%s' "sora"                     | gcloud secrets create azure-openai-video-deployment  --data-file=-
+printf '%s' "sora-2"                   | gcloud secrets create azure-openai-video-deployment  --data-file=-
 
 # Azure AI Speech (TTS-Avatar)
 printf '%s' "<AZURE_SPEECH_KEY>"       | gcloud secrets create azure-speech-key               --data-file=-
