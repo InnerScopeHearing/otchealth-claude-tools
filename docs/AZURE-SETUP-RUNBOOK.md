@@ -95,6 +95,21 @@ az cognitiveservices account deployment create --name "$AOAI" -g "$RG" \
 > `gpt-image-2` and `gpt-4.1`/`gpt-5.x` — deploy those and repoint the secrets
 > once the proven path works.
 
+### A6b. If deployment fails with `InsufficientQuota` (limit is 0)
+Common on new/grant/sponsorship subscriptions — model quota starts at 0 and must
+be requested. It's not a mistake; the deploy commands are valid.
+- **Try the regional `Standard` SKU** for gpt-4o (separate bucket from
+  GlobalStandard, often nonzero by default):
+  `... --deployment-name gpt-4o --model-name gpt-4o --model-version 2024-11-20 --model-format OpenAI --sku-name Standard --sku-capacity 10`
+- **See your quota:** `az cognitiveservices usage list --location eastus2 -o table`
+- **Request quota** in Azure AI Foundry → https://ai.azure.com → Management
+  center → Quota (filter to your subscription + East US 2). Request small amounts
+  (gpt-image-1 ~2 RPM, gpt-4o ~30k TPM, sora-2 ~1 RPM). Standard-model bumps
+  often auto-approve in minutes; image/Sora may need review.
+- Fallback: Azure Portal → Help + Support → support request → "Service and
+  subscription limits (quotas)" → Cognitive Services / Azure OpenAI.
+- The image + avatar paths don't need Sora, so a stuck Sora quota doesn't block you.
+
 ### A7. Create the Azure AI Speech resource (for TTS-Avatar)
 ```bash
 az cognitiveservices account create \
