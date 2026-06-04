@@ -9,6 +9,16 @@ description: Creative-director skill — Claude drives end-to-end visual asset g
 
 Invoke this skill whenever a project needs a visual or audio asset and the user hasn't pointed at a specific manual tool. Trigger words: "design," "generate," "icon," "illustration," "splash," "logo," "App Store screenshot," "preview video," "voiceover," "hero image," "social graphic," "empty state," "marketing asset."
 
+## Provider defaults — use the proven path (read first)
+
+These run on credits that are **live today**; default to them and the skill just works:
+- **Images / icons / vision review:** direct **OpenAI** (`gpt-image-1`, `gpt-4o`) — the default. Don't pass `--provider azure`.
+- **Video / talking avatars:** **Vertex Veo 3.1** (default engine) — validated live.
+- **Voice / music / SFX:** **ElevenLabs** — live.
+- **Photoreal fixed-presenter avatar:** **Azure TTS-Avatar** (`gen-avatar.mjs --engine azure`) — validated live and fine to use.
+
+**Azure OpenAI is opt-in and NOT yet usable for images/vision/video:** the `gpt-image-1`, `gpt-4o`, and `sora-2` deployments are **pending quota approval**, so `--provider azure` and `gen-video.mjs --engine sora` will fail until that clears. The image/vision scripts auto-fall-back to direct OpenAI if Azure is selected and unavailable, but **don't choose Azure for these jobs** — just use the defaults. Never tell the user a task "can't be done" because an Azure path failed; the direct OpenAI/Vertex/ElevenLabs path can do it.
+
 ## Compliance / scope rules (read first)
 
 - **This skill operates in the NON-PHI ring only.** Default project is `otchealth-shared-prod`. NEVER point this skill at `otchealth-medreview-prod` or any PHI project.

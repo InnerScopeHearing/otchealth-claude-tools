@@ -80,13 +80,13 @@ if (dryRun) {
     process.exit(0);
 }
 
-async function callOpenAIImage({ prompt, size, n }) {
+async function callOpenAIImage({ prompt, size, n, useProvider }) {
     // gpt-image-1 always returns b64_json and rejects response_format. quality
     // is high|medium|low. The body is identical for direct OpenAI and Azure;
     // on Azure the deployment name (not a model field) selects the model.
     const body = { prompt, n, size, quality };
     let url, headers;
-    if (provider === 'azure') {
+    if (useProvider === 'azure') {
         requireAzureOpenAI(creds, creds.azureOpenAIImageDeployment);
         url = azureOpenAIUrl(creds, creds.azureOpenAIImageDeployment, 'images/generations');
         headers = { 'Content-Type': 'application/json', 'api-key': creds.azureOpenAIKey };
@@ -99,7 +99,7 @@ async function callOpenAIImage({ prompt, size, n }) {
     }
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!res.ok) {
-        throw new Error(`${provider} image API ${res.status}: ${await res.text()}`);
+        throw new Error(`${useProvider} image API ${res.status}: ${await res.text()}`);
     }
     const data = await res.json();
     return Promise.all((data.data || []).map(async (d) => {
@@ -169,8 +169,17 @@ let buffers;
 try {
     if (provider === 'vertex') {
         buffers = await callImagen({ prompt: fullPrompt, n: variants });
+    } else if (provider === 'azure') {
+        // Azure is opt-in and its OpenAI models are pending quota — never let an
+        // Azure problem fail the job when direct OpenAI can do it. Fall back.
+        try {
+            buffers = await callOpenAIImage({ prompt: fullPrompt, size, n: variants, useProvider: 'azure' });
+        } catch (azErr) {
+            console.error(`WARN: Azure image path unavailable (${azErr.message}). Falling back to direct OpenAI.`);
+            buffers = await callOpenAIImage({ prompt: fullPrompt, size, n: variants, useProvider: 'openai' });
+        }
     } else {
-        buffers = await callOpenAIImage({ prompt: fullPrompt, size, n: variants });
+        buffers = await callOpenAIImage({ prompt: fullPrompt, size, n: variants, useProvider: 'openai' });
     }
 } catch (e) {
     console.error(`ERROR: ${e.message}`);
