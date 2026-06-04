@@ -11,9 +11,21 @@
 //   GOOGLE_CLOUD_PROJECT            project id (default otchealth-shared-prod)
 //
 // Secret Manager secret IDs expected (create once as org admin — see README):
-//   openai-api-key       -> OPENAI_API_KEY
-//   elevenlabs-api-key   -> ELEVENLABS_API_KEY
-//   recraft-api-key      -> RECRAFT_API_KEY   (optional; skipped if absent)
+//   openai-api-key                  -> OPENAI_API_KEY
+//   elevenlabs-api-key              -> ELEVENLABS_API_KEY
+//   recraft-api-key                 -> RECRAFT_API_KEY                 (optional)
+//   azure-openai-endpoint           -> AZURE_OPENAI_ENDPOINT           (optional)
+//   azure-openai-key                -> AZURE_OPENAI_API_KEY            (optional)
+//   azure-openai-api-version        -> AZURE_OPENAI_API_VERSION        (optional)
+//   azure-openai-image-deployment   -> AZURE_OPENAI_IMAGE_DEPLOYMENT   (optional)
+//   azure-openai-vision-deployment  -> AZURE_OPENAI_VISION_DEPLOYMENT  (optional)
+//   azure-openai-video-deployment   -> AZURE_OPENAI_VIDEO_DEPLOYMENT   (optional, Sora)
+//   azure-speech-key                -> AZURE_SPEECH_KEY                (optional)
+//   azure-speech-region             -> AZURE_SPEECH_REGION             (optional)
+//   azure-sp-client-id              -> AZURE_SP_CLIENT_ID              (optional, Contributor SP)
+//   azure-sp-client-secret          -> AZURE_SP_CLIENT_SECRET          (optional)
+//   azure-sp-tenant-id              -> AZURE_SP_TENANT_ID              (optional)
+//   azure-subscription-id           -> AZURE_SUBSCRIPTION_ID           (optional)
 
 import { readFileSync } from 'node:fs';
 import crypto from 'node:crypto';
@@ -26,6 +38,20 @@ const MAP = [
   { id: 'openai-api-key', env: 'OPENAI_API_KEY', required: true },
   { id: 'elevenlabs-api-key', env: 'ELEVENLABS_API_KEY', required: true },
   { id: 'recraft-api-key', env: 'RECRAFT_API_KEY', required: false },
+  // Azure (all optional — emitted only once the secrets exist in the vault).
+  { id: 'azure-openai-endpoint', env: 'AZURE_OPENAI_ENDPOINT', required: false },
+  { id: 'azure-openai-key', env: 'AZURE_OPENAI_API_KEY', required: false },
+  { id: 'azure-openai-api-version', env: 'AZURE_OPENAI_API_VERSION', required: false },
+  { id: 'azure-openai-image-deployment', env: 'AZURE_OPENAI_IMAGE_DEPLOYMENT', required: false },
+  { id: 'azure-openai-vision-deployment', env: 'AZURE_OPENAI_VISION_DEPLOYMENT', required: false },
+  { id: 'azure-openai-video-deployment', env: 'AZURE_OPENAI_VIDEO_DEPLOYMENT', required: false },
+  { id: 'azure-speech-key', env: 'AZURE_SPEECH_KEY', required: false },
+  { id: 'azure-speech-region', env: 'AZURE_SPEECH_REGION', required: false },
+  // Contributor service principal (for provisioning, not data-plane calls).
+  { id: 'azure-sp-client-id', env: 'AZURE_SP_CLIENT_ID', required: false },
+  { id: 'azure-sp-client-secret', env: 'AZURE_SP_CLIENT_SECRET', required: false },
+  { id: 'azure-sp-tenant-id', env: 'AZURE_SP_TENANT_ID', required: false },
+  { id: 'azure-subscription-id', env: 'AZURE_SUBSCRIPTION_ID', required: false },
 ];
 
 if (!SA_PATH) {

@@ -17,6 +17,7 @@ import { writeFileSync, readFileSync } from 'node:fs';
 import {
     loadCredentials, requireCredential, resolveBrand, pickOutputPath,
     writeMeta, reportCost, parseArgs, brandPromptPrefix,
+    resolveOpenAIProvider, requireAzureOpenAI, azureOpenAIUrl,
 } from './_lib.mjs';
 
 const args = parseArgs(process.argv);
@@ -30,19 +31,24 @@ if (!prompt) {
 const kind = args.kind || 'illustration';
 const size = args.size || (kind === 'icon' ? '1024x1024' : '1024x1024');
 const variants = parseInt(args.variants || '1', 10);
-const model = args.model || 'gpt-image-1';
+let model = args.model || 'gpt-image-1';
 const quality = args.quality || 'high';
 const brand = resolveBrand(args.brand);
 const creds = loadCredentials();
 
-// dall-e-3 (aliases: dalle3, dall-e-3) routes to the DALL-E 3 endpoint;
-// every other OpenAI request uses gpt-image-1 (the default model).
-const isDalle3 = model === 'dalle3' || model === 'dall-e-3';
+// 'vertex' for Imagen; otherwise 'openai' or 'azure' (spends the Azure grant).
+const provider = model.startsWith('imagen') ? 'vertex' : resolveOpenAIProvider(args);
 
-// Per-call estimated cost (May-2026 published rates; verify in vendor dashboard).
-// Imagen 4 GA as of late 2025; Imagen 3 superseded. Veo 3/3.1 are Preview as
-// of May 2026 and are deliberately not supported here — use Veo 2 via
-// gen-video.mjs for video.
+// DALL-E 3 was retired (Mar 2026). Keep the old aliases working by routing
+// them to gpt-image-1 instead of a dead endpoint.
+if (model === 'dalle3' || model === 'dall-e-3') {
+    console.error('NOTE: dall-e-3 was retired (Mar 2026); using gpt-image-1 instead.');
+    model = 'gpt-image-1';
+}
+
+// Per-call estimated cost (2026 published rates; verify in vendor dashboard).
+// Imagen 4 GA as of late 2025; Imagen 3 superseded. For video/avatars use
+// gen-video.mjs / gen-avatar.mjs (Veo 3.1, native audio).
 const COST_PER_IMAGE = {
     'gpt-image-1': 0.04,
     'dalle3': size === '1792x1024' || size === '1024x1792' ? 0.08 : 0.04,
@@ -57,7 +63,7 @@ const costUsd = (COST_PER_IMAGE[model] || 0.05) * variants;
 const fullPrompt = `${brandPromptPrefix(brand, kind)} ${prompt}`.trim();
 
 reportCost({
-    provider: model.startsWith('imagen') ? 'google-vertex' : 'openai',
+    provider: provider === 'vertex' ? 'google-vertex' : provider,
     model,
     units: `${variants}x ${size}`,
     costUsd,
@@ -75,29 +81,25 @@ if (dryRun) {
 }
 
 async function callOpenAIImage({ prompt, size, n }) {
-    requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
-    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${creds.openaiKey}` };
-    if (creds.openaiOrg) headers['OpenAI-Organization'] = creds.openaiOrg;
-    // No response_format: gpt-image-1 always returns b64_json and rejects the
-    // parameter; dall-e-3 returns a URL, which we fetch below.
-    const body = {
-        model: isDalle3 ? 'dall-e-3' : 'gpt-image-1',
-        prompt,
-        n: isDalle3 ? 1 : n,
-        size,
-    };
-    if (isDalle3) {
-        // DALL-E 3 quality is standard|hd; map high -> hd, otherwise standard.
-        body.quality = quality === 'high' ? 'hd' : 'standard';
+    // gpt-image-1 always returns b64_json and rejects response_format. quality
+    // is high|medium|low. The body is identical for direct OpenAI and Azure;
+    // on Azure the deployment name (not a model field) selects the model.
+    const body = { prompt, n, size, quality };
+    let url, headers;
+    if (provider === 'azure') {
+        requireAzureOpenAI(creds, creds.azureOpenAIImageDeployment);
+        url = azureOpenAIUrl(creds, creds.azureOpenAIImageDeployment, 'images/generations');
+        headers = { 'Content-Type': 'application/json', 'api-key': creds.azureOpenAIKey };
     } else {
-        // gpt-image-1 quality is high|medium|low.
-        body.quality = quality;
+        requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
+        url = 'https://api.openai.com/v1/images/generations';
+        headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${creds.openaiKey}` };
+        if (creds.openaiOrg) headers['OpenAI-Organization'] = creds.openaiOrg;
+        body.model = 'gpt-image-1';
     }
-    const res = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST', headers, body: JSON.stringify(body),
-    });
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!res.ok) {
-        throw new Error(`OpenAI image API ${res.status}: ${await res.text()}`);
+        throw new Error(`${provider} image API ${res.status}: ${await res.text()}`);
     }
     const data = await res.json();
     return Promise.all((data.data || []).map(async (d) => {
@@ -165,15 +167,8 @@ async function getGoogleAccessToken(sa) {
 
 let buffers;
 try {
-    if (model.startsWith('imagen')) {
+    if (provider === 'vertex') {
         buffers = await callImagen({ prompt: fullPrompt, n: variants });
-    } else if (isDalle3) {
-        // DALL-E 3 only supports n=1, so loop to produce variants.
-        buffers = [];
-        for (let i = 0; i < variants; i++) {
-            const [buf] = await callOpenAIImage({ prompt: fullPrompt, size, n: 1 });
-            buffers.push(buf);
-        }
     } else {
         buffers = await callOpenAIImage({ prompt: fullPrompt, size, n: variants });
     }

@@ -13,7 +13,7 @@ re-hydrate credentials from environment secrets.
 
 | Path | What it is |
 |---|---|
-| `skills/designer/` | Creative-director skill — Claude drives icon / illustration / app-icon / App Store screenshot / video / voiceover generation. Brand-profile driven (works per project). Wraps OpenAI DALL·E 3 + GPT-image-1, Vertex AI Imagen 4 (GA) + Veo 2, ElevenLabs. |
+| `skills/designer/` | Creative-director skill — Claude drives icon / illustration / app-icon / App Store screenshot / video / **talking avatar** / voiceover / **music** / **sound-effects** generation, plus **GPT-4o art-director review**. Brand-profile driven (works per project). Wraps OpenAI DALL·E 3 + GPT-image-1 + GPT-4o Vision, Vertex AI Imagen 4 (GA) + Veo 3.1 (native audio + lip-sync), ElevenLabs (voice + music + SFX). |
 | `setup/session-start.sh` | Idempotent installer: copies the skill into `~/.claude/skills/`, runs `npm install`, writes the GCP SA key, then fetches API keys from Secret Manager into `~/.designer/credentials.env`. |
 | `setup/fetch-secrets.mjs` | Pulls `openai-api-key` / `elevenlabs-api-key` (and optional `recraft-api-key`) from GCP Secret Manager using the SA key. No gcloud CLI needed. |
 | `setup/credentials.env.template` | Reference for the one env secret + the Secret Manager secret IDs. |
@@ -43,6 +43,28 @@ To rotate a key later, add a new version (no code change, picks up `latest`):
 ```bash
 printf '%s' "<PASTE-NEW-KEY>" | gcloud secrets versions add openai-api-key --data-file=-
 ```
+
+#### Optional: Azure ($5k grant) — scoped resource keys only
+
+To let the skill spend Azure credits, create **two scoped resources** in the
+Azure Portal — an **Azure OpenAI** resource (with `gpt-image-1` and `gpt-4o`
+*deployments*) and an **Azure AI Speech** resource — then store their keys here.
+**Do not share Microsoft account or tenant-admin credentials**; only these
+resource keys are needed:
+
+```bash
+printf '%s' "<AZURE-OPENAI-ENDPOINT>"  | gcloud secrets create azure-openai-endpoint          --data-file=-
+printf '%s' "<AZURE-OPENAI-KEY>"       | gcloud secrets create azure-openai-key               --data-file=-
+printf '%s' "<IMAGE-DEPLOYMENT-NAME>"  | gcloud secrets create azure-openai-image-deployment  --data-file=-
+printf '%s' "<VISION-DEPLOYMENT-NAME>" | gcloud secrets create azure-openai-vision-deployment --data-file=-
+printf '%s' "<AZURE-SPEECH-KEY>"       | gcloud secrets create azure-speech-key               --data-file=-
+printf '%s' "<AZURE-SPEECH-REGION>"    | gcloud secrets create azure-speech-region            --data-file=-
+# optional override (defaults to 2025-04-01-preview):
+printf '%s' "2025-04-01-preview"       | gcloud secrets create azure-openai-api-version        --data-file=-
+```
+
+They're picked up automatically at the next session start. Until then the skill
+runs on OpenAI/Vertex/ElevenLabs exactly as before — Azure is purely additive.
 
 ## One-time setup
 
@@ -89,12 +111,16 @@ designer skill and hydrates credentials — no manual steps.
 
 Once installed, just ask Claude in plain English. Trigger words: *design, icon,
 logo, illustration, splash, hero image, App Store screenshot, preview video,
-voiceover, social graphic, empty state.*
+talking avatar, presenter, voiceover, music, sound effect, social graphic,
+empty state.*
 
 ```
 "Generate an app icon family for AWARE from the teal sound-wave mark"
 "Make a hero illustration: older woman laughing in a restaurant, hearing aids visible"
 "Create 5 App Store screenshots for iHEARtest with headlines"
+"Make a 30-second talking-avatar intro: our audiologist explains the hearing check"
+"Generate a calm ambient music bed and a soft success chime for the app"
+"Review this hero image against the AWARE brand and refine it"
 "Estimate the cost to generate 20 tip icons first"   # runs --dry-run
 ```
 
@@ -108,8 +134,11 @@ a sibling `.meta.json` (prompt, model, cost, timestamp).
 - **Claude Code only.** Filesystem skills (`~/.claude/skills/`) are a Claude Code
   feature. Claude Chat (claude.ai) uses a separate Skills upload that runs in a
   sandbox without these credentials — this repo does not target Claude Chat.
-- **Pre-GA models excluded.** Video uses Veo 2; Veo 3/3.1 are Preview. Imagen is
-  the GA `imagen-4.0-generate-001`.
+- **Video + avatars use Veo 3.1** (`veo-3.1-generate-001`) for native audio +
+  lip-synced dialogue; Veo 2 stays available for plain silent B-roll. Imagen is
+  the GA `imagen-4.0-generate-001`. Synthetic avatars only — never replicate a
+  real, identifiable person without consent, and keep `voice.do_not` claims out
+  of spoken scripts.
 - **Cost-aware.** Every script supports `--dry-run` to print the estimated spend
   and exact API call without spending.
 - **Imagen quota:** new GCP projects may need a Vertex AI quota bump for

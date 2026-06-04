@@ -40,8 +40,8 @@ const masterPrompt = [
     `Looks premium next to Calm, Headspace, Apple Health on a home screen.`,
 ].join(' ');
 
-const cost = 0.12; // dalle3 HD 1024x1024
-reportCost({ provider: 'openai', model: 'dall-e-3 HD', units: '1 master', costUsd: cost, dryRun });
+const cost = 0.04; // gpt-image-1 1024x1024 high (DALL-E 3 retired Mar 2026)
+reportCost({ provider: 'openai', model: 'gpt-image-1', units: '1 master', costUsd: cost, dryRun });
 
 if (dryRun) {
     console.log('MASTER PROMPT:');
