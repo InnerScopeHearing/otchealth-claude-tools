@@ -191,3 +191,19 @@ Say "Azure keys are in." Claude will then, in a fresh session:
 - **Sora caveat:** Azure's Sora API is mid-transition (model retiring Feb 2026,
   path migrating). If A5 doesn't list a Sora model in `eastus2`, deploy it later
   or in another region — the image + avatar paths don't depend on it.
+
+## Validation results & gotchas (2026-06-04)
+- **Azure AI Speech TTS-Avatar: VALIDATED live** end-to-end via
+  `gen-avatar.mjs --engine azure` (character `lisa`, voice
+  `en-US-AvaMultilingualNeural`) in `eastus2`. Batch synthesis create → poll
+  (NotStarted → Running → Succeeded) → download all worked with no code change.
+- **`1`/`l` key-transcription gotcha:** never transcribe Azure keys from a
+  screenshot. The Speech key read off an image had a digit `1` where the real
+  key has a lowercase `l` (char 14), which 401'd every call. Always grab keys via
+  the portal **Keys and Endpoint** copy button (or `az ... keys list -o tsv`) and
+  paste the exact value — verify with a quick
+  `curl -s -o /dev/null -w "%{http_code}" -X POST "https://<region>.api.cognitive.microsoft.com/sts/v1.0/issueToken" -H "Ocp-Apim-Subscription-Key: <key>" -H "Content-Length: 0"`
+  (expect `200`).
+- The **Azure OpenAI key** was transcribed the same way and likely has a similar
+  typo — re-copy it from the portal and verify before relying on it once model
+  quota clears.
