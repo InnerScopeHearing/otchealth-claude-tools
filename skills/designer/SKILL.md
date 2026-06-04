@@ -45,6 +45,7 @@ These run on credits that are **live today**; default to them and the skill just
 | **Art-director review** (brand-fit critique + refined prompt) | `review-asset.mjs` | OpenAI GPT-4o Vision | ~$0.01 each |
 | PNG → SVG vectorize | `vectorize.mjs` | Recraft API or local potrace | $0.04 or free |
 | Optimize / format assets | `optimize-asset.mjs` | sharp (local, free) | $0 |
+| Health-check all credentials / APIs | `healthcheck.mjs` | every provider (auth-only probes) | $0 |
 
 ## Full creative stack — pick the best engine per task
 
