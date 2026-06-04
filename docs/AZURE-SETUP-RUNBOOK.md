@@ -31,10 +31,19 @@ echo "Subscription: $SUB"            # if blank, run:  az login   (then re-run)
 > If you have more than one subscription: `az account list -o table`, then
 > `az account set --subscription "<the one you want>"`, then re-run the `SUB=` line.
 
-### A2. Make sure the providers are registered (one-time, harmless to repeat)
+### A2. Make sure the provider is registered (one-time)
 ```bash
-az provider register --namespace Microsoft.CognitiveServices --wait
+# Check first — on most subscriptions this is already "Registered".
+az provider show --namespace Microsoft.CognitiveServices --query registrationState -o tsv
 ```
+If that prints `Registered`, skip ahead to A3. Otherwise register it:
+```bash
+az provider register --namespace Microsoft.CognitiveServices
+# Returns immediately. Re-run the status line above until it says "Registered"
+# (can take a few minutes).
+```
+> Don't use `az provider register --wait` — it blocks silently with no output
+> and looks frozen. The check-then-poll approach above is clearer.
 
 ### A3. Create the resource group (the single "box" the SP will be scoped to)
 ```bash
