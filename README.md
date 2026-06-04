@@ -96,13 +96,20 @@ Optional env overrides: `GOOGLE_CLOUD_PROJECT`, `VERTEX_DEFAULT_*`.
 
 ### 3. Point each environment's setup script at the installer
 
-Set the environment's setup/init script to:
+Set the environment's setup/init script to (force a fresh clone every start so
+a warm-container cache can never ship stale skills):
 
 ```bash
-git clone https://github.com/gbgolfmatt/otchealth-claude-tools /tmp/octools \
-  2>/dev/null || (cd /tmp/octools && git pull --ff-only)
+rm -rf /tmp/octools 2>/dev/null
+git clone --depth 1 https://github.com/gbgolfmatt/otchealth-claude-tools /tmp/octools
 bash /tmp/octools/setup/session-start.sh
 ```
+
+> The older `git clone ... || git pull --ff-only` form can leave a stale
+> `/tmp/octools` if the pull ever fails to fast-forward — symptom: a session
+> reports missing scripts (e.g. no `healthcheck.mjs`). The force-fresh form
+> above avoids that; `session-start.sh` also self-heals a `/tmp/*` clone to
+> `origin/main` as a backstop.
 
 That's it. From then on, every Claude Code web session auto-installs the
 designer skill and hydrates credentials — no manual steps.
