@@ -24,6 +24,22 @@ TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILLS_DST="${HOME}/.claude/skills"
 DESIGNER_DST="${SKILLS_DST}/designer"
 
+# Self-heal stale caches: when running from the ephemeral /tmp clone, force it to
+# the latest origin/main so a warm container never ships old skills. Guarded to
+# /tmp so this can NEVER reset a real working checkout.
+case "$TOOLS_DIR" in
+  /tmp/*)
+    if git -C "$TOOLS_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+      if git -C "$TOOLS_DIR" fetch --depth 1 origin main >/dev/null 2>&1 \
+         && git -C "$TOOLS_DIR" reset --hard FETCH_HEAD >/dev/null 2>&1; then
+        echo "[octools] synced $TOOLS_DIR to origin/main ($(git -C "$TOOLS_DIR" rev-parse --short HEAD))"
+      else
+        echo "[octools] WARN: could not refresh $TOOLS_DIR; using cached copy."
+      fi
+    fi
+    ;;
+esac
+
 echo "[octools] Installing designer skill -> ${DESIGNER_DST}"
 mkdir -p "$SKILLS_DST"
 rm -rf "$DESIGNER_DST"
