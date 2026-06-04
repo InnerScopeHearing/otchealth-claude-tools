@@ -86,7 +86,16 @@
       "properties": {
         "presenter": { "type": "string", "description": "Default on-brand presenter description, e.g. 'warm female audiologist, 40s, approachable'" },
         "setting": { "type": "string", "description": "Default scene/background, e.g. 'soft teal-lit studio'" },
-        "default_model": { "type": "string", "description": "veo-3.1-generate-001 (quality) or veo-3.1-fast-generate-001 (cheaper)" }
+        "default_model": { "type": "string", "description": "veo-3.1-generate-001 (quality) or veo-3.1-fast-generate-001 (cheaper)" },
+        "azure": {
+          "type": "object",
+          "description": "Defaults for the Azure AI Speech TTS-Avatar engine (gen-avatar.mjs --engine azure)",
+          "properties": {
+            "character": { "type": "string", "description": "Standard avatar character, e.g. 'lisa', 'max', 'meg'" },
+            "style": { "type": "string", "description": "Avatar style, e.g. 'casual-sitting', 'graceful-standing'" },
+            "voice": { "type": "string", "description": "Azure neural voice, e.g. 'en-US-AvaMultilingualNeural'" }
+          }
+        }
       }
     },
     "music": {

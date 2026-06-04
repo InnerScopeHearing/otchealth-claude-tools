@@ -51,6 +51,7 @@ export function loadCredentials() {
         azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION || '2025-04-01-preview',
         azureOpenAIImageDeployment: process.env.AZURE_OPENAI_IMAGE_DEPLOYMENT,
         azureOpenAIVisionDeployment: process.env.AZURE_OPENAI_VISION_DEPLOYMENT,
+        azureOpenAIVideoDeployment: process.env.AZURE_OPENAI_VIDEO_DEPLOYMENT,
         azureSpeechKey: process.env.AZURE_SPEECH_KEY,
         azureSpeechRegion: process.env.AZURE_SPEECH_REGION,
     };

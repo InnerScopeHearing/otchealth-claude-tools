@@ -42,8 +42,8 @@ The handcuffs are off: route every job to whichever model on our credits
 produces the best result. The menu, by medium:
 
 - **Stills / icons / hero art** — OpenAI **GPT-image-1** (default, best instruction-following), **DALL-E 3 HD** (app-icon master), Vertex **Imagen 4 GA** (`imagen4` / `imagen4-ultra` / `imagen4-fast`; best in-image text rendering for screenshot headlines). All via `gen-image.mjs --model …`.
-- **Video / motion / animated loops** — Vertex **Veo 3.1** (default; native audio + lip-sync, text- or image-to-video) and **Veo 3.1 Fast** (`--model veo-3.1-fast-generate-001`, cheaper); **Veo 2** for plain silent B-roll. Animate any still (logo reveal, animated splash, app preview) by passing `--seed-image` to `gen-video.mjs`.
-- **Talking avatars / presenters** — Vertex **Veo 3.1** via `gen-avatar.mjs` (text-to-avatar or image-to-avatar). Reusable on-brand presenter defined in `brand.avatar`.
+- **Video / motion / animated loops** — Vertex **Veo 3.1** (default; native audio + lip-sync, text- or image-to-video) and **Veo 3.1 Fast** (`--model veo-3.1-fast-generate-001`, cheaper); **Veo 2** for plain silent B-roll; **Sora 2** on Azure OpenAI via `gen-video.mjs --engine sora` (spends the Azure grant). Animate any still by passing `--seed-image`.
+- **Talking avatars / presenters** — two engines: Vertex **Veo 3.1** (default, cinematic, generative) via `gen-avatar.mjs`; or Azure **AI Speech TTS-Avatar** via `--engine azure` (a fixed, consistent enterprise cast — Lisa/Max/Meg — ideal for high-volume identical explainers, on the Azure grant). Reusable on-brand presenter defined in `brand.avatar` (and `brand.avatar.azure`).
 - **Voice / narration** — ElevenLabs (`gen-voiceover.mjs`, `eleven_v3`); 33M-char grant active. Set a per-project voice via `brand.voiceover_default_voice_id`.
 - **Music** — ElevenLabs Music via `gen-music.mjs` (instrumental beds by default, `--vocal` for songs).
 - **Sound design** — ElevenLabs Sound Effects via `gen-sfx.mjs` (UI chimes, notifications, stingers).

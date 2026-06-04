@@ -128,6 +128,44 @@ printf '%s' "<sub-id>"   | gcloud secrets create azure-subscription-id  --data-f
 When those exist, tell me — I'll wire the fetch (same pattern as the
 `azure-openai-*` secrets) and start the inventory.
 
+### To create the **Contributor** service principal (scoped to ONE resource group)
+
+This is the chosen posture — I can provision AI + hosting resources inside a
+single dedicated resource group, and **nothing else** in your account is
+touchable. In Cloud Shell as subscription owner:
+```bash
+# 1. make a dedicated box
+az group create --name rg-claude-designer --location eastus2
+
+# 2. a service principal that can build ONLY inside that box
+az ad sp create-for-rbac \
+  --name "claude-designer-contributor" \
+  --role "Contributor" \
+  --scopes "/subscriptions/<SUB-ID>/resourceGroups/rg-claude-designer"
+# → store appId / password / tenant + the subscription id as the
+#   azure-sp-* / azure-subscription-id secrets (see below). Never paste in chat.
+```
+```bash
+printf '%s' "<appId>"    | gcloud secrets create azure-sp-client-id     --data-file=-
+printf '%s' "<password>" | gcloud secrets create azure-sp-client-secret --data-file=-
+printf '%s' "<tenant>"   | gcloud secrets create azure-sp-tenant-id     --data-file=-
+printf '%s' "<sub-id>"   | gcloud secrets create azure-subscription-id  --data-file=-
+```
+The session installer already fetches these into `credentials.env`. Hands-on
+provisioning from this session additionally needs the `az` CLI + network egress
+to `management.azure.com` stood up — flag me to verify/wire that when you're ready.
+
+## Media engines on Azure (scaffolded, pending live keys)
+
+Two engines are already wired in the designer skill, ready to run the moment the
+Azure data-plane keys land in the vault:
+- `gen-video.mjs --engine sora` → **Sora 2** on Azure OpenAI (needs `azure-openai-video-deployment`). ⚠️ Azure's Sora API is mid-transition (old `sora` model retiring Feb 2026, path migrating to `/openai/v1/videos`) — the endpoint is configurable and must be validated against the live deployment.
+- `gen-avatar.mjs --engine azure` → **Azure AI Speech TTS-Avatar** (needs `azure-speech-key` + `azure-speech-region`). Fixed cast (Lisa/Max/Meg); per-project defaults in `brand.avatar.azure`.
+
+Both are **SCAFFOLD** quality — wired to the documented contracts but not yet run
+against a live resource. First real call validates them, exactly as we validated
+Veo 3.1.
+
 ---
 
 ## 4. Golden rules (pin these)

@@ -28,18 +28,72 @@ import {
     writeMeta, reportCost, parseArgs,
     getVertexAccessToken, runVeoJob, extractVeoVideoB64,
 } from './_lib.mjs';
+import { ttsAvatarSynthesize } from './_azure.mjs';
 
 const args = parseArgs(process.argv);
 const dryRun = Boolean(args['dry-run']);
 
 const script = args.script || args.s;
 if (!script) {
-    console.error('Usage: gen-avatar.mjs --script "spoken line" [--presenter "..."] [--setting "..."] [--seed-image f.png] [--duration N] [--ratio 16:9|9:16|1:1] [--resolution 720p|1080p] [--no-audio]');
+    console.error('Usage: gen-avatar.mjs --script "spoken line" [--engine veo|azure] [--presenter "..."] [--setting "..."] [--seed-image f.png] [--duration N] [--ratio 16:9|9:16|1:1] [--no-audio]');
+    process.exit(1);
+}
+
+const engine = args.engine || 'veo'; // veo (Vertex, generative) | azure (AI Speech TTS-Avatar, fixed cast)
+if (engine !== 'veo' && engine !== 'azure') {
+    console.error(`--engine must be 'veo' or 'azure' (got '${engine}')`);
     process.exit(1);
 }
 
 const brand = resolveBrand(args.brand);
 const creds = loadCredentials();
+
+// ─── Azure AI Speech TTS-Avatar (fixed photoreal cast, on the Azure grant) ──
+// Trade-off vs Veo: a consistent, reusable enterprise presenter (Lisa, Max,
+// Meg…) reading the script — ideal for high-volume identical explainers.
+if (engine === 'azure') {
+    const azAvatar = brand.avatar?.azure || {};
+    const character = args.character || azAvatar.character || 'lisa';
+    const style = args.style || azAvatar.style || 'casual-sitting';
+    const voice = args.voice || azAvatar.voice || 'en-US-AvaMultilingualNeural';
+    const background = args.background || (brand.palette?.primary ? brand.palette.primary + 'FF' : '#FFFFFFFF');
+    // Azure TTS-Avatar bills per output minute of video; rough placeholder.
+    const azCost = Math.max(1, Math.ceil(script.length / 700)) * 0.50;
+    reportCost({
+        provider: 'azure-speech', model: `tts-avatar/${character}`,
+        units: `${script.length} chars · voice ${voice}`, costUsd: azCost, dryRun,
+    });
+    if (dryRun) {
+        console.log(`SCRIPT: ${script}`);
+        console.log(`Avatar: ${character} (${style}), voice ${voice}, bg ${background}`);
+        console.log(`Would have written MP4 (Azure TTS-Avatar) to ${brand.output_root || 'assets/generated'}/avatar/`);
+        process.exit(0);
+    }
+    if (!creds.azureSpeechKey || !creds.azureSpeechRegion) {
+        console.error('ERROR: Azure Speech not configured. Need secrets: azure-speech-key, azure-speech-region.');
+        process.exit(2);
+    }
+    let buf;
+    try {
+        buf = await ttsAvatarSynthesize({
+            creds, text: script, voice, character, style, background,
+            log: (m) => process.stderr.write(m + '\n'),
+        });
+    } catch (e) {
+        console.error(`ERROR (Azure TTS-Avatar): ${e.message}`);
+        process.exit(2);
+    }
+    const slug = args.name || script.split(/\s+/).slice(0, 6).join(' ');
+    const outputPath = pickOutputPath({ brand, type: 'avatar', name: slug, ext: 'mp4', explicit: args.output });
+    (await import('node:fs')).writeFileSync(outputPath, buf);
+    writeMeta(outputPath, {
+        script, engine: 'azure', character, style, voice, background,
+        brand_name: brand.name, cost_estimate_usd: azCost,
+    });
+    console.log(`\nOUTPUT: ${outputPath}`);
+    console.log(`Cost: ~$${azCost.toFixed(2)} (Azure grant)`);
+    process.exit(0);
+}
 
 const avatar = brand.avatar || {};
 const presenter = args.presenter
