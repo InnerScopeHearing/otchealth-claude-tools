@@ -81,14 +81,27 @@ Set these env vars (or paste into a one-time `~/.designer/credentials.env` file 
 
 | Env var | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | GPT-image-1, DALL-E 3, GPT-4 Vision (for asset review) |
+| `OPENAI_API_KEY` | GPT-image-1 (image gen), GPT-4o Vision (asset review) |
 | `OPENAI_ORG_ID` | optional, for multi-org accounts |
 | `GOOGLE_APPLICATION_CREDENTIALS` | path to service account JSON for Vertex AI |
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID for Vertex AI |
-| `ELEVENLABS_API_KEY` | voiceover generation |
+| `ELEVENLABS_API_KEY` | voiceover, music, sound-effects |
 | `RECRAFT_API_KEY` | optional, for vectorization (otherwise uses local potrace) |
+| `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` | optional — route GPT-image-1 + GPT-4o Vision to Azure OpenAI (spends the Azure grant) |
+| `AZURE_OPENAI_IMAGE_DEPLOYMENT` / `AZURE_OPENAI_VISION_DEPLOYMENT` | Azure deployment names for the image + vision models |
+| `AZURE_OPENAI_API_VERSION` | optional, defaults to `2025-04-01-preview` |
+| `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` | optional — Azure AI Speech (TTS-Avatar / neural TTS) |
 
 Run `bash setup.sh` once per machine to install deps and validate credentials.
+
+### Provider routing (OpenAI vs Azure)
+
+`gen-image.mjs` and `review-asset.mjs` accept `--provider openai|azure` (or set
+`DESIGNER_OPENAI_PROVIDER=azure` to flip the default for a session). Both back
+the same models — Azure just bills the Microsoft grant instead of direct OpenAI
+credits. Azure is used only when its secrets are configured; otherwise the call
+fails with a clear "not configured" message. (DALL·E 3 was retired Mar 2026 —
+the `dall-e-3` alias now routes to `gpt-image-1`.)
 
 ## Output convention
 

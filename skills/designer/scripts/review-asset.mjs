@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import {
     loadCredentials, requireCredential, resolveBrand, parseArgs,
+    resolveOpenAIProvider, requireAzureOpenAI, azureOpenAIUrl,
 } from './_lib.mjs';
 
 const args = parseArgs(process.argv);
@@ -53,7 +54,7 @@ if (dryRun) {
     process.exit(0);
 }
 
-requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
+const provider = resolveOpenAIProvider(args);
 
 const ext = extname(imagePath).slice(1).toLowerCase();
 const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
@@ -77,14 +78,26 @@ Evaluate the attached image. Return JSON with exactly these keys:
   "refined_prompt": "<an improved generation prompt to fix the issues>"
 }`;
 
-const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
+let url, headers;
+if (provider === 'azure') {
+    requireAzureOpenAI(creds, creds.azureOpenAIVisionDeployment);
+    url = azureOpenAIUrl(creds, creds.azureOpenAIVisionDeployment, 'chat/completions');
+    headers = { 'Content-Type': 'application/json', 'api-key': creds.azureOpenAIKey };
+} else {
+    requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
+    url = 'https://api.openai.com/v1/chat/completions';
+    headers = {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${creds.openaiKey}`,
         ...(creds.openaiOrg ? { 'OpenAI-Organization': creds.openaiOrg } : {}),
-    },
+    };
+}
+
+const res = await fetch(url, {
+    method: 'POST',
+    headers,
     body: JSON.stringify({
+        // On Azure the deployment selects the model; the model field is ignored.
         model,
         response_format: { type: 'json_object' },
         messages: [
@@ -100,7 +113,7 @@ const res = await fetch('https://api.openai.com/v1/chat/completions', {
     }),
 });
 if (!res.ok) {
-    console.error(`OpenAI vision ${res.status}: ${await res.text()}`);
+    console.error(`${provider} vision ${res.status}: ${await res.text()}`);
     process.exit(2);
 }
 const data = await res.json();

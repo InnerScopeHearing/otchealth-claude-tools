@@ -11,9 +11,16 @@
 //   GOOGLE_CLOUD_PROJECT            project id (default otchealth-shared-prod)
 //
 // Secret Manager secret IDs expected (create once as org admin — see README):
-//   openai-api-key       -> OPENAI_API_KEY
-//   elevenlabs-api-key   -> ELEVENLABS_API_KEY
-//   recraft-api-key      -> RECRAFT_API_KEY   (optional; skipped if absent)
+//   openai-api-key                  -> OPENAI_API_KEY
+//   elevenlabs-api-key              -> ELEVENLABS_API_KEY
+//   recraft-api-key                 -> RECRAFT_API_KEY                 (optional)
+//   azure-openai-endpoint           -> AZURE_OPENAI_ENDPOINT           (optional)
+//   azure-openai-key                -> AZURE_OPENAI_API_KEY            (optional)
+//   azure-openai-api-version        -> AZURE_OPENAI_API_VERSION        (optional)
+//   azure-openai-image-deployment   -> AZURE_OPENAI_IMAGE_DEPLOYMENT   (optional)
+//   azure-openai-vision-deployment  -> AZURE_OPENAI_VISION_DEPLOYMENT  (optional)
+//   azure-speech-key                -> AZURE_SPEECH_KEY                (optional)
+//   azure-speech-region             -> AZURE_SPEECH_REGION             (optional)
 
 import { readFileSync } from 'node:fs';
 import crypto from 'node:crypto';
@@ -26,6 +33,14 @@ const MAP = [
   { id: 'openai-api-key', env: 'OPENAI_API_KEY', required: true },
   { id: 'elevenlabs-api-key', env: 'ELEVENLABS_API_KEY', required: true },
   { id: 'recraft-api-key', env: 'RECRAFT_API_KEY', required: false },
+  // Azure (all optional — emitted only once the secrets exist in the vault).
+  { id: 'azure-openai-endpoint', env: 'AZURE_OPENAI_ENDPOINT', required: false },
+  { id: 'azure-openai-key', env: 'AZURE_OPENAI_API_KEY', required: false },
+  { id: 'azure-openai-api-version', env: 'AZURE_OPENAI_API_VERSION', required: false },
+  { id: 'azure-openai-image-deployment', env: 'AZURE_OPENAI_IMAGE_DEPLOYMENT', required: false },
+  { id: 'azure-openai-vision-deployment', env: 'AZURE_OPENAI_VISION_DEPLOYMENT', required: false },
+  { id: 'azure-speech-key', env: 'AZURE_SPEECH_KEY', required: false },
+  { id: 'azure-speech-region', env: 'AZURE_SPEECH_REGION', required: false },
 ];
 
 if (!SA_PATH) {

@@ -44,6 +44,28 @@ To rotate a key later, add a new version (no code change, picks up `latest`):
 printf '%s' "<PASTE-NEW-KEY>" | gcloud secrets versions add openai-api-key --data-file=-
 ```
 
+#### Optional: Azure ($5k grant) — scoped resource keys only
+
+To let the skill spend Azure credits, create **two scoped resources** in the
+Azure Portal — an **Azure OpenAI** resource (with `gpt-image-1` and `gpt-4o`
+*deployments*) and an **Azure AI Speech** resource — then store their keys here.
+**Do not share Microsoft account or tenant-admin credentials**; only these
+resource keys are needed:
+
+```bash
+printf '%s' "<AZURE-OPENAI-ENDPOINT>"  | gcloud secrets create azure-openai-endpoint          --data-file=-
+printf '%s' "<AZURE-OPENAI-KEY>"       | gcloud secrets create azure-openai-key               --data-file=-
+printf '%s' "<IMAGE-DEPLOYMENT-NAME>"  | gcloud secrets create azure-openai-image-deployment  --data-file=-
+printf '%s' "<VISION-DEPLOYMENT-NAME>" | gcloud secrets create azure-openai-vision-deployment --data-file=-
+printf '%s' "<AZURE-SPEECH-KEY>"       | gcloud secrets create azure-speech-key               --data-file=-
+printf '%s' "<AZURE-SPEECH-REGION>"    | gcloud secrets create azure-speech-region            --data-file=-
+# optional override (defaults to 2025-04-01-preview):
+printf '%s' "2025-04-01-preview"       | gcloud secrets create azure-openai-api-version        --data-file=-
+```
+
+They're picked up automatically at the next session start. Until then the skill
+runs on OpenAI/Vertex/ElevenLabs exactly as before — Azure is purely additive.
+
 ## One-time setup
 
 ### 1. Create the repo and push (run locally)

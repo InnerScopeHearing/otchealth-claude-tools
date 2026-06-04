@@ -44,6 +44,15 @@ export function loadCredentials() {
         googleProject: process.env.GOOGLE_CLOUD_PROJECT,
         elevenlabsKey: process.env.ELEVENLABS_API_KEY,
         recraftKey: process.env.RECRAFT_API_KEY,
+        // Azure (optional — present only once the Azure resources are provisioned
+        // and their keys land in Secret Manager). See setup/fetch-secrets.mjs.
+        azureOpenAIEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
+        azureOpenAIKey: process.env.AZURE_OPENAI_API_KEY,
+        azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION || '2025-04-01-preview',
+        azureOpenAIImageDeployment: process.env.AZURE_OPENAI_IMAGE_DEPLOYMENT,
+        azureOpenAIVisionDeployment: process.env.AZURE_OPENAI_VISION_DEPLOYMENT,
+        azureSpeechKey: process.env.AZURE_SPEECH_KEY,
+        azureSpeechRegion: process.env.AZURE_SPEECH_REGION,
     };
 }
 
@@ -269,6 +278,42 @@ export function extractVeoVideoB64(response) {
         throw new Error(`Veo returned a GCS URI (${uri}) instead of inline bytes — fetch it from Cloud Storage, or omit any output storageUri.`);
     }
     throw new Error(`Job done but no video bytes in response: ${JSON.stringify(response).slice(0, 500)}`);
+}
+
+// ─── OpenAI provider routing (direct OpenAI vs Azure OpenAI) ──────────
+// Both back the same models (gpt-image-1, gpt-4o). Routing to Azure spends
+// the Azure grant instead of direct-OpenAI credits. Precedence:
+//   --provider flag  →  DESIGNER_OPENAI_PROVIDER env  →  'openai'
+export function resolveOpenAIProvider(args) {
+    const choice = (args && args.provider) || process.env.DESIGNER_OPENAI_PROVIDER || 'openai';
+    if (choice !== 'azure' && choice !== 'openai') {
+        throw new Error(`--provider must be 'openai' or 'azure' (got '${choice}')`);
+    }
+    return choice;
+}
+
+// Preflight the Azure OpenAI config on the real call path (not during dry-run).
+export function requireAzureOpenAI(creds, deployment) {
+    const missing = [];
+    if (!creds.azureOpenAIEndpoint) missing.push('azure-openai-endpoint');
+    if (!creds.azureOpenAIKey) missing.push('azure-openai-key');
+    if (!deployment) missing.push('a deployment name (azure-openai-*-deployment)');
+    if (missing.length) {
+        throw new Error(
+            `Azure provider selected but not fully configured. Missing: ${missing.join(', ')}.\n` +
+            '  Add these to GCP Secret Manager — see setup/fetch-secrets.mjs.'
+        );
+    }
+}
+
+// Build the Azure OpenAI REST URL for a given deployment + operation, e.g.
+//   azureOpenAIUrl(creds, deployment, 'images/generations')
+export function azureOpenAIUrl(creds, deployment, op) {
+    if (!deployment) {
+        throw new Error(`Azure OpenAI deployment name missing for '${op}'. Set the matching azure-openai-*-deployment secret.`);
+    }
+    const base = creds.azureOpenAIEndpoint.replace(/\/+$/, '');
+    return `${base}/openai/deployments/${deployment}/${op}?api-version=${creds.azureOpenAIApiVersion}`;
 }
 
 export const PATHS = { SKILL_HOME, USER_HOME };
