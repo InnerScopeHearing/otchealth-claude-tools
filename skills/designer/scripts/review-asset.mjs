@@ -78,45 +78,62 @@ Evaluate the attached image. Return JSON with exactly these keys:
   "refined_prompt": "<an improved generation prompt to fix the issues>"
 }`;
 
-let url, headers;
-if (provider === 'azure') {
-    requireAzureOpenAI(creds, creds.azureOpenAIVisionDeployment);
-    url = azureOpenAIUrl(creds, creds.azureOpenAIVisionDeployment, 'chat/completions');
-    headers = { 'Content-Type': 'application/json', 'api-key': creds.azureOpenAIKey };
-} else {
-    requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
-    url = 'https://api.openai.com/v1/chat/completions';
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${creds.openaiKey}`,
-        ...(creds.openaiOrg ? { 'OpenAI-Organization': creds.openaiOrg } : {}),
-    };
+async function callVision(useProvider) {
+    let url, headers;
+    if (useProvider === 'azure') {
+        requireAzureOpenAI(creds, creds.azureOpenAIVisionDeployment);
+        url = azureOpenAIUrl(creds, creds.azureOpenAIVisionDeployment, 'chat/completions');
+        headers = { 'Content-Type': 'application/json', 'api-key': creds.azureOpenAIKey };
+    } else {
+        requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
+        url = 'https://api.openai.com/v1/chat/completions';
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${creds.openaiKey}`,
+            ...(creds.openaiOrg ? { 'OpenAI-Organization': creds.openaiOrg } : {}),
+        };
+    }
+    const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            // On Azure the deployment selects the model; the model field is ignored.
+            model,
+            response_format: { type: 'json_object' },
+            messages: [
+                { role: 'system', content: system },
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: userText },
+                        { type: 'image_url', image_url: { url: dataUrl } },
+                    ],
+                },
+            ],
+        }),
+    });
+    if (!res.ok) throw new Error(`${useProvider} vision ${res.status}: ${await res.text()}`);
+    return res.json();
 }
 
-const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-        // On Azure the deployment selects the model; the model field is ignored.
-        model,
-        response_format: { type: 'json_object' },
-        messages: [
-            { role: 'system', content: system },
-            {
-                role: 'user',
-                content: [
-                    { type: 'text', text: userText },
-                    { type: 'image_url', image_url: { url: dataUrl } },
-                ],
-            },
-        ],
-    }),
-});
-if (!res.ok) {
-    console.error(`${provider} vision ${res.status}: ${await res.text()}`);
+let data;
+try {
+    if (provider === 'azure') {
+        // Azure is opt-in and pending quota — never fail the review when direct
+        // OpenAI can do it.
+        try {
+            data = await callVision('azure');
+        } catch (azErr) {
+            console.error(`WARN: Azure vision unavailable (${azErr.message}). Falling back to direct OpenAI.`);
+            data = await callVision('openai');
+        }
+    } else {
+        data = await callVision('openai');
+    }
+} catch (e) {
+    console.error(`ERROR: ${e.message}`);
     process.exit(2);
 }
-const data = await res.json();
 const raw = data.choices?.[0]?.message?.content || '{}';
 
 let critique;
