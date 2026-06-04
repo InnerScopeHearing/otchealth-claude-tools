@@ -13,7 +13,7 @@ Invoke this skill whenever a project needs a visual or audio asset and the user 
 
 These run on credits that are **live today**; default to them and the skill just works:
 - **Images / icons / vision review:** direct **OpenAI** (`gpt-image-1`, `gpt-4o`) — the default. Don't pass `--provider azure`.
-- **Video / talking avatars:** **Vertex Veo 3.1** (default engine) — validated live.
+- **Video:** direct **OpenAI Sora 2** (`gen-video.mjs`, default engine) — validated live, plenty of OpenAI credits; auto-falls-back to Veo if Sora is ever unavailable. **Talking avatars:** **Vertex Veo 3.1** (`gen-avatar.mjs`) — validated live.
 - **Voice / music / SFX:** **ElevenLabs** — live.
 - **Photoreal fixed-presenter avatar:** **Azure TTS-Avatar** (`gen-avatar.mjs --engine azure`) — validated live and fine to use.
 
@@ -24,7 +24,7 @@ These run on credits that are **live today**; default to them and the skill just
 - **This skill operates in the NON-PHI ring only.** Default project is `otchealth-shared-prod`. NEVER point this skill at `otchealth-medreview-prod` or any PHI project.
 - **No PHI in any generated asset, prompt, or metadata.** Generated content is brand/marketing only.
 - **FourVault is OUTSIDE the OTCHealth org.** When generating for FourVault, the credentials.env must point at the personal Google Cloud project, not the company project. See `docs/gcp/ARCHITECTURE.md` in any AWARE-derived repo.
-- **Video / avatar models:** Veo 3.1 is approved and is the default for video and talking avatars (native audio + lip-synced dialogue, on Google Cloud credits). Veo 2 remains available via `--model veo-2.0-generate-001` for plain silent B-roll. Imagen 4 is GA (preview IDs retired Nov 30, 2025).
+- **Video / avatar models:** Direct **OpenAI Sora 2** is the default video engine (`gen-video.mjs`). **Veo 3.1** powers talking avatars (`gen-avatar.mjs`) and is the video fallback / alternate (`--engine veo`, native lip-synced audio); Veo 2 via `--model veo-2.0-generate-001` for plain silent B-roll. Imagen 4 is GA (preview IDs retired Nov 30, 2025).
 - **Avatars are synthetic, not real people.** Never generate an avatar resembling a real, identifiable person without their consent. No PHI, no implied medical credentials the brand doesn't hold, and keep `voice.do_not` claims out of any spoken script.
 
 ## What it does
@@ -37,7 +37,7 @@ These run on credits that are **live today**; default to them and the skill just
 | Empty-state illustration | `gen-image.mjs --kind empty-state` | GPT-image-1 | $0.04 |
 | App icon family (1024 master + all iOS + Android sizes) | `gen-app-icon-family.mjs` | DALL-E 3 HD + sharp post-processing | $0.12 + free |
 | App Store screenshot (device frame + headline overlay) | `compose-screenshot.mjs` | sharp + Imagen 4 for headline text rendering | $0.04 + free |
-| AI video (App Preview, marketing, walkthrough) | `gen-video.mjs` | Google Vertex Veo 3.1 (default) or Veo 2 | ~$0.50/sec ($0.75 with audio) |
+| AI video (App Preview, marketing, walkthrough) | `gen-video.mjs` | OpenAI Sora 2 (default) · Veo 3.1 (`--engine veo`) · Azure Sora (`--engine azure`) | ~$0.10/sec Sora · ~$0.50/sec Veo |
 | **Realistic AI talking avatar** (presenter reads a script, native lip-sync) | `gen-avatar.mjs` | Google Vertex Veo 3.1 (text- or image-to-avatar) | ~$0.75/sec ($0.40/sec on `-fast`) |
 | Voiceover for video | `gen-voiceover.mjs` | ElevenLabs (33M-char startup grant active) | $0.30/1000 chars |
 | **Background music / underscore** (app ambience, video bed, intro) | `gen-music.mjs` | ElevenLabs Music | ~$0.06/10s (grant) |
@@ -53,7 +53,7 @@ The handcuffs are off: route every job to whichever model on our credits
 produces the best result. The menu, by medium:
 
 - **Stills / icons / hero art** — OpenAI **GPT-image-1** (default, best instruction-following), **DALL-E 3 HD** (app-icon master), Vertex **Imagen 4 GA** (`imagen4` / `imagen4-ultra` / `imagen4-fast`; best in-image text rendering for screenshot headlines). All via `gen-image.mjs --model …`.
-- **Video / motion / animated loops** — Vertex **Veo 3.1** (default; native audio + lip-sync, text- or image-to-video) and **Veo 3.1 Fast** (`--model veo-3.1-fast-generate-001`, cheaper); **Veo 2** for plain silent B-roll; **Sora 2** on Azure OpenAI via `gen-video.mjs --engine sora` (spends the Azure grant). Animate any still by passing `--seed-image`.
+- **Video / motion / animated loops** — direct **OpenAI Sora 2** (`gen-video.mjs`, default; `--sora-model sora-2-pro` for higher quality); **Veo 3.1** via `--engine veo` (native audio + lip-sync, text- or image-to-video, `--seed-image`); **Veo 2** for plain silent B-roll; **Azure Sora** via `--engine azure` (spends the Azure grant, pending quota). Sora is the default because we have ample OpenAI credits; it auto-falls-back to Veo on failure.
 - **Talking avatars / presenters** — two engines: Vertex **Veo 3.1** (default, cinematic, generative) via `gen-avatar.mjs`; or Azure **AI Speech TTS-Avatar** via `--engine azure` (a fixed, consistent enterprise cast — Lisa/Max/Meg — ideal for high-volume identical explainers, on the Azure grant). Reusable on-brand presenter defined in `brand.avatar` (and `brand.avatar.azure`).
 - **Voice / narration** — ElevenLabs (`gen-voiceover.mjs`, `eleven_v3`); 33M-char grant active. Set a per-project voice via `brand.voiceover_default_voice_id`.
 - **Music** — ElevenLabs Music via `gen-music.mjs` (instrumental beds by default, `--vocal` for songs).
