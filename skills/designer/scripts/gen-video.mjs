@@ -22,6 +22,7 @@ import {
     getVertexAccessToken, runVeoJob, extractVeoVideoB64, requireAzureOpenAI,
 } from './_lib.mjs';
 import { soraGenerateVideo } from './_azure.mjs';
+import { openaiGenerateVideo } from './_openai.mjs';
 
 const args = parseArgs(process.argv);
 const dryRun = Boolean(args['dry-run']);
@@ -30,16 +31,18 @@ const duration = parseInt(args.duration || '8', 10);
 const ratio = args.ratio || '16:9';
 const resolution = args.resolution || '1080p';
 const seedImage = args['seed-image'];
-const engine = args.engine || 'veo'; // veo (Vertex) | sora (Azure OpenAI)
+// Primary video engine is direct OpenAI Sora 2 (plenty of OpenAI credits).
+// Alternatives: veo (Vertex, native lip-sync) | azure (Azure OpenAI Sora).
+const engine = args.engine || 'openai';
 const model = args.model || 'veo-3.1-generate-001';
-const audio = Boolean(args.audio); // off by default for plain B-roll; on for talkies
+const audio = Boolean(args.audio); // Veo-only flag; Sora generates its own audio
 
 if (!prompt) {
-    console.error('Usage: gen-video.mjs --prompt "..." [--engine veo|sora] [--duration N] [--ratio 16:9|9:16|1:1] [--resolution 720p|1080p] [--audio] [--model ...]');
+    console.error('Usage: gen-video.mjs --prompt "..." [--engine openai|veo|azure] [--duration N] [--ratio 16:9|9:16|1:1] [--resolution 720p|1080p] [--audio] [--model ...]');
     process.exit(1);
 }
-if (engine !== 'veo' && engine !== 'sora') {
-    console.error(`--engine must be 'veo' or 'sora' (got '${engine}')`);
+if (!['openai', 'veo', 'azure'].includes(engine)) {
+    console.error(`--engine must be 'openai', 'veo', or 'azure' (got '${engine}')`);
     process.exit(1);
 }
 
@@ -47,8 +50,66 @@ const brand = resolveBrand(args.brand);
 const creds = loadCredentials();
 const fullPrompt = `${brandPromptPrefix(brand, 'illustration')} ${prompt}`.trim();
 
+// ─── Sora 2 on direct OpenAI (PRIMARY / default) ──────────────────────
+if (engine === 'openai') {
+    const soraModel = args['sora-model'] || 'sora-2'; // or sora-2-pro
+    // sora-2 sizes are WxH; map aspect ratio to a supported pair.
+    const size = ratio === '9:16' ? '720x1280'
+        : ratio === '1:1' ? '1024x1024'
+        : '1280x720';
+    // sora-2 accepts 4 / 8 / 12 seconds — snap to the nearest.
+    const soraSeconds = [4, 8, 12].reduce((a, b) => Math.abs(b - duration) < Math.abs(a - duration) ? b : a, 8);
+    // Rough list estimate (verify on the OpenAI dashboard).
+    const perSec = soraModel === 'sora-2-pro' ? 0.30 : 0.10;
+    const soraCost = soraSeconds * perSec;
+    reportCost({ provider: 'openai', model: soraModel, units: `${soraSeconds}s ${size}`, costUsd: soraCost, dryRun });
+    if (dryRun) {
+        console.log('PROMPT:');
+        console.log(`  ${fullPrompt}`);
+        console.log(`Would have written ~${soraSeconds}s MP4 (OpenAI ${soraModel}, ${size}) to ${brand.output_root || 'assets/generated'}/video/`);
+        process.exit(0);
+    }
+    requireCredential(creds, 'openaiKey', 'OPENAI_API_KEY');
+    let buf;
+    try {
+        buf = await openaiGenerateVideo({
+            key: creds.openaiKey, org: creds.openaiOrg, prompt: fullPrompt,
+            seconds: soraSeconds, size, model: soraModel, log: (m) => process.stderr.write(m + '\n'),
+        });
+    } catch (e) {
+        // Don't fail the job — fall back to Veo on Vertex if Sora is unavailable.
+        console.error(`WARN: OpenAI Sora unavailable (${e.message}). Falling back to Veo on Vertex.`);
+        try {
+            requireCredential(creds, 'googleProject', 'GOOGLE_CLOUD_PROJECT');
+            requireCredential(creds, 'googleCredsPath', 'GOOGLE_APPLICATION_CREDENTIALS');
+            const sa = JSON.parse((await import('node:fs')).readFileSync(creds.googleCredsPath, 'utf8'));
+            const token = await getVertexAccessToken(sa);
+            const response = await runVeoJob({
+                token, project: creds.googleProject, model: 'veo-3.1-generate-001',
+                instances: [{ prompt: fullPrompt }],
+                parameters: { durationSeconds: 8, aspectRatio: ratio, resolution, generateAudio: true, sampleCount: 1, personGeneration: 'allow_adult' },
+            });
+            buf = Buffer.from(extractVeoVideoB64(response), 'base64');
+        } catch (veoErr) {
+            console.error(`ERROR: Sora and Veo fallback both failed: ${veoErr.message}`);
+            process.exit(2);
+        }
+    }
+    const slug = args.name || prompt.split(/\s+/).slice(0, 6).join(' ');
+    const outputPath = pickOutputPath({ brand, type: 'video', name: slug, ext: 'mp4', explicit: args.output });
+    (await import('node:fs')).writeFileSync(outputPath, buf);
+    writeMeta(outputPath, {
+        user_prompt: prompt, full_prompt: fullPrompt, duration_sec: soraSeconds,
+        aspect_ratio: ratio, engine: 'openai', model: soraModel,
+        brand_name: brand.name, cost_estimate_usd: soraCost,
+    });
+    console.log(`\nOUTPUT: ${outputPath}`);
+    console.log(`Cost: ~$${soraCost.toFixed(2)} (OpenAI)`);
+    process.exit(0);
+}
+
 // ─── Sora 2 on Azure OpenAI (spends the Azure grant) ──────────────────
-if (engine === 'sora') {
+if (engine === 'azure') {
     // Sora resolutions are width×height; map ratio → a supported pair.
     const dims = ratio === '9:16' ? { width: 720, height: 1280 }
         : ratio === '1:1' ? { width: 1080, height: 1080 }
@@ -82,7 +143,7 @@ if (engine === 'sora') {
     (await import('node:fs')).writeFileSync(outputPath, buf);
     writeMeta(outputPath, {
         user_prompt: prompt, full_prompt: fullPrompt, duration_sec: soraSeconds,
-        aspect_ratio: ratio, engine: 'sora', model: creds.azureOpenAIVideoDeployment,
+        aspect_ratio: ratio, engine: 'azure', model: creds.azureOpenAIVideoDeployment,
         brand_name: brand.name, cost_estimate_usd: soraCost,
     });
     console.log(`\nOUTPUT: ${outputPath}`);
