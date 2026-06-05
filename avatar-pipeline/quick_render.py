@@ -36,9 +36,11 @@ def main():
     ap.add_argument("--script", required=True, help="script text or a path (also looks under scripts/)")
     ap.add_argument("--base", required=True, help="presenter base video (latentsync/musetalk) or photo (sadtalker)")
     ap.add_argument("--model", default="latentsync", choices=config.VALID_MODELS)
+    ap.add_argument("--backend", default="replicate", choices=("replicate", "modal"),
+                    help="no-quota GPU backend for the interim render")
     a = ap.parse_args()
 
-    if not config.REPLICATE_API_TOKEN:
+    if a.backend == "replicate" and not config.REPLICATE_API_TOKEN:
         sys.exit("Set REPLICATE_API_TOKEN (Replicate account, no GPU quota needed).")
     if not splice.ffmpeg_available():
         sys.exit("ffmpeg not found on PATH.")
@@ -49,24 +51,35 @@ def main():
         p = config.SCRIPTS_DIR / a.script
     script_text = p.read_text(encoding="utf-8").strip() if p.exists() else a.script.strip()
 
-    base_url = _to_url(a.base)
-
     # 1. voiceover (ElevenLabs)
     audio_paths = voiceover.generate_voiceover(script_text)
 
-    # 2. per-segment lip-sync on Replicate
+    # 2. per-segment lip-sync on the chosen no-quota GPU backend
     clip_paths = []
+    base_url = None
+    modal_fn = None
+    if a.backend == "modal":
+        import modal
+        modal_fn = modal.Function.lookup("otchealth-avatar", "lipsync_latentsync")
+        base_bytes = Path(a.base).read_bytes() if Path(a.base).exists() else None
+    else:
+        base_url = _to_url(a.base)
+
     for i, audio_path in enumerate(audio_paths):
-        print(f"[replicate] lip-sync segment {i+1}/{len(audio_paths)} ({a.model}) ...")
-        audio_url = avatar.replicate_upload_file(audio_path)
-        clip_url = avatar.generate_clip_replicate(base_url, audio_url, f"clip_{i:03d}", a.model)
         local_clip = config.CLIPS_DIR / f"clip_{i:03d}.mp4"
-        import requests
-        with requests.get(clip_url, stream=True, timeout=900) as r:
-            r.raise_for_status()
-            with open(local_clip, "wb") as f:
-                for chunk in r.iter_content(1 << 16):
-                    f.write(chunk)
+        print(f"[{a.backend}] lip-sync segment {i+1}/{len(audio_paths)} ({a.model}) ...")
+        if a.backend == "modal":
+            out_bytes = modal_fn.remote(base_bytes, Path(audio_path).read_bytes())
+            local_clip.write_bytes(out_bytes)
+        else:
+            audio_url = avatar.replicate_upload_file(audio_path)
+            clip_url = avatar.generate_clip_replicate(base_url, audio_url, f"clip_{i:03d}", a.model)
+            import requests
+            with requests.get(clip_url, stream=True, timeout=900) as r:
+                r.raise_for_status()
+                with open(local_clip, "wb") as f:
+                    for chunk in r.iter_content(1 << 16):
+                        f.write(chunk)
         clip_paths.append(local_clip)
 
     # 3. splice

@@ -32,9 +32,9 @@ for d in (AUDIO_DIR, CLIPS_DIR, OUTPUT_DIR, SCRIPTS_DIR):
 
 # --- Model / backend defaults ---
 DEFAULT_MODEL = "latentsync"          # latentsync | musetalk | sadtalker
-DEFAULT_BACKEND = "azure"             # azure | replicate | fal
+DEFAULT_BACKEND = "azure"             # azure | replicate | modal | fal
 VALID_MODELS = ("latentsync", "musetalk", "sadtalker")
-VALID_BACKENDS = ("azure", "replicate", "fal")
+VALID_BACKENDS = ("azure", "replicate", "modal", "fal")
 
 # Models that relip-sync a BASE VIDEO (vs photo-only SadTalker)
 BASE_VIDEO_MODELS = ("latentsync", "musetalk")
