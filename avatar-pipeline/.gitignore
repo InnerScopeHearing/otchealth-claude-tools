@@ -23,3 +23,6 @@ weights/
 *.pth
 *.ckpt
 *.safetensors
+
+# keep the demo base video
+!samples/presenter.mp4

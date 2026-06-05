@@ -20,7 +20,7 @@ on:
       base_video:
         description: "Presenter base video URL or path (required for latentsync/musetalk)"
         required: false
-        default: ""
+        default: "samples/presenter.mp4"
 
 concurrency:
   group: avatar-render

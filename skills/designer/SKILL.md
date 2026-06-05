@@ -60,6 +60,7 @@ produces the best result. The menu, by medium:
 - **Sound design** — ElevenLabs Sound Effects via `gen-sfx.mjs` (UI chimes, notifications, stingers).
 - **Quality control** — `review-asset.mjs` runs GPT-4o Vision as an art director: scores brand fit, flags `do_not` violations, and returns a refined prompt to regenerate from.
 - **Vectors / cleanup** — `vectorize.mjs` (Recraft or local potrace), `optimize-asset.mjs` (sharp, free), `compose-screenshot.mjs` (device frames + headline overlay).
+- **Long-form lip-synced presenter video (real presenter + your ElevenLabs voice)** — NOT this skill. Use the sibling **`avatar-pipeline/`** in this repo: a cloud pipeline (GitHub Actions, GPU on Replicate or Azure) that relip-syncs a short presenter base video to a full script in your own ElevenLabs voice via LatentSync/MuseTalk/SadTalker. Trigger the `avatar-render` workflow (phone-friendly) or `python avatar-pipeline/quick_render.py`. The designer `gen-avatar.mjs` here is for short *generative* talking heads (Veo / Azure TTS-Avatar); the avatar-pipeline is for long, consistent presenter videos. See `avatar-pipeline/README.md`.
 
 A full App Preview can be assembled end-to-end from this stack with no
 third-party SaaS: `gen-avatar.mjs` (presenter) + `gen-video.mjs` (B-roll) +

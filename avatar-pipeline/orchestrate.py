@@ -95,12 +95,26 @@ def main():
         audio_paths = voiceover.generate_voiceover(script_text)
         segments = audio_paths
 
-        # 3. upload audio + base video
-        audio_urls = []
-        for i, ap_path in enumerate(audio_paths):
-            key = f"avatar/{run_id}/audio_{i:03d}.mp3"
-            audio_urls.append(storage.upload(ap_path, key, content_type="audio/mpeg"))
-        base_video_url = _resolve_base_video(args.base_video, run_id)
+        # 3. host audio + base video so the GPU backend can fetch them.
+        #    replicate: upload to Replicate's files API (no object store needed).
+        #    azure/fal: upload to R2 (the VM / fal pulls from there).
+        def _host(path, key):
+            if args.backend == "replicate":
+                return avatar.replicate_upload_file(path)
+            return storage.upload(path, key, content_type=None)
+
+        audio_urls = [_host(ap_path, f"avatar/{run_id}/audio_{i:03d}.mp3")
+                      for i, ap_path in enumerate(audio_paths)]
+
+        base_video_url = None
+        if args.base_video:
+            if args.base_video.startswith("http"):
+                base_video_url = args.base_video
+            else:
+                bp = Path(args.base_video)
+                if not bp.exists():
+                    bp = config.ROOT / args.base_video
+                base_video_url = _host(str(bp), f"avatar/{run_id}/base{bp.suffix or '.mp4'}")
 
         # 4. start GPU (azure backend only)
         if args.backend == "azure":
@@ -124,9 +138,13 @@ def main():
         final_path = splice.concat_clips(clip_paths, config.OUTPUT_DIR / "final.mp4")
         print(f"[splice] -> {final_path}")
 
-        # 7. publish + log
-        final_key = f"avatar/{run_id}/final.mp4"
-        final_url = storage.upload(final_path, final_key, content_type="video/mp4")
+        # 7. publish to R2 if configured (optional; the GitHub artifact is the
+        #    primary phone-download path). Skip cleanly when R2 is not set up.
+        if config.R2_ACCOUNT_ID and config.R2_ACCESS_KEY_ID:
+            try:
+                final_url = storage.upload(final_path, f"avatar/{run_id}/final.mp4", content_type="video/mp4")
+            except Exception as ue:
+                print(f"[warn] R2 upload skipped: {ue}")
         status = "success"
     except Exception as e:
         print(f"[error] {e}")
