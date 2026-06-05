@@ -1,0 +1,25 @@
+# avatar-pipeline — local build/test secrets. NEVER commit this file.
+.env
+*.env
+!.env.example
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# generated media / work dirs
+audio/
+clips/
+output/
+*.mp4
+*.wav
+*.mp3
+
+# weights (never in git)
+weights/
+*.pt
+*.pth
+*.ckpt
+*.safetensors

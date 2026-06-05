@@ -1,0 +1,42 @@
+name: avatar-provision
+
+# One-time (or rebuild) provisioning of the GPU VM, run in the cloud.
+# Requires AZURE_CREDENTIALS secret and non-zero GPU quota (CHECKPOINT 1).
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: eastus | westus2
+        required: true
+        default: eastus
+      sku:
+        description: GPU SKU
+        required: true
+        default: Standard_NC4as_T4_v3
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: avatar-pipeline
+    env:
+      AZURE_RG: ${{ vars.AZURE_RG || 'otchealth-avatar-rg' }}
+      AZURE_VM_NAME: ${{ vars.AZURE_VM_NAME || 'otchealth-avatar-gpu' }}
+      AZURE_REGION: ${{ inputs.region }}
+      AZURE_VM_SKU: ${{ inputs.sku }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Show subscription + GPU quota
+        run: |
+          az account show -o table
+          echo "GPU quota in $AZURE_REGION:"
+          az vm list-usage --location "$AZURE_REGION" --only-show-errors \
+            --query "[?contains(name.value,'NCAS') || contains(name.value,'NCASv3') || contains(name.value,'NVADSA10')].{Family:name.localizedValue,Used:currentValue,Limit:limit}" -o table
+      - name: Provision
+        run: bash infra/provision.sh

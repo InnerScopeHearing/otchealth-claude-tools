@@ -1,0 +1,81 @@
+name: avatar-render
+
+# Trigger from the GitHub mobile app (Actions tab -> Run workflow) or via
+# `gh workflow run avatar-render.yml -f script=scripts/demo.md`.
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Script text, or a path under avatar-pipeline/scripts/"
+        required: true
+        default: scripts/demo.md
+      model:
+        description: latentsync | musetalk | sadtalker
+        required: true
+        default: latentsync
+      backend:
+        description: azure | fal
+        required: true
+        default: azure
+      base_video:
+        description: "Presenter base video URL or path (required for latentsync/musetalk)"
+        required: false
+        default: ""
+
+concurrency:
+  group: avatar-render
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: avatar-pipeline
+    env:
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL_BASE }}
+      NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+      NOTION_RENDER_DB_ID: ${{ secrets.NOTION_RENDER_DB_ID }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      AZURE_RG: ${{ vars.AZURE_RG || 'otchealth-avatar-rg' }}
+      AZURE_VM_NAME: ${{ vars.AZURE_VM_NAME || 'otchealth-avatar-gpu' }}
+      AZURE_REGION: ${{ vars.AZURE_REGION || 'eastus' }}
+      AZURE_VM_SKU: ${{ vars.AZURE_VM_SKU || 'Standard_NC4as_T4_v3' }}
+      GHCR_IMAGE: ${{ vars.GHCR_IMAGE || format('ghcr.io/{0}/otchealth-avatar:latest', github.repository_owner) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ffmpeg + deps
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install -r requirements.txt
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Render
+        run: |
+          python orchestrate.py \
+            --script "${{ inputs.script }}" \
+            --model "${{ inputs.model }}" \
+            --backend "${{ inputs.backend }}" \
+            ${{ inputs.base_video != '' && format('--base-video "{0}"', inputs.base_video) || '' }}
+      - name: Upload final.mp4 artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: avatar-final
+          path: avatar-pipeline/output/final.mp4
+          if-no-files-found: warn
+      - name: Always deallocate GPU VM (cost safety)
+        if: always()
+        run: az vm deallocate -g "$AZURE_RG" -n "$AZURE_VM_NAME" --only-show-errors || true

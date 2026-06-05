@@ -1,0 +1,4 @@
+# Orchestrator (runs on the GitHub-hosted Ubuntu runner; no GPU needed here)
+requests>=2.32
+boto3>=1.34
+python-dotenv>=1.0

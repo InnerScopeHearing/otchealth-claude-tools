@@ -1,0 +1,23 @@
+name: avatar-stop
+
+# Manual force-deallocate of the GPU VM. Trigger from your phone anytime
+# (Actions -> avatar-stop -> Run workflow) to guarantee the GPU is off.
+on:
+  workflow_dispatch:
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AZURE_RG: ${{ vars.AZURE_RG || 'otchealth-avatar-rg' }}
+      AZURE_VM_NAME: ${{ vars.AZURE_VM_NAME || 'otchealth-avatar-gpu' }}
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Deallocate VM
+        run: |
+          az vm deallocate -g "$AZURE_RG" -n "$AZURE_VM_NAME" --only-show-errors
+          echo "Deallocated $AZURE_VM_NAME. GPU billing stopped."
