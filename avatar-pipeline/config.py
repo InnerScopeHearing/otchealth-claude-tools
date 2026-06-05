@@ -45,7 +45,7 @@ MAX_SEGMENT_SECONDS = 60
 # --- ElevenLabs ---
 ELEVENLABS_API_KEY = _get("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = _get("ELEVENLABS_VOICE_ID")
-ELEVENLABS_MODEL = _get("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+ELEVENLABS_MODEL = _get("ELEVENLABS_MODEL", "eleven_v3")  # latest model; any voice id works via ELEVENLABS_VOICE_ID
 
 # --- Cloudflare R2 (S3-compatible) ---
 R2_ACCESS_KEY_ID = _get("R2_ACCESS_KEY_ID")
