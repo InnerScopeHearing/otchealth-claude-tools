@@ -19,6 +19,18 @@ import sys
 import time
 from pathlib import Path
 
+import requests
+
+
+def _http_download(url, dest):
+    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    with requests.get(url, stream=True, timeout=900) as r:
+        r.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in r.iter_content(1 << 16):
+                f.write(chunk)
+    return dest
+
 import config
 import voiceover
 import storage
@@ -104,8 +116,8 @@ def main():
             print(f"[infer] segment {i+1}/{len(audio_urls)} via {args.backend}/{args.model}")
             clip_url = avatar.generate_clip(args.backend, base_video_url, audio_url, out_key, args.model)
             local_clip = config.CLIPS_DIR / f"clip_{i:03d}.mp4"
-            # derive the R2 key from the known out_key for the download
-            storage.download(out_key, local_clip)
+            # backend-agnostic: download the clip from whatever URL the backend returned
+            _http_download(clip_url, local_clip)
             clip_paths.append(local_clip)
 
         # 6. splice

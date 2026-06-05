@@ -21,6 +21,22 @@ fallback for hero shots.
    publishes `final.mp4` as a workflow artifact you can download from your phone.
 6. An `if: always()` step deallocates the VM, even on failure.
 
+## Interim path: render today without Azure GPU quota
+
+Azure GPU quota needs manual support approval on credited subscriptions, which
+can take a day. To produce videos now, the pipeline supports a no-quota managed
+GPU via **Replicate** (`--backend replicate`), and a standalone runner that needs
+no Azure, no R2, and no GitHub Actions:
+
+```
+python quick_render.py --script scripts/demo.md --base presenter.mp4 --model latentsync
+```
+
+It only needs `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `REPLICATE_API_TOKEN`,
+and a presenter base video (or a photo with `--model sadtalker`). Inputs are
+uploaded to Replicate's files API, so no object store is required. Switch to
+`--backend azure` once the GPU quota lands.
+
 ## Models
 
 - `latentsync` (default, needs a presenter BASE VIDEO)

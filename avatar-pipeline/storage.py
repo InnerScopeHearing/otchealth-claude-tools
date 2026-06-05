@@ -6,9 +6,6 @@ domain bound to the bucket).
 """
 from pathlib import Path
 
-import boto3
-from botocore.config import Config
-
 import config
 
 _client = None
@@ -17,6 +14,9 @@ _client = None
 def client():
     global _client
     if _client is None:
+        # Lazy import so the no-R2 paths (e.g. Replicate quick_render) do not require boto3.
+        import boto3
+        from botocore.config import Config
         if not (config.R2_ENDPOINT and config.R2_ACCESS_KEY_ID and config.R2_SECRET_ACCESS_KEY):
             raise RuntimeError("R2 credentials are not fully configured (need R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY).")
         _client = boto3.client(

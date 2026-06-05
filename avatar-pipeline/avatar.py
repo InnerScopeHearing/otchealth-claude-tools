@@ -131,7 +131,70 @@ def generate_clip_fal(base_video_url, audio_url, out_key, model):
     return storage.upload(tmp, out_key, content_type="video/mp4")
 
 
+# ----------------------------- Replicate backend ----------------------------
+# No GPU quota required. Hosts LatentSync / MuseTalk / SadTalker. Interim path
+# while the Azure GPU quota request is in review.
+_REPLICATE_BASE = "https://api.replicate.com/v1"
+
+
+def _replicate_headers():
+    if not config.REPLICATE_API_TOKEN:
+        raise RuntimeError("REPLICATE_API_TOKEN not set; cannot use --backend replicate.")
+    return {"Authorization": f"Bearer {config.REPLICATE_API_TOKEN}", "Content-Type": "application/json"}
+
+
+def replicate_upload_file(local_path):
+    """Upload a local file to Replicate's files API and return its served URL."""
+    with open(local_path, "rb") as fh:
+        resp = requests.post(
+            f"{_REPLICATE_BASE}/files",
+            headers={"Authorization": f"Bearer {config.REPLICATE_API_TOKEN}"},
+            files={"content": (str(local_path).split("/")[-1], fh)},
+            timeout=300,
+        )
+    if not resp.ok:
+        raise RuntimeError(f"replicate file upload {resp.status_code}: {resp.text[:300]}")
+    return resp.json()["urls"]["get"]
+
+
+def generate_clip_replicate(base_url, audio_url, out_key, model):
+    """Run a lip-sync model on Replicate. base_url/audio_url must be public URLs."""
+    slug = config.REPLICATE_MODELS.get(model)
+    fields = config.REPLICATE_INPUT_FIELDS.get(model, {"video": "video", "audio": "audio"})
+    inp = {fields["audio"]: audio_url}
+    inp[fields.get("image") and fields["image"] or fields.get("video", "video")] = base_url
+
+    resp = requests.post(
+        f"{_REPLICATE_BASE}/models/{slug}/predictions",
+        headers={**_replicate_headers(), "Prefer": "wait"},
+        json={"input": inp},
+        timeout=120,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"replicate create {resp.status_code}: {resp.text[:400]}")
+    pred = resp.json()
+
+    # Poll if not finished from the Prefer: wait hint.
+    for _ in range(240):
+        status = pred.get("status")
+        if status in ("succeeded", "failed", "canceled"):
+            break
+        time.sleep(5)
+        get_url = pred.get("urls", {}).get("get")
+        pred = requests.get(get_url, headers=_replicate_headers(), timeout=60).json()
+
+    if pred.get("status") != "succeeded":
+        raise RuntimeError(f"replicate {model} {pred.get('status')}: {str(pred.get('error'))[:300]}")
+    out = pred.get("output")
+    url = out[-1] if isinstance(out, list) else out
+    if not url:
+        raise RuntimeError("replicate succeeded but returned no output url")
+    return url
+
+
 def generate_clip(backend, base_video_url, audio_url, out_key, model):
+    if backend == "replicate":
+        return generate_clip_replicate(base_video_url, audio_url, out_key, model)
     if backend == "fal":
         return generate_clip_fal(base_video_url, audio_url, out_key, model)
     return generate_clip_azure(base_video_url, audio_url, out_key, model)

@@ -32,9 +32,9 @@ for d in (AUDIO_DIR, CLIPS_DIR, OUTPUT_DIR, SCRIPTS_DIR):
 
 # --- Model / backend defaults ---
 DEFAULT_MODEL = "latentsync"          # latentsync | musetalk | sadtalker
-DEFAULT_BACKEND = "azure"             # azure | fal
+DEFAULT_BACKEND = "azure"             # azure | replicate | fal
 VALID_MODELS = ("latentsync", "musetalk", "sadtalker")
-VALID_BACKENDS = ("azure", "fal")
+VALID_BACKENDS = ("azure", "replicate", "fal")
 
 # Models that relip-sync a BASE VIDEO (vs photo-only SadTalker)
 BASE_VIDEO_MODELS = ("latentsync", "musetalk")
@@ -70,6 +70,21 @@ AZURE_SKU_HOURLY_USD = float(_get("AZURE_SKU_HOURLY_USD", "0.526"))
 
 # --- Container image on GHCR ---
 GHCR_IMAGE = _get("GHCR_IMAGE", "ghcr.io/gbgolfmatt/otchealth-avatar:latest")
+
+# --- Replicate (no-quota managed GPU, interim path while Azure quota pends) ---
+REPLICATE_API_TOKEN = _get("REPLICATE_API_TOKEN")
+# Model slugs per family (override via env if a better/community version exists).
+REPLICATE_MODELS = {
+    "latentsync": _get("REPLICATE_LATENTSYNC", "bytedance/latentsync"),
+    "musetalk": _get("REPLICATE_MUSETALK", "zsxkib/musetalk"),
+    "sadtalker": _get("REPLICATE_SADTALKER", "cjwbw/sadtalker"),
+}
+# Input field names per model (Replicate schemas differ).
+REPLICATE_INPUT_FIELDS = {
+    "latentsync": {"video": "video", "audio": "audio"},
+    "musetalk": {"video": "video_input", "audio": "audio_input"},
+    "sadtalker": {"image": "source_image", "audio": "driven_audio"},
+}
 
 # --- Paid fallback ---
 FAL_KEY = _get("FAL_KEY")

@@ -14,7 +14,7 @@ on:
         required: true
         default: latentsync
       backend:
-        description: azure | fal
+        description: azure | replicate | fal
         required: true
         default: azure
       base_video:
@@ -43,6 +43,8 @@ jobs:
       R2_PUBLIC_URL_BASE: ${{ secrets.R2_PUBLIC_URL_BASE }}
       NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
       NOTION_RENDER_DB_ID: ${{ secrets.NOTION_RENDER_DB_ID }}
+      NOTION_PARENT_PAGE_ID: ${{ secrets.NOTION_PARENT_PAGE_ID }}
+      REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       AZURE_RG: ${{ vars.AZURE_RG || 'otchealth-avatar-rg' }}
       AZURE_VM_NAME: ${{ vars.AZURE_VM_NAME || 'otchealth-avatar-gpu' }}
@@ -59,6 +61,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y ffmpeg
           pip install -r requirements.txt
       - name: Azure login
+        if: inputs.backend == 'azure'
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
@@ -77,5 +80,5 @@ jobs:
           path: avatar-pipeline/output/final.mp4
           if-no-files-found: warn
       - name: Always deallocate GPU VM (cost safety)
-        if: always()
+        if: always() && inputs.backend == 'azure'
         run: az vm deallocate -g "$AZURE_RG" -n "$AZURE_VM_NAME" --only-show-errors || true
