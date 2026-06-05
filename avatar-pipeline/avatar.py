@@ -164,10 +164,19 @@ def generate_clip_replicate(base_url, audio_url, out_key, model):
     inp = {fields["audio"]: audio_url}
     inp[fields.get("image") and fields["image"] or fields.get("video", "video")] = base_url
 
+    # Resolve the model's latest version, then use the version-based predictions
+    # endpoint (works for both official and community/versioned models).
+    minfo = requests.get(f"{_REPLICATE_BASE}/models/{slug}", headers=_replicate_headers(), timeout=60)
+    if not minfo.ok:
+        raise RuntimeError(f"replicate model lookup {minfo.status_code} for {slug}: {minfo.text[:200]}")
+    version = (minfo.json().get("latest_version") or {}).get("id")
+    if not version:
+        raise RuntimeError(f"replicate model {slug} has no runnable version")
+
     resp = requests.post(
-        f"{_REPLICATE_BASE}/models/{slug}/predictions",
+        f"{_REPLICATE_BASE}/predictions",
         headers={**_replicate_headers(), "Prefer": "wait"},
-        json={"input": inp},
+        json={"version": version, "input": inp},
         timeout=120,
     )
     if not resp.ok:
