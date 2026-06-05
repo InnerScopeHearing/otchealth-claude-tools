@@ -1,0 +1,34 @@
+name: avatar-build-image
+
+# Builds the inference container and pushes it to GHCR using the built-in
+# GITHUB_TOKEN (no manual registry token needed). Run after changes to
+# avatar-pipeline/infra/. Building needs no GPU.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "avatar-pipeline/infra/Dockerfile"
+      - "avatar-pipeline/infra/entrypoint.py"
+      - ".github/workflows/avatar-build-image.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: avatar-pipeline/infra
+          file: avatar-pipeline/infra/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/otchealth-avatar:latest
