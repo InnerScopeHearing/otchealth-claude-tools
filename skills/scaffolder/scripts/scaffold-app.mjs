@@ -7,12 +7,20 @@
 import { writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const args = Object.fromEntries(
-  process.argv.slice(2).join(' ').match(/--[\w-]+\s+[^-][^\s]*/g)?.map((p) => {
-    const [k, ...v] = p.replace(/^--/, '').split(/\s+/);
-    return [k, v.join(' ')];
-  }) || []
-);
+// Parse --key value pairs and valueless boolean flags (e.g. --force).
+const argv = process.argv.slice(2);
+const args = {};
+for (let i = 0; i < argv.length; i++) {
+  if (!argv[i].startsWith('--')) continue;
+  const key = argv[i].slice(2);
+  const next = argv[i + 1];
+  if (next === undefined || next.startsWith('--')) {
+    args[key] = true; // boolean flag
+  } else {
+    args[key] = next;
+    i++;
+  }
+}
 
 const app = args.app;
 if (!app) { console.error('required: --app <id>'); process.exit(1); }
