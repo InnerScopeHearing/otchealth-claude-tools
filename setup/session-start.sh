@@ -40,13 +40,16 @@ case "$TOOLS_DIR" in
     ;;
 esac
 
-echo "[octools] Installing designer skill -> ${DESIGNER_DST}"
+echo "[octools] Installing skills -> ${SKILLS_DST}"
 mkdir -p "$SKILLS_DST"
-rm -rf "$DESIGNER_DST"
-cp -R "${TOOLS_DIR}/skills/designer" "$DESIGNER_DST"
+for skdir in "${TOOLS_DIR}/skills/"*/; do
+  sk="$(basename "$skdir")"
+  rm -rf "${SKILLS_DST:?}/${sk}"
+  cp -R "$skdir" "${SKILLS_DST}/${sk}"
+done
 
-# Node deps (sharp, etc.). Skip if already present (e.g. warm container cache).
-if [ ! -d "${DESIGNER_DST}/node_modules" ]; then
+# Designer carries Node deps (sharp). Skip if already present (warm cache).
+if [ -f "${DESIGNER_DST}/package.json" ] && [ ! -d "${DESIGNER_DST}/node_modules" ]; then
   echo "[octools] npm install (designer deps)..."
   (cd "$DESIGNER_DST" && npm install --no-audit --no-fund --silent) \
     || echo "[octools] WARN: npm install failed — sharp-based post-processing may be unavailable."
