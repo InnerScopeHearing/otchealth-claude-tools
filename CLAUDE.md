@@ -1,0 +1,61 @@
+# CLAUDE.md — operating facts for this repo and the OTCHealth portfolio
+
+Read this first. It is the standing context every Claude Code session should
+assume unless the user says otherwise.
+
+## Environment / host facts (do not suggest workflows that violate these)
+- **Operator host is a Windows PC. There is NO Mac.** Never propose a local macOS
+  or local Xcode workflow.
+- **iOS builds and App Store submission are cloud-only.** You cannot `xcodebuild`
+  or code-sign iOS on Windows, so every iOS build/sign/submit runs on a cloud
+  macOS machine: **Codemagic** today (mobile-tuned: signing, TestFlight, store
+  publish), with Depot **macOS runners** as a second cloud-macOS option to
+  evaluate. Android builds run on Linux, so cloud CI handles them trivially.
+- **We operate cloud-native.** Work happens through Claude Code on the web; the
+  session sandbox is Linux in the cloud. `setup/session-start.sh` and all tooling
+  run there, not on the Windows PC. If local shell is ever needed, use WSL2.
+- **Test device: iPhone 16 Pro (the operator's own phone).** Use it via
+  **TestFlight** for the device-only QA that the cloud cannot do (AVAudioSession /
+  AirPods / Web Audio bugs, see `app-kit/LESSONS.md`). It runs **Apple
+  Intelligence**, so it is also the dogfood device for on-device LLM features
+  (Apple Foundation Models / Companion assistant) and the HealthKit AirPods
+  audiogram idea for iHEARtest.
+
+## Standing rules (compliance + process)
+- **PHI ring boundary.** Designer/creative tooling and any non-BAA service operate
+  in the **non-PHI ring only**. Never point them at `otchealth-medreview-prod` or
+  any PHI project. No PHI in generated assets, prompts, metadata, analytics,
+  sandboxes, or AI tool context.
+- **Branch discipline.** Develop on the designated feature branch; never push to a
+  different branch without explicit permission. Open PRs as **draft**.
+- **Content rule.** No em dashes or en dashes in any *published app copy* (use
+  commas, periods, line breaks). Internal docs like this one are exempt.
+- **Secrets.** Never paste secrets into chat. Tokens provided in chat are saved to
+  the Notion **API Tokens & Credentials** vault and flagged for rotation.
+
+## Tooling decisions (the durable calls, with the trigger that changes them)
+- **Automation engine: n8n is the production engine; Make.com is a non-PHI sandbox
+  only.** Make will not sign a BAA on any tier and its per-module pricing is the
+  worst case for our proxy-heavy workflows, so it never runs PHI and we do not
+  migrate working flows to it. Spend the Make grant only on net-new, low-frequency,
+  non-PHI automation.
+- **n8n self-host trigger.** We are on n8n **Cloud** today (fine during build;
+  ~99% of current executions are build/test traffic, true production is ~near zero).
+  **Move to self-hosted n8n on the Azure grant when** sustained *production*
+  executions approach the Cloud plan cap (~8-10k/mo) **OR** the first genuinely-PHI
+  flow goes live (e.g. Adverse Event Logger, specialist-line transcripts). n8n
+  Cloud does not provide a BAA; self-hosting is the compliant path. One move solves
+  both cost and compliance.
+- **Build/CI vs sandboxes: do not double-spend grants.** Use **Depot** ($5k) for
+  build/CI acceleration (GitHub Actions runners at ~half cost + faster, Docker
+  build cache, optional macOS/GPU runners). Use **Daytona** ($10k) for
+  parallel-agent sandboxes. They overlap on "agent sandboxes" so keep them in their
+  lanes.
+
+## Where things live
+- `dream-team/` - the coordinated agent + skill architecture (roster, interconnect,
+  installable agent definitions, app manifest schema).
+- `app-kit/` - the portable app lifecycle kits (startup -> maintenance + LESSONS).
+- `skills/designer/` - the creative skill (icons, video, avatars, voice, music).
+- `avatar-pipeline/` - the cloud avatar render pipeline.
+- `setup/session-start.sh` - the installer that hydrates skills + credentials.
