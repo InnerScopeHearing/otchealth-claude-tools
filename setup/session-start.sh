@@ -52,6 +52,16 @@ if [ ! -d "${DESIGNER_DST}/node_modules" ]; then
     || echo "[octools] WARN: npm install failed — sharp-based post-processing may be unavailable."
 fi
 
+# ─── Install Dream Team agents -> ~/.claude/agents ──────────────────
+# Makes the coordinated agent roster (coach, architect, builder, qa, ...) available
+# in every Claude Code session across every repo. Idempotent.
+AGENTS_DST="${HOME}/.claude/agents"
+if [ -d "${TOOLS_DIR}/dream-team/agents" ]; then
+  echo "[octools] Installing Dream Team agents -> ${AGENTS_DST}"
+  mkdir -p "$AGENTS_DST"
+  cp -f "${TOOLS_DIR}/dream-team/agents/"*.md "$AGENTS_DST/" 2>/dev/null || true
+fi
+
 mkdir -p "${HOME}/.designer"
 CRED="${HOME}/.designer/credentials.env"
 SA_PATH="${HOME}/.gcp_claude_driver_sa.json"
@@ -97,6 +107,22 @@ AZ_SP_CLIENT_ID="$(get_key AZURE_SP_CLIENT_ID)"
 AZ_SP_CLIENT_SECRET="$(get_key AZURE_SP_CLIENT_SECRET)"
 AZ_SP_TENANT_ID="$(get_key AZURE_SP_TENANT_ID)"
 AZ_SUBSCRIPTION_ID="$(get_key AZURE_SUBSCRIPTION_ID)"
+# Platform / service tokens (NON-PHI; blank until promoted to Secret Manager)
+DEPOT_TOKEN_V="$(get_key DEPOT_TOKEN)"
+DEPOT_PROJECT_ID_V="$(get_key DEPOT_PROJECT_ID)"
+POSTHOG_KEY_V="$(get_key POSTHOG_PERSONAL_API_KEY)"
+POSTHOG_HOST_V="$(get_key POSTHOG_HOST)"
+MIRO_TOKEN_V="$(get_key MIRO_TOKEN)"
+MIRO_CLIENT_ID_V="$(get_key MIRO_CLIENT_ID)"
+MIRO_CLIENT_SECRET_V="$(get_key MIRO_CLIENT_SECRET)"
+MAKE_TOKEN_V="$(get_key MAKE_API_TOKEN)"
+DAYTONA_KEY_V="$(get_key DAYTONA_API_KEY)"
+DAYTONA_URL_V="$(get_key DAYTONA_API_URL)"
+GREPTILE_TOKEN_V="$(get_key GREPTILE_TOKEN)"
+REPLICATE_TOKEN_V="$(get_key REPLICATE_API_TOKEN)"
+N8N_API_KEY_V="$(get_key N8N_API_KEY)"
+N8N_BASE_URL_V="$(get_key N8N_BASE_URL)"
+SENTRY_AUTH_TOKEN_V="$(get_key SENTRY_AUTH_TOKEN)"
 
 # ─── Write ~/.designer/credentials.env ──────────────────────────────
 {
@@ -126,11 +152,33 @@ AZ_SUBSCRIPTION_ID="$(get_key AZURE_SUBSCRIPTION_ID)"
   echo "AZURE_SP_TENANT_ID=${AZ_SP_TENANT_ID}"
   echo "AZURE_SUBSCRIPTION_ID=${AZ_SUBSCRIPTION_ID}"
 } > "$CRED"
+
+# ─── Append platform/service tokens that are actually provisioned ───
+# Kept out of the block above so credentials.env only carries what exists.
+append_if() { [ -n "$2" ] && echo "$1=$2" >> "$CRED"; }
+echo "# ─ Platform / service tokens (non-PHI; present only when provisioned) ─" >> "$CRED"
+append_if DEPOT_TOKEN "$DEPOT_TOKEN_V"
+append_if DEPOT_PROJECT_ID "$DEPOT_PROJECT_ID_V"
+append_if POSTHOG_PERSONAL_API_KEY "$POSTHOG_KEY_V"
+append_if POSTHOG_HOST "$POSTHOG_HOST_V"
+append_if MIRO_TOKEN "$MIRO_TOKEN_V"
+append_if MIRO_CLIENT_ID "$MIRO_CLIENT_ID_V"
+append_if MIRO_CLIENT_SECRET "$MIRO_CLIENT_SECRET_V"
+append_if MAKE_API_TOKEN "$MAKE_TOKEN_V"
+append_if DAYTONA_API_KEY "$DAYTONA_KEY_V"
+append_if DAYTONA_API_URL "$DAYTONA_URL_V"
+append_if GREPTILE_TOKEN "$GREPTILE_TOKEN_V"
+append_if REPLICATE_API_TOKEN "$REPLICATE_TOKEN_V"
+append_if N8N_API_KEY "$N8N_API_KEY_V"
+append_if N8N_BASE_URL "$N8N_BASE_URL_V"
+append_if SENTRY_AUTH_TOKEN "$SENTRY_AUTH_TOKEN_V"
 chmod 600 "$CRED"
 
 [ -n "$OPENAI_KEY" ] && echo "[octools] OPENAI_API_KEY: loaded" || echo "[octools] WARN: OPENAI_API_KEY missing (create 'openai-api-key' secret)."
 [ -n "$ELEVEN_KEY" ] && echo "[octools] ELEVENLABS_API_KEY: loaded" || echo "[octools] WARN: ELEVENLABS_API_KEY missing (create 'elevenlabs-api-key' secret)."
 [ -n "$AZ_OAI_KEY" ] && echo "[octools] AZURE_OPENAI: loaded (provider toggle available)" || echo "[octools] Azure OpenAI: not configured (optional)."
+SVC_LOADED="$(grep -cE '^(DEPOT_TOKEN|POSTHOG_PERSONAL_API_KEY|MIRO_TOKEN|MAKE_API_TOKEN|DAYTONA_API_KEY|GREPTILE_TOKEN|REPLICATE_API_TOKEN|N8N_API_KEY|SENTRY_AUTH_TOKEN)=' "$CRED" || true)"
+echo "[octools] Platform/service tokens loaded: ${SVC_LOADED} (provision the rest via 'gcloud secrets create' — see docs/PLATFORM.md)."
 
-echo "[octools] Done. Designer skill ready."
+echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"

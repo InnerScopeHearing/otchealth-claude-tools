@@ -52,6 +52,24 @@ const MAP = [
   { id: 'azure-sp-client-secret', env: 'AZURE_SP_CLIENT_SECRET', required: false },
   { id: 'azure-sp-tenant-id', env: 'AZURE_SP_TENANT_ID', required: false },
   { id: 'azure-subscription-id', env: 'AZURE_SUBSCRIPTION_ID', required: false },
+  // Platform / service tokens (NON-PHI; all optional — emitted only once the
+  // secret exists in Secret Manager, so this list is safe to ship ahead of
+  // provisioning. Promote each from the Notion vault with `gcloud secrets create`.
+  { id: 'depot-token', env: 'DEPOT_TOKEN', required: false },                          // Depot build/CI
+  { id: 'depot-project-id', env: 'DEPOT_PROJECT_ID', required: false },
+  { id: 'posthog-personal-api-key', env: 'POSTHOG_PERSONAL_API_KEY', required: false },// PostHog mgmt (phx_)
+  { id: 'posthog-host', env: 'POSTHOG_HOST', required: false },
+  { id: 'miro-token', env: 'MIRO_TOKEN', required: false },                            // Miro diagrammer
+  { id: 'miro-client-id', env: 'MIRO_CLIENT_ID', required: false },
+  { id: 'miro-client-secret', env: 'MIRO_CLIENT_SECRET', required: false },
+  { id: 'make-api-token', env: 'MAKE_API_TOKEN', required: false },                    // Make (non-PHI sandbox)
+  { id: 'daytona-api-key', env: 'DAYTONA_API_KEY', required: false },                  // Daytona sandboxes
+  { id: 'daytona-api-url', env: 'DAYTONA_API_URL', required: false },
+  { id: 'greptile-token', env: 'GREPTILE_TOKEN', required: false },                    // Greptile review
+  { id: 'replicate-api-token', env: 'REPLICATE_API_TOKEN', required: false },          // Replicate (avatar fallback)
+  { id: 'n8n-api-key', env: 'N8N_API_KEY', required: false },                          // n8n automation
+  { id: 'n8n-base-url', env: 'N8N_BASE_URL', required: false },
+  { id: 'sentry-auth-token', env: 'SENTRY_AUTH_TOKEN', required: false },              // Sentry releases
 ];
 
 if (!SA_PATH) {
