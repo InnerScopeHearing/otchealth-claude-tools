@@ -14,15 +14,21 @@ const H = {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function miroApi(method, path, body) {
+export async function miroApi(method, path, body, attempt = 1) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: H,
     body: body ? JSON.stringify(body) : undefined,
   });
+  if ((res.status === 429 || res.status >= 500) && attempt <= 5) {
+    const retryAfter = Number(res.headers.get("retry-after")) || 0;
+    const wait = Math.max(retryAfter * 1000, 500 * 2 ** (attempt - 1));
+    await sleep(wait);
+    return miroApi(method, path, body, attempt + 1);
+  }
   const txt = await res.text();
   if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}: ${txt}`);
-  await sleep(160); // pace for rate limits
+  await sleep(180); // pace for rate limits
   return txt ? JSON.parse(txt) : {};
 }
 
