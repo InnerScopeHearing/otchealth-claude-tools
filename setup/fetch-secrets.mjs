@@ -70,6 +70,17 @@ const MAP = [
   { id: 'n8n-api-key', env: 'N8N_API_KEY', required: false },                          // n8n automation
   { id: 'n8n-base-url', env: 'N8N_BASE_URL', required: false },
   { id: 'sentry-auth-token', env: 'SENTRY_AUTH_TOKEN', required: false },              // Sentry releases
+  { id: 'cloudflare-api-token', env: 'CLOUDFLARE_API_TOKEN', required: false },        // Cloudflare
+  { id: 'netlify-token', env: 'NETLIFY_TOKEN', required: false },                      // Netlify
+  { id: 'railway-token', env: 'RAILWAY_TOKEN', required: false },                      // Railway
+  // App / cross-entity string secrets (single-store operator decision, 2026-06-08).
+  { id: 'fourvault-gemini-api-key', env: 'FOURVAULT_GEMINI_API_KEY', required: false },
+  { id: 'fourvault-neon-database-url', env: 'FOURVAULT_NEON_DATABASE_URL', required: false },
+  { id: 'fourvault-neon-database-url-direct', env: 'FOURVAULT_NEON_DATABASE_URL_DIRECT', required: false },
+  // NOTE: PEM / multiline / binary secrets (e.g. medreview-asc-api-key-p8,
+  // medreview-iap-key-p8, app keystores) live in Secret Manager ONLY and are
+  // fetched-to-file on demand — never emitted here (they would corrupt the flat
+  // credentials.env). Use setup/get-secret.mjs <id> <outfile> to materialize one.
 ];
 
 if (!SA_PATH) {

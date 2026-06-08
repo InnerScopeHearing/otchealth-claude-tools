@@ -32,6 +32,14 @@ assume unless the user says otherwise.
   commas, periods, line breaks). Internal docs like this one are exempt.
 - **Secrets.** Never paste secrets into chat. Tokens provided in chat are saved to
   the Notion **API Tokens & Credentials** vault and flagged for rotation.
+- **Secret store (operator decision, 2026-06-08).** Per operator direction
+  (seamless > separation), ALL app secrets, including MedReview (PHI) and FourVault
+  (separate entity), are consolidated into the single `otchealth-shared-prod`
+  Secret Manager and hydrate into every session. This intentionally drops the
+  PHI-ring / cross-entity *storage* separation; the operator accepted the HIPAA /
+  entity co-mingling tradeoff. NOTE: this changes secret *storage* only. The
+  content rules still hold, no PHI in generated assets, prompts, analytics, or AI
+  tool context, and the designer/creative path stays non-PHI.
 
 ## Tooling decisions (the durable calls, with the trigger that changes them)
 - **Automation engine: n8n is the production engine; Make.com is a non-PHI sandbox
