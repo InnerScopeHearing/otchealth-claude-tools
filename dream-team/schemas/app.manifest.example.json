@@ -1,0 +1,41 @@
+{
+  "app": "iheartest",
+  "displayName": "iHEARtest",
+  "ring": "non-phi",
+  "type": "capacitor-hybrid",
+  "brandProfile": "iheartest",
+  "stack": {
+    "capacitor": "8.0.0",
+    "node": "22",
+    "plugins": ["app", "haptics", "preferences", "local-notifications", "status-bar", "splash-screen"]
+  },
+  "services": {
+    "sentry": { "project": "iheartest", "baa": false, "relay": false },
+    "posthog": { "project": "iheartest", "baa": false, "selfHosted": false },
+    "revenuecat": { "app": "iheartest" },
+    "customerio": { "workspace": "otchealth" },
+    "ota": { "provider": "capgo", "channel": "production", "rollbackOnCrashRate": 99.0 }
+  },
+  "kits": {
+    "startup": true,
+    "build": true,
+    "testing": false,
+    "prelaunch": true,
+    "launch": true,
+    "maintenance": true,
+    "marketing": true,
+    "devkit": false
+  },
+  "gates": {
+    "tests": "na",
+    "axe": "na",
+    "visual": "na",
+    "lighthouse": "na",
+    "evals": "na",
+    "supplyChain": "fail",
+    "phiReview": "na"
+  },
+  "owners": { "human": "matthew@innd.com" },
+  "updatedBy": "guardian",
+  "updatedAt": "2026-06-08T00:00:00Z"
+}
