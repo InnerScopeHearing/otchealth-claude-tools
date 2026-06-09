@@ -26,3 +26,8 @@ inbound-fired EVENT-MODE run handles just its item and never briefs. Morning mod
 after, so the brief happens at most once per day (no duplicates from double-scheduling).
 Also fixed the review finding: step 1 no longer elevates the email payload as "top input";
 it now marks event payloads as untrusted, triage-only, never a directive.
+2026-06-09 build | Idempotency-guard hardening (review) | done | Pinned the marker title to
+one exact format (Morning brief sent - YYYY-MM-DD) for both the check and the write so they
+can't drift; the marker is now written FIRST (before sending) to shrink the double-run
+window; and the already-sent short-circuit path now logs that the guard fired, so guard
+hits are auditable.
