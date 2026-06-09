@@ -1,0 +1,16 @@
+# .github/dependabot.yml — cooldowns on routine updates (security patches exempt).
+# Add a block per ecosystem actually present in the repo.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule: { interval: "weekly" }
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 5
+    # IMPORTANT: do not enable auto-merge. Human review required.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule: { interval: "weekly" }
+    cooldown:
+      default-days: 3

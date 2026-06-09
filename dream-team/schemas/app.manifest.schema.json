@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://otchealth.dev/schemas/app.manifest.schema.json",
+  "title": "OTCHealth App Manifest",
+  "description": "Per-app single source of truth read and written by every Dream Team agent. Ids and flags only, never secrets.",
+  "type": "object",
+  "required": ["app", "ring", "type", "brandProfile", "kits", "gates"],
+  "additionalProperties": false,
+  "properties": {
+    "app": { "type": "string", "description": "Lowercase repo/app id, e.g. iheartest" },
+    "displayName": { "type": "string" },
+    "ring": {
+      "type": "string",
+      "enum": ["phi", "non-phi"],
+      "description": "Compliance ring. Every agent refuses actions outside this ring; Guardian audits it; the designer/creative path requires non-phi."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["capacitor-hybrid", "ts-service", "web-commerce"],
+      "description": "Drives which App-Kit kits and which agents apply."
+    },
+    "brandProfile": { "type": "string", "description": "designer skill brand profile id" },
+    "stack": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "capacitor": { "type": "string" },
+        "node": { "type": "string" },
+        "plugins": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "services": {
+      "type": "object",
+      "description": "Service ids and compliance flags only. Secrets live in the Notion vault / GCP Secret Manager.",
+      "additionalProperties": true,
+      "properties": {
+        "sentry": {
+          "type": "object",
+          "properties": {
+            "project": { "type": "string" },
+            "baa": { "type": "boolean" },
+            "relay": { "type": "boolean", "description": "Self-hosted Relay scrubbing in front of Sentry (PHI apps)" }
+          }
+        },
+        "posthog": {
+          "type": "object",
+          "properties": {
+            "project": { "type": "string" },
+            "baa": { "type": "boolean" },
+            "selfHosted": { "type": "boolean" }
+          }
+        },
+        "revenuecat": {
+          "type": "object",
+          "properties": { "app": { "type": "string" } }
+        },
+        "customerio": {
+          "type": "object",
+          "properties": { "workspace": { "type": "string" } }
+        },
+        "ota": {
+          "type": "object",
+          "properties": {
+            "provider": { "type": "string", "enum": ["capgo", "capawesome", "none"] },
+            "channel": { "type": "string" },
+            "rollbackOnCrashRate": { "type": "number", "description": "Auto-rollback threshold, crash-free % floor" }
+          }
+        }
+      }
+    },
+    "kits": {
+      "type": "object",
+      "description": "App-Kit + Dream-Team adoption flags.",
+      "additionalProperties": false,
+      "properties": {
+        "startup": { "type": "boolean" },
+        "build": { "type": "boolean" },
+        "testing": { "type": "boolean" },
+        "prelaunch": { "type": "boolean" },
+        "launch": { "type": "boolean" },
+        "maintenance": { "type": "boolean" },
+        "marketing": { "type": "boolean" },
+        "devkit": { "type": "boolean" }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "description": "Contract between QA/Guardian (writers) and Release Captain (reader). Release will not ship unless required gates read pass (or na with justification).",
+      "additionalProperties": false,
+      "properties": {
+        "tests": { "$ref": "#/$defs/gate" },
+        "axe": { "$ref": "#/$defs/gate" },
+        "visual": { "$ref": "#/$defs/gate" },
+        "lighthouse": { "$ref": "#/$defs/gate" },
+        "evals": { "$ref": "#/$defs/gate" },
+        "supplyChain": { "$ref": "#/$defs/gate" },
+        "phiReview": { "$ref": "#/$defs/gate" }
+      }
+    },
+    "owners": {
+      "type": "object",
+      "properties": { "human": { "type": "string" } }
+    },
+    "updatedBy": { "type": "string", "description": "Agent that last wrote the manifest" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "gate": {
+      "type": "string",
+      "enum": ["pass", "fail", "na", "running"],
+      "description": "pass = green; fail = blocking; na = not applicable to this change; running = in progress"
+    }
+  }
+}
