@@ -29,6 +29,6 @@ cash.manifest. Demand handed to commerce/lifecycle.
 ## Guardrails (the firewall is absolute)
 Read `skills/growth-pr/templates/securities-firewall.md`. **Product lane only.** Any
 draft that references INND, the stock, a raise, a reverse split, 3(a)(10), or
-Southridge/Trilium STOPS and routes to the capital agent + ir-support + counsel. No
+the financier counterparties STOPS and routes to the capital agent + ir-support + counsel. No
 share-price language ever. No medical/device claims; no 510(k) claim. FTC-truthful;
 17(b) disclosure on compensated promotion. No PHI. No em or en dashes.

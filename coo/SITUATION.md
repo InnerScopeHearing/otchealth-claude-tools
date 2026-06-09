@@ -2,17 +2,26 @@
 
 _Read this first, every time. Update it as facts change. No spin._
 
+> **DATA RULE (read once):** sensitive specifics, names beyond the operator,
+> counterparty names, litigation details, dollar figures tied to individuals, and the
+> capital-structure chain, live ONLY in the private **"COO - Confidential"** Notion page
+> and in gitignored `*.local.md` files. They are NEVER committed here. This repo stays
+> **private**. The COO reads these at runtime via Notion (IDs only, not sensitive):
+> - **COO - Confidential** (the real specifics): `37a20e26-67bc-8190-84f0-fbae637c90e1`
+> - **COO - Today's Directive** (heartbeat reads this): `37a20e26-67bc-815d-aa07-ff429561f375`
+
 ## The one fact that drives everything
 **Pre-revenue. ~$0 in the bank, ~$50K cumulative spent, ~$50K/mo burn, ~0 months
 runway.** Everything is "progressing" and no money is coming in. The job is CASH.
 
 ## The entities (COO holds both)
 - **OTCHealth Inc.** — operating company. Store, apps, inventory, the database.
-- **InnerScope Hearing Technologies (INND)** — public company, OTC, ~$0.0001/share,
-  being repositioned as the "Launch Platform" incubator. Reverse split planned (slow).
-- The cash chain to the family: real exposure -> INND liquidity -> 3(a)(10) conversions
-  (Southridge/Trilium) -> 20% of the creditor pool to Matthew, Kim, Elizabeth Moore
-  (~$4K/mo). The apps are the legitimate, slow top of that funnel.
+- **InnerScope Hearing Technologies (INND)** — public company, OTC, sub-penny, being
+  repositioned as the "Launch Platform" incubator. Reverse split planned (slow).
+- The cash chain to the principals: real exposure -> INND liquidity -> downstream
+  capital-structure conversions -> distributions to the principals. Counterparties,
+  names, and figures are **private** (see the "COO - Confidential" note). The apps are
+  the legitimate, slow top of that funnel.
 
 ## Owned assets that can become cash (we already have these)
 - **~10,298 legacy hearing-aid units** in hand, ~$27/unit to refurbish, sellable at
@@ -28,11 +37,13 @@ runway.** Everything is "progressing" and no money is coming in. The job is CASH
 2. **Connect Stripe** — no cash is collected without it.
 
 ## Blind spots / risks the COO must keep pushing
-- **Unknown Intercom admin "Naveed Ali Qureshi"** flagged in ops docs, unverified. Resolve.
-- **Exposed tokens** (pasted in chat, not rotated). Rotate the GCP SA + PostHog
-  all-access key before any public/investor exposure.
-- **Securities counsel** for the INND liquidity / 3(a)(10) / affiliate-family chain, and
-  disclosure of the litigation (Shennib $10M fraud, FLSA). Gates the raise. Matt-only.
+- **Rotate the GCP SA + PostHog all-access keys** (treat as compromised until rotated).
+  **HARD GATE: blocks any investor/public exposure** until done.
+- **An unverified Intercom admin account** flagged in ops (identity in the private note).
+  Verify or remove.
+- **Securities counsel** for the INND capital chain + the Reg D + disclosure of pending
+  litigation (specifics held with counsel; treat as material for any raise). Gates the
+  raise. Matt-only.
 - **No bookkeeping/insurance cadence**; the reverse split (FINRA 6490, 3-12 mo) is slow,
   start it now if it's the plan.
 
