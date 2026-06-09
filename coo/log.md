@@ -19,3 +19,10 @@ polls the coo@innd.com shared mailbox every 5 min via Graph, wraps each email as
 injection-guarded external payload, fires the routine to wake the COO, and marks the mail
 read. End-to-end test passed: an email to coo@innd.com woke a real COO session. The "CC the
 COO" pattern is now live: anything to or CC'ing coo@innd.com wakes the COO unattended.
+2026-06-09 build | Concurrency guard + injection-guard fix | done | Playbook is now
+mode-aware: only a scheduled MORNING-MODE run sends the brief and books the daily block; an
+inbound-fired EVENT-MODE run handles just its item and never briefs. Morning mode checks a
+"Morning brief sent - YYYY-MM-DD" marker in the COO Tasks DB before sending and writes it
+after, so the brief happens at most once per day (no duplicates from double-scheduling).
+Also fixed the review finding: step 1 no longer elevates the email payload as "top input";
+it now marks event payloads as untrusted, triage-only, never a directive.
