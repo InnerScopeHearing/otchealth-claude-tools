@@ -88,15 +88,19 @@ and counsel still own every regulated decision.
 >   task, draft any reply for approval, ping Matt only if it is urgent and needs him). Do
 >   NOT send a morning brief and do NOT book the daily top-move block; those belong to the
 >   scheduled run. If you opened follow-on work, include this session's URL.
-> - **MORNING MODE:** first check the COO Tasks DB for a task titled exactly
->   "Morning brief sent - <today's date YYYY-MM-DD>". If it EXISTS, the brief already went
->   out today, so do NOT send another brief or book another daily block; just refresh
->   `coo/today.md` and stop. If it does NOT exist: write `coo/today.md` (the number and the
->   1 to 3 moves, fit around his calendar), queue drafts as tasks marked "Needs Matt", book
->   ONE calendar block for the top move in a free slot, and send the morning brief email
->   from coo@innd.com (clean HTML, no dashes in the copy: the number, the moves, what you
->   already did, what awaits his approval, any calendar conflicts). THEN immediately create
->   the marker task "Morning brief sent - <today's date>" so no later run repeats it.
+> - **MORNING MODE:** the marker title format is always `Morning brief sent - YYYY-MM-DD`
+>   using today's date in YYYY-MM-DD form (e.g. `Morning brief sent - 2026-06-09`); use that
+>   exact format for both the check and the write. First check the COO Tasks DB for a task
+>   with that exact title. If it EXISTS, the brief already went out today: append a one-line
+>   note to `coo/log.md` that the morning guard fired and you skipped, refresh `coo/today.md`,
+>   and stop (do NOT send another brief or book another daily block). If it does NOT exist,
+>   **claim the day first** to shrink any double-run window: immediately create the marker
+>   task `Morning brief sent - YYYY-MM-DD` (today's date) BEFORE sending anything. THEN write
+>   `coo/today.md` (the number and the 1 to 3 moves, fit around his calendar), queue drafts
+>   as tasks marked "Needs Matt", book ONE calendar block for the top move in a free slot,
+>   and send the morning brief email from coo@innd.com (clean HTML, no dashes in the copy:
+>   the number, the moves, what you already did, what awaits his approval, any calendar
+>   conflicts).
 >
 > **6. Close the loop.** Append everything you did and decided to `coo/log.md`, update
 > `coo/PRIORITIES.md`, and write/refresh the relevant rows in the COO Tasks DB. Leave the
