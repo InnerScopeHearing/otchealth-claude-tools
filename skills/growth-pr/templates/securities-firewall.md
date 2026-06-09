@@ -47,6 +47,20 @@ to the gated path. It never publishes gated content on its own.
 - [ ] No medical/device claims; no em/en dashes?
 - [ ] If it touches the public company in ANY way -> attorney review + Matt sign-off before send.
 
+## Named counterparties (loaded at runtime, never committed)
+The **specific financier counterparty names** are private and are deliberately NOT in
+this file or the distributable OS bundle (privacy, per the 2026-06-09 scrub). Detection
+still works, by design:
+- An **operating agent with access** (Claude Code or n8n with Notion) loads the named
+  counterparty list from the private **"COO - Confidential"** note at runtime and gates
+  any draft that mentions those names.
+- A **context-free instance** (bundle only) gates on the generic terms above (INND,
+  3(a)(10), the raise, dilution, reverse split, creditor pool), which catch the
+  overwhelming majority of gated drafts, since the names almost never appear without one
+  of those terms also present.
+This is the deliberate tradeoff: the distributable artifact stays clean; the privileged
+runtime has the full list. If in doubt, route to the gated path.
+
 ## Why this protects you
 Done this way, you get real, compounding exposure for real products, which is
 legitimate business. The firewall removes the one thing that turns growth into
