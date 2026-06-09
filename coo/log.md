@@ -31,3 +31,4 @@ one exact format (Morning brief sent - YYYY-MM-DD) for both the check and the wr
 can't drift; the marker is now written FIRST (before sending) to shrink the double-run
 window; and the already-sent short-circuit path now logs that the guard fired, so guard
 hits are auditable.
+2026-06-09 build | Idempotency recovery + log format (review) | done | Morning guard now has a recovery path: if any step fails after the marker is claimed, the marker is deleted and Matt is alerted so the next run retries instead of silently skipping. Guard-hit and failure log lines now follow the file format (... | morning-guard | skipped/failed | ...).
