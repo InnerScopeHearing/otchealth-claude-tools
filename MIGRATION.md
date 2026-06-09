@@ -14,14 +14,13 @@ All 14 repos confirmed under `InnerScopeHearing`. Claude's post-move checks:
 - [x] **Repos transferred** — all 14 from the list below present in the org.
 - [x] **App triggers firing** — Claude Code session live on the moved repo; check runs
   (PR + push, CodeQL) green post-move.
-- [ ] **Depot runners** — managed runners connect at the org level (Depot GitHub App on
-  the org); once connected, every repo in the org uses `runs-on: depot-ubuntu-24.04` with
-  no per-repo step. The move cleared the structural blocker, but a 2026-06-09 canary
-  (avatar-build-image flipped to the Depot runner, since reverted) sat queued ~3.5 min
-  with **no runner** — the org is not serving Depot runners yet. **Action (org owner):**
-  install + approve the Depot GitHub App on `InnerScopeHearing` and finish the Depot
-  dashboard org connection, then flip runs-on (heavy app repos first). (`DEPOT_TOKEN` /
-  project id are for `depot build` caching, not the runners.)
+- [x] **Depot runners** — CONFIRMED working 2026-06-09. Managed runners connect at the org
+  level (Depot GitHub App on the org); after the move + connecting the app, a canary
+  (avatar-build-image on `depot-ubuntu-24.04`) was picked up by a Depot runner (group
+  `depot`) in seconds. This repo's avatar-build-image now runs on Depot; flip the heavy app
+  repos next (their own sessions). A move-exposed bug was fixed in passing: the avatar
+  image tag used `github.repository_owner` (mixed case), which GHCR rejects, so the owner
+  is now lowercased. (`DEPOT_TOKEN` / project id are for `depot build` caching, not the runners.)
 - [ ] **Actions secrets** — repo-level secrets follow the transfer automatically; re-add
   only org-level ones if any are newly wanted (reference list at the bottom of this file).
 - [ ] **COO routine** — Matt re-points it to `InnerScopeHearing/otchealth-claude-tools`
