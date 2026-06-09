@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rm -rf /tmp/octools 2>/dev/null; git clone --depth 1 https://github.com/InnerScopeHearing/otchealth-claude-tools /tmp/octools 2>/dev/null; bash /tmp/octools/setup/session-start.sh 2>/dev/null; [ -f \"$CLAUDE_PROJECT_DIR/HANDOFF.md\" ] && { echo '=== HANDOFF.md (read and continue from Next up) ==='; cat \"$CLAUDE_PROJECT_DIR/HANDOFF.md\"; }"
+          }
+        ]
+      }
+    ]
+  }
+}
