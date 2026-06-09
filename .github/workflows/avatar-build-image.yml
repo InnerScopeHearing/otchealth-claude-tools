@@ -13,12 +13,15 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Lowercase image owner (GHCR requires a lowercase namespace)
+        id: img
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -31,4 +34,4 @@ jobs:
           context: avatar-pipeline/infra
           file: avatar-pipeline/infra/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/otchealth-avatar:latest
+          tags: ghcr.io/${{ steps.img.outputs.owner }}/otchealth-avatar:latest
