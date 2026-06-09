@@ -1,0 +1,114 @@
+{
+  "entities": ["OTCHealth Inc.", "InnerScope Hearing Technologies (INND)", "FourVault"],
+  "northStar": {
+    "goal": "Cash into the bank ASAP (sales, capital, or any legal source)",
+    "weeklyTargetUSD": 10000,
+    "monthlyTargetUSD": 100000
+  },
+  "scoreboard": {
+    "cashInBankUSD": 0,
+    "revenueMTDUSD": 0,
+    "revenueLast7dUSD": 0,
+    "monthlyBurnUSD": 50000,
+    "runwayMonths": 0
+  },
+  "triggers": [
+    {
+      "name": "ainnova-spinoff-put",
+      "condition": "$100,000+/month gross revenue for 3 consecutive months",
+      "progress": "0 of 3 months",
+      "unlocks": "Ainnova must execute spin-off; founders reclaim ~80%; feeds the INND liquidity -> 3(a)(10) -> family payout chain (~$4k/mo)"
+    }
+  ],
+  "levers": [
+    {
+      "id": "gumroad-sop",
+      "name": "Gumroad pharmacy/OTC compliance SOP marketplace",
+      "type": "digital",
+      "owner": "digital-products",
+      "status": "idle",
+      "timeToCashDays": 3,
+      "pipelineUSD": 0,
+      "realizedUSD": 0,
+      "blocker": "write the 10-15 SOPs from Mark's outline + set up Gumroad",
+      "complianceGate": "na",
+      "nextAction": "draft SOP set; list and auto-deliver"
+    },
+    {
+      "id": "inventory-clearance",
+      "name": "Clearance sale of ~10,298 legacy hearing-aid units ($199-299, ~$27 COGS)",
+      "type": "sales",
+      "owner": "commerce",
+      "status": "blocked",
+      "timeToCashDays": 14,
+      "pipelineUSD": 2500000,
+      "realizedUSD": 0,
+      "blocker": "FDA OTC Establishment Registration (~$10k, <2wk) + Stripe live + battery refurb",
+      "complianceGate": "review",
+      "nextAction": "file FDA registration; connect Stripe; refurb first batch"
+    },
+    {
+      "id": "db-reactivation-email",
+      "name": "Email reactivation of the 85K database (Customer.io)",
+      "type": "sales",
+      "owner": "lifecycle",
+      "status": "building",
+      "timeToCashDays": 7,
+      "pipelineUSD": 0,
+      "realizedUSD": 0,
+      "blocker": "build segments + first campaign; sellable offer (accessories now, hearing aids post-FDA)",
+      "complianceGate": "review",
+      "nextAction": "segment list; draft reactivation campaign (CAN-SPAM compliant)"
+    },
+    {
+      "id": "regd-506c",
+      "name": "Reg D 506(c) Series C tranche (accredited, live)",
+      "type": "capital",
+      "owner": "capital",
+      "status": "live",
+      "timeToCashDays": 10,
+      "pipelineUSD": 500000,
+      "realizedUSD": 0,
+      "blocker": "accredited-verification process + investor outreach (counsel + Matt approve every word)",
+      "complianceGate": "review",
+      "nextAction": "counsel-approved outreach to accredited contacts; data room access log"
+    },
+    {
+      "id": "helen-outbound",
+      "name": "Helen outbound reactivation calls (sells via Shopify)",
+      "type": "sales",
+      "owner": "switchboard",
+      "status": "blocked",
+      "timeToCashDays": 21,
+      "pipelineUSD": 0,
+      "realizedUSD": 0,
+      "blocker": "TCPA consent verification + DNC scrub on the legacy list (compliance-officer must clear)",
+      "complianceGate": "blocked",
+      "nextAction": "verify consent provenance; DNC scrub; then design outbound offer"
+    },
+    {
+      "id": "wefunder-regcf",
+      "name": "WeFunder Reg CF campaign",
+      "type": "capital",
+      "owner": "capital",
+      "status": "idle",
+      "timeToCashDays": 70,
+      "pipelineUSD": 500000,
+      "realizedUSD": 0,
+      "blocker": "Form C + reviewed financials + 8-12wk prep + reservation list (1,500-3,000)",
+      "complianceGate": "review",
+      "nextAction": "start TTW (no money accepted) + build reservation funnel"
+    }
+  ],
+  "grants": [
+    { "name": "PostHog", "remaining": "$50,000", "expires": "~12mo", "lane": "analytics" },
+    { "name": "Daytona", "remaining": "$10,000", "expires": "12mo", "lane": "sandboxes" },
+    { "name": "Depot", "remaining": "$5,000", "expires": "~", "lane": "build/CI" },
+    { "name": "Azure (Founders Hub)", "remaining": "$5,000+", "expires": "~", "lane": "PHI/compute" },
+    { "name": "Make", "remaining": "$1,500 / 480k ops", "expires": "12mo", "lane": "non-PHI automation" },
+    { "name": "Porter", "remaining": "6mo free", "expires": "6mo", "lane": "deploy (HOLD)" },
+    { "name": "ElevenLabs", "remaining": "33M chars", "expires": "~", "lane": "voice" }
+  ],
+  "asOf": "2026-06-08T00:00:00Z",
+  "updatedBy": "finance-ops"
+}

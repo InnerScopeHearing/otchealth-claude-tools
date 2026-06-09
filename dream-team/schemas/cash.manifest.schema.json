@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://otchealth.dev/schemas/cash.manifest.schema.json",
+  "title": "OTCHealth Cash Manifest (the scoreboard)",
+  "description": "The single source of truth the Rainmaker runs the business off. One north star: cash in the bank. Owned by finance-ops; read by every Cash Driver agent.",
+  "type": "object",
+  "required": ["northStar", "scoreboard", "levers", "asOf"],
+  "additionalProperties": false,
+  "properties": {
+    "entities": {
+      "type": "array",
+      "description": "The companies in scope (OTCHealth Inc., InnerScope/INND, FourVault).",
+      "items": { "type": "string" }
+    },
+    "northStar": {
+      "type": "object",
+      "required": ["goal"],
+      "properties": {
+        "goal": { "type": "string", "description": "e.g. 'Cash into the bank ASAP'" },
+        "weeklyTargetUSD": { "type": "number" },
+        "monthlyTargetUSD": { "type": "number" }
+      }
+    },
+    "scoreboard": {
+      "type": "object",
+      "description": "The honest numbers, kept current by finance-ops.",
+      "additionalProperties": false,
+      "properties": {
+        "cashInBankUSD": { "type": "number" },
+        "revenueMTDUSD": { "type": "number" },
+        "revenueLast7dUSD": { "type": "number" },
+        "monthlyBurnUSD": { "type": "number" },
+        "runwayMonths": { "type": "number" }
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "description": "Milestone conditions that unlock value (e.g. the spin-off).",
+      "items": {
+        "type": "object",
+        "required": ["name", "condition"],
+        "properties": {
+          "name": { "type": "string" },
+          "condition": { "type": "string" },
+          "progress": { "type": "string" },
+          "unlocks": { "type": "string" }
+        }
+      }
+    },
+    "levers": {
+      "type": "array",
+      "description": "Every cash lever, ranked by the Rainmaker on time-to-cash x probability x size.",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "type", "owner", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["sales", "capital", "digital", "billing"] },
+          "owner": { "type": "string", "description": "the agent that owns it (commerce, lifecycle, switchboard, capital, digital-products, growth-exposure...)" },
+          "status": { "type": "string", "enum": ["idle", "building", "live", "blocked", "done"] },
+          "timeToCashDays": { "type": "number" },
+          "pipelineUSD": { "type": "number" },
+          "realizedUSD": { "type": "number" },
+          "blocker": { "type": "string" },
+          "complianceGate": { "type": "string", "enum": ["pass", "blocked", "na", "review"] },
+          "nextAction": { "type": "string" }
+        }
+      }
+    },
+    "grants": {
+      "type": "array",
+      "description": "Credit/grant burn tracker (so none expire unused or get exhausted).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "remaining": { "type": "string" },
+          "expires": { "type": "string" },
+          "lane": { "type": "string" }
+        }
+      }
+    },
+    "asOf": { "type": "string", "format": "date-time" },
+    "updatedBy": { "type": "string" }
+  }
+}
