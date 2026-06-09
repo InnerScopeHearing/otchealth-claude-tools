@@ -14,9 +14,11 @@ All 14 repos confirmed under `InnerScopeHearing`. Claude's post-move checks:
 - [x] **Repos transferred** — all 14 from the list below present in the org.
 - [x] **App triggers firing** — Claude Code session live on the moved repo; check runs
   (PR + push, CodeQL) green post-move.
-- [ ] **Depot runners** — org blocker cleared (repos now in an org); pending the repo
-  <-> Depot-project connection in the Depot dashboard, then `runs-on: depot-ubuntu-24.04`
-  (heavy app repos first; this repo's avatar workflows are low-value/optional).
+- [ ] **Depot runners** — managed runners connect at the org level (Depot GitHub App on
+  the org), so every repo now in the org can use `runs-on: depot-ubuntu-24.04` with no
+  per-repo step; the move was the only blocker. Switch = flip runs-on, heavy app repos
+  first; this repo's avatar workflows are the low-value canary used to confirm the
+  connection. (`DEPOT_TOKEN` / project id are for `depot build` caching, not the runners.)
 - [ ] **Actions secrets** — repo-level secrets follow the transfer automatically; re-add
   only org-level ones if any are newly wanted (reference list at the bottom of this file).
 - [ ] **COO routine** — Matt re-points it to `InnerScopeHearing/otchealth-claude-tools`
