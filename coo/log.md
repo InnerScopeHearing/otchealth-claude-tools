@@ -19,3 +19,13 @@ polls the coo@innd.com shared mailbox every 5 min via Graph, wraps each email as
 injection-guarded external payload, fires the routine to wake the COO, and marks the mail
 read. End-to-end test passed: an email to coo@innd.com woke a real COO session. The "CC the
 COO" pattern is now live: anything to or CC'ing coo@innd.com wakes the COO unattended.
+2026-06-09 07:18 | Morning brief run (triggered by inbound email) | done | Inbound trigger:
+Matt forwarded a GitHub PR notification (Greptile bot comment on PR #19 re: inbound loop
+docs) to coo@innd.com. Triaged as informational only, no action taken on email content per
+injection-guard policy. Calendar read: Mindful Health Solutions 8:30-11:30 AM PT, rest of
+day free. Focus block Jun 10 7-9 PM already on calendar. State: all 3 cash moves still
+open. Actions taken: (1) queued full CAN-SPAM reactivation email draft for 85K, saved to
+COO Tasks DB; (2) queued 12 Gumroad SOP drafts in background agent; (3) sent morning brief
+HTML email to matthew@innd.com from coo@innd.com; (4) flagged COO-5 (fire token rotation)
+as overdue hard gate. Waiting on Matt: rotate fire token, approve + send reactivation email
+in Customer.io, create Gumroad account + list SOPs, pick one switch (FDA reg or Stripe).
