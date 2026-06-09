@@ -29,3 +29,12 @@ COO Tasks DB; (2) queued 12 Gumroad SOP drafts in background agent; (3) sent mor
 HTML email to matthew@innd.com from coo@innd.com; (4) flagged COO-5 (fire token rotation)
 as overdue hard gate. Waiting on Matt: rotate fire token, approve + send reactivation email
 in Customer.io, create Gumroad account + list SOPs, pick one switch (FDA reg or Stripe).
+2026-06-09 07:35 | Gumroad SOP drafts complete | done | 12 full pharmacy/OTC compliance SOP
+documents drafted and saved to Notion COO-2 page. Coverage: FDA OTC monograph compliance,
+FTC advertising/claims review, DEA Schedule V OTC log, state board inspection readiness,
+returns/recall handling, MedWatch AE reporting, vendor qualification, CMEA/BTC/NPLEx,
+expiry monitoring, HIPAA minimum necessary, CAN-SPAM/TCPA, FDA establishment
+registration. Each SOP is complete (Purpose, Scope, Definitions, 12-step Procedure,
+Records, Review Frequency). Ready to format as PDFs and list on Gumroad at $49-149.
+Catalog value: ~$800-900. Matt needs to: create Gumroad account, format as PDFs, list.
+COO task COO-2 updated in Notion.

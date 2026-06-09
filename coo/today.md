@@ -26,9 +26,12 @@ Subject options (pick one):
 3. A quick note from OTCHealthMart (and a little something inside)
 
 ### Move 2 (cash in days, ~create account + 1 hr) — Stand up the Gumroad store
-Status: [x] 12 SOP DRAFTS being prepared this session
-- Once COO session completes: retrieve the 12 pharmacy/OTC compliance SOP drafts
-- Create Gumroad account, list at $49-149, instant delivery on
+Status: [x] 12 FULL SOP DOCUMENTS COMPLETE — saved to COO Tasks > COO-2 in Notion
+- Open Notion > COO Tasks > COO-2 "Stand up Gumroad SOP store"
+- Format each of the 12 SOPs as a branded PDF (or paste into Google Docs and export)
+- Create Gumroad account at gumroad.com
+- List each SOP at $49-149, attach PDF, enable instant delivery
+- Pricing guide: SOPs 3/6/8/12 (DEA/MedWatch/CMEA/FDA reg) at $99-149; others at $49-79
 - Report back: listed? link?
 
 ### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
