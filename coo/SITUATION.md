@@ -6,10 +6,12 @@ _Read this first, every time. Update it as facts change. No spin._
 > counterparty names, litigation details, dollar figures tied to individuals, and the
 > capital-structure chain, live ONLY in the private **"COO - Confidential"** Notion page
 > and in gitignored `*.local.md` files. They are NEVER committed here. This repo stays
-> **private**. The COO finds these at runtime by **searching Notion for their titles**
-> (no page IDs committed): **"COO - Confidential"** (the real specifics) and
-> **"COO - Today's Directive"** (the day's moves; the heartbeat reads this). Use Notion
-> search, not a hard-coded ID.
+> **private**. The COO finds these at runtime by **searching Notion for an EXACT title
+> match** (no page IDs committed): **"COO - Confidential"** (the real specifics) and
+> **"COO - Today's Directive"** (the day's moves; the heartbeat reads this). Require an
+> exact title match; if the search returns **zero or more than one** result, **HARD STOP
+> and ask Matt** rather than loading a possibly-wrong page (loading the wrong
+> "COO - Confidential" would silently drop the gated-term list the firewall depends on).
 
 ## The one fact that drives everything
 **Pre-revenue. ~$0 in the bank, ~$50K cumulative spent, ~$50K/mo burn, ~0 months
