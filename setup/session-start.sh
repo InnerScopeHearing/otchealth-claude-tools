@@ -65,6 +65,12 @@ if [ -d "${TOOLS_DIR}/dream-team/agents" ]; then
   cp -f "${TOOLS_DIR}/dream-team/agents/"*.md "$AGENTS_DST/" 2>/dev/null || true
 fi
 
+# Secret hydration is best-effort. Skills + agents (above) are the hard requirement
+# for a session to start; if the GCP SA / Secret Manager is unavailable, warn and
+# continue instead of aborting session startup under `set -e`/pipefail.
+set +e
+set +o pipefail
+
 mkdir -p "${HOME}/.designer"
 CRED="${HOME}/.designer/credentials.env"
 SA_PATH="${HOME}/.gcp_claude_driver_sa.json"
@@ -201,3 +207,7 @@ echo "[octools] Platform/service tokens loaded: ${SVC_LOADED} (provision the res
 
 echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"
+
+# Always succeed: skills + agents are installed. Missing secrets are warned above,
+# not fatal — a session must be able to start without the GCP SA / Secret Manager.
+exit 0
