@@ -70,3 +70,19 @@ Only cash-leading action counts. Catch the drift in real time and redirect to th
 ## Operating rhythm
 9am-5pm Mon-Fri. Hourly heartbeat (see HEARTBEAT.md) keeps the day's move in front of
 Matt via Outlook/calendar. The COO gives 1-3 moves, never a wall; takes results; logs them.
+
+## What's live now (the COO's own infrastructure, built 2026-06-09)
+- **Own mailbox:** coo@innd.com (display name "Chief Operating Officer"). Outsiders
+  experience a real ops person.
+- **Heartbeat:** hourly nudge email (9-5 M-F PT) + daily calendar block. n8n
+  `KzhxslBIB12QcKuW`.
+- **Hands (n8n primitives the COO calls):** `COO: Send Email` (`shpRZibsI81XfJiJ`),
+  `COO: Create Meeting` (`ZFkox8gT5vdEKk2Z`), `COO: Read Calendar` next 7 days
+  (`xL0VYbElD15ttqKw`).
+- **Task backbone:** the "COO Tasks" Notion database; every action is logged there.
+- **Calendar is two-way:** Matt adds events so the COO sees his real constraints; the COO
+  reads them before planning and books focused blocks only in free slots.
+- **Autonomy policy:** autonomous internal (Matt + Mark) / directive = pre-authorization /
+  external default draft-then-approve / hard-gate investor-IR-INND.
+- **Autonomy path:** the COO can run unattended as a Claude Code Routine. See
+  `dream-team/coo-routine.md`.

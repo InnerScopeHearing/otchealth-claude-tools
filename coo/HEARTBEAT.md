@@ -50,3 +50,13 @@ hit Outlook once and it reaches all your screens. No separate per-device integra
   you review and flip it active.
 - Note: n8n is on the Cloud Starter plan near its active-workflow cap, this may be the
   trigger to bump the plan or move the hourly job onto the Azure self-host.
+
+## UPDATE 2026-06-09: LIVE
+The heartbeat is built and active in n8n (`KzhxslBIB12QcKuW`): an hourly email
+(9-5 M-F PT) from **coo@innd.com** plus a daily calendar block, rendered as clean HTML.
+Alongside it, three more COO primitives are live and callable by the COO:
+- `COO: Send Email` (`shpRZibsI81XfJiJ`) - send from coo@innd.com on directive.
+- `COO: Create Meeting` (`ZFkox8gT5vdEKk2Z`) - book a Teams meeting + invite, in a free slot.
+- `COO: Read Calendar` (`xL0VYbElD15ttqKw`) - Matt's next 7 days (subject, start, end, busy/free).
+
+The "to build / to activate" notes above are historical; treat this section as current.

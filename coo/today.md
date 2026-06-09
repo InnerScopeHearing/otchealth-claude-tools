@@ -35,3 +35,9 @@ pattern, come back to Move 1.
 
 ## Yesterday's results
 (none logged yet)
+
+## The COO can now act for you
+The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
+your directive can send an email or book a meeting for you, then log it to the COO Tasks
+DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
+proposing today's blocks it checks your calendar so it never double-books you.
