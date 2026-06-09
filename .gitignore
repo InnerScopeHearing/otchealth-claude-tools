@@ -16,3 +16,7 @@ gcp-*-sa.json
 assets/generated/
 *.log
 .DS_Store
+
+# COO confidential runtime notes — sensitive specifics never go in git
+*.local.md
+coo/CONFIDENTIAL*

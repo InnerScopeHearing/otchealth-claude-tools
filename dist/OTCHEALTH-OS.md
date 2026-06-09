@@ -1,5 +1,5 @@
 # OTCHealth / InnerScope — Operating System (portable bundle)
-_Generated 2026-06-09T02:21Z by dist/build-os-bundle.sh. Install this in any AI to give it the full operating context._
+_Generated 2026-06-09T02:49Z by dist/build-os-bundle.sh. Install this in any AI to give it the full operating context._
 
 This bundle makes any assistant (Claude Code, Claude chat/cowork, or another
 AI) operate as part of the team: it carries the standing rules, the agent
@@ -121,10 +121,11 @@ database, the voice fleet, and the raise are the faster ones.
 ## The cash chain (why the apps matter)
 
 apps -> **real exposure / PR** (growth-exposure, product team) -> genuine market
-visibility -> (over time) INND liquidity -> 3(a)(10) conversions -> ~$4k/mo to the
-Moore family. The **securities firewall** keeps product growth strictly separate from
-anything that touches the public company, which stays factual, counsel-gated, and
-never timed to share price. That separation is what keeps the whole chain legitimate.
+visibility -> (over time) INND liquidity. The downstream capital-structure chain and any
+distributions to the principals are **private and counsel-gated** (specifics are not
+committed to this repo). The **securities firewall** keeps product growth strictly
+separate from anything that touches the public company, which stays factual,
+counsel-gated, and never timed to share price. That separation keeps the chain legitimate.
 
 ## Today's priority order (from the ops read)
 1. **digital-products** Gumroad (days) ·
@@ -203,7 +204,7 @@ publishes anything.**
 | Lane | What | Automation |
 |---|---|---|
 | **Open (product)** | Factual marketing of the apps, OTCHealthMart products, real business milestones | Aggressive. Draft + (with human send) publish. |
-| **Gated (public company)** | Anything mentioning **INND / InnerScope / "the stock" / share price / 3(a)(10) / Southridge / Trilium / the raise / dilution / reverse split / creditor pool** | **STOP. Attorney review + Matt approval. Never autonomous.** |
+| **Gated (public company)** | Anything mentioning **INND / InnerScope / "the stock" / share price / 3(a)(10) / the financier counterparties / the raise / dilution / reverse split / creditor pool** | **STOP. Attorney review + Matt approval. Never autonomous.** |
 
 A growth tool that detects any gated-lane term in its own draft must halt and route
 to the gated path. It never publishes gated content on its own.
@@ -232,7 +233,7 @@ to the gated path. It never publishes gated content on its own.
 ## Pre-publish checklist (every release/post)
 - [ ] Is every claim factual and supportable?
 - [ ] Zero share-price / investment / "the stock" language?
-- [ ] No gated-lane terms (INND, 3(a)(10), Southridge, raise, split...)? If any -> gated path.
+- [ ] No gated-lane terms (INND, 3(a)(10), the financier counterparties, raise, split...)? If any -> gated path.
 - [ ] Forward-looking statements have the safe-harbor disclaimer?
 - [ ] Any paid promotion disclosed (17(b))?
 - [ ] No medical/device claims; no em/en dashes?

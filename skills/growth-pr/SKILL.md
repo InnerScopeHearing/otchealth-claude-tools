@@ -21,7 +21,7 @@ real usage or outcome metric, a localization, a store feature.
 2. **Build a media pitch + target list** (relevant senior-health, hearing, consumer
    tech, local press). Personalized, factual, short.
 3. **Run the firewall pre-publish checklist.** If the draft contains ANY gated-lane
-   term (INND, the stock, 3(a)(10), Southridge, the raise, reverse split), it
+   term (INND, the stock, 3(a)(10), the financier counterparties, the raise, reverse split), it
    STOPS and routes to `ir-support` + attorney review. It does not publish public-
    company content.
 4. **Prep distribution** (newswire/PR service, owned channels) — a human sends.

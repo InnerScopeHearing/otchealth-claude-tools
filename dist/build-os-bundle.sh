@@ -68,7 +68,7 @@ index_dir() { # $1=dir  $2=heading
   echo; echo "## Skills (capabilities) available"; echo
   index_dir "skills" "Skills"
   echo; echo "## Securities firewall (absolute)"
-  echo "Two lanes: PRODUCT marketing (factual, automate) is open; anything touching INND / the stock / a raise / 3(a)(10) / Southridge-Trilium / reverse split is GATED — factual, Reg-FD-safe, attorney + Matt approved, never autonomous, never timed to share price. No medical/device claims; never claim a 510(k) OTCHealth does not hold. No PHI. No em or en dashes in published copy."
+  echo "Two lanes: PRODUCT marketing (factual, automate) is open; anything touching INND / the stock / a raise / 3(a)(10) / the financier counterparties / reverse split is GATED — factual, Reg-FD-safe, attorney + Matt approved, never autonomous, never timed to share price. No medical/device claims; never claim a 510(k) OTCHealth does not hold. No PHI. No em or en dashes in published copy."
 } > "$SYS"
 
 echo "[os-bundle] wrote $FULL ($(wc -l < "$FULL") lines) and $SYS ($(wc -l < "$SYS") lines)"

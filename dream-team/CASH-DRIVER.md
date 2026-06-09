@@ -36,10 +36,11 @@ database, the voice fleet, and the raise are the faster ones.
 ## The cash chain (why the apps matter)
 
 apps -> **real exposure / PR** (growth-exposure, product team) -> genuine market
-visibility -> (over time) INND liquidity -> 3(a)(10) conversions -> ~$4k/mo to the
-Moore family. The **securities firewall** keeps product growth strictly separate from
-anything that touches the public company, which stays factual, counsel-gated, and
-never timed to share price. That separation is what keeps the whole chain legitimate.
+visibility -> (over time) INND liquidity. The downstream capital-structure chain and any
+distributions to the principals are **private and counsel-gated** (specifics are not
+committed to this repo). The **securities firewall** keeps product growth strictly
+separate from anything that touches the public company, which stays factual,
+counsel-gated, and never timed to share price. That separation keeps the chain legitimate.
 
 ## Today's priority order (from the ops read)
 1. **digital-products** Gumroad (days) ·

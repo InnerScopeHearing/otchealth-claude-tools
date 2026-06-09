@@ -12,7 +12,7 @@ publishes anything.**
 | Lane | What | Automation |
 |---|---|---|
 | **Open (product)** | Factual marketing of the apps, OTCHealthMart products, real business milestones | Aggressive. Draft + (with human send) publish. |
-| **Gated (public company)** | Anything mentioning **INND / InnerScope / "the stock" / share price / 3(a)(10) / Southridge / Trilium / the raise / dilution / reverse split / creditor pool** | **STOP. Attorney review + Matt approval. Never autonomous.** |
+| **Gated (public company)** | Anything mentioning **INND / InnerScope / "the stock" / share price / 3(a)(10) / the financier counterparties / the raise / dilution / reverse split / creditor pool** | **STOP. Attorney review + Matt approval. Never autonomous.** |
 
 A growth tool that detects any gated-lane term in its own draft must halt and route
 to the gated path. It never publishes gated content on its own.
@@ -41,7 +41,7 @@ to the gated path. It never publishes gated content on its own.
 ## Pre-publish checklist (every release/post)
 - [ ] Is every claim factual and supportable?
 - [ ] Zero share-price / investment / "the stock" language?
-- [ ] No gated-lane terms (INND, 3(a)(10), Southridge, raise, split...)? If any -> gated path.
+- [ ] No gated-lane terms (INND, 3(a)(10), the financier counterparties, raise, split...)? If any -> gated path.
 - [ ] Forward-looking statements have the safe-harbor disclaimer?
 - [ ] Any paid promotion disclosed (17(b))?
 - [ ] No medical/device claims; no em/en dashes?

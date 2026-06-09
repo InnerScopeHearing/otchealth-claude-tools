@@ -27,5 +27,5 @@ Notes (delete before sending):
   PSLRA safe-harbor paragraph and cautionary language.
 - Section 17(b): if this release is part of any compensated promotion, disclose it.
 - This template is the OPEN (product) lane only. Any mention of InnerScope/INND, the
-  stock, a raise, 3(a)(10), Southridge/Trilium, dilution, or a reverse split means
+  stock, a raise, 3(a)(10), the financier counterparties, dilution, or a reverse split means
   STOP and route to ir-support + attorney review. No em or en dashes.

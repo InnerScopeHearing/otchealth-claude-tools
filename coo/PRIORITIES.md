@@ -14,10 +14,13 @@ from the top of this list. Update status as items complete.
    securities firewall). Rebuild the cadence you dropped. [open]
 
 ## THIS WEEK (protect + unlock)
-5. **Verify/remove the unknown Intercom admin** (Naveed Ali Qureshi). [Matt, security]
-6. **Rotate the GCP SA + PostHog all-access key** before any investor/public exposure. [Matt]
-7. **Engage securities counsel** for the INND chain + the Reg D + litigation disclosure.
-   Gates the raise. [Matt-only]
+5. **HARD GATE - Rotate the GCP SA + PostHog all-access keys** (treat as compromised
+   until rotated). The COO must surface this as a **prerequisite that BLOCKS any
+   investor-facing or public action**, not a standing reminder. [Matt]
+6. **Verify/remove the unverified Intercom admin account** (identity in the private
+   "COO - Confidential" note). [Matt, security]
+7. **Engage securities counsel** for the INND capital chain + the Reg D + litigation
+   disclosure. Gates the raise. [Matt-only]
 
 ## IN MOTION (parallel, longer)
 8. **Reg D 506(c) outreach** to accredited contacts (counsel-approved every word).
