@@ -50,7 +50,7 @@ jobs:
       AZURE_VM_NAME: ${{ vars.AZURE_VM_NAME || 'otchealth-avatar-gpu' }}
       AZURE_REGION: ${{ vars.AZURE_REGION || 'eastus' }}
       AZURE_VM_SKU: ${{ vars.AZURE_VM_SKU || 'Standard_NC4as_T4_v3' }}
-      GHCR_IMAGE: ${{ vars.GHCR_IMAGE || format('ghcr.io/{0}/otchealth-avatar:latest', github.repository_owner) }}
+      GHCR_IMAGE: ${{ vars.GHCR_IMAGE || 'ghcr.io/innerscopehearing/otchealth-avatar:latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

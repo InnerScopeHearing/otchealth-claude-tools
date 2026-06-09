@@ -8,6 +8,24 @@ GitHub **auto-redirects** old URLs (web + `git`) to the new owner, so existing c
 remotes, and links keep working. The lists below are the things that do NOT auto-follow a
 transfer, so they are the whole job.
 
+## Status: move complete (verified 2026-06-09)
+
+All 14 repos confirmed under `InnerScopeHearing`. Claude's post-move checks:
+- [x] **Repos transferred** — all 14 from the list below present in the org.
+- [x] **App triggers firing** — Claude Code session live on the moved repo; check runs
+  (PR + push, CodeQL) green post-move.
+- [x] **Depot runners** — CONFIRMED working 2026-06-09. Managed runners connect at the org
+  level (Depot GitHub App on the org); after the move + connecting the app, a canary
+  (avatar-build-image on `depot-ubuntu-24.04`) was picked up by a Depot runner (group
+  `depot`) in seconds. This repo's avatar-build-image now runs on Depot; flip the heavy app
+  repos next (their own sessions). A move-exposed bug was fixed in passing: the avatar
+  image tag used `github.repository_owner` (mixed case), which GHCR rejects, so the owner
+  is now lowercased. (`DEPOT_TOKEN` / project id are for `depot build` caching, not the runners.)
+- [ ] **Actions secrets** — repo-level secrets follow the transfer automatically; re-add
+  only org-level ones if any are newly wanted (reference list at the bottom of this file).
+- [ ] **COO routine** — Matt re-points it to `InnerScopeHearing/otchealth-claude-tools`
+  (step 3 below); the n8n primitives are URL-keyed and unaffected by the move.
+
 ## Matt's checklist (the only auth-gated steps; everything else is Claude's)
 
 1. **Authorize these GitHub Apps on the InnerScopeHearing org** (give them access to all repos):

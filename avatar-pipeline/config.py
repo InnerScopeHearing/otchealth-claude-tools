@@ -69,7 +69,7 @@ AZURE_VM_SKU = _get("AZURE_VM_SKU", "Standard_NC4as_T4_v3")
 AZURE_SKU_HOURLY_USD = float(_get("AZURE_SKU_HOURLY_USD", "0.526"))
 
 # --- Container image on GHCR ---
-GHCR_IMAGE = _get("GHCR_IMAGE", "ghcr.io/gbgolfmatt/otchealth-avatar:latest")
+GHCR_IMAGE = _get("GHCR_IMAGE", "ghcr.io/innerscopehearing/otchealth-avatar:latest")
 
 # --- Replicate (no-quota managed GPU, interim path while Azure quota pends) ---
 REPLICATE_API_TOKEN = _get("REPLICATE_API_TOKEN")

@@ -75,9 +75,9 @@ runs on OpenAI/Vertex/ElevenLabs exactly as before — Azure is purely additive.
 git init -b main
 git add .
 git commit -m "Initial commit: designer skill + session installer"
-gh repo create gbgolfmatt/otchealth-claude-tools --private --source=. --push
+gh repo create InnerScopeHearing/otchealth-claude-tools --private --source=. --push
 # (or create the empty repo in the GitHub UI, then:)
-#   git remote add origin https://github.com/gbgolfmatt/otchealth-claude-tools.git
+#   git remote add origin https://github.com/InnerScopeHearing/otchealth-claude-tools.git
 #   git push -u origin main
 ```
 
@@ -101,7 +101,7 @@ a warm-container cache can never ship stale skills):
 
 ```bash
 rm -rf /tmp/octools 2>/dev/null
-git clone --depth 1 https://github.com/gbgolfmatt/otchealth-claude-tools /tmp/octools
+git clone --depth 1 https://github.com/InnerScopeHearing/otchealth-claude-tools /tmp/octools
 bash /tmp/octools/setup/session-start.sh
 ```
 

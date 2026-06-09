@@ -13,7 +13,7 @@ bash dist/build-os-bundle.sh
 Already automated. Each environment runs the setup script:
 ```bash
 rm -rf /tmp/octools 2>/dev/null
-git clone --depth 1 https://github.com/gbgolfmatt/otchealth-claude-tools /tmp/octools
+git clone --depth 1 https://github.com/InnerScopeHearing/otchealth-claude-tools /tmp/octools
 bash /tmp/octools/setup/session-start.sh
 ```
 This installs **all skills** to `~/.claude/skills` and **all agents** (product team +
