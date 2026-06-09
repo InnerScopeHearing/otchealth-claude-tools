@@ -4,10 +4,10 @@ Ranked by cash impact x speed x "only Matt can do it." The COO pulls today's 1-3
 from the top of this list. Update status as items complete.
 
 ## NOW (this week — first dollars)
-1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
-   today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
+1. **Launch the Gumroad SOP store.** 12 SOP drafts queued by COO (2026-06-09 session).
+   Matt creates Gumroad account + lists them. First dollars in days. [DRAFT READY]
+2. **Send the overdue email campaign.** Full CAN-SPAM draft queued in COO Tasks DB
+   (2026-06-09). Matt pastes into Customer.io, sets address, sends. ~30 min. [DRAFT READY — Needs Matt]
 3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
    connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
 4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
