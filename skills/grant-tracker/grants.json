@@ -1,0 +1,17 @@
+{
+  "_comment": "The grant/credit tracker. Update status/used as you go. track.mjs flags expiry + waste. Lane decisions live in CLAUDE.md.",
+  "grants": [
+    { "name": "PostHog", "value": "$50,000", "status": "active", "added": "2026-06-08", "termMonths": 12, "lane": "analytics (THE one)", "note": "Boost BAA add-on may be cash for MedReview PHI" },
+    { "name": "Daytona", "value": "$10,000", "status": "active", "added": "2026-06-08", "termMonths": 12, "lane": "agent sandboxes" },
+    { "name": "Depot", "value": "$5,000", "status": "active", "added": "2026-06-08", "termMonths": 12, "lane": "build/CI runners" },
+    { "name": "Azure Founders Hub", "value": "$5,000+", "status": "active", "added": "2026-06-08", "termMonths": 12, "lane": "PHI self-host + Azure OpenAI + GitHub Enterprise" },
+    { "name": "Make.com", "value": "$1,500 / 480k ops", "status": "active", "added": "2026-06-08", "termMonths": 12, "lane": "non-PHI sandbox automation only" },
+    { "name": "ElevenLabs", "value": "33M chars", "status": "active", "added": "2026-05-01", "termMonths": 12, "lane": "voice/music/SFX" },
+    { "name": "Porter.run", "value": "6 months free", "status": "hold", "added": "2026-06-08", "termMonths": 6, "lane": "deploy (K8s) - HOLD, Cloud Run covers it" },
+    { "name": "Datadog", "value": "pending approval", "status": "pending", "added": "2026-06-08", "termMonths": 12, "lane": "backend observability - hold for scale" },
+    { "name": "Mixpanel", "value": "1yr free", "status": "declined", "added": "2026-06-08", "termMonths": 12, "lane": "analytics - DECLINED (PostHog is the one)" },
+    { "name": "Amplitude", "value": "1yr discount", "status": "declined", "added": "2026-06-08", "termMonths": 12, "lane": "analytics - DECLINED" },
+    { "name": "Greptile", "value": "subscription", "status": "active", "added": "2026-06-03", "termMonths": 12, "lane": "code review" },
+    { "name": "Replicate", "value": "$5 (funded)", "status": "active", "added": "2026-05-25", "termMonths": 12, "lane": "avatar render fallback" }
+  ]
+}
