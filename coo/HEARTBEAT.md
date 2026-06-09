@@ -1,5 +1,8 @@
 # HEARTBEAT — the always-on hourly push (9-5 M-F) to Outlook, calendar, and your devices
 
+> **Note:** `$RECIPIENT_EMAIL` below is a placeholder; it is resolved from the n8n
+> credential/env at build time, not a literal string.
+
 ## The honest architecture
 The COO has two halves:
 - **The brain = a Claude Code session.** Portable on web, desktop, and the iPhone 16 Pro
@@ -20,7 +23,7 @@ Steps:
 2. **Compose the nudge:** the time, the one open Move (#1 first), the time it takes, and
    "report back when done." Pulls the open items from the directive.
 3. **Push it** (parallel):
-   - **Outlook email** (Graph API) to $RECIPIENT_EMAIL (resolve from the n8n credential/env at build time; not a literal string) - subject "COO 2pm: Move 1 still
+   - **Outlook email** (Graph API) to $RECIPIENT_EMAIL - subject "COO 2pm: Move 1 still
      open (the Friday email). 20 min. Go."
    - **Outlook calendar** - create/update a short event/reminder for the next hour with
      the move (this is what surfaces on the iPhone + Apple Watch via the Outlook/calendar
@@ -41,7 +44,7 @@ Apple device signed into that account, iPhone, Apple Watch, Mac/web, so n8n only
 hit Outlook once and it reaches all your screens. No separate per-device integration.
 
 ## To activate (needs your go + a couple of specifics)
-- Confirm: push channel(s) = email + calendar (+ SMS?), recipient = $RECIPIENT_EMAIL (resolve from the n8n credential/env at build time; not a literal string),
+- Confirm: push channel(s) = email + calendar (+ SMS?), recipient = $RECIPIENT_EMAIL,
   window 9-5 M-F PT.
 - Claude builds the n8n workflow (inactive) + the Notion "COO - Today's Directive" page;
   you review and flip it active.
