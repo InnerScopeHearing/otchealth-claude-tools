@@ -102,8 +102,12 @@ and counsel still own every regulated decision.
 >   what you already did, what awaits his approval, any calendar conflicts). **If any step
 >   after the claim fails** (the `coo/today.md` write, the calendar booking, or the email
 >   send), **delete the marker task** and log it (`YYYY-MM-DD HH:MM | morning-guard | failed
->   | <what failed>, marker removed for retry`) and alert Matt, so the next run retries
->   instead of silently skipping the brief.
+>   | <what failed>, marker removed for retry`) so the next run retries instead of silently
+>   skipping. **Alert Matt over a channel that does not depend on the failed step:** always
+>   create a high-priority "Needs Matt" alert task in the COO Tasks DB (Notion, independent
+>   of Outlook) - that is the guaranteed channel. Also drop a `COO ALERT: brief failed`
+>   event on his calendar if the calendar still works, and send the alert email only if
+>   email was not the failing step.
 >
 > **6. Close the loop.** Append everything you did and decided to `coo/log.md`, update
 > `coo/PRIORITIES.md`, and write/refresh the relevant rows in the COO Tasks DB. Leave the
