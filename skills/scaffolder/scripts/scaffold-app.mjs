@@ -27,6 +27,8 @@ if (!app) { console.error('required: --app <id>'); process.exit(1); }
 const ring = args.ring || 'non-phi';
 const type = args.type || 'capacitor-hybrid';
 const brand = args.brand || app;
+const owner = args.owner || 'matthew@innd.com';
+const workspace = args.workspace || 'otchealth';
 const out = args.out || '.';
 
 if (!['phi', 'non-phi'].includes(ring)) { console.error('--ring must be phi|non-phi'); process.exit(1); }
@@ -45,12 +47,12 @@ const manifest = {
     sentry: { project: app, baa: ring === 'phi', relay: ring === 'phi' },
     posthog: { project: app, baa: ring === 'phi', selfHosted: false },
     revenuecat: { app },
-    customerio: { workspace: 'otchealth' },
+    customerio: { workspace },
     ota: { provider: type === 'capacitor-hybrid' ? 'capgo' : 'none', channel: 'production', rollbackOnCrashRate: 99.0 },
   },
   kits: { startup: true, build: false, testing: false, prelaunch: false, launch: false, maintenance: false, marketing: false, devkit: false },
   gates: { tests: G(), axe: G(), visual: G(), lighthouse: G(), evals: G(), supplyChain: 'fail', phiReview: ring === 'phi' ? 'running' : 'na' },
-  owners: { human: 'matthew@innd.com' },
+  owners: { human: owner },
   updatedBy: 'scaffolder',
   updatedAt: new Date().toISOString(),
 };

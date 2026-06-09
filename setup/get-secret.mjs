@@ -35,5 +35,5 @@ const t = await token();
 const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
 if (!r.ok) { console.error(`access ${id} ${r.status}: ${(await r.text()).slice(0, 200)}`); process.exit(1); }
 const data = Buffer.from((await r.json()).payload.data, 'base64');
-if (outfile) { writeFileSync(outfile, data); chmodSync(outfile, 0o600); console.error(`[get-secret] wrote ${data.length} bytes -> ${outfile} (600)`); }
+if (outfile) { writeFileSync(outfile, data, { mode: 0o600 }); chmodSync(outfile, 0o600); console.error(`[get-secret] wrote ${data.length} bytes -> ${outfile} (600)`); }
 else process.stdout.write(data);
