@@ -4,7 +4,7 @@
 # at the start of every Claude Code (web) session.
 #
 # Wire this into each project's Claude Code environment setup script, e.g.:
-#   git clone https://github.com/gbgolfmatt/otchealth-claude-tools /tmp/octools \
+#   git clone https://github.com/InnerScopeHearing/otchealth-claude-tools /tmp/octools \
 #     2>/dev/null || (cd /tmp/octools && git pull --ff-only)
 #   bash /tmp/octools/setup/session-start.sh
 #

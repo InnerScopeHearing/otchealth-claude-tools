@@ -101,7 +101,7 @@ so once created they hydrate automatically, no code change.)
 - the setup/init script:
   ```bash
   rm -rf /tmp/octools 2>/dev/null
-  git clone --depth 1 https://github.com/gbgolfmatt/otchealth-claude-tools /tmp/octools
+  git clone --depth 1 https://github.com/InnerScopeHearing/otchealth-claude-tools /tmp/octools
   bash /tmp/octools/setup/session-start.sh
   ```
 Set this once per environment (or on a shared default). From then on every
