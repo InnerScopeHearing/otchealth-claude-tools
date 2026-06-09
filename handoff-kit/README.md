@@ -30,6 +30,11 @@ It is idempotent: it never overwrites an existing `HANDOFF.md` or an existing
 `.claude/settings.json`. Then fill in `HANDOFF.md` and commit + push (PR to
 `main`).
 
+## Prompts
+
+All three ready-to-paste prompts (capture, app kickoff, commerce kickoff) live in
+[`PROMPTS.md`](./PROMPTS.md). Copy from there instead of from chat.
+
 ## Capturing an old session's context (the important part)
 The richest handoff is written by the OLD session that still holds the
 conversation, since the code state alone does not capture the "why". Paste this

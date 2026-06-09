@@ -11,8 +11,22 @@
 set -euo pipefail
 
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Anchor to the SAME root the SessionStart hook reads: $CLAUDE_PROJECT_DIR.
+# Fall back to the git toplevel, then the current dir. Anchoring to
+# CLAUDE_PROJECT_DIR guarantees HANDOFF.md lands exactly where the hook looks
+# for it (the project root), even when the session is cd'd into a subfolder or
+# a nested git repo — the bug that once put a HANDOFF.md one level deep.
+REPO="${CLAUDE_PROJECT_DIR:-}"
+[ -z "$REPO" ] && REPO="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+GITROOT="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || echo "$REPO")"
 cd "$REPO"
+
+echo "[handoff-kit] applying to project root: $REPO"
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ "$REPO" != "$GITROOT" ]; then
+  echo "[handoff-kit] note: git toplevel is $GITROOT (nested/different git root);"
+  echo "             using the Claude project root so the SessionStart hook finds HANDOFF.md."
+fi
 
 # 1. HANDOFF.md — create from the template only if it does not exist.
 if [ -f HANDOFF.md ]; then
@@ -47,4 +61,6 @@ else
 fi
 
 echo ""
-echo "[handoff-kit] Done. Next: fill in HANDOFF.md, then commit + push (PR to main)."
+echo "[handoff-kit] Done. Files are at: $REPO"
+echo "[handoff-kit]   $REPO/HANDOFF.md  <- the SessionStart hook reads exactly this path"
+echo "[handoff-kit] Next: fill in HANDOFF.md, then commit + push (PR to main)."
