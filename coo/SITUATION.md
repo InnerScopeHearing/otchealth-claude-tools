@@ -99,3 +99,9 @@ Matt via Outlook/calendar. The COO gives 1-3 moves, never a wall; takes results;
   external default draft-then-approve / hard-gate investor-IR-INND.
 - **Autonomy path:** the COO can run unattended as a Claude Code Routine. See
   `dream-team/coo-routine.md`.
+- **Send Later (2026-06-10):** the COO can schedule its own future wake-ups with a
+  message to itself: data table `coo_send_later` + n8n dispatcher `EMZxsrSPgagInfdR`
+  (5-min tick, claim-before-fire). See `coo/SEND-LATER.md`.
+- **Dispatch + Briefing loop (2026-06-10):** packets DOWN via `coo/DISPATCH.md`;
+  truth UP via the Bucket Briefings DB per `coo/BRIEFING.md`; bucket onboarding via
+  `coo/BUCKET-PROMPT.md`.

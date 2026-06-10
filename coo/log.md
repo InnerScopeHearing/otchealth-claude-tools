@@ -65,3 +65,11 @@ end-of-session briefing as a standing CLAUDE.md rule. Shopify session gets an ex
 last week's real email numbers + Stripe/Helen checkout reality. Also answered the send_later
 question: it is a harness scheduler tool absent from this session, not a GitHub permission;
 the n8n schedule -> routine trigger is the COO's own send_later equivalent.
+2026-06-10 build* | COO Send Later built + tested (Matt-directed, not avoidance) | done |
+Matt asked for the send_later capability. It is a platform harness tool that cannot be
+installed, so built the equivalent on owned rails: n8n data table coo_send_later
+(5FpSjTJxKYMU1rQE) + workflow "COO: Send Later (scheduled self wake)" (EMZxsrSPgagInfdR,
+active, 5-min tick, claim-before-fire idempotency, injection-guarded self-note payload).
+End-to-end test passed (execution 4766). First real use: armed an hourly self check-in on
+PR 36. Documented in coo/SEND-LATER.md; SITUATION.md updated. Token caution: reuses the
+hardcoded routine fire token; the open HARD GATE rotation task now covers both workflows.
