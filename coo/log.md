@@ -34,3 +34,15 @@ hits are auditable.
 2026-06-09 build | Idempotency recovery + log format (review) | done | Morning guard now has a recovery path: if any step fails after the marker is claimed, the marker is deleted and Matt is alerted so the next run retries instead of silently skipping. Guard-hit and failure log lines now follow the file format (... | morning-guard | skipped/failed | ...).
 2026-06-09 build | Failure-alert fallback channel (review) | done | If the morning brief fails on the email step, alerting Matt via email would also fail. Recovery now alerts over an email-independent channel: a guaranteed high-priority "Needs Matt" task in the COO Tasks DB (Notion), plus a best-effort calendar alert event and email only when email was not the failing step.
 2026-06-09 coo-check | COO invoked after another build session (org move + Depot + cloud-env setup) | flagged | Every entry in today's log is "build." The 3 cash moves are still not-started and the Friday reactivation email is still unsent. Named the pattern, redirected to Move 1, offered to draft the email + the Gumroad SOPs now.
+2026-06-10 session | COO spun up; portfolio visibility + dispatch question | done | Pulled
+live status of all 14 org repos (read access confirmed; write scoped per session). Answered
+the cross-session question: sessions are isolated; shared state (git + Notion + manifests)
+is the bridge; the routine API trigger (proven by the inbound email loop) is the real-time
+wake. Matt set today as foundation day (Mindful Health appt); emails fire tomorrow morning
+via the Shopify bucket.
+2026-06-10 dispatch | First COO dispatch packet fired | done | Wrote coo/DISPATCH.md (the
+two-tier dispatch protocol: Tier 1 pickup-on-open via Notion packet + CLAUDE.md line, Tier 2
+real-time wake via per-bucket routine API trigger + n8n dispatcher). Created the kickstart
+packet in the COO Tasks DB: "DISPATCH -> Shopify bucket: Reactivation email #1 to the 85K"
+(due 2026-06-11, Needs Matt, full pre-send checks + Option A/B copy plan in the body).
+Trade accepted by Matt: portfolio status board gets built after Move 1 fires.
