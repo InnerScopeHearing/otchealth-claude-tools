@@ -36,8 +36,8 @@ runway.** Everything is "progressing" and no money is coming in. The job is CASH
 - **A ready Gumroad SOP product** (Mark's pharmacy compliance SOPs, $49-149, zero competition).
 
 ## The two switches that unlock the big pool (only Matt can flip)
-1. **FDA OTC Establishment Registration** (~$10K, <2 weeks) — nothing ships without it.
-2. **Connect Stripe** — no cash is collected without it.
+1. **FDA OTC Establishment Registration** ($11K/year, <2 weeks once filed) — nothing ships without it. CASH-GATED: we do not have $11K right now; need Gumroad + email reactivation dollars first.
+2. **Connect Stripe** — DONE (confirmed 2026-06-10 by Matt). Stripe is connected. Shopify link should be verified working (see COO Tasks).
 
 ## Blind spots / risks the COO must keep pushing
 - **Rotate the GCP SA + PostHog all-access keys** (treat as compromised until rotated).

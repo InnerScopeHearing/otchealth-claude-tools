@@ -23,11 +23,12 @@ Status: [ ] not started
 - Report back: listed? link?
 Status: [ ] not started
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
-Status: [ ] not started
+### Move 3 — Inventory path UPDATE (2026-06-10 confirmed by Matt)
+Stripe is ALREADY CONNECTED. FDA registration costs $11K/year and we do not have it.
+The path to inventory is: earn $11K from Moves 1+2 first -> then file FDA.
+Action today: Verify Stripe is showing as an active payment method in Shopify admin
+(Settings -> Payments). Takes 2 min. Confirm or report any issue.
+Status: [ ] verify Shopify/Stripe connection live
 
 ## Not a move today (resist it)
 Building more tools. The system is done. If you feel the urge, that's the avoidance

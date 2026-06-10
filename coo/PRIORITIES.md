@@ -8,8 +8,7 @@ from the top of this list. Update status as items complete.
    today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
 2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
    Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
-3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
-   connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
+3. **Flip the remaining switch:** file FDA OTC Establishment Registration ($11K/year, <2wk once filed). Stripe is DONE. FDA is now CASH-GATED — need first-dollar inflows (Gumroad + reactivation) to fund the $11K, THEN file. Sequence: earn $11K -> file FDA -> list inventory. [Matt-only, cash-gated]
 4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
    securities firewall). Rebuild the cadence you dropped. [open]
 
