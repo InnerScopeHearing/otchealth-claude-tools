@@ -30,7 +30,8 @@ runway.** Everything is "progressing" and no money is coming in. The job is CASH
 - **~10,298 legacy hearing-aid units** in hand, ~$27/unit to refurbish, sellable at
   $199-299 = ~$2-3M at retail, ~85-90% margin. Biggest near-term pool.
 - **85,000+ contact database** (Customer.io workspace 193366). Owned, zero-cost channel.
-- **Live Shopify store** (OTCHealthMart) — but Stripe not connected, catalog mostly draft.
+- **Live Shopify store** (OTCHealthMart) — Stripe IS live. Catalog partially draft. FDA OTC
+  Establishment Registration is the remaining gate on the hearing-aid inventory units.
 - **Live AI voice fleet** — Helen already closes Shopify orders by phone (inbound).
 - **A live Reg D 506(c) Series C** ($500K tranche, accredited, data room ready).
 - **A ready Gumroad SOP product** (Mark's pharmacy compliance SOPs, $49-149, zero competition).

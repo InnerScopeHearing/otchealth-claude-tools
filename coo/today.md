@@ -1,43 +1,62 @@
 # TODAY — the COO's directive (regenerate each morning; mark results through the day)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-10. Operating window 9am-5pm PT. Calendar: CLEAR all day.
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in bank: $0. Burn ~$50K/mo. The clock is real.
+Good news: the email campaign IS running. Thousands sent last week. Send 3 v2 is prepped
+and in HOLD. The question is not "did we start" — it is "will we close."
 
 ## Today's 3 moves (do these, in order)
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
-- Report back: sent? to how many?
+### Move 1 (5 minutes) — Twilio top-up: do this before you read anything else
+Balance is $9.25. One busy morning of inbound calls wipes it out and every call drops.
+- Log into Twilio, add $50-100 to the account.
+- Report back: done?
+- Task #11 in COO Tasks.
 Status: [ ] not started
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
+### Move 2 (15 minutes) — Approve or deny Send 3 v2
+Non-opener resend to ~6,800 Tier 1+2 buyers. TReO $99 pair offer. Funnel page is now
+correctly linked (the root cause of 0 orders in prior sends has been fixed).
+- Open Customer.io, find HOLD draft 141.
+- Read the copy, approve or deny.
+- Approval = it sends. Denial = we document why and pivot to phone.
+- Task #10 in COO Tasks. 15-minute decision.
 Status: [ ] not started
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
+### Move 3 (30 minutes) — Publish Helen as primary closer
+Right now every inbound call the campaign generates goes to Sarah (intake only, no orders).
+Helen — the AI closer who already has the Shopify draft-order workflow — is unpublished
+on (800) 640-9731. The footer shows (800) 864-4337 (Sarah). You are burning every lead.
+- Publish Helen's number in Twilio/ElevenLabs.
+- Update the Shopify store footer to (800) 640-9731.
+- Task #12 in COO Tasks.
 Status: [ ] not started
+
+## Next up after the 3 moves
+Gumroad SOP store (Task #2): content is ready — 8 product listings + 12 SOP PDFs drafted.
+Create the Gumroad account, paste the listings, upload the PDFs, enable instant delivery.
+First dollars in days. ~45 min total.
+
+## HARD GATES — do not promote anything until cleared
+- **Rotate GCP SA key + PostHog key** (Task #4): blocks investor/public action.
+- **Rotate COO Routine Fire Token** (Task #5): flagged as compromised.
+- **CareNow Section 17(b) counsel review** (Task #15): do NOT advertise CareNow bundles
+  until a securities lawyer clears it. Engage counsel this week.
+- **FDA OTC Establishment Registration** (Task #3): required before selling the 10,298 units.
+  Stripe IS live. FDA filing is the remaining blocker for the $2-3M inventory pool.
+
+## COO ruling needed
+Task #13: The live Shopify store currently sells Matrix hearing-aid pre-orders with
+cancel-for-refund disclosures. The dispatch packet says "tease only until FDA filing."
+These conflict. Before Phase 2 emails (Sends 7-12) promote Matrix, Matt needs to rule:
+tease-only or sell? One sentence answer clears this.
 
 ## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+More tooling. The campaign is running. The tools exist. Close, do not build.
 
-## Yesterday's results
-(none logged yet)
-
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+## Yesterday's results (2026-06-09)
+Dispatch protocol built (coo/DISPATCH.md). First dispatch packet created (Task #9).
+COO state correction: emails went out last week — the Shopify bucket updated the record.
+PR #36 merged to feature branch. CI: 4/4 green. No review comments.
