@@ -15,7 +15,7 @@ _Read this first, every time. Update it as facts change. No spin._
 
 ## The one fact that drives everything
 **Pre-revenue. ~$0 in the bank, ~$50K cumulative spent, ~$50K/mo burn, ~0 months
-runway.** Everything is "progressing" and no money is coming in. The job is CASH.
+runway.** 2026 revenue to date: $736 (2 orders, Feb). Last 60 days: $0.00. The job is CASH.
 
 ## The entities (COO holds both)
 - **OTCHealth Inc.** — operating company. Store, apps, inventory, the database.
@@ -30,14 +30,14 @@ runway.** Everything is "progressing" and no money is coming in. The job is CASH
 - **~10,298 legacy hearing-aid units** in hand, ~$27/unit to refurbish, sellable at
   $199-299 = ~$2-3M at retail, ~85-90% margin. Biggest near-term pool.
 - **85,000+ contact database** (Customer.io workspace 193366). Owned, zero-cost channel.
-- **Live Shopify store** (OTCHealthMart) — but Stripe not connected, catalog mostly draft.
-- **Live AI voice fleet** — Helen already closes Shopify orders by phone (inbound).
+- **Live Shopify store** (OTCHealthMart) — Stripe connected and verified end to end (confirmed Jun 9). Shop Pay OFF (eligible_for_payments=false; not yet applied).
+- **Live AI voice fleet** — Helen can close orders but is UNPUBLISHED; published footer number routes to Sarah (intake only, cannot close). Fix: publish Helen, point footer to her number.
 - **A live Reg D 506(c) Series C** ($500K tranche, accredited, data room ready).
 - **A ready Gumroad SOP product** (Mark's pharmacy compliance SOPs, $49-149, zero competition).
 
-## The two switches that unlock the big pool (only Matt can flip)
-1. **FDA OTC Establishment Registration** (~$10K, <2 weeks) — nothing ships without it.
-2. **Connect Stripe** — no cash is collected without it.
+## The two switches that unlock the big pool
+1. **FDA OTC Establishment Registration** (~$10K, <2 weeks) — nothing ships without it. [OPEN — status unknown, Matt to confirm]
+2. **Connect Stripe** — [DONE, confirmed Jun 9]. Shop Pay application still needed (increases conversion).
 
 ## Blind spots / risks the COO must keep pushing
 - **Rotate the GCP SA + PostHog all-access keys** (treat as compromised until rotated).
@@ -56,9 +56,14 @@ runway.** Everything is "progressing" and no money is coming in. The job is CASH
   HIPAA, the securities firewall).
 
 ## Matt's pattern the COO exists to break
-**Builds instead of executes.** Proof: the email campaign stopped after 2 (one due last
-Friday, never sent); LinkedIn posts stopped. Tooling is DONE; more building is avoidance.
-Only cash-leading action counts. Catch the drift in real time and redirect to the move.
+**Builds instead of executes.** Email wave started (4 sends, Jun 2-3) then stalled: Sends 3, 4A-C all missed their dates and are still HOLD drafts. The root cause of zero conversions was identified (funnel page never linked in sent emails) and fixed in draft 141, which has been sitting unapproved since Jun 10. LinkedIn posts stopped. Tooling is DONE; the decision left is Matt approving the next send, not more building. Catch the drift in real time and redirect to the move.
+
+## Email reactivation campaign status (updated 2026-06-10)
+- Wave 1 sent Jun 2-3: 4 emails to 4,633 buyer-segment subscribers, 63 opens, 32 clicks, 0 orders.
+- Root cause of 0 orders: sent emails linked to product pages at $149 with no visible offer; the $99 funnel page (/pages/treo-pair-offer) existed but was never linked. Fixed in next draft.
+- Send 3 v2 (non-opener resend, funnel-page CTA, Standoff subject line): HOLD draft 141 in Customer.io. Needs Matt's approval to send. Audience: ~6,800 Tier 1+2 non-openers.
+- Twilio balance: $9.25 (voice channel dies mid-campaign without top-up).
+- CareNow share-bundle Section 17(b) exposure: memberships live and purchasable, counsel review needed before any promotion.
 
 ## The cash levers, fastest first
 1. **Gumroad SOP store** (digital-products) — cash in days, zero gates.
