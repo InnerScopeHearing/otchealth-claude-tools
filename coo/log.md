@@ -58,3 +58,10 @@ LIVE not unsent). Reframed the Shopify dispatch packet: Step 1 = file a briefing
 numbers, Step 2 = tee up the NEXT send. Seeded a placeholder briefing row for the Shopify
 bucket to fill. The loop is now closed: coach -> COO (reconcile) -> dispatch -> bucket
 (execute + brief) -> COO (reconcile) -> next play.
+2026-06-10 enable | Bucket onboarding prompt written | done | coo/BUCKET-PROMPT.md: the
+standardized paste-into-any-session prompt that (1) files an immediate Bucket Briefings row
+to catch the COO up, (2) checks the COO Tasks DB for DISPATCH packets, (3) adopts the
+end-of-session briefing as a standing CLAUDE.md rule. Shopify session gets an extra ask:
+last week's real email numbers + Stripe/Helen checkout reality. Also answered the send_later
+question: it is a harness scheduler tool absent from this session, not a GitHub permission;
+the n8n schedule -> routine trigger is the COO's own send_later equivalent.
