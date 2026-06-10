@@ -14,16 +14,19 @@ Update all repos and consolidate onto the one platform. Matt is driving this him
 around the appointment.
 Status: [~] in progress (Matt)
 
-### Move 2 (done by the COO today) — Dispatch the reactivation email kickstart
-The COO wrote the full kickstart packet for the "NEW OTCHealthMart Shopify" bucket:
-pre-send checks (checkout reality, list hygiene, CAN-SPAM, claims firewall), Option A
-commerce email vs Option B permission/warmup email, segment-first send plan.
-Packet: COO Tasks DB -> "DISPATCH -> Shopify bucket: Reactivation email #1 to the 85K".
-Due: tomorrow 2026-06-11 first thing.
-Status: [x] dispatched (execution tomorrow, Matt approves before send)
+### Move 2 (done by the COO today) — Built the upward briefing loop + corrected stale data
+Caught a real bug: the COO dispatched "send the reactivation email, never sent." WRONG.
+Emails went out last week (thousands). Fixed it:
+- Created the **Bucket Briefings** Notion DB so each bucket reports its real status UP to
+  the COO daily (`coo/BRIEFING.md`). This is the fix for the COO going stale.
+- Corrected SITUATION.md + PRIORITIES.md: reactivation is LIVE, not unsent.
+- Reframed the Shopify dispatch packet: Step 1 is now "give the COO a status briefing with
+  real numbers," Step 2 is "tee up the NEXT send" (not redo last week's).
+Status: [x] done
 
 ### Tomorrow morning, first thing (committed)
-1. Shopify bucket executes the dispatch packet; Matt reviews + sends segment 1.
+1. Shopify bucket files its briefing (real send history + results), then drafts the NEXT
+   send; Matt reviews + sends.
 2. Gumroad SOP drafts (the COO can draft these in parallel).
 
 ## Not a move today (resist it)

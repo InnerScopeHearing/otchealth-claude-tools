@@ -46,3 +46,15 @@ real-time wake via per-bucket routine API trigger + n8n dispatcher). Created the
 packet in the COO Tasks DB: "DISPATCH -> Shopify bucket: Reactivation email #1 to the 85K"
 (due 2026-06-11, Needs Matt, full pre-send checks + Option A/B copy plan in the body).
 Trade accepted by Matt: portfolio status board gets built after Move 1 fires.
+2026-06-10 correction | Stale-data bug caught + upward briefing loop built | done | Matt
+flagged that the COO's picture was out of date: it dispatched "send the reactivation email,
+never sent" but emails actually went out last week (thousands). Root cause: the COO is a
+separate ephemeral session from the buckets, so its memory decays with no feedback path.
+Fix: created the "Bucket Briefings" Notion DB (collection://2bed2bba-52f8-4665-ba7d-46044a11d549)
++ coo/BRIEFING.md (two-tier upward briefing, symmetric with DISPATCH.md; COO reconciles New
+rows into SITUATION/PRIORITIES at the start of every run, marks them COO Read; latest
+briefing always beats COO memory). Corrected SITUATION.md + PRIORITIES.md (reactivation is
+LIVE not unsent). Reframed the Shopify dispatch packet: Step 1 = file a briefing with real
+numbers, Step 2 = tee up the NEXT send. Seeded a placeholder briefing row for the Shopify
+bucket to fill. The loop is now closed: coach -> COO (reconcile) -> dispatch -> bucket
+(execute + brief) -> COO (reconcile) -> next play.

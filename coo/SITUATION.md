@@ -56,13 +56,26 @@ runway.** Everything is "progressing" and no money is coming in. The job is CASH
   HIPAA, the securities firewall).
 
 ## Matt's pattern the COO exists to break
-**Builds instead of executes.** Proof: the email campaign stopped after 2 (one due last
-Friday, never sent); LinkedIn posts stopped. Tooling is DONE; more building is avoidance.
-Only cash-leading action counts. Catch the drift in real time and redirect to the move.
+**Builds instead of executes.** Tooling is DONE; more building is avoidance. Only
+cash-leading action counts. Catch the drift in real time and redirect to the move.
+(NOTE 2026-06-10: an earlier version claimed the reactivation email "was never sent."
+That was STALE COO data. Emails DID go out last week, thousands sent; the Shopify bucket
+holds the real history and results. Corrected. This is exactly why the upward briefing
+loop below exists.)
+
+## The COO's picture is only as fresh as its inputs (read this)
+The COO is a separate session from the buckets that do the work, so it goes stale and can
+dispatch work already done (it just did). Truth flows UP via the **Bucket Briefings**
+Notion DB (`collection://2bed2bba-52f8-4665-ba7d-46044a11d549`): each bucket files an
+end-of-day brief with its REAL numbers. **At the start of every COO run, read the "New"
+rows in Bucket Briefings, fold them into this file + PRIORITIES.md, then mark them "COO
+Read."** Never trust the COO's own memory of a bucket's status over that bucket's latest
+briefing. Protocol: `coo/BRIEFING.md`.
 
 ## The cash levers, fastest first
 1. **Gumroad SOP store** (digital-products) — cash in days, zero gates.
-2. **Email reactivation of the 85K** (lifecycle) — fastest sales lever; the dropped campaign.
+2. **Email reactivation of the 85K** (lifecycle) — fastest sales lever; LIVE (emails went
+   out last week; get real numbers from the Shopify bucket briefing, then continue cadence).
 3. **Reg D 506(c)** (capital) — live, counsel-gated.
 4. **Inventory clearance** (commerce) — biggest pool, gated on FDA + Stripe.
 5. **Outbound voice** (switchboard) — after TCPA/DNC. **WeFunder** — prep now (8-12 wk).

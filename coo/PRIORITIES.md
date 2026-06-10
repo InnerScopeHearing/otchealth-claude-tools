@@ -6,8 +6,10 @@ from the top of this list. Update status as items complete.
 ## NOW (this week — first dollars)
 1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
    today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
+2. **Continue the reactivation cadence to the 85K.** CORRECTED 2026-06-10: NOT an unsent
+   campaign. Emails went out last week (thousands sent) from the Shopify bucket. Next: get
+   the real numbers via the Shopify Bucket Briefing, then tee up the next send. Claude
+   drafts; Matt approves + sends in Customer.io. [LIVE, get numbers]
 3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
    connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
 4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
