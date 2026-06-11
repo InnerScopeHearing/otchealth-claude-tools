@@ -82,3 +82,15 @@ due 2026-06-13) and armed a Send Later follow-up for 2026-06-13 to catch a reply
 the 7-day archive. Established the "BCC the COO" tracking pattern: Matt BCCs coo@innd.com on
 outbound emails to track; the inbound loop logs them as triage (not directives). Documented
 in SITUATION.md.
+2026-06-11 org | CTO position created | done | Matt is standing up a dedicated CTO Claude
+Code session as the technical execution arm; COO plans/directs, CTO executes. Decisions:
+(1) CTO gets a NEW PRIVATE repo InnerScopeHearing/otchealth-cto, NOT the public
+otchealth-claude-tools (infra runbooks must not be public); COO<->CTO link is the Notion
+dispatch/briefing loop, so no shared repo needed. My GitHub scope could not create the org
+repo (403); Matt creates it. (2) Added "CTO / Infrastructure" bucket to the Bucket Briefings
+DB. (3) Wrote coo/CTO-PROMPT.md (full CTO charter + paste-ready onboarding prompt + role,
+loop wiring, authority/gates, security absolutes). (4) Fired the first CTO dispatch:
+"DISPATCH -> CTO: migrate n8n to self-hosted on Azure (Cloud is hard-locked)" with a full
+runbook (preserve -> stand up Azure -> migrate creds -> cut over app-by-app -> decommission).
+n8n Cloud is HARD LOCKED (payment + plan-cap), so this is NOW priority. Fast-follow noted:
+provision cto@innd.com inbound loop so CC/BCC reaches the CTO like the COO.
