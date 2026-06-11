@@ -94,3 +94,12 @@ loop wiring, authority/gates, security absolutes). (4) Fired the first CTO dispa
 runbook (preserve -> stand up Azure -> migrate creds -> cut over app-by-app -> decommission).
 n8n Cloud is HARD LOCKED (payment + plan-cap), so this is NOW priority. Fast-follow noted:
 provision cto@innd.com inbound loop so CC/BCC reaches the CTO like the COO.
+2026-06-11 access | COO access model documented | done | Answered "how do I give the COO
+more GitHub reach." Key fact from Claude Code web docs: a session can reach any repo the
+connecting account sees; the limiter is the per-session repo scope set at launch (not an env
+var, not changeable from inside a session), and repo CREATION needs the Claude GitHub App to
+have Administration permission (the 403 we hit). Wrote coo/ACCESS-MODEL.md: recommended scope
+is read-all + write to the 3 coordination repos (claude-tools, cto, ops) + create rights,
+but NOT direct write to app code or the PHI repo (those route through CTO/builders with the
+release gates). Reason: this COO session ingests untrusted external email, so least privilege
+caps the blast radius. Includes the one-time GitHub App + environment setup checklist for Matt.
