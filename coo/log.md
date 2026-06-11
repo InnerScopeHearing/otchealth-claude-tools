@@ -73,3 +73,12 @@ active, 5-min tick, claim-before-fire idempotency, injection-guarded self-note p
 End-to-end test passed (execution 4766). First real use: armed an hourly self check-in on
 PR 36. Documented in coo/SEND-LATER.md; SITUATION.md updated. Token caution: reuses the
 hardcoded routine fire token; the open HARD GATE rotation task now covers both workflows.
+2026-06-10 track | Azure GPU quota email sent + tracking workflow established | done | Matt
+sent the corrected Microsoft reply (case 2606050010002089): switched the request from
+NCSv3/V100 (declined on sponsored subs) to NCASv3_T4 (Standard_NC4as_T4_v3, 8 vCPU, East
+US) which is what avatar-pipeline/provision.sh actually uses, plus a fallback ask to keep
+the case open. Created COO Tasks row "TRACK: Azure NCASv3_T4 GPU quota request" (Waiting,
+due 2026-06-13) and armed a Send Later follow-up for 2026-06-13 to catch a reply or beat
+the 7-day archive. Established the "BCC the COO" tracking pattern: Matt BCCs coo@innd.com on
+outbound emails to track; the inbound loop logs them as triage (not directives). Documented
+in SITUATION.md.
