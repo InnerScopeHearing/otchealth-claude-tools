@@ -103,3 +103,10 @@ is read-all + write to the 3 coordination repos (claude-tools, cto, ops) + creat
 but NOT direct write to app code or the PHI repo (those route through CTO/builders with the
 release gates). Reason: this COO session ingests untrusted external email, so least privilege
 caps the blast radius. Includes the one-time GitHub App + environment setup checklist for Matt.
+2026-06-11 access | CTO scope decided: broad (all repos) | done | Matt asked whether to give
+the CTO access to all buckets. Yes: CTO is the mirror image of the COO. COO = narrow (eats
+untrusted email); CTO = all repos write (it is the executor, no email ingestion). Confirmed
+full inventory = 16: 14 under InnerScopeHearing + otchealth-cto (to be created) + 1 personal
+GBGolfMatt/aware-aural-rehab-ci (Codemagic CI mirror, easy to miss). Standing limits survive:
+medreview repo writable but no PHI data in context; innd-website tech ok but investor publish
+stays gated. Documented in coo/ACCESS-MODEL.md (new CTO scope section).

@@ -33,6 +33,26 @@ app/PHI changes through the CTO preserves the release gates a direct COO write w
 bypass. A great director reads-all, coordinates-all, and creates — it does not hand-edit
 production.
 
+## The CTO scope (the mirror image: broad on purpose)
+The CTO is the technical executor and does NOT ingest untrusted email, so it is the
+session that SHOULD hold wide write access. Give the CTO **All repositories** (write).
+Full inventory it should reach (16 once otchealth-cto exists):
+
+- **InnerScopeHearing (14):** iheartest, aware-aural-rehab, medreview (PHI),
+  otchealth-companion, innerease, flatstick, fourvault, fictionary, innd-website,
+  otchealthmart-shopify, otchealth-ops, otchealth-mcp-server, voice-agent-evals,
+  otchealth-claude-tools — plus **otchealth-cto** (its home).
+- **GBGolfMatt (personal, easy to miss, 1):** aware-aural-rehab-ci (Codemagic CI mirror).
+
+Two standing limits that survive the access grant:
+- **medreview is PHI:** the CTO may write the source repo, but PHI *data* never enters its
+  context, analytics, or any non-BAA service. Code yes, patient data never.
+- **innd-website touches INND:** the CTO manages the site's technology freely; publishing
+  investor-facing content stays gated to Capital + counsel (securities firewall).
+
+Net split: **COO = narrow (3 coordination repos, it eats untrusted email); CTO = all (it
+is the executor and does not).**
+
 ## Setup checklist (Matt, action once)
 1. **Widen the GitHub App permissions.** GitHub -> org **InnerScopeHearing** -> Settings
    -> GitHub Apps / Installed Apps -> **Claude** -> Configure:
