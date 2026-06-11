@@ -1,43 +1,55 @@
 # TODAY — the COO's directive (regenerate each morning; mark results through the day)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-11 (Thursday). Operating window 9am-5pm PT.
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in bank: $0. Burn ~$50K/mo. Runway: 0. The clock is real.
 
-## Today's 3 moves (do these, in order)
+## URGENT: n8n Cloud execution limit hit
+**ALL automation is down.** The heartbeat, morning email sender, and calendar reader all
+failed with "Execution limit reached." Matt needs to log in to n8n Cloud and upgrade the
+plan (or wait for the monthly reset). This blocks the COO's operating infrastructure.
+5-minute fix. Do it first.
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
-- Report back: sent? to how many?
-Status: [ ] not started
+## Today's 3 moves (in order — first dollars require these decisions)
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
-Status: [ ] not started
+### Move 1 (overdue since June 10, 15-min decision) — Approve Send 3 v2
+Customer.io HOLD draft 141 is ready. TReO $99 pair offer. Non-opener resend to ~6,800
+Tier 1+2 buyers. The funnel page link is NOW correctly set (that was the root cause of 0
+orders across prior sends). This is the cheapest live test of whether the list can buy.
+- Go to Customer.io, find HOLD draft 141, review it, hit send (or deny and tell COO why).
+- 15-minute decision. The resend is already built.
+Status: [ ] awaiting Matt's approval (Task #10 in COO Tasks DB)
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
-Status: [ ] not started
+### Move 2 (5-min fix, every inbound call is a lost sale) — Publish Helen + top-up Twilio
+Helen (AI closer, number 800-640-9731) is unpublished. The store footer shows Sarah
+(intake only, cannot close). Every inbound call right now goes nowhere.
+- Publish Helen as primary inbound line. Update Shopify store footer to (800) 640-9731.
+- Top up Twilio to $50-100 (current balance: $9.25). Takes 5 minutes at twilio.com.
+Status: [ ] not started (Tasks #11, #12)
+
+### Move 3 (30-min, unlocks inventory lever) — Verify Stripe + tee up FDA
+Matt confirmed Stripe is connected June 10. Do the 2-min check in Shopify Admin ->
+Settings -> Payments to confirm it shows as active. Then decide: file the FDA OTC
+Establishment Registration today? That plus Stripe = $2-3M inventory pool open.
+Status: [ ] not started (Tasks #17, #3)
+
+## Pending Matt decisions (queue — these are drafted and waiting)
+- Gumroad SOP store (Task #2): content is READY (8 listings + 12 SOPs). Create the
+  Gumroad account, paste, upload PDFs, price at $49-149. First dollars in days.
+- Matrix hearing aid ruling (Task #13): tease-only or sell? Live store conflict vs.
+  dispatch. Ruling needed before Phase 2 emails (Sends 7-12) go out.
+- CareNow Section 17(b) counsel review (Task #15): hard gate, do not promote until done.
+
+## Hard gates (non-negotiable before investor or public action)
+- Rotate GCP SA key + PostHog all-access key (Task #4) — BLOCKS raise/press.
+- Rotate COO Routine Fire Token (Task #5).
 
 ## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+Building more tools. The operating system is done. If you feel the urge, that is the
+avoidance pattern. Come back to Move 1.
 
 ## Yesterday's results
-(none logged yet)
-
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+- Stripe confirmed connected by Matt (June 10).
+- n8n Cloud execution limit hit — all automation down (flagged today).
+- Send 3 v2 built and queued in Customer.io, awaiting approval.
