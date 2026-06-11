@@ -121,3 +121,15 @@ the business chiefs = one shared private repo otchealth-exec (folders cro/cfo/cc
 Matt creates it (my GitHub scope cannot). Fast-follow: per-role mailboxes (cro@/cfo@/cco@/
 cpo@ innd.com) mirroring coo@; until then CC/BCC coo@. Build discipline noted: this is the
 survival org; do not add CMO/CISO/GC until a lever demands a standing seat.
+2026-06-11 context | Claude usage cap + model switch | done | Matt's weekly premium pool
+(Opus/Fable) hit 100%. Confirmed: "Weekly all models" and "Sonnet only" are SEPARATE
+buckets. "Sonnet only" is at 1% -- near-full capacity. Matt switched the session to Sonnet
+4.6, which draws from the Sonnet-only bucket. Work continues. No downgrade of the Claude
+plan yet -- the hyperagent.com pilot (claimed $20K credit for $200) is the right evaluation
+path first; see prior log entry for decision.
+2026-06-11 attempt | otchealth-exec repo creation 403 | blocked | Tried mcp__github__create_repository
+for InnerScopeHearing/otchealth-exec. Got 403 "Resource not accessible by integration" --
+same as the otchealth-cto attempt. Root cause: the GitHub App still lacks the Administration
+permission (Part A broadened repo scope to All repositories but Administration = repo creation
+is a separate permission). Workaround: Matt creates manually (60 sec). See coo/SETUP-GITHUB-ACCESS.md
+Part B and exec/SETUP-EXEC-REPO.md for the exact repo creation steps + what to copy in.

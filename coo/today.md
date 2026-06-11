@@ -1,43 +1,52 @@
 # TODAY — the COO's directive (regenerate each morning; mark results through the day)
 
-Date: 2026-06-10. Operating window 9am-5pm. **Slower day by design: Mindful Health
-Solutions appointment.** Matt's call: today is foundation (repos onto one platform);
-the cash moves fire tomorrow morning.
+Date: 2026-06-11. Operating window 9am-5pm.
 
 ## The number
 Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
 
-## Today's plan (Matt-directed)
+## Foundation built (2026-06-10 + this morning)
+The C-suite org is designed. The infrastructure (mailbox, heartbeat, dispatch loop,
+briefing loop, send-later) is all live. The repo structure is staged.
 
-### Move 1 (foundation, Matt) — Repos onto the same platform
-Update all repos and consolidate onto the one platform. Matt is driving this himself
-around the appointment.
-Status: [~] in progress (Matt)
+**What is NOT done yet = what needs to happen today:**
 
-### Move 2 (done by the COO today) — Built the upward briefing loop + corrected stale data
-Caught a real bug: the COO dispatched "send the reactivation email, never sent." WRONG.
-Emails went out last week (thousands). Fixed it:
-- Created the **Bucket Briefings** Notion DB so each bucket reports its real status UP to
-  the COO daily (`coo/BRIEFING.md`). This is the fix for the COO going stale.
-- Corrected SITUATION.md + PRIORITIES.md: reactivation is LIVE, not unsent.
-- Reframed the Shopify dispatch packet: Step 1 is now "give the COO a status briefing with
-  real numbers," Step 2 is "tee up the NEXT send" (not redo last week's).
-Status: [x] done
+## Move 1 — CTO: launch NOW (n8n is hard locked)
+All 35 n8n workflows are suspended. COO nervous system, iHEARtest webhooks, AWARE,
+Shopify, Helen voice -- all offline. The CTO session fixes this.
 
-### Tomorrow morning, first thing (committed)
-1. Shopify bucket files its briefing (real send history + results), then drafts the NEXT
-   send; Matt reviews + sends.
-2. Gumroad SOP drafts (the COO can draft these in parallel).
+**Matt's action:**
+1. Open `InnerScopeHearing/otchealth-cto` (already created)
+2. Start a NEW Claude Code session on that repo (All repositories access)
+3. Paste the prompt from `coo/CTO-PROMPT.md`
+4. The CTO reads the dispatch, starts the Azure migration immediately
 
-## Not a move today (resist it)
-New tooling beyond the dispatch protocol. DISPATCH.md is written; the system is done.
+This is the unblock for everything. Every automated workflow is down until n8n is live again.
 
-## Yesterday's results (2026-06-09)
-All build, no cash moves fired. COO infrastructure completed (mailbox, heartbeat,
-inbound wake loop, guards). The 3 cash moves rolled forward; the Friday reactivation
-email is now dispatched for tomorrow with a hard packet.
+## Move 2 — Create otchealth-exec + launch CRO first
+1. Create `InnerScopeHearing/otchealth-exec` (private, initialize with README) -- see
+   `exec/SETUP-EXEC-REPO.md` for the exact steps
+2. Start the CRO session on it (paste `exec/CRO-PROMPT.md`)
+3. The CRO picks up the reactivation cadence + numbers from the Shopify bucket
 
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, can
-send email / book meetings on directive, and can now **dispatch task packets to the
-other Claude Code buckets** (see coo/DISPATCH.md). Say "CcOO" anywhere.
+**Launch order after CRO: CFO, CCO, CPO** (as time allows; CFO second is the priority).
+
+## Move 3 — Shopify bucket: needs its Bucket Briefing
+The Shopify bucket was given the onboarding prompt last session. It should have filed
+a Bucket Briefings row with last week's real numbers. If it hasn't:
+- Ask it to file its briefing now (email numbers, revenue, Stripe status)
+- The COO cannot reconcile SITUATION.md or direct next-send until that row exists
+
+## What is blocked (do not attempt)
+- n8n-powered workflows: all suspended until the CTO migrates to Azure
+- The COO inbound wake loop (uses n8n) -- email to coo@innd.com will not wake the COO
+  until self-host is up
+- The Send Later scheduler (also n8n) -- the Azure GPU follow-up for 2026-06-13 may not
+  fire; Matt should check that date manually
+
+## The key open gates (COO must not let these drift)
+1. **HARD GATE:** Rotate GCP SA + PostHog all-access keys (blocks investor-facing action).
+2. **Intercom:** verify or remove the unverified admin account.
+3. **Securities counsel:** INND capital chain + Reg D + litigation disclosure. Matt-only.
+4. **FDA OTC registration + Stripe connect** -- the two switches that unlock the inventory pool.
+5. **Azure GPU quota** (case 2606050010002089) -- follow up 2026-06-13.
