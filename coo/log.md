@@ -110,3 +110,14 @@ full inventory = 16: 14 under InnerScopeHearing + otchealth-cto (to be created) 
 GBGolfMatt/aware-aural-rehab-ci (Codemagic CI mirror, easy to miss). Standing limits survive:
 medreview repo writable but no PHI data in context; innd-website tech ok but investor publish
 stays gated. Documented in coo/ACCESS-MODEL.md (new CTO scope section).
+2026-06-11 org | Standing C-suite designed + chartered | done | Matt chose to build all four
+standing executives. Created charters: exec/CRO-PROMPT.md (Rainmaker/cash offense),
+exec/CFO-PROMPT.md (money truth + vendor-billing watch so no n8n-style surprise recurs),
+exec/CCO-PROMPT.md (compliance gate WITH VETO), exec/CPO-PROMPT.md (product portfolio /
+triage). Added exec/ORG.md (the org chart + division of labor + shared plumbing). Wired all
+four into the loop: added CRO/Revenue, CFO/Finance, CCO/Compliance, CPO/Product buckets to
+the Bucket Briefings DB; dispatch via "COO Tasks" title prefix DISPATCH -> <ROLE>:. Home for
+the business chiefs = one shared private repo otchealth-exec (folders cro/cfo/cco/cpo);
+Matt creates it (my GitHub scope cannot). Fast-follow: per-role mailboxes (cro@/cfo@/cco@/
+cpo@ innd.com) mirroring coo@; until then CC/BCC coo@. Build discipline noted: this is the
+survival org; do not add CMO/CISO/GC until a lever demands a standing seat.
