@@ -53,13 +53,18 @@ assume unless the user says otherwise.
   worst case for our proxy-heavy workflows, so it never runs PHI and we do not
   migrate working flows to it. Spend the Make grant only on net-new, low-frequency,
   non-PHI automation.
-- **n8n self-host trigger.** We are on n8n **Cloud** today (fine during build;
-  ~99% of current executions are build/test traffic, true production is ~near zero).
-  **Move to self-hosted n8n on the Azure grant when** sustained *production*
-  executions approach the Cloud plan cap (~8-10k/mo) **OR** the first genuinely-PHI
-  flow goes live (e.g. Adverse Event Logger, specialist-line transcripts). n8n
-  Cloud does not provide a BAA; self-hosting is the compliant path. One move solves
-  both cost and compliance.
+- **n8n self-host is LIVE (DONE 2026-06-11, COO-21).** The production engine is the
+  Azure self-host at **`https://automation.otchealth.app`** (VM `n8n-prod`,
+  `otchealth-automation-rg`); 40 workflows imported, ~28 active (Shopify, Helen,
+  Twilio, iHEARtest, AWARE, INND signup, the COO Outlook nervous system). n8n
+  **Cloud** (`otchealth.app.n8n.cloud`) is billing-locked / decommissioned, kept
+  read-only for final verification then cancelled. Self-hosting was the compliant
+  path (Cloud gives no BAA; PHI flows WF02/WF03 may run ONLY on the self-host).
+  ALWAYS target the self-host. Two things still point at Cloud and need repointing:
+  the n8n **MCP connection** (set its base URL to `https://automation.otchealth.app`
+  + the self-host API key from the Notion vault "n8n Self-Host") and the deployed
+  `otchealth-mcp-server` `.env` (`N8N_BASE_URL`). `setup/session-start.sh` defaults
+  `N8N_BASE_URL` to the self-host so CLI/skill use never hits the dead Cloud host.
 - **Build/CI vs sandboxes: do not double-spend grants.** Use **Depot** ($5k) for
   build/CI acceleration (GitHub Actions runners at ~half cost + faster, Docker
   build cache, and **macOS runners — now the PRIMARY iOS build path** (see
