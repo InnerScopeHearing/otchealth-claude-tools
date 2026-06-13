@@ -21,7 +21,7 @@ harness MCP config; those rows are operator actions.
 ## 1. MCP connections (operator action, in the Claude Code env settings)
 | MCP | Change | Value |
 |---|---|---|
-| n8n | **Repoint to the self-host** (currently Cloud) | base URL `https://automation.otchealth.app` + API key from Notion vault "n8n Self-Host automation.otchealth.app" (label cto-session). Verify: it should list 40 workflows (Send Later = `mQdoxuKwFgeSSgly`). |
+| n8n | **DONE 2026-06-13: repointed to the self-host.** | Server URL = `https://automation.otchealth.app/mcp-server/http` (n8n's NATIVE instance MCP endpoint, Bearer-auth, realm "n8n MCP Server"). NOT the bare host (`https://automation.otchealth.app` is rejected as "Server URL doesn't match expected format" — the connector wants the full `/mcp-server/http` path). Verified: REST shows 40 workflows / 28 active on the self-host, no Cloud IDs. NOTE: the native instance MCP exposes your existing workflows + management; it is a DIFFERENT toolset than the old workflow-*builder* MCP (node search / SDK / create_workflow). To keep MCP workflow-authoring, point that builder MCP at the self-host via `N8N_API_URL` + key. The new tools load on a fresh Claude Code session. |
 | PostHog | **Optional: add it** for parity with the Hyperagent CTO | PostHog MCP, org "OTCHealth Inc.". Lets Claude Code query funnels / manage flags / create projects directly instead of via the REST API. |
 | Depot | No MCP needed | Depot is CLI/Actions; builds run on Depot runners via GitHub Actions. The grant-burn monitor uses `DEPOT_TOKEN` (see Secret Manager below). |
 
