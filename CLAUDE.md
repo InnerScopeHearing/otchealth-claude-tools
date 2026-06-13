@@ -8,9 +8,15 @@ assume unless the user says otherwise.
   or local Xcode workflow.
 - **iOS builds and App Store submission are cloud-only.** You cannot `xcodebuild`
   or code-sign iOS on Windows, so every iOS build/sign/submit runs on a cloud
-  macOS machine: **Codemagic** today (mobile-tuned: signing, TestFlight, store
-  publish), with Depot **macOS runners** as a second cloud-macOS option to
-  evaluate. Android builds run on Linux, so cloud CI handles them trivially.
+  macOS machine: **Depot macOS runners (GitHub Actions) — PRIMARY as of
+  2026-06-13**, spending the $5k Depot grant instead of Codemagic cash.
+  **Codemagic is deprecated** and cut over per app once a green Depot iOS build
+  is proven (the personal CI mirror GBGolfMatt/aware-aural-rehab-ci is affected
+  too). Signing assets (App Store Connect API key, distribution cert + profile)
+  live in the Notion API Tokens & Credentials vault and load as GitHub Actions
+  secrets; fastlane match is the preferred manager. Monitor Depot grant burn
+  (macOS minutes cost ~10x Linux). Android builds run on Linux (Depot ubuntu), so
+  cloud CI handles them trivially.
 - **We operate cloud-native.** Work happens through Claude Code on the web; the
   session sandbox is Linux in the cloud. `setup/session-start.sh` and all tooling
   run there, not on the Windows PC. If local shell is ever needed, use WSL2.
@@ -56,7 +62,8 @@ assume unless the user says otherwise.
   both cost and compliance.
 - **Build/CI vs sandboxes: do not double-spend grants.** Use **Depot** ($5k) for
   build/CI acceleration (GitHub Actions runners at ~half cost + faster, Docker
-  build cache, optional macOS/GPU runners). Use **Daytona** ($10k) for
+  build cache, and **macOS runners — now the PRIMARY iOS build path** (see
+  Environment facts above), plus optional GPU runners). Use **Daytona** ($10k) for
   parallel-agent sandboxes. They overlap on "agent sandboxes" so keep them in their
   lanes.
 
