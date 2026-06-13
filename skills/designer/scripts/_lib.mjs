@@ -1,1 +1,320 @@
-Ly8gU2hhcmVkIHV0aWxpdGllcyBmb3IgdGhlIGRlc2lnbmVyIHNraWxsIHNjcmlwdHMuCi8vCi8vIFdoYXQgbGl2ZXMgaGVyZToKLy8gICAtIEJyYW5kLXByb2ZpbGUgcmVzb2x1dGlvbiAocHJvamVjdC1sb2NhbCDihpIgaG9tZSDihpIgZGVmYXVsdCkKLy8gICAtIENyZWRlbnRpYWwgbG9hZGluZyAoZW52IHZhcnMg4oaSIH4vLmRlc2lnbmVyL2NyZWRlbnRpYWxzLmVudikKLy8gICAtIE91dHB1dC1wYXRoIG1hbmFnZW1lbnQgKGFzc2V0cy9nZW5lcmF0ZWQvPHR5cGU+LzxzbHVnPi48ZXh0PiArIC5tZXRhLmpzb24pCi8vICAgLSBDb3N0IHJlcG9ydGluZyArIGRyeS1ydW4gZ3VhcmQKLy8gICAtIFNoYXJlZCBsb2dnaW5nCi8vCi8vIEltcG9ydGVkIGJ5IGV2ZXJ5IGdlbi0qIHNjcmlwdC4gU2luZ2xlIHNvdXJjZSBvZiB0cnV0aCBzbyBlYWNoIHNjcmlwdCBzdGF5cyBzbWFsbC4KCmltcG9ydCB7IGV4aXN0c1N5bmMsIG1rZGlyU3luYywgcmVhZEZpbGVTeW5jLCB3cml0ZUZpbGVTeW5jIH0gZnJvbSAnbm9kZTpmcyc7CmltcG9ydCB7IHJlc29sdmUsIGRpcm5hbWUsIGJhc2VuYW1lLCBleHRuYW1lLCBqb2luIH0gZnJvbSAnbm9kZTpwYXRoJzsKaW1wb3J0IHsgaG9tZWRpciB9IGZyb20gJ25vZGU6b3MnOwoKY29uc3QgSE9NRSA9IGhvbWVkaXIoKTsKY29uc3QgU0tJTExfSE9NRSA9IHJlc29sdmUoSE9NRSwgJy5jbGF1ZGUvc2tpbGxzL2Rlc2lnbmVyJyk7CmNvbnN0IFVTRVJfSE9NRSA9IHJlc29sdmUoSE9NRSwgJy5kZXNpZ25lcicpOwoKLy8g4pSA4pSA4pSAIENyZWRlbnRpYWxzIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAovLyBPcmRlciBvZiBwcmVjZWRlbmNlOiBwcm9jZXNzLmVudiDihpIgfi8uZGVzaWduZXIvY3JlZGVudGlhbHMuZW52IChLRVk9dmFsdWUgbGluZXMpCmV4cG9ydCBmdW5jdGlvbiBsb2FkQ3JlZGVudGlhbHMoKSB7CiAgICBjb25zdCBlbnZGaWxlID0gcmVzb2x2ZShVU0VSX0hPTUUsICdjcmVkZW50aWFscy5lbnYnKTsKICAgIGlmIChleGlzdHNTeW5jKGVudkZpbGUpKSB7CiAgICAgICAgY29uc3QgY29udGVudCA9IHJlYWRGaWxlU3luYyhlbnZGaWxlLCAndXRmOCcpOwogICAgICAgIGZvciAoY29uc3QgbGluZSBvZiBjb250ZW50LnNwbGl0KCdcbicpKSB7CiAgICAgICAgICAgIGNvbnN0IHRyaW1tZWQgPSBsaW5lLnRyaW0oKTsKICAgICAgICAgICAgaWYgKCF0cmltbWVkIHx8IHRyaW1tZWQuc3RhcnRzV2l0aCgnIycpKSBjb250aW51ZTsKICAgICAgICAgICAgY29uc3QgaWR4ID0gdHJpbW1lZC5pbmRleE9mKCc9Jyk7CiAgICAgICAgICAgIGlmIChpZHggPT09IC0xKSBjb250aW51ZTsKICAgICAgICAgICAgY29uc3Qga2V5ID0gdHJpbW1lZC5zbGljZSgwLCBpZHgpLnRyaW0oKTsKICAgICAgICAgICAgbGV0IHZhbHVlID0gdHJpbW1lZC5zbGljZShpZHggKyAxKS50cmltKCk7CiAgICAgICAgICAgIGlmICgodmFsdWUuc3RhcnRzV2l0aCgnIicpICYmIHZhbHVlLmVuZHNXaXRoKCciJykpIHx8CiAgICAgICAgICAgICAgICAodmFsdWUuc3RhcnRzV2l0aCgiJyIpICYmIHZhbHVlLmVuZHNXaXRoKCInIikpKSB7CiAgICAgICAgICAgICAgICB2YWx1ZSA9IHZhbHVlLnNsaWNlKDEsIC0xKTsKICAgICAgICAgICAgfQogICAgICAgICAgICBpZiAoIShrZXkgaW4gcHJvY2Vzcy5lbnYpKSBwcm9jZXNzLmVudltrZXldID0gdmFsdWU7CiAgICAgICAgfQogICAgfQogICAgcmV0dXJuIHsKICAgICAgICBvcGVuYWlLZXk6IHByb2Nlc3MuZW52Lk9QRU5BSV9BUElfS0VZLAogICAgICAgIG9wZW5haU9yZzogcHJvY2Vzcy5lbnYuT1BFTkFJX09SR19JRCwKICAgICAgICBnb29nbGVDcmVkc1BhdGg6IHByb2Nlc3MuZW52LkdPT0dMRV9BUFBMSUNBVElPTl9DUkVERU5USUFMUywKICAgICAgICBnb29nbGVQcm9qZWN0OiBwcm9jZXNzLmVudi5HT09HTEVfQ0xPVURfUFJPSkVDVCwKICAgICAgICBlbGV2ZW5sYWJzS2V5OiBwcm9jZXNzLmVudi5FTEVWRU5MQUJTX0FQSV9LRVksCiAgICAgICAgcmVjcmFmdEtleTogcHJvY2Vzcy5lbnYuUkVDUkFGVF9BUElfS0VZLAogICAgICAgIC8vIEF6dXJlIChvcHRpb25hbCDigJQgcHJlc2VudCBvbmx5IG9uY2UgdGhlIEF6dXJlIHJlc291cmNlcyBhcmUgcHJvdmlzaW9uZWQKICAgICAgICAvLyBhbmQgdGhlaXIga2V5cyBsYW5kIGluIFNlY3JldCBNYW5hZ2VyKS4gU2VlIHNldHVwL2ZldGNoLXNlY3JldHMubWpzLgogICAgICAgIGF6dXJlT3BlbkFJRW5kcG9pbnQ6IHByb2Nlc3MuZW52LkFaVVJFX09QRU5BSV9FTkRQT0lOVCwKICAgICAgICBhenVyZU9wZW5BSUtleTogcHJvY2Vzcy5lbnYuQVpVUkVfT1BFTkFJX0FQSV9LRVksCiAgICAgICAgYXp1cmVPcGVuQUlBcGlWZXJzaW9uOiBwcm9jZXNzLmVudi5BWlVSRV9PUEVOQUlfQVBJX1ZFUlNJT04gfHwgJzIwMjUtMDQtMDEtcHJldmlldycsCiAgICAgICAgYXp1cmVPcGVuQUlJbWFnZURlcGxveW1lbnQ6IHByb2Nlc3MuZW52LkFaVVJFX09QRU5BSV9JTUFHRV9ERVBMT1lNRU5ULAogICAgICAgIGF6dXJlT3BlbkFJVmlzaW9uRGVwbG95bWVudDogcHJvY2Vzcy5lbnYuQVpVUkVfT1BFTkFJX1ZJU0lPTl9ERVBMT1lNRU5ULAogICAgICAgIGF6dXJlT3BlbkFJVmlkZW9EZXBsb3ltZW50OiBwcm9jZXNzLmVudi5BWlVSRV9PUEVOQUlfVklERU9fREVQTE9ZTUVOVCwKICAgICAgICBhenVyZVNwZWVjaEtleTogcHJvY2Vzcy5lbnYuQVpVUkVfU1BFRUNIX0tFWSwKICAgICAgICBhenVyZVNwZWVjaFJlZ2lvbjogcHJvY2Vzcy5lbnYuQVpVUkVfU1BFRUNIX1JFR0lPTiwKICAgIH07Cn0KCmV4cG9ydCBmdW5jdGlvbiByZXF1aXJlQ3JlZGVudGlhbChjcmVkcywga2V5LCBmcmllbmRseU5hbWUpIHsKICAgIGlmICghY3JlZHNba2V5XSkgewogICAgICAgIGNvbnNvbGUuZXJyb3IoYEVSUk9SOiBtaXNzaW5nIGNyZWRlbnRpYWwgJHtmcmllbmRseU5hbWV9LmApOwogICAgICAgIGNvbnNvbGUuZXJyb3IoYCAgU2V0IGl0IGluIHByb2Nlc3MuZW52IG9yIGluIH4vLmRlc2lnbmVyL2NyZWRlbnRpYWxzLmVudi5gKTsKICAgICAgICBjb25zb2xlLmVycm9yKGAgIFJ1biBcYGJhc2ggJHtTS0lMTF9IT01FfS9zY3JpcHRzL3NldHVwLnNoXGAgZm9yIGEgZ3VpZGVkIHNldHVwLmApOwogICAgICAgIHByb2Nlc3MuZXhpdCgyKTsKICAgIH0KfQoKLy8g4pSA4pSA4pSAIEJyYW5kIHByb2ZpbGUgcmVzb2x1dGlvbiDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKLy8gT3JkZXI6ICRQV0QvLmRlc2lnbmVyL2JyYW5kLmpzb24g4oaSICRQV0QvYnJhbmQuanNvbiDihpIgJFBXRC9CUkFORC5tZAovLyAgICAgIOKGkiB+Ly5kZXNpZ25lci9icmFuZC1wcm9maWxlcy88YmFzZW5hbWUtb2YtcHdkPi5qc29uCi8vICAgICAg4oaSIH4vLmNsYXVkZS9za2lsbHMvZGVzaWduZXIvYnJhbmQtcHJvZmlsZXMvZGVmYXVsdC5qc29uCmV4cG9ydCBmdW5jdGlvbiByZXNvbHZlQnJhbmQob3ZlcnJpZGVQYXRoKSB7CiAgICBjb25zdCBjd2QgPSBwcm9jZXNzLmN3ZCgpOwogICAgY29uc3QgY2FuZGlkYXRlcyA9IFsKICAgICAgICBvdmVycmlkZVBhdGgsCiAgICAgICAgcmVzb2x2ZShjd2QsICcuZGVzaWduZXIvYnJhbmQuanNvbicpLAogICAgICAgIHJlc29sdmUoY3dkLCAnYnJhbmQuanNvbicpLAogICAgICAgIHJlc29sdmUoVVNFUl9IT01FLCBgYnJhbmQtcHJvZmlsZXMvJHtiYXNlbmFtZShjd2QpfS5qc29uYCksCiAgICAgICAgcmVzb2x2ZShTS0lMTF9IT01FLCAnYnJhbmQtcHJvZmlsZXMvZGVmYXVsdC5qc29uJyksCiAgICBdLmZpbHRlcihCb29sZWFuKTsKCiAgICBmb3IgKGNvbnN0IHAgb2YgY2FuZGlkYXRlcykgewogICAgICAgIGlmIChleGlzdHNTeW5jKHApKSB7CiAgICAgICAgICAgIHRyeSB7CiAgICAgICAgICAgICAgICBjb25zdCBwcm9maWxlID0gSlNPTi5wYXJzZShyZWFkRmlsZVN5bmMocCwgJ3V0ZjgnKSk7CiAgICAgICAgICAgICAgICBwcm9maWxlLl9zb3VyY2UgPSBwOwogICAgICAgICAgICAgICAgcmV0dXJuIHByb2ZpbGU7CiAgICAgICAgICAgIH0gY2F0Y2ggKGUpIHsKICAgICAgICAgICAgICAgIGNvbnNvbGUuZXJyb3IoYFdBUk46IGNvdWxkIG5vdCBwYXJzZSBicmFuZCBwcm9maWxlIGF0ICR7cH06ICR7ZS5tZXNzYWdlfWApOwogICAgICAgICAgICB9CiAgICAgICAgfQogICAgfQogICAgdGhyb3cgbmV3IEVycm9yKCdObyBicmFuZCBwcm9maWxlIGZvdW5kIGFuZCBkZWZhdWx0IGlzIG1pc3Npbmcg4oCUIHJlaW5zdGFsbCB0aGUgZGVzaWduZXIgc2tpbGwuJyk7Cn0KCi8vIOKUgOKUgOKUgCBPdXRwdXQgcGF0aHMg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACmV4cG9ydCBmdW5jdGlvbiBlbnN1cmVPdXRwdXREaXIoYnJhbmQsIHR5cGUpIHsKICAgIGNvbnN0IHJvb3QgPSBicmFuZC5vdXRwdXRfcm9vdCB8fCAnYXNzZXRzL2dlbmVyYXRlZCc7CiAgICBjb25zdCBkaXIgPSByZXNvbHZlKHByb2Nlc3MuY3dkKCksIHJvb3QsIHR5cGUpOwogICAgbWtkaXJTeW5jKGRpciwgeyByZWN1cnNpdmU6IHRydWUgfSk7CiAgICByZXR1cm4gZGlyOwp9CgpleHBvcnQgZnVuY3Rpb24gc2x1Z2lmeSh0ZXh0KSB7CiAgICByZXR1cm4gU3RyaW5nKHRleHQgfHwgJ2Fzc2V0JykKICAgICAgICAudG9Mb3dlckNhc2UoKQogICAgICAgIC5yZXBsYWNlKC9bXlx3XHMtXS9nLCAnJykKICAgICAgICAucmVwbGFjZSgvW1xzXy1dKy9nLCAnLScpCiAgICAgICAgLnJlcGxhY2UoL14tK3wtKyQvZywgJycpCiAgICAgICAgLnNsaWNlKDAsIDYwKSB8fCAnYXNzZXQnOwp9CgpleHBvcnQgZnVuY3Rpb24gcGlja091dHB1dFBhdGgoeyBicmFuZCwgdHlwZSwgbmFtZSwgZXh0LCBleHBsaWNpdCB9KSB7CiAgICBpZiAoZXhwbGljaXQpIHsKICAgICAgICBjb25zdCBwID0gcmVzb2x2ZShwcm9jZXNzLmN3ZCgpLCBleHBsaWNpdCk7CiAgICAgICAgbWtkaXJTeW5jKGRpcm5hbWUocCksIHsgcmVjdXJzaXZlOiB0cnVlIH0pOwogICAgICAgIHJldHVybiBwOwogICAgfQogICAgY29uc3QgZGlyID0gZW5zdXJlT3V0cHV0RGlyKGJyYW5kLCB0eXBlKTsKICAgIGNvbnN0IHNsdWcgPSBzbHVnaWZ5KG5hbWUpOwogICAgcmV0dXJuIHJlc29sdmUoZGlyLCBgJHtzbHVnfS4ke2V4dH1gKTsKfQoKZXhwb3J0IGZ1bmN0aW9uIHdyaXRlTWV0YShvdXRwdXRQYXRoLCBtZXRhKSB7CiAgICBjb25zdCBtZXRhUGF0aCA9IG91dHB1dFBhdGgucmVwbGFjZSgvXC5bXi5dKyQvLCAnLm1ldGEuanNvbicpOwogICAgd3JpdGVGaWxlU3luYyhtZXRhUGF0aCwgSlNPTi5zdHJpbmdpZnkoewogICAgICAgIC4uLm1ldGEsCiAgICAgICAgb3V0cHV0OiBvdXRwdXRQYXRoLAogICAgICAgIGdlbmVyYXRlZF9hdDogbmV3IERhdGUoKS50b0lTT1N0cmluZygpLAogICAgfSwgbnVsbCwgMikpOwogICAgcmV0dXJuIG1ldGFQYXRoOwp9CgovLyDilIDilIDilIAgQ29zdCByZXBvcnRpbmcg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACmV4cG9ydCBmdW5jdGlvbiByZXBvcnRDb3N0KHsgcHJvdmlkZXIsIG1vZGVsLCB1bml0cywgY29zdFVzZCwgZHJ5UnVuIH0pIHsKICAgIGNvbnN0IHRhZyA9IGRyeVJ1biA/ICdbRFJZLVJVTl0nIDogJ1tCSUxMRURdJzsKICAgIGNvbnNvbGUubG9nKGAke3RhZ30gJHtwcm92aWRlcn0vJHttb2RlbH06ICR7dW5pdHN9IOKGkiB+JCR7Y29zdFVzZC50b0ZpeGVkKDMpfWApOwp9CgovLyDilIDilIDilIAgQXJnIHBhcnNpbmcgKG1pbmltYWwsIGRlcC1mcmVlKSDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKZXhwb3J0IGZ1bmN0aW9uIHBhcnNlQXJncyhhcmd2KSB7CiAgICBjb25zdCBhcmdzID0geyBfOiBbXSB9OwogICAgY29uc3QgYXJyID0gYXJndi5zbGljZSgyKTsKICAgIGZvciAobGV0IGkgPSAwOyBpIDwgYXJyLmxlbmd0aDsgaSsrKSB7CiAgICAgICAgY29uc3QgYSA9IGFycltpXTsKICAgICAgICBpZiAoYS5zdGFydHNXaXRoKCctLScpKSB7CiAgICAgICAgICAgIGNvbnN0IGtleSA9IGEuc2xpY2UoMik7CiAgICAgICAgICAgIGNvbnN0IG5leHQgPSBhcnJbaSArIDFdOwogICAgICAgICAgICBpZiAobmV4dCA9PT0gdW5kZWZpbmVkIHx8IG5leHQuc3RhcnRzV2l0aCgnLS0nKSkgewogICAgICAgICAgICAgICAgYXJnc1trZXldID0gdHJ1ZTsKICAgICAgICAgICAgfSBlbHNlIHsKICAgICAgICAgICAgICAgIGFyZ3Nba2V5XSA9IG5leHQ7CiAgICAgICAgICAgICAgICBpKys7CiAgICAgICAgICAgIH0KICAgICAgICB9IGVsc2UgaWYgKGEuc3RhcnRzV2l0aCgnLScpICYmIGEubGVuZ3RoID09PSAyKSB7CiAgICAgICAgICAgIGFyZ3NbYS5zbGljZSgxKV0gPSBhcnJbaSArIDFdOwogICAgICAgICAgICBpKys7CiAgICAgICAgfSBlbHNlIHsKICAgICAgICAgICAgYXJncy5fLnB1c2goYSk7CiAgICAgICAgfQogICAgfQogICAgcmV0dXJuIGFyZ3M7Cn0KCi8vIOKUgOKUgOKUgCBCcmFuZCDihpIgcHJvbXB0IHByZWZpeCDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKLy8gRXZlcnkgZ2VuZXJhdG9yIHByZXBlbmRzIHRoaXMgYnJhbmQgY29udGV4dCB0byB0aGUgdXNlcidzIHByb21wdCBzbwovLyBnZW5lcmF0ZWQgYXNzZXRzIGxhbmQgb24tc3R5bGUgd2l0aG91dCBuZWVkaW5nIHRoZSB1c2VyIHRvIHJlcGVhdCBpdC4KZXhwb3J0IGZ1bmN0aW9uIGJyYW5kUHJvbXB0UHJlZml4KGJyYW5kLCBhc3NldEtpbmQpIHsKICAgIGNvbnN0IHBhcnRzID0gW107CiAgICBpZiAoYnJhbmQucGFsZXR0ZSkgewogICAgICAgIGNvbnN0IHBhbCA9IGJyYW5kLnBhbGV0dGU7CiAgICAgICAgcGFydHMucHVzaChgQnJhbmQgY29sb3JzOiBwcmltYXJ5ICR7cGFsLnByaW1hcnl9JHtwYWwucHJpbWFyeV9kZWVwID8gYCwgZGVlcCAke3BhbC5wcmltYXJ5X2RlZXB9YCA6ICcnfSR7cGFsLmFjY2VudCA/IGAsIGFjY2VudCAke3BhbC5hY2NlbnR9YCA6ICcnfS5gKTsKICAgIH0KICAgIGlmIChhc3NldEtpbmQgPT09ICdpbGx1c3RyYXRpb24nICYmIGJyYW5kLmlsbHVzdHJhdGlvbl9zdHlsZSkgewogICAgICAgIHBhcnRzLnB1c2goYElsbHVzdHJhdGlvbiBzdHlsZTogJHticmFuZC5pbGx1c3RyYXRpb25fc3R5bGV9YCk7CiAgICB9CiAgICBpZiAoYXNzZXRLaW5kID09PSAnaWNvbicgJiYgYnJhbmQuaWNvbl9zdHlsZSkgewogICAgICAgIHBhcnRzLnB1c2goYEljb24gc3R5bGU6ICR7YnJhbmQuaWNvbl9zdHlsZX1gKTsKICAgIH0KICAgIGlmIChicmFuZC5zdHlsZV9yZWZlcmVuY2VzICYmIGJyYW5kLnN0eWxlX3JlZmVyZW5jZXMubGVuZ3RoKSB7CiAgICAgICAgcGFydHMucHVzaChgUmVmZXJlbmNlIGJyYW5kcyB0byBtaW1pYzogJHticmFuZC5zdHlsZV9yZWZlcmVuY2VzLmpvaW4oJywgJyl9LmApOwogICAgfQogICAgaWYgKGJyYW5kLnN0eWxlX2FudGlfcmVmZXJlbmNlcyAmJiBicmFuZC5zdHlsZV9hbnRpX3JlZmVyZW5jZXMubGVuZ3RoKSB7CiAgICAgICAgcGFydHMucHVzaChgQXZvaWQ6ICR7YnJhbmQuc3R5bGVfYW50aV9yZWZlcmVuY2VzLmpvaW4oJzsgJyl9LmApOwogICAgfQogICAgcmV0dXJuIHBhcnRzLmpvaW4oJyAnKTsKfQoKLy8g4pSA4pSA4pSAIFZlcnRleCBBSSAvIFZlbyBoZWxwZXJzIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAovLyBTaGFyZWQgYnkgZ2VuLXZpZGVvLm1qcyBhbmQgZ2VuLWF2YXRhci5tanMuIFRoZSBWZW8gZmFtaWx5ICgyLjAsIDMuMCwKLy8gMy4xKSBhbGwgdXNlIHRoZSBzYW1lIGFzeW5jaHJvbm91cyBwcmVkaWN0TG9uZ1J1bm5pbmcgKyBwb2xsIGNvbnRyYWN0LAovLyBzbyB0aGUgYXV0aCArIHN1Ym1pdCArIHBvbGwgbG9vcCBsaXZlcyBoZXJlIG9uY2UuCgovLyBNaW50IGEgc2hvcnQtbGl2ZWQgVmVydGV4IGFjY2VzcyB0b2tlbiBmcm9tIGEgc2VydmljZS1hY2NvdW50IGtleSBvYmplY3QKLy8gKHRoZSBwYXJzZWQgSlNPTiBvZiBHT09HTEVfQVBQTElDQVRJT05fQ1JFREVOVElBTFMpLgpleHBvcnQgYXN5bmMgZnVuY3Rpb24gZ2V0VmVydGV4QWNjZXNzVG9rZW4oc2EpIHsKICAgIGNvbnN0IGNyeXB0byA9IGF3YWl0IGltcG9ydCgnbm9kZTpjcnlwdG8nKTsKICAgIGNvbnN0IGhlYWRlciA9IHsgYWxnOiAnUlMyNTYnLCB0eXA6ICdKV1QnIH07CiAgICBjb25zdCBub3cgPSBNYXRoLmZsb29yKERhdGUubm93KCkgLyAxMDAwKTsKICAgIGNvbnN0IGNsYWltID0gewogICAgICAgIGlzczogc2EuY2xpZW50X2VtYWlsLAogICAgICAgIHNjb3BlOiAnaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vYXV0aC9jbG91ZC1wbGF0Zm9ybScsCiAgICAgICAgYXVkOiAnaHR0cHM6Ly9vYXV0aDIuZ29vZ2xlYXBpcy5jb20vdG9rZW4nLAogICAgICAgIGlhdDogbm93LCBleHA6IG5vdyArIDM2MDAsCiAgICB9OwogICAgY29uc3QgZW5jID0gKG8pID0+IEJ1ZmZlci5mcm9tKEpTT04uc3RyaW5naWZ5KG8pKS50b1N0cmluZygnYmFzZTY0dXJsJyk7CiAgICBjb25zdCBzaWduaW5nSW5wdXQgPSBgJHtlbmMoaGVhZGVyKX0uJHtlbmMoY2xhaW0pfWA7CiAgICBjb25zdCBzaWduZXIgPSBjcnlwdG8uY3JlYXRlU2lnbignUlNBLVNIQTI1NicpOwogICAgc2lnbmVyLnVwZGF0ZShzaWduaW5nSW5wdXQpOwogICAgY29uc3Qgc2lnID0gc2lnbmVyLnNpZ24oc2EucHJpdmF0ZV9rZXksICdiYXNlNjR1cmwnKTsKICAgIGNvbnN0IGp3dCA9IGAke3NpZ25pbmdJbnB1dH0uJHtzaWd9YDsKICAgIGNvbnN0IHJlcyA9IGF3YWl0IGZldGNoKCdodHRwczovL29hdXRoMi5nb29nbGVhcGlzLmNvbS90b2tlbicsIHsKICAgICAgICBtZXRob2Q6ICdQT1NUJywKICAgICAgICBoZWFkZXJzOiB7ICdDb250ZW50LVR5cGUnOiAnYXBwbGljYXRpb24veC13d3ctZm9ybS11cmxlbmNvZGVkJyB9LAogICAgICAgIGJvZHk6IGBncmFudF90eXBlPXVybiUzQWlldGYlM0FwYXJhbXMlM0FvYXV0aCUzQWdyYW50LXR5cGUlM0Fqd3QtYmVhcmVyJmFzc2VydGlvbj0ke2VuY29kZVVSSUNvbXBvbmVudChqd3QpfWAsCiAgICB9KTsKICAgIGlmICghcmVzLm9rKSB0aHJvdyBuZXcgRXJyb3IoYFRva2VuIGV4Y2hhbmdlICR7cmVzLnN0YXR1c306ICR7YXdhaXQgcmVzLnRleHQoKX1gKTsKICAgIHJldHVybiAoYXdhaXQgcmVzLmpzb24oKSkuYWNjZXNzX3Rva2VuOwp9CgovLyBTdWJtaXQgYSBWZW8gcHJlZGljdExvbmdSdW5uaW5nIGpvYiBhbmQgcG9sbCB1bnRpbCBpdCBmaW5pc2hlcy4KLy8gUmV0dXJucyB0aGUgcmF3IGByZXNwb25zZWAgb2JqZWN0IGZyb20gdGhlIGNvbXBsZXRlZCBvcGVyYXRpb24gc28gdGhlCi8vIGNhbGxlciBjYW4gcHVsbCBieXRlcy91cmkgb3V0IG9mIGl0IChzZWUgZXh0cmFjdFZlb1ZpZGVvQjY0KS4KZXhwb3J0IGFzeW5jIGZ1bmN0aW9uIHJ1blZlb0pvYih7CiAgICB0b2tlbiwgcHJvamVjdCwgbG9jYXRpb24gPSAndXMtY2VudHJhbDEnLCBtb2RlbCwKICAgIGluc3RhbmNlcywgcGFyYW1ldGVycywgbWF4UG9sbHMgPSAxMjAsIGludGVydmFsTXMgPSA1MDAwLCBsb2cgPSBjb25zb2xlLmVycm9yLAp9KSB7CiAgICBjb25zdCBiYXNlID0gYGh0dHBzOi8vJHtsb2NhdGlvbn0tYWlwbGF0Zm9ybS5nb29nbGVhcGlzLmNvbS92MWA7CiAgICBjb25zdCBzdWJtaXRVcmwgPSBgJHtiYXNlfS9wcm9qZWN0cy8ke3Byb2plY3R9L2xvY2F0aW9ucy8ke2xvY2F0aW9ufS9wdWJsaXNoZXJzL2dvb2dsZS9tb2RlbHMvJHttb2RlbH06cHJlZGljdExvbmdSdW5uaW5nYDsKICAgIGxvZyhgU3VibWl0dGluZyAke21vZGVsfSBqb2IuLi5gKTsKICAgIGNvbnN0IHN1Ym1pdFJlcyA9IGF3YWl0IGZldGNoKHN1Ym1pdFVybCwgewogICAgICAgIG1ldGhvZDogJ1BPU1QnLAogICAgICAgIGhlYWRlcnM6IHsgJ0F1dGhvcml6YXRpb24nOiBgQmVhcmVyICR7dG9rZW59YCwgJ0NvbnRlbnQtVHlwZSc6ICdhcHBsaWNhdGlvbi9qc29uJyB9LAogICAgICAgIGJvZHk6IEpTT04uc3RyaW5naWZ5KHsgaW5zdGFuY2VzLCBwYXJhbWV0ZXJzIH0pLAogICAgfSk7CiAgICBpZiAoIXN1Ym1pdFJlcy5vaykgewogICAgICAgIHRocm93IG5ldyBFcnJvcihgU3VibWl0IGZhaWxlZCAke3N1Ym1pdFJlcy5zdGF0dXN9OiAke2F3YWl0IHN1Ym1pdFJlcy50ZXh0KCl9YCk7CiAgICB9CiAgICBjb25zdCBvcGVyYXRpb25OYW1lID0gKGF3YWl0IHN1Ym1pdFJlcy5qc29uKCkpLm5hbWU7CiAgICBsb2coYCAgam9iOiAke29wZXJhdGlvbk5hbWV9YCk7CgogICAgLy8gVmVvIGxvbmctcnVubmluZyBvcHMgYXJlIE5PVCBwb2xsZWQgd2l0aCBhIEdFVCBvbiB0aGUgb3BlcmF0aW9uIFVSTCDigJQKICAgIC8vIHRoYXQgNDA0cy4gWW91IFBPU1QgdGhlIG9wZXJhdGlvbiBuYW1lIHRvIDpmZXRjaFByZWRpY3RPcGVyYXRpb24gb24gdGhlCiAgICAvLyBzYW1lIG1vZGVsIGVuZHBvaW50IGFuZCByZWFkIGBkb25lYCAvIGByZXNwb25zZWAgb2ZmIHRoZSByZXN1bHQuCiAgICBjb25zdCBmZXRjaFVybCA9IGAke2Jhc2V9L3Byb2plY3RzLyR7cHJvamVjdH0vbG9jYXRpb25zLyR7bG9jYXRpb259L3B1Ymxpc2hlcnMvZ29vZ2xlL21vZGVscy8ke21vZGVsfTpmZXRjaFByZWRpY3RPcGVyYXRpb25gOwogICAgZm9yIChsZXQgaSA9IDA7IGkgPCBtYXhQb2xsczsgaSsrKSB7CiAgICAgICAgYXdhaXQgbmV3IFByb21pc2UociA9PiBzZXRUaW1lb3V0KHIsIGludGVydmFsTXMpKTsKICAgICAgICBwcm9jZXNzLnN0ZGVyci53cml0ZShgICBwb2xsaW5nICgke2kgKyAxfSkuLi4gYCk7CiAgICAgICAgY29uc3QgcG9sbFJlcyA9IGF3YWl0IGZldGNoKGZldGNoVXJsLCB7CiAgICAgICAgICAgIG1ldGhvZDogJ1BPU1QnLAogICAgICAgICAgICBoZWFkZXJzOiB7ICdBdXRob3JpemF0aW9uJzogYEJlYXJlciAke3Rva2VufWAsICdDb250ZW50LVR5cGUnOiAnYXBwbGljYXRpb24vanNvbicgfSwKICAgICAgICAgICAgYm9keTogSlNPTi5zdHJpbmdpZnkoeyBvcGVyYXRpb25OYW1lIH0pLAogICAgICAgIH0pOwogICAgICAgIGlmICghcG9sbFJlcy5vaykgewogICAgICAgICAgICBwcm9jZXNzLnN0ZGVyci53cml0ZShgSFRUUCAke3BvbGxSZXMuc3RhdHVzfVxuYCk7CiAgICAgICAgICAgIGNvbnRpbnVlOwogICAgICAgIH0KICAgICAgICBjb25zdCBwb2xsID0gYXdhaXQgcG9sbFJlcy5qc29uKCk7CiAgICAgICAgaWYgKHBvbGwuZG9uZSkgewogICAgICAgICAgICBwcm9jZXNzLnN0ZGVyci53cml0ZSgnZG9uZVxuJyk7CiAgICAgICAgICAgIGlmIChwb2xsLmVycm9yKSB0aHJvdyBuZXcgRXJyb3IoYEpvYiBmYWlsZWQ6ICR7SlNPTi5zdHJpbmdpZnkocG9sbC5lcnJvcil9YCk7CiAgICAgICAgICAgIHJldHVybiBwb2xsLnJlc3BvbnNlOwogICAgICAgIH0KICAgICAgICBwcm9jZXNzLnN0ZGVyci53cml0ZSgnc3RpbGwgcnVubmluZ1xuJyk7CiAgICB9CiAgICB0aHJvdyBuZXcgRXJyb3IoYFRpbWVkIG91dCBwb2xsaW5nICR7bW9kZWx9IGFmdGVyICR7KG1heFBvbGxzICogaW50ZXJ2YWxNcyAvIDYwMDAwKS50b0ZpeGVkKDApfSBtaW51dGVzLmApOwp9CgovLyBQdWxsIHRoZSBnZW5lcmF0ZWQgTVA0IChiYXNlNjQpIG91dCBvZiBhIGNvbXBsZXRlZCBWZW8gcmVzcG9uc2UuIFZlbwovLyByZXR1cm5zIGlubGluZSBieXRlcyBieSBkZWZhdWx0OyBhIGdjc1VyaSBhcHBlYXJzIG9ubHkgd2hlbiBhbiBvdXRwdXQKLy8gc3RvcmFnZVVyaSB3YXMgcmVxdWVzdGVkLCB3aGljaCB0aGVzZSBzY3JpcHRzIGRvbid0IGRvLgpleHBvcnQgZnVuY3Rpb24gZXh0cmFjdFZlb1ZpZGVvQjY0KHJlc3BvbnNlKSB7CiAgICBjb25zdCBiNjQgPSByZXNwb25zZT8udmlkZW9zPy5bMF0/LmJ5dGVzQmFzZTY0RW5jb2RlZAogICAgICAgIHx8IHJlc3BvbnNlPy5wcmVkaWN0aW9ucz8uWzBdPy5ieXRlc0Jhc2U2NEVuY29kZWQ7CiAgICBpZiAoYjY0KSByZXR1cm4gYjY0OwogICAgY29uc3QgdXJpID0gcmVzcG9uc2U/LnZpZGVvcz8uWzBdPy5nY3NVcmkgfHwgcmVzcG9uc2U/LnByZWRpY3Rpb25zPy5bMF0/Lmdjc1VyaTsKICAgIGlmICh1cmkpIHsKICAgICAgICB0aHJvdyBuZXcgRXJyb3IoYFZlbyByZXR1cm5lZCBhIEdDUyBVUkkgKCR7dXJpfSkgaW5zdGVhZCBvZiBpbmxpbmUgYnl0ZXMg4oCUIGZldGNoIGl0IGZyb20gQ2xvdWQgU3RvcmFnZSwgb3Igb21pdCBhbnkgb3V0cHV0IHN0b3JhZ2VVcmkuYCk7CiAgICB9CiAgICB0aHJvdyBuZXcgRXJyb3IoYEpvYiBkb25lIGJ1dCBubyB2aWRlbyBieXRlcyBpbiByZXNwb25zZTogJHtKU09OLnN0cmluZ2lmeShyZXNwb25zZSkuc2xpY2UoMCwgNTAwKX1gKTsKfQoKLy8g4pSA4pSA4pSAIE9wZW5BSSBwcm92aWRlciByb3V0aW5nIChkaXJlY3QgT3BlbkFJIHZzIEF6dXJlIE9wZW5BSSkg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACi8vIEJvdGggYmFjayB0aGUgc2FtZSBtb2RlbHMgKGdwdC1pbWFnZS0xLCBncHQtNG8pLiBSb3V0aW5nIHRvIEF6dXJlIHNwZW5kcwovLyB0aGUgQXp1cmUgZ3JhbnQgaW5zdGVhZCBvZiBkaXJlY3QtT3BlbkFJIGNyZWRpdHMuIFByZWNlZGVuY2U6Ci8vICAgLS1wcm92aWRlciBmbGFnICDihpIgIERFU0lHTkVSX09QRU5BSV9QUk9WSURFUiBlbnYgIOKGkiAgJ29wZW5haScKZXhwb3J0IGZ1bmN0aW9uIHJlc29sdmVPcGVuQUlQcm92aWRlcihhcmdzKSB7CiAgICBjb25zdCBjaG9pY2UgPSAoYXJncyAmJiBhcmdzLnByb3ZpZGVyKSB8fCBwcm9jZXNzLmVudi5ERVNJR05FUl9PUEVOQUlfUFJPVklERVIgfHwgKChwcm9jZXNzLmVudi5BWlVSRV9PUEVOQUlfQVBJX0tFWSAmJiBwcm9jZXNzLmVudi5BWlVSRV9PUEVOQUlfSU1BR0VfREVQTE9ZTUVOVCkgPyAnYXp1cmUnIDogJ29wZW5haScpOwogICAgaWYgKGNob2ljZSAhPT0gJ2F6dXJlJyAmJiBjaG9pY2UgIT09ICdvcGVuYWknKSB7CiAgICAgICAgdGhyb3cgbmV3IEVycm9yKGAtLXByb3ZpZGVyIG11c3QgYmUgJ29wZW5haScgb3IgJ2F6dXJlJyAoZ290ICcke2Nob2ljZX0nKWApOwogICAgfQogICAgcmV0dXJuIGNob2ljZTsKfQoKLy8gUHJlZmxpZ2h0IHRoZSBBenVyZSBPcGVuQUkgY29uZmlnIG9uIHRoZSByZWFsIGNhbGwgcGF0aCAobm90IGR1cmluZyBkcnktcnVuKS4KZXhwb3J0IGZ1bmN0aW9uIHJlcXVpcmVBenVyZU9wZW5BSShjcmVkcywgZGVwbG95bWVudCkgewogICAgY29uc3QgbWlzc2luZyA9IFtdOwogICAgaWYgKCFjcmVkcy5henVyZU9wZW5BSUVuZHBvaW50KSBtaXNzaW5nLnB1c2goJ2F6dXJlLW9wZW5haS1lbmRwb2ludCcpOwogICAgaWYgKCFjcmVkcy5henVyZU9wZW5BSUtleSkgbWlzc2luZy5wdXNoKCdhenVyZS1vcGVuYWkta2V5Jyk7CiAgICBpZiAoIWRlcGxveW1lbnQpIG1pc3NpbmcucHVzaCgnYSBkZXBsb3ltZW50IG5hbWUgKGF6dXJlLW9wZW5haS0qLWRlcGxveW1lbnQpJyk7CiAgICBpZiAobWlzc2luZy5sZW5ndGgpIHsKICAgICAgICB0aHJvdyBuZXcgRXJyb3IoCiAgICAgICAgICAgIGBBenVyZSBwcm92aWRlciBzZWxlY3RlZCBidXQgbm90IGZ1bGx5IGNvbmZpZ3VyZWQuIE1pc3Npbmc6ICR7bWlzc2luZy5qb2luKCcsICcpfS5cbmAgKwogICAgICAgICAgICAnICBBZGQgdGhlc2UgdG8gR0NQIFNlY3JldCBNYW5hZ2VyIOKAlCBzZWUgc2V0dXAvZmV0Y2gtc2VjcmV0cy5tanMuJwogICAgICAgICk7CiAgICB9Cn0KCi8vIEJ1aWxkIHRoZSBBenVyZSBPcGVuQUkgUkVTVCBVUkwgZm9yIGEgZ2l2ZW4gZGVwbG95bWVudCArIG9wZXJhdGlvbiwgZS5nLgovLyAgIGF6dXJlT3BlbkFJVXJsKGNyZWRzLCBkZXBsb3ltZW50LCAnaW1hZ2VzL2dlbmVyYXRpb25zJykKZXhwb3J0IGZ1bmN0aW9uIGF6dXJlT3BlbkFJVXJsKGNyZWRzLCBkZXBsb3ltZW50LCBvcCkgewogICAgaWYgKCFkZXBsb3ltZW50KSB7CiAgICAgICAgdGhyb3cgbmV3IEVycm9yKGBBenVyZSBPcGVuQUkgZGVwbG95bWVudCBuYW1lIG1pc3NpbmcgZm9yICcke29wfScuIFNldCB0aGUgbWF0Y2hpbmcgYXp1cmUtb3BlbmFpLSotZGVwbG95bWVudCBzZWNyZXQuYCk7CiAgICB9CiAgICBjb25zdCBiYXNlID0gY3JlZHMuYXp1cmVPcGVuQUlFbmRwb2ludC5yZXBsYWNlKC9cLyskLywgJycpOwogICAgcmV0dXJuIGAke2Jhc2V9L29wZW5haS9kZXBsb3ltZW50cy8ke2RlcGxveW1lbnR9LyR7b3B9P2FwaS12ZXJzaW9uPSR7Y3JlZHMuYXp1cmVPcGVuQUlBcGlWZXJzaW9ufWA7Cn0KCmV4cG9ydCBjb25zdCBQQVRIUyA9IHsgU0tJTExfSE9NRSwgVVNFUl9IT01FIH07Cg==
+// Shared utilities for the designer skill scripts.
+//
+// What lives here:
+//   - Brand-profile resolution (project-local → home → default)
+//   - Credential loading (env vars → ~/.designer/credentials.env)
+//   - Output-path management (assets/generated/<type>/<slug>.<ext> + .meta.json)
+//   - Cost reporting + dry-run guard
+//   - Shared logging
+//
+// Imported by every gen-* script. Single source of truth so each script stays small.
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve, dirname, basename, extname, join } from 'node:path';
+import { homedir } from 'node:os';
+
+const HOME = homedir();
+const SKILL_HOME = resolve(HOME, '.claude/skills/designer');
+const USER_HOME = resolve(HOME, '.designer');
+
+// ─── Credentials ──────────────────────────────────────────────────────
+// Order of precedence: process.env → ~/.designer/credentials.env (KEY=value lines)
+export function loadCredentials() {
+    const envFile = resolve(USER_HOME, 'credentials.env');
+    if (existsSync(envFile)) {
+        const content = readFileSync(envFile, 'utf8');
+        for (const line of content.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const idx = trimmed.indexOf('=');
+            if (idx === -1) continue;
+            const key = trimmed.slice(0, idx).trim();
+            let value = trimmed.slice(idx + 1).trim();
+            if ((value.startsWith('"') && value.endsWith('"')) ||
+                (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+            if (!(key in process.env)) process.env[key] = value;
+        }
+    }
+    return {
+        openaiKey: process.env.OPENAI_API_KEY,
+        openaiOrg: process.env.OPENAI_ORG_ID,
+        googleCredsPath: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+        googleProject: process.env.GOOGLE_CLOUD_PROJECT,
+        elevenlabsKey: process.env.ELEVENLABS_API_KEY,
+        recraftKey: process.env.RECRAFT_API_KEY,
+        // Azure (optional — present only once the Azure resources are provisioned
+        // and their keys land in Secret Manager). See setup/fetch-secrets.mjs.
+        azureOpenAIEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
+        azureOpenAIKey: process.env.AZURE_OPENAI_API_KEY,
+        azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION || '2025-04-01-preview',
+        azureOpenAIImageDeployment: process.env.AZURE_OPENAI_IMAGE_DEPLOYMENT,
+        azureOpenAIVisionDeployment: process.env.AZURE_OPENAI_VISION_DEPLOYMENT,
+        azureOpenAIVideoDeployment: process.env.AZURE_OPENAI_VIDEO_DEPLOYMENT,
+        azureSpeechKey: process.env.AZURE_SPEECH_KEY,
+        azureSpeechRegion: process.env.AZURE_SPEECH_REGION,
+    };
+}
+
+export function requireCredential(creds, key, friendlyName) {
+    if (!creds[key]) {
+        console.error(`ERROR: missing credential ${friendlyName}.`);
+        console.error(`  Set it in process.env or in ~/.designer/credentials.env.`);
+        console.error(`  Run \`bash ${SKILL_HOME}/scripts/setup.sh\` for a guided setup.`);
+        process.exit(2);
+    }
+}
+
+// ─── Brand profile resolution ─────────────────────────────────────────
+// Order: $PWD/.designer/brand.json → $PWD/brand.json → $PWD/BRAND.md
+//      → ~/.designer/brand-profiles/<basename-of-pwd>.json
+//      → ~/.claude/skills/designer/brand-profiles/default.json
+export function resolveBrand(overridePath) {
+    const cwd = process.cwd();
+    const candidates = [
+        overridePath,
+        resolve(cwd, '.designer/brand.json'),
+        resolve(cwd, 'brand.json'),
+        resolve(USER_HOME, `brand-profiles/${basename(cwd)}.json`),
+        resolve(SKILL_HOME, 'brand-profiles/default.json'),
+    ].filter(Boolean);
+
+    for (const p of candidates) {
+        if (existsSync(p)) {
+            try {
+                const profile = JSON.parse(readFileSync(p, 'utf8'));
+                profile._source = p;
+                return profile;
+            } catch (e) {
+                console.error(`WARN: could not parse brand profile at ${p}: ${e.message}`);
+            }
+        }
+    }
+    throw new Error('No brand profile found and default is missing — reinstall the designer skill.');
+}
+
+// ─── Output paths ─────────────────────────────────────────────────────
+export function ensureOutputDir(brand, type) {
+    const root = brand.output_root || 'assets/generated';
+    const dir = resolve(process.cwd(), root, type);
+    mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+export function slugify(text) {
+    return String(text || 'asset')
+        .toLowerCase()
+        .replace(/[^\w\s-]/g, '')
+        .replace(/[\s_-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'asset';
+}
+
+export function pickOutputPath({ brand, type, name, ext, explicit }) {
+    if (explicit) {
+        const p = resolve(process.cwd(), explicit);
+        mkdirSync(dirname(p), { recursive: true });
+        return p;
+    }
+    const dir = ensureOutputDir(brand, type);
+    const slug = slugify(name);
+    return resolve(dir, `${slug}.${ext}`);
+}
+
+export function writeMeta(outputPath, meta) {
+    const metaPath = outputPath.replace(/\.[^.]+$/, '.meta.json');
+    writeFileSync(metaPath, JSON.stringify({
+        ...meta,
+        output: outputPath,
+        generated_at: new Date().toISOString(),
+    }, null, 2));
+    return metaPath;
+}
+
+// ─── Cost reporting ───────────────────────────────────────────────────
+export function reportCost({ provider, model, units, costUsd, dryRun }) {
+    const tag = dryRun ? '[DRY-RUN]' : '[BILLED]';
+    console.log(`${tag} ${provider}/${model}: ${units} → ~$${costUsd.toFixed(3)}`);
+}
+
+// ─── Arg parsing (minimal, dep-free) ──────────────────────────────────
+export function parseArgs(argv) {
+    const args = { _: [] };
+    const arr = argv.slice(2);
+    for (let i = 0; i < arr.length; i++) {
+        const a = arr[i];
+        if (a.startsWith('--')) {
+            const key = a.slice(2);
+            const next = arr[i + 1];
+            if (next === undefined || next.startsWith('--')) {
+                args[key] = true;
+            } else {
+                args[key] = next;
+                i++;
+            }
+        } else if (a.startsWith('-') && a.length === 2) {
+            args[a.slice(1)] = arr[i + 1];
+            i++;
+        } else {
+            args._.push(a);
+        }
+    }
+    return args;
+}
+
+// ─── Brand → prompt prefix ────────────────────────────────────────────
+// Every generator prepends this brand context to the user's prompt so
+// generated assets land on-style without needing the user to repeat it.
+export function brandPromptPrefix(brand, assetKind) {
+    const parts = [];
+    if (brand.palette) {
+        const pal = brand.palette;
+        parts.push(`Brand colors: primary ${pal.primary}${pal.primary_deep ? `, deep ${pal.primary_deep}` : ''}${pal.accent ? `, accent ${pal.accent}` : ''}.`);
+    }
+    if (assetKind === 'illustration' && brand.illustration_style) {
+        parts.push(`Illustration style: ${brand.illustration_style}`);
+    }
+    if (assetKind === 'icon' && brand.icon_style) {
+        parts.push(`Icon style: ${brand.icon_style}`);
+    }
+    if (brand.style_references && brand.style_references.length) {
+        parts.push(`Reference brands to mimic: ${brand.style_references.join(', ')}.`);
+    }
+    if (brand.style_anti_references && brand.style_anti_references.length) {
+        parts.push(`Avoid: ${brand.style_anti_references.join('; ')}.`);
+    }
+    return parts.join(' ');
+}
+
+// ─── Vertex AI / Veo helpers ──────────────────────────────────────────
+// Shared by gen-video.mjs and gen-avatar.mjs. The Veo family (2.0, 3.0,
+// 3.1) all use the same asynchronous predictLongRunning + poll contract,
+// so the auth + submit + poll loop lives here once.
+
+// Mint a short-lived Vertex access token from a service-account key object
+// (the parsed JSON of GOOGLE_APPLICATION_CREDENTIALS).
+export async function getVertexAccessToken(sa) {
+    const crypto = await import('node:crypto');
+    const header = { alg: 'RS256', typ: 'JWT' };
+    const now = Math.floor(Date.now() / 1000);
+    const claim = {
+        iss: sa.client_email,
+        scope: 'https://www.googleapis.com/auth/cloud-platform',
+        aud: 'https://oauth2.googleapis.com/token',
+        iat: now, exp: now + 3600,
+    };
+    const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const signingInput = `${enc(header)}.${enc(claim)}`;
+    const signer = crypto.createSign('RSA-SHA256');
+    signer.update(signingInput);
+    const sig = signer.sign(sa.private_key, 'base64url');
+    const jwt = `${signingInput}.${sig}`;
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}`,
+    });
+    if (!res.ok) throw new Error(`Token exchange ${res.status}: ${await res.text()}`);
+    return (await res.json()).access_token;
+}
+
+// Submit a Veo predictLongRunning job and poll until it finishes.
+// Returns the raw `response` object from the completed operation so the
+// caller can pull bytes/uri out of it (see extractVeoVideoB64).
+export async function runVeoJob({
+    token, project, location = 'us-central1', model,
+    instances, parameters, maxPolls = 120, intervalMs = 5000, log = console.error,
+}) {
+    const base = `https://${location}-aiplatform.googleapis.com/v1`;
+    const submitUrl = `${base}/projects/${project}/locations/${location}/publishers/google/models/${model}:predictLongRunning`;
+    log(`Submitting ${model} job...`);
+    const submitRes = await fetch(submitUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instances, parameters }),
+    });
+    if (!submitRes.ok) {
+        throw new Error(`Submit failed ${submitRes.status}: ${await submitRes.text()}`);
+    }
+    const operationName = (await submitRes.json()).name;
+    log(`  job: ${operationName}`);
+
+    // Veo long-running ops are NOT polled with a GET on the operation URL —
+    // that 404s. You POST the operation name to :fetchPredictOperation on the
+    // same model endpoint and read `done` / `response` off the result.
+    const fetchUrl = `${base}/projects/${project}/locations/${location}/publishers/google/models/${model}:fetchPredictOperation`;
+    for (let i = 0; i < maxPolls; i++) {
+        await new Promise(r => setTimeout(r, intervalMs));
+        process.stderr.write(`  polling (${i + 1})... `);
+        const pollRes = await fetch(fetchUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operationName }),
+        });
+        if (!pollRes.ok) {
+            process.stderr.write(`HTTP ${pollRes.status}\n`);
+            continue;
+        }
+        const poll = await pollRes.json();
+        if (poll.done) {
+            process.stderr.write('done\n');
+            if (poll.error) throw new Error(`Job failed: ${JSON.stringify(poll.error)}`);
+            return poll.response;
+        }
+        process.stderr.write('still running\n');
+    }
+    throw new Error(`Timed out polling ${model} after ${(maxPolls * intervalMs / 60000).toFixed(0)} minutes.`);
+}
+
+// Pull the generated MP4 (base64) out of a completed Veo response. Veo
+// returns inline bytes by default; a gcsUri appears only when an output
+// storageUri was requested, which these scripts don't do.
+export function extractVeoVideoB64(response) {
+    const b64 = response?.videos?.[0]?.bytesBase64Encoded
+        || response?.predictions?.[0]?.bytesBase64Encoded;
+    if (b64) return b64;
+    const uri = response?.videos?.[0]?.gcsUri || response?.predictions?.[0]?.gcsUri;
+    if (uri) {
+        throw new Error(`Veo returned a GCS URI (${uri}) instead of inline bytes — fetch it from Cloud Storage, or omit any output storageUri.`);
+    }
+    throw new Error(`Job done but no video bytes in response: ${JSON.stringify(response).slice(0, 500)}`);
+}
+
+// ─── OpenAI provider routing (direct OpenAI vs Azure OpenAI) ──────────
+// Both back the same models (gpt-image-1, gpt-4o). Routing to Azure spends
+// the Azure grant instead of direct-OpenAI credits. Precedence:
+//   --provider flag  →  DESIGNER_OPENAI_PROVIDER env  →  'openai'
+export function resolveOpenAIProvider(args) {
+    const choice = (args && args.provider) || process.env.DESIGNER_OPENAI_PROVIDER || ((process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_IMAGE_DEPLOYMENT) ? 'azure' : 'openai');
+    if (choice !== 'azure' && choice !== 'openai') {
+        throw new Error(`--provider must be 'openai' or 'azure' (got '${choice}')`);
+    }
+    return choice;
+}
+
+// Preflight the Azure OpenAI config on the real call path (not during dry-run).
+export function requireAzureOpenAI(creds, deployment) {
+    const missing = [];
+    if (!creds.azureOpenAIEndpoint) missing.push('azure-openai-endpoint');
+    if (!creds.azureOpenAIKey) missing.push('azure-openai-key');
+    if (!deployment) missing.push('a deployment name (azure-openai-*-deployment)');
+    if (missing.length) {
+        throw new Error(
+            `Azure provider selected but not fully configured. Missing: ${missing.join(', ')}.\n` +
+            '  Add these to GCP Secret Manager — see setup/fetch-secrets.mjs.'
+        );
+    }
+}
+
+// Build the Azure OpenAI REST URL for a given deployment + operation, e.g.
+//   azureOpenAIUrl(creds, deployment, 'images/generations')
+export function azureOpenAIUrl(creds, deployment, op) {
+    if (!deployment) {
+        throw new Error(`Azure OpenAI deployment name missing for '${op}'. Set the matching azure-openai-*-deployment secret.`);
+    }
+    const base = creds.azureOpenAIEndpoint.replace(/\/+$/, '');
+    return `${base}/openai/deployments/${deployment}/${op}?api-version=${creds.azureOpenAIApiVersion}`;
+}
+
+export const PATHS = { SKILL_HOME, USER_HOME };

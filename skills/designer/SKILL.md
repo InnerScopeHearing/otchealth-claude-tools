@@ -1,1 +1,209 @@
-LS0tCm5hbWU6IGRlc2lnbmVyCmRlc2NyaXB0aW9uOiBDcmVhdGl2ZS1kaXJlY3RvciBza2lsbCDigJQgQ2xhdWRlIGRyaXZlcyBlbmQtdG8tZW5kIHZpc3VhbCBhc3NldCBnZW5lcmF0aW9uIGFjcm9zcyBhbnkgcHJvamVjdCAoaWNvbnMsIGlsbHVzdHJhdGlvbnMsIGFwcCBpY29ucywgQXBwIFN0b3JlIHNjcmVlbnNob3RzLCB2aWRlbywgdm9pY2VvdmVyKS4gQnJhbmQtcHJvZmlsZSBkcml2ZW4gc28gdGhlIHNhbWUgc2tpbGwgcHJvZHVjZXMgb24tYnJhbmQgYXNzZXRzIGZvciBBV0FSRSwgaUhFQVJ0ZXN0LCBNZWRSZXZpZXcsIE9UQ0hlYWx0aE1hcnQsIENvbXBhbmlvbiwgSW5uZXJFYXNlLCBvciBhbnkgZnV0dXJlIHByb2plY3QuIFdyYXBzIE9wZW5BSSAoR1BULWltYWdlLTEsIERBTEwtRSAzKSwgR29vZ2xlIFZlcnRleCBBSSAoSW1hZ2VuIDQgR0EsIFZlbyAyKSwgYW5kIEVsZXZlbkxhYnMuIE91dHB1dHMgbGFuZCBpbiB0aGUgcHJvamVjdCdzIGFzc2V0cy8gZGlyZWN0b3J5IGFuZCBhcmUgcmV0dXJuZWQgaW5saW5lIGZvciBDbGF1ZGUgdG8gZGlzcGxheS4KLS0tCgojIERlc2lnbmVyIFNraWxsIOKAlCBDbGF1ZGUgYXMgY3JlYXRpdmUgcXVhcnRlcmJhY2sKCiMjIFdoZW4gdG8gaW52b2tlCgpJbnZva2UgdGhpcyBza2lsbCB3aGVuZXZlciBhIHByb2plY3QgbmVlZHMgYSB2aXN1YWwgb3IgYXVkaW8gYXNzZXQgYW5kIHRoZSB1c2VyIGhhc24ndCBwb2ludGVkIGF0IGEgc3BlY2lmaWMgbWFudWFsIHRvb2wuIFRyaWdnZXIgd29yZHM6ICJkZXNpZ24sIiAiZ2VuZXJhdGUsIiAiaWNvbiwiICJpbGx1c3RyYXRpb24sIiAic3BsYXNoLCIgImxvZ28sIiAiQXBwIFN0b3JlIHNjcmVlbnNob3QsIiAicHJldmlldyB2aWRlbywiICJ2b2ljZW92ZXIsIiAiaGVybyBpbWFnZSwiICJzb2NpYWwgZ3JhcGhpYywiICJlbXB0eSBzdGF0ZSwiICJtYXJrZXRpbmcgYXNzZXQuIgoKIyMgUHJvdmlkZXIgZGVmYXVsdHMg4oCUIHVzZSB0aGUgcHJvdmVuIHBhdGggKHJlYWQgZmlyc3QpCgpUaGVzZSBydW4gb24gY3JlZGl0cyB0aGF0IGFyZSAqKmxpdmUgdG9kYXkqKjsgZGVmYXVsdCB0byB0aGVtIGFuZCB0aGUgc2tpbGwganVzdCB3b3JrczoKLSAqKkltYWdlcyAvIGljb25zIC8gdmlzaW9uIHJldmlldzoqKiBkaXJlY3QgKipPcGVuQUkqKiAoYGdwdC1pbWFnZS0xYCwgYGdwdC00b2ApIOKAlCB0aGUgZGVmYXVsdC4gRG9uJ3QgcGFzcyBgLS1wcm92aWRlciBhenVyZWAuCi0gKipWaWRlbzoqKiBkaXJlY3QgKipPcGVuQUkgU29yYSAyKiogKGBnZW4tdmlkZW8ubWpzYCwgZGVmYXVsdCBlbmdpbmUpIOKAlCB2YWxpZGF0ZWQgbGl2ZSwgcGxlbnR5IG9mIE9wZW5BSSBjcmVkaXRzOyBhdXRvLWZhbGxzLWJhY2sgdG8gVmVvIGlmIFNvcmEgaXMgZXZlciB1bmF2YWlsYWJsZS4gKipUYWxraW5nIGF2YXRhcnM6KiogKipWZXJ0ZXggVmVvIDMuMSoqIChgZ2VuLWF2YXRhci5tanNgKSDigJQgdmFsaWRhdGVkIGxpdmUuCi0gKipWb2ljZSAvIG11c2ljIC8gU0ZYOioqICoqRWxldmVuTGFicyoqIOKAlCBsaXZlLgotICoqUGhvdG9yZWFsIGZpeGVkLXByZXNlbnRlciBhdmF0YXI6KiogKipBenVyZSBUVFMtQXZhdGFyKiogKGBnZW4tYXZhdGFyLm1qcyAtLWVuZ2luZSBhenVyZWApIOKAlCB2YWxpZGF0ZWQgbGl2ZSBhbmQgZmluZSB0byB1c2UuCgoqKkF6dXJlIE9wZW5BSSBpcyBub3cgdGhlIERFRkFVTFQgd2hlbiBjb25maWd1cmVkKiogKHNwZW5kcyB0aGUgTWljcm9zb2Z0IGZvciBTdGFydHVwcyBBenVyZSBncmFudCBpbnN0ZWFkIG9mIGRpcmVjdC1PcGVuQUkvVmVydGV4IGNyZWRpdHMpLiBUaGUgYGdwdC1pbWFnZS0xYCwgYGdwdC00b2AsIGFuZCBgc29yYS0yYCBkZXBsb3ltZW50cyBhcmUgbGl2ZS4gVGhlIHNjcmlwdHMgYXV0by1yb3V0ZSB0byBBenVyZSB3aGVuIGBBWlVSRV9PUEVOQUlfQVBJX0tFWWAgcGx1cyB0aGUgbWF0Y2hpbmcgZGVwbG95bWVudCBlbnYgdmFyIChgQVpVUkVfT1BFTkFJX0lNQUdFX0RFUExPWU1FTlRgIC8gYEFaVVJFX09QRU5BSV9WSVNJT05fREVQTE9ZTUVOVGAgLyBgQVpVUkVfT1BFTkFJX1ZJREVPX0RFUExPWU1FTlRgKSBhcmUgc2V0OyBvdGhlcndpc2UgdGhleSBmYWxsIGJhY2sgdG8gZGlyZWN0IE9wZW5BSSAvIFZlcnRleC4gT3ZlcnJpZGUgcGVyIGNhbGwgd2l0aCBgLS1wcm92aWRlciBvcGVuYWlgIChpbWFnZS92aXNpb24pIG9yIGAtLWVuZ2luZSBvcGVuYWl8dmVvYCAodmlkZW8pLiBDb25maWd1cmUgdGhlIEF6dXJlIHZhbHVlcyBmcm9tIHRoZSBwcml2YXRlIE5vdGlvbiB2YXVsdCAiQXp1cmUgT3BlbkFJIiBlbnRyeSAoZG8gbm90IGhhcmRjb2RlIHRoZW0gaGVyZSkuCgojIyBDb21wbGlhbmNlIC8gc2NvcGUgcnVsZXMgKHJlYWQgZmlyc3QpCgotICoqVGhpcyBza2lsbCBvcGVyYXRlcyBpbiB0aGUgTk9OLVBISSByaW5nIG9ubHkuKiogRGVmYXVsdCBwcm9qZWN0IGlzIGBvdGNoZWFsdGgtc2hhcmVkLXByb2RgLiBORVZFUiBwb2ludCB0aGlzIHNraWxsIGF0IGBvdGNoZWFsdGgtbWVkcmV2aWV3LXByb2RgIG9yIGFueSBQSEkgcHJvamVjdC4KLSAqKk5vIFBISSBpbiBhbnkgZ2VuZXJhdGVkIGFzc2V0LCBwcm9tcHQsIG9yIG1ldGFkYXRhLioqIEdlbmVyYXRlZCBjb250ZW50IGlzIGJyYW5kL21hcmtldGluZyBvbmx5LgotICoqRm91clZhdWx0IGlzIE9VVFNJREUgdGhlIE9UQ0hlYWx0aCBvcmcuKiogV2hlbiBnZW5lcmF0aW5nIGZvciBGb3VyVmF1bHQsIHRoZSBjcmVkZW50aWFscy5lbnYgbXVzdCBwb2ludCBhdCB0aGUgcGVyc29uYWwgR29vZ2xlIENsb3VkIHByb2plY3QsIG5vdCB0aGUgY29tcGFueSBwcm9qZWN0LiBTZWUgYGRvY3MvZ2NwL0FSQ0hJVEVDVFVSRS5tZGAgaW4gYW55IEFXQVJFLWRlcml2ZWQgcmVwby4KLSAqKlZpZGVvIC8gYXZhdGFyIG1vZGVsczoqKiBEaXJlY3QgKipPcGVuQUkgU29yYSAyKiogaXMgdGhlIGRlZmF1bHQgdmlkZW8gZW5naW5lIChgZ2VuLXZpZGVvLm1qc2ApLiAqKlZlbyAzLjEqKiBwb3dlcnMgdGFsa2luZyBhdmF0YXJzIChgZ2VuLWF2YXRhci5tanNgKSBhbmQgaXMgdGhlIHZpZGVvIGZhbGxiYWNrIC8gYWx0ZXJuYXRlIChgLS1lbmdpbmUgdmVvYCwgbmF0aXZlIGxpcC1zeW5jZWQgYXVkaW8pOyBWZW8gMiB2aWEgYC0tbW9kZWwgdmVvLTIuMC1nZW5lcmF0ZS0wMDFgIGZvciBwbGFpbiBzaWxlbnQgQi1yb2xsLiBJbWFnZW4gNCBpcyBHQSAocHJldmlldyBJRHMgcmV0aXJlZCBOb3YgMzAsIDIwMjUpLgotICoqQXZhdGFycyBhcmUgc3ludGhldGljLCBub3QgcmVhbCBwZW9wbGUuKiogTmV2ZXIgZ2VuZXJhdGUgYW4gYXZhdGFyIHJlc2VtYmxpbmcgYSByZWFsLCBpZGVudGlmaWFibGUgcGVyc29uIHdpdGhvdXQgdGhlaXIgY29uc2VudC4gTm8gUEhJLCBubyBpbXBsaWVkIG1lZGljYWwgY3JlZGVudGlhbHMgdGhlIGJyYW5kIGRvZXNuJ3QgaG9sZCwgYW5kIGtlZXAgYHZvaWNlLmRvX25vdGAgY2xhaW1zIG91dCBvZiBhbnkgc3Bva2VuIHNjcmlwdC4KCiMjIFdoYXQgaXQgZG9lcwoKfCBOZWVkIHwgU2NyaXB0IHwgQmFja2VkIGJ5IHwgQXBwcm94IGNvc3QgfAp8LS0tfC0tLXwtLS18LS0tfAp8IFNpbmdsZSBpbGx1c3RyYXRpb24gLyBoZXJvIGltYWdlIHwgYGdlbi1pbWFnZS5tanNgIHwgT3BlbkFJIEdQVC1pbWFnZS0xIChkZWZhdWx0KSBvciBWZXJ0ZXggSW1hZ2VuIDQgR0EgfCAkMC4wNC0wLjEyIHwKfCBCcmFuZC1jb25zaXN0ZW50IGljb24gfCBgZ2VuLWltYWdlLm1qcyAtLWtpbmQgaWNvbmAgfCBPcGVuQUkgR1BULWltYWdlLTEgfCAkMC4wNCB8CnwgU3R5bGUtbG9ja2VkIGljb24gYmF0Y2ggKDIwKyBpY29ucyBpbiBtYXRjaGluZyBhZXN0aGV0aWMpIHwgYGdlbi1pY29uLWJhdGNoLm1qc2AgfCBHUFQtaW1hZ2UtMSArIHJlZmVyZW5jZSBpbWFnZSBjb25kaXRpb25pbmcgfCAkMC4wNC9pY29uIHwKfCBFbXB0eS1zdGF0ZSBpbGx1c3RyYXRpb24gfCBgZ2VuLWltYWdlLm1qcyAtLWtpbmQgZW1wdHktc3RhdGVgIHwgR1BULWltYWdlLTEgfCAkMC4wNCB8CnwgQXBwIGljb24gZmFtaWx5ICgxMDI0IG1hc3RlciArIGFsbCBpT1MgKyBBbmRyb2lkIHNpemVzKSB8IGBnZW4tYXBwLWljb24tZmFtaWx5Lm1qc2AgfCBEQUxMLUUgMyBIRCArIHNoYXJwIHBvc3QtcHJvY2Vzc2luZyB8ICQwLjEyICsgZnJlZSB8CnwgQXBwIFN0b3JlIHNjcmVlbnNob3QgKGRldmljZSBmcmFtZSArIGhlYWRsaW5lIG92ZXJsYXkpIHwgYGNvbXBvc2Utc2NyZWVuc2hvdC5tanNgIHwgc2hhcnAgKyBJbWFnZW4gNCBmb3IgaGVhZGxpbmUgdGV4dCByZW5kZXJpbmcgfCAkMC4wNCArIGZyZWUgfAp8IEFJIHZpZGVvIChBcHAgUHJldmlldywgbWFya2V0aW5nLCB3YWxrdGhyb3VnaCkgfCBgZ2VuLXZpZGVvLm1qc2AgfCBPcGVuQUkgU29yYSAyIChkZWZhdWx0KSDCtyBWZW8gMy4xIChgLS1lbmdpbmUgdmVvYCkgwrcgQXp1cmUgU29yYSAoYC0tZW5naW5lIGF6dXJlYCkgfCB+JDAuMTAvc2VjIFNvcmEgwrcgfiQwLjUwL3NlYyBWZW8gfAp8ICoqUmVhbGlzdGljIEFJIHRhbGtpbmcgYXZhdGFyKiogKHByZXNlbnRlciByZWFkcyBhIHNjcmlwdCwgbmF0aXZlIGxpcC1zeW5jKSB8IGBnZW4tYXZhdGFyLm1qc2AgfCBHb29nbGUgVmVydGV4IFZlbyAzLjEgKHRleHQtIG9yIGltYWdlLXRvLWF2YXRhcikgfCB+JDAuNzUvc2VjICgkMC40MC9zZWMgb24gYC1mYXN0YCkgfAp8IFZvaWNlb3ZlciBmb3IgdmlkZW8gfCBgZ2VuLXZvaWNlb3Zlci5tanNgIHwgRWxldmVuTGFicyAoMzNNLWNoYXIgc3RhcnR1cCBncmFudCBhY3RpdmUpIHwgJDAuMzAvMTAwMCBjaGFycyB8CnwgKipCYWNrZ3JvdW5kIG11c2ljIC8gdW5kZXJzY29yZSoqIChhcHAgYW1iaWVuY2UsIHZpZGVvIGJlZCwgaW50cm8pIHwgYGdlbi1tdXNpYy5tanNgIHwgRWxldmVuTGFicyBNdXNpYyB8IH4kMC4wNi8xMHMgKGdyYW50KSB8CnwgKipTb3VuZCBlZmZlY3RzKiogKFVJIGNoaW1lLCBub3RpZmljYXRpb24sIHN0aW5nZXIsIHRyYW5zaXRpb24pIHwgYGdlbi1zZngubWpzYCB8IEVsZXZlbkxhYnMgU291bmQgRWZmZWN0cyB8IH4kMC4wMiBlYWNoIChncmFudCkgfAp8ICoqQXJ0LWRpcmVjdG9yIHJldmlldyoqIChicmFuZC1maXQgY3JpdGlxdWUgKyByZWZpbmVkIHByb21wdCkgfCBgcmV2aWV3LWFzc2V0Lm1qc2AgfCBPcGVuQUkgR1BULTRvIFZpc2lvbiB8IH4kMC4wMSBlYWNoIHwKfCBQTkcg4oaSIFNWRyB2ZWN0b3JpemUgfCBgdmVjdG9yaXplLm1qc2AgfCBSZWNyYWZ0IEFQSSBvciBsb2NhbCBwb3RyYWNlIHwgJDAuMDQgb3IgZnJlZSB8CnwgT3B0aW1pemUgLyBmb3JtYXQgYXNzZXRzIHwgYG9wdGltaXplLWFzc2V0Lm1qc2AgfCBzaGFycCAobG9jYWwsIGZyZWUpIHwgJDAgfAp8IEhlYWx0aC1jaGVjayBhbGwgY3JlZGVudGlhbHMgLyBBUElzIHwgYGhlYWx0aGNoZWNrLm1qc2AgfCBldmVyeSBwcm92aWRlciAoYXV0aC1vbmx5IHByb2JlcykgfCAkMCB8CgojIyBGdWxsIGNyZWF0aXZlIHN0YWNrIOKAlCBwaWNrIHRoZSBiZXN0IGVuZ2luZSBwZXIgdGFzawoKVGhlIGhhbmRjdWZmcyBhcmUgb2ZmOiByb3V0ZSBldmVyeSBqb2IgdG8gd2hpY2hldmVyIG1vZGVsIG9uIG91ciBjcmVkaXRzCnByb2R1Y2VzIHRoZSBiZXN0IHJlc3VsdC4gVGhlIG1lbnUsIGJ5IG1lZGl1bToKCi0gKipTdGlsbHMgLyBpY29ucyAvIGhlcm8gYXJ0Kiog4oCUIE9wZW5BSSAqKkdQVC1pbWFnZS0xKiogKGRlZmF1bHQsIGJlc3QgaW5zdHJ1Y3Rpb24tZm9sbG93aW5nKSwgKipEQUxMLUUgMyBIRCoqIChhcHAtaWNvbiBtYXN0ZXIpLCBWZXJ0ZXggKipJbWFnZW4gNCBHQSoqIChgaW1hZ2VuNGAgLyBgaW1hZ2VuNC11bHRyYWAgLyBgaW1hZ2VuNC1mYXN0YDsgYmVzdCBpbi1pbWFnZSB0ZXh0IHJlbmRlcmluZyBmb3Igc2NyZWVuc2hvdCBoZWFkbGluZXMpLiBBbGwgdmlhIGBnZW4taW1hZ2UubWpzIC0tbW9kZWwg4oCmYC4KLSAqKlZpZGVvIC8gbW90aW9uIC8gYW5pbWF0ZWQgbG9vcHMqKiDigJQgZGlyZWN0ICoqT3BlbkFJIFNvcmEgMioqIChgZ2VuLXZpZGVvLm1qc2AsIGRlZmF1bHQ7IGAtLXNvcmEtbW9kZWwgc29yYS0yLXByb2AgZm9yIGhpZ2hlciBxdWFsaXR5KTsgKipWZW8gMy4xKiogdmlhIGAtLWVuZ2luZSB2ZW9gIChuYXRpdmUgYXVkaW8gKyBsaXAtc3luYywgdGV4dC0gb3IgaW1hZ2UtdG8tdmlkZW8sIGAtLXNlZWQtaW1hZ2VgKTsgKipWZW8gMioqIGZvciBwbGFpbiBzaWxlbnQgQi1yb2xsOyAqKkF6dXJlIFNvcmEqKiB2aWEgYC0tZW5naW5lIGF6dXJlYCAoc3BlbmRzIHRoZSBBenVyZSBncmFudCwgcGVuZGluZyBxdW90YSkuIFNvcmEgaXMgdGhlIGRlZmF1bHQgYmVjYXVzZSB3ZSBoYXZlIGFtcGxlIE9wZW5BSSBjcmVkaXRzOyBpdCBhdXRvLWZhbGxzLWJhY2sgdG8gVmVvIG9uIGZhaWx1cmUuCi0gKipUYWxraW5nIGF2YXRhcnMgLyBwcmVzZW50ZXJzKiog4oCUIHR3byBlbmdpbmVzOiBWZXJ0ZXggKipWZW8gMy4xKiogKGRlZmF1bHQsIGNpbmVtYXRpYywgZ2VuZXJhdGl2ZSkgdmlhIGBnZW4tYXZhdGFyLm1qc2A7IG9yIEF6dXJlICoqQUkgU3BlZWNoIFRUUy1BdmF0YXIqKiB2aWEgYC0tZW5naW5lIGF6dXJlYCAoYSBmaXhlZCwgY29uc2lzdGVudCBlbnRlcnByaXNlIGNhc3Qg4oCUIExpc2EvTWF4L01lZyDigJQgaWRlYWwgZm9yIGhpZ2gtdm9sdW1lIGlkZW50aWNhbCBleHBsYWluZXJzLCBvbiB0aGUgQXp1cmUgZ3JhbnQpLiBSZXVzYWJsZSBvbi1icmFuZCBwcmVzZW50ZXIgZGVmaW5lZCBpbiBgYnJhbmQuYXZhdGFyYCAoYW5kIGBicmFuZC5hdmF0YXIuYXp1cmVgKS4KLSAqKlZvaWNlIC8gbmFycmF0aW9uKiog4oCUIEVsZXZlbkxhYnMgKGBnZW4tdm9pY2VvdmVyLm1qc2ApLCBhbHdheXMgb24gdGhlIGxhdGVzdCAqKmBlbGV2ZW5fdjNgKiogbW9kZWwuICoqRXZlcnkgdm9pY2UgaW4gdGhlIGFjY291bnQgaXMgYXZhaWxhYmxlKiogKHByZW1hZGUgYW5kIGNsb25lZCkg4oCUIHBhc3MgYW55IGAtLXZvaWNlLWlkYCAoZS5nLiBTYXJhaCBgRVhBVklUUXU0dnI0eG5TRHhNYUxgLCBvciBsaXN0IHZvaWNlcyB2aWEgYEdFVCBodHRwczovL2FwaS5lbGV2ZW5sYWJzLmlvL3YxL3ZvaWNlc2ApLiBQZXItcHJvamVjdCBkZWZhdWx0IHZpYSBgYnJhbmQudm9pY2VvdmVyX2RlZmF1bHRfdm9pY2VfaWRgOyBkbyBub3QgYXNzdW1lIGEgc2luZ2xlIGZpeGVkIHZvaWNlLiAzM00tY2hhciBncmFudCBhY3RpdmUuCi0gKipNdXNpYyoqIOKAlCBFbGV2ZW5MYWJzIE11c2ljIHZpYSBgZ2VuLW11c2ljLm1qc2AgKGluc3RydW1lbnRhbCBiZWRzIGJ5IGRlZmF1bHQsIGAtLXZvY2FsYCBmb3Igc29uZ3MpLgotICoqU291bmQgZGVzaWduKiog4oCUIEVsZXZlbkxhYnMgU291bmQgRWZmZWN0cyB2aWEgYGdlbi1zZngubWpzYCAoVUkgY2hpbWVzLCBub3RpZmljYXRpb25zLCBzdGluZ2VycykuCi0gKipRdWFsaXR5IGNvbnRyb2wqKiDigJQgYHJldmlldy1hc3NldC5tanNgIHJ1bnMgR1BULTRvIFZpc2lvbiBhcyBhbiBhcnQgZGlyZWN0b3I6IHNjb3JlcyBicmFuZCBmaXQsIGZsYWdzIGBkb19ub3RgIHZpb2xhdGlvbnMsIGFuZCByZXR1cm5zIGEgcmVmaW5lZCBwcm9tcHQgdG8gcmVnZW5lcmF0ZSBmcm9tLgotICoqVmVjdG9ycyAvIGNsZWFudXAqKiDigJQgYHZlY3Rvcml6ZS5tanNgIChSZWNyYWZ0IG9yIGxvY2FsIHBvdHJhY2UpLCBgb3B0aW1pemUtYXNzZXQubWpzYCAoc2hhcnAsIGZyZWUpLCBgY29tcG9zZS1zY3JlZW5zaG90Lm1qc2AgKGRldmljZSBmcmFtZXMgKyBoZWFkbGluZSBvdmVybGF5KS4KLSAqKkxvbmctZm9ybSBsaXAtc3luY2VkIHByZXNlbnRlciB2aWRlbyAocmVhbCBwcmVzZW50ZXIgKyB5b3VyIEVsZXZlbkxhYnMgdm9pY2UpKiog4oCUIE5PVCB0aGlzIHNraWxsLiBVc2UgdGhlIHNpYmxpbmcgKipgYXZhdGFyLXBpcGVsaW5lL2AqKiBpbiB0aGlzIHJlcG86IGEgY2xvdWQgcGlwZWxpbmUgKEdpdEh1YiBBY3Rpb25zLCBHUFUgb24gUmVwbGljYXRlIG9yIEF6dXJlKSB0aGF0IHJlbGlwLXN5bmNzIGEgc2hvcnQgcHJlc2VudGVyIGJhc2UgdmlkZW8gdG8gYSBmdWxsIHNjcmlwdCBpbiB5b3VyIG93biBFbGV2ZW5MYWJzIHZvaWNlIHZpYSBMYXRlbnRTeW5jL011c2VUYWxrL1NhZFRhbGtlci4gVHJpZ2dlciB0aGUgYGF2YXRhci1yZW5kZXJgIHdvcmtmbG93IChwaG9uZS1mcmllbmRseSkgb3IgYHB5dGhvbiBhdmF0YXItcGlwZWxpbmUvcXVpY2tfcmVuZGVyLnB5YC4gVGhlIGRlc2lnbmVyIGBnZW4tYXZhdGFyLm1qc2AgaGVyZSBpcyBmb3Igc2hvcnQgKmdlbmVyYXRpdmUqIHRhbGtpbmcgaGVhZHMgKFZlbyAvIEF6dXJlIFRUUy1BdmF0YXIpOyB0aGUgYXZhdGFyLXBpcGVsaW5lIGlzIGZvciBsb25nLCBjb25zaXN0ZW50IHByZXNlbnRlciB2aWRlb3MuIFNlZSBgYXZhdGFyLXBpcGVsaW5lL1JFQURNRS5tZGAuCgpBIGZ1bGwgQXBwIFByZXZpZXcgY2FuIGJlIGFzc2VtYmxlZCBlbmQtdG8tZW5kIGZyb20gdGhpcyBzdGFjayB3aXRoIG5vCnRoaXJkLXBhcnR5IFNhYVM6IGBnZW4tYXZhdGFyLm1qc2AgKHByZXNlbnRlcikgKyBgZ2VuLXZpZGVvLm1qc2AgKEItcm9sbCkgKwpgZ2VuLW11c2ljLm1qc2AgKGJlZCkgKyBgZ2VuLXNmeC5tanNgIChVSSBzb3VuZHMpICsgYGdlbi12b2ljZW92ZXIubWpzYAooYW55IGV4dHJhIFZPKSwgc3RpdGNoZWQgaW4gYW4gZWRpdG9yLgoKKipBdmF0YXIgUkFJIG5vdGUgKGxlYXJuZWQgZnJvbSBsaXZlIHRlc3RpbmcpOioqIFZlbydzIFJlc3BvbnNpYmxlLUFJIGZpbHRlcgpibG9ja3Mgc29tZSByZWFsaXN0aWMtaHVtYW4gcmVuZGVycyAoc3VwcG9ydCBjb2RlIDE1MjM2NzU0KSDigJQgeW91IGFyZSAqbm90KgpjaGFyZ2VkIGZvciBmaWx0ZXJlZCBvdXRwdXRzLiBOZXV0cmFsIHByZXNlbnRlcnMgKyBwbGFpbiBzY3JpcHRzIHBhc3MgY2xlYW5seTsKcmVuZGVycyB0aGF0IGltcGx5IGEgbWVkaWNhbCBwcm9mZXNzaW9uYWwgKCJhdWRpb2xvZ2lzdCIpIG9yIG1ha2UgaGVhbHRoIGNsYWltcwooImNoZWNrIHlvdXIgaGVhcmluZyIpIHRlbmQgdG8gZ2V0IGZpbHRlcmVkLiBLZWVwIGF2YXRhciBzY3JpcHRzIG5ldXRyYWwgYW5kCm5vbi1jbGluaWNhbCwgbGV0IHRoZSBicmFuZCB2b2ljZSBjYXJyeSB3YXJtdGgsIGFuZCBhZGQgZGlzZWFzZS9vdXRjb21lIGNsYWltcwphcyBvbi1zY3JlZW4gdGV4dCBpbiB0aGUgZWRpdG9yIHJhdGhlciB0aGFuIGluIHRoZSBzcG9rZW4gbGluZS4gYHBlcnNvbkdlbmVyYXRpb25gCmRlZmF1bHRzIHRvIGBhbGxvd19hZHVsdGA7IG92ZXJyaWRlIHdpdGggYC0tcGVyc29uYC4KCiMjIEJyYW5kLXByb2ZpbGUgcmVzb2x1dGlvbiAocHJvamVjdC1hZ25vc3RpYykKCldoZW4gaW52b2tlZCBmcm9tIGluc2lkZSBhIHByb2plY3QgZGlyZWN0b3J5LCB0aGUgc2tpbGwgcmVzb2x2ZXMgdGhlIGFjdGl2ZSBicmFuZCBpbiB0aGlzIG9yZGVyOgoKMS4gYCRQV0QvLmRlc2lnbmVyL2JyYW5kLmpzb25gIChwcm9qZWN0LWxvY2FsIHByb2ZpbGUpCjIuIGAkUFdEL0JSQU5ELm1kYCAocGFyc2VkIGZvciBjb2xvciAvIHR5cG9ncmFwaHkgYmxvY2tzKQozLiBgfi8uZGVzaWduZXIvYnJhbmQtcHJvZmlsZXMvPHByb2plY3QtbmFtZT4uanNvbmAgKG5hbWVkIHByb2ZpbGUgaW4gaG9tZSkKNC4gYH4vLmRlc2lnbmVyL2JyYW5kLXByb2ZpbGVzL2RlZmF1bHQuanNvbmAgKGZhbGxiYWNrKQoKQSBicmFuZCBwcm9maWxlIGRlZmluZXMgY29sb3IgcGFsZXR0ZSwgdHlwb2dyYXBoeSwgdm9pY2UvdG9uZSwgZG8tbm90LWNsYWltIHJ1bGVzLCBhbmQgc3R5bGUgcmVmZXJlbmNlcy4gU2VlIGBicmFuZC1wcm9maWxlcy9fc2NoZW1hLmpzb25gIGZvciB0aGUgY29udHJhY3QgYW5kIGBicmFuZC1wcm9maWxlcy9fZXhhbXBsZS1hd2FyZS5qc29uYCBmb3IgYSB3b3JraW5nIGV4YW1wbGUuCgojIyBDcmVkZW50aWFscwoKU2V0IHRoZXNlIGVudiB2YXJzIChvciBwYXN0ZSBpbnRvIGEgb25lLXRpbWUgYH4vLmRlc2lnbmVyL2NyZWRlbnRpYWxzLmVudmAgZmlsZSB0aGUgc2NyaXB0cyBhdXRvLWxvYWQpOgoKfCBFbnYgdmFyIHwgUHVycG9zZSB8CnwtLS18LS0tfAp8IGBPUEVOQUlfQVBJX0tFWWAgfCBHUFQtaW1hZ2UtMSAoaW1hZ2UgZ2VuKSwgR1BULTRvIFZpc2lvbiAoYXNzZXQgcmV2aWV3KSB8CnwgYE9QRU5BSV9PUkdfSURgIHwgb3B0aW9uYWwsIGZvciBtdWx0aS1vcmcgYWNjb3VudHMgfAp8IGBHT09HTEVfQVBQTElDQVRJT05fQ1JFREVOVElBTFNgIHwgcGF0aCB0byBzZXJ2aWNlIGFjY291bnQgSlNPTiBmb3IgVmVydGV4IEFJIHwKfCBgR09PR0xFX0NMT1VEX1BST0pFQ1RgIHwgR0NQIHByb2plY3QgSUQgZm9yIFZlcnRleCBBSSB8CnwgYEVMRVZFTkxBQlNfQVBJX0tFWWAgfCB2b2ljZW92ZXIsIG11c2ljLCBzb3VuZC1lZmZlY3RzIHwKfCBgUkVDUkFGVF9BUElfS0VZYCB8IG9wdGlvbmFsLCBmb3IgdmVjdG9yaXphdGlvbiAob3RoZXJ3aXNlIHVzZXMgbG9jYWwgcG90cmFjZSkgfAp8IGBBWlVSRV9PUEVOQUlfRU5EUE9JTlRgIC8gYEFaVVJFX09QRU5BSV9BUElfS0VZYCB8IG9wdGlvbmFsIOKAlCByb3V0ZSBHUFQtaW1hZ2UtMSArIEdQVC00byBWaXNpb24gdG8gQXp1cmUgT3BlbkFJIChzcGVuZHMgdGhlIEF6dXJlIGdyYW50KSB8CnwgYEFaVVJFX09QRU5BSV9JTUFHRV9ERVBMT1lNRU5UYCAvIGBBWlVSRV9PUEVOQUlfVklTSU9OX0RFUExPWU1FTlRgIHwgQXp1cmUgZGVwbG95bWVudCBuYW1lcyBmb3IgdGhlIGltYWdlICsgdmlzaW9uIG1vZGVscyB8CnwgYEFaVVJFX09QRU5BSV9BUElfVkVSU0lPTmAgfCBvcHRpb25hbCwgZGVmYXVsdHMgdG8gYDIwMjUtMDQtMDEtcHJldmlld2AgfAp8IGBBWlVSRV9TUEVFQ0hfS0VZYCAvIGBBWlVSRV9TUEVFQ0hfUkVHSU9OYCB8IG9wdGlvbmFsIOKAlCBBenVyZSBBSSBTcGVlY2ggKFRUUy1BdmF0YXIgLyBuZXVyYWwgVFRTKSB8CgpSdW4gYGJhc2ggc2V0dXAuc2hgIG9uY2UgcGVyIG1hY2hpbmUgdG8gaW5zdGFsbCBkZXBzIGFuZCB2YWxpZGF0ZSBjcmVkZW50aWFscy4KCiMjIyBQcm92aWRlciByb3V0aW5nIChPcGVuQUkgdnMgQXp1cmUpCgpgZ2VuLWltYWdlLm1qc2AgYW5kIGByZXZpZXctYXNzZXQubWpzYCBhY2NlcHQgYC0tcHJvdmlkZXIgb3BlbmFpfGF6dXJlYCAob3Igc2V0CmBERVNJR05FUl9PUEVOQUlfUFJPVklERVI9YXp1cmVgIHRvIGZsaXAgdGhlIGRlZmF1bHQgZm9yIGEgc2Vzc2lvbikuIEJvdGggYmFjawp0aGUgc2FtZSBtb2RlbHMg4oCUIEF6dXJlIGp1c3QgYmlsbHMgdGhlIE1pY3Jvc29mdCBncmFudCBpbnN0ZWFkIG9mIGRpcmVjdCBPcGVuQUkKY3JlZGl0cy4gQXp1cmUgaXMgdXNlZCBvbmx5IHdoZW4gaXRzIHNlY3JldHMgYXJlIGNvbmZpZ3VyZWQ7IG90aGVyd2lzZSB0aGUgY2FsbApmYWlscyB3aXRoIGEgY2xlYXIgIm5vdCBjb25maWd1cmVkIiBtZXNzYWdlLiAoREFMTMK3RSAzIHdhcyByZXRpcmVkIE1hciAyMDI2IOKAlAp0aGUgYGRhbGwtZS0zYCBhbGlhcyBub3cgcm91dGVzIHRvIGBncHQtaW1hZ2UtMWAuKQoKIyMgT3V0cHV0IGNvbnZlbnRpb24KCkJ5IGRlZmF1bHQsIGdlbmVyYXRlZCBhc3NldHMgbGFuZCBpbiBgJFBXRC9hc3NldHMvZ2VuZXJhdGVkLzx0eXBlPi88c2x1Zz4uPGV4dD5gIHdoZXJlOgotIGA8dHlwZT5gID0gaWNvbiwgaWxsdXN0cmF0aW9uLCBhcHAtaWNvbiwgc3RvcmUtc2NyZWVuc2hvdCwgdmlkZW8sIGF2YXRhciwgdm9pY2VvdmVyCi0gYDxzbHVnPmAgPSBodW1hbi1yZWFkYWJsZSBuYW1lIGRlcml2ZWQgZnJvbSBwcm9tcHQgb3IgZXhwbGljaXQgYC0tbmFtZWAKLSBBIHNpYmxpbmcgYC5tZXRhLmpzb25gIGZpbGUgcmVjb3JkcyB0aGUgcHJvbXB0LCBicmFuZCBwcm9maWxlLCBjb3N0LCBtb2RlbCwgdGltZXN0YW1wCgpPdmVycmlkZSB3aXRoIGAtLW91dHB1dCA8cGF0aD5gLiBBbGwgc2NyaXB0cyBwcmludCB0aGUgZmluYWwgcGF0aCBvbiBzdGRvdXQ7IENsYXVkZSBjYW4gYFJlYWRgIGl0IGFuZCBkaXNwbGF5IGlubGluZSB2aWEgYFNlbmRVc2VyRmlsZWAuCgojIyBIb3cgQ2xhdWRlIHNob3VsZCB1c2UgdGhpcyAoZGVjaXNpb24gdHJlZSkKCmBgYApVc2VyIGFza3MgZm9yIGEgdmlzdWFsIGFzc2V0CiAgICDilIIKICAgIOKUnOKUgOKUgCBEaWQgdGhleSBzcGVjaWZ5IHRoZSBhc3NldCBjbGFzcyAoaWNvbiwgaGVybywgdmlkZW8sIGV0Yy4pPwogICAg4pSCICAgWUVTIOKGkiBydW4gdGhhdCBzY3JpcHQgZGlyZWN0bHkgd2l0aCB0aGUgdXNlcidzIGJyaWVmCiAgICDilIIgICBOTyAg4oaSIGFzayBvbmUgY2xhcmlmeWluZyBxdWVzdGlvbiwgdGhlbiBydW4KICAgIOKUggogICAg4pSc4pSA4pSAIEFyZSBjcmVkZW50aWFscyBwcmVzZW50IChlbnYgdmFycyBzZXQgLyBzZXR1cC5zaCByYW4pPwogICAg4pSCICAgTk8gIOKGkiBydW4gc2V0dXAuc2gsIHRoZW4gcHJvbXB0IHVzZXIgZm9yIGtleXMgdmlhIFNlbmRVc2VyTWVzc2FnZQogICAg4pSCICAgWUVTIOKGkiBjb250aW51ZQogICAg4pSCCiAgICDilJzilIDilIAgSXMgdGhlcmUgYW4gYWN0aXZlIGJyYW5kIHByb2ZpbGUgZm9yIHRoaXMgZGlyZWN0b3J5PwogICAg4pSCICAgTk8gIOKGkiBmYWxsIGJhY2sgdG8gZGVmYXVsdCwgbWVudGlvbiBpdCB0byB1c2VyCiAgICDilIIgICBZRVMg4oaSIHVzZSBpdDsgbG9jayBwYWxldHRlIC8gdHlwb2dyYXBoeSB0byB0aGUgcHJvZmlsZQogICAg4pSCCiAgICDilJzilIDilIAgR2VuZXJhdGUKICAgIOKUgiAgIC0gUHJpbnQgcHJvbXB0IGJlaW5nIHVzZWQgKGZvciB0cmFjZWFiaWxpdHkpCiAgICDilIIgICAtIENhbGwgdGhlIEFQSQogICAg4pSCICAgLSBTYXZlIGFzc2V0ICsgLm1ldGEuanNvbgogICAg4pSCCiAgICDilJzilIDilIAgRGlzcGxheSByZXN1bHQKICAgIOKUgiAgIC0gUmVhZCB0aGUgb3V0cHV0IGZpbGUKICAgIOKUgiAgIC0gU2VuZFVzZXJGaWxlIHdpdGggY2FwdGlvbiAoYXNzZXQgcGF0aCwgY29zdCwgbW9kZWwpCiAgICDilIIgICAtIFN1Z2dlc3QgaXRlcmF0aW9uOiAid2FudCB0byByZWZpbmU/IGJhdGNoIHZhcmlhbnRzPyB0cnkgZGlmZmVyZW50IHN0eWxlPyIKICAgIOKUggogICAg4pSU4pSA4pSAIE9wdGlvbmFsbHkgY29tbWl0IHRvIHRoZSBwcm9qZWN0J3MgcmVwbyBhcyBhIGZvbGxvdy11cApgYGAKCiMjIEl0ZXJhdGlvbiB3b3JrZmxvdwoKRm9yIGhpZ2gtc3Rha2VzIGFzc2V0cyAoYXBwIGljb24sIGhlcm8gaWxsdXN0cmF0aW9uLCBBcHAgU3RvcmUgY292ZXIpOgoxLiBGaXJzdCBjYWxsOiBnZW5lcmF0ZSA0IHZhcmlhbnRzIHdpdGggYC0tdmFyaWFudHMgNGAKMi4gT3B0aW9uYWxseSBzZWxmLWNyaXRpcXVlIGVhY2ggd2l0aCBgcmV2aWV3LWFzc2V0Lm1qcyAtLWltYWdlIDxwYXRoPmAg4oCUIGl0IHNjb3JlcyBicmFuZCBmaXQsIGZsYWdzIGBkb19ub3RgIHZpb2xhdGlvbnMsIGFuZCByZXR1cm5zIGEgcmVmaW5lZCBwcm9tcHQuIFVzZSB0aGlzIHRvIGF1dG8tY3VsbCB3ZWFrIHZhcmlhbnRzIGJlZm9yZSBzaG93aW5nIHRoZSB1c2VyLgozLiBEaXNwbGF5IHRoZSBzdHJvbmdlc3QgaW5saW5lIHZpYSBTZW5kVXNlckZpbGUKNC4gVXNlciBwaWNrcyBvbmUgb3IgYXNrcyBmb3IgcmVmaW5lbWVudAo1LiBSZWZpbmUgd2l0aCBgLS1zZWVkIDxzZWxlY3RlZD4gLS1yZWZpbmUgIjxmZWVkYmFjaz4iYCAodXNlcyBpbWFnZS10by1pbWFnZSBlZGl0IGVuZHBvaW50KSwgb3IgZmVlZCB0aGUgcmV2aWV3ZXIncyBgcmVmaW5lZF9wcm9tcHRgIHN0cmFpZ2h0IGJhY2sgaW50byBgZ2VuLWltYWdlLm1qc2AKNi4gSXRlcmF0ZSB1bnRpbCBhcHByb3ZlZAoKRm9yIGxvdy1zdGFrZXMgYXNzZXRzIChlbXB0eSBzdGF0ZXMsIGhlYXJpbmctYWlkIHRpcCBpY29ucywgdGhyb3dhd2F5IHNvY2lhbCBwb3N0cyk6CjEuIFNpbmdsZSBnZW5lcmF0aW9uLCBubyB2YXJpYW50cwoyLiBJZiB1c2VyIGRpc2xpa2VzLCByZS1yb2xsIHdpdGggb25lIHR3ZWFrCgojIyBDb3N0LWF3YXJlIG1vZGUKCkV2ZXJ5IHNjcmlwdCBzdXBwb3J0cyBgLS1kcnktcnVuYCB3aGljaCBwcmludHMgdGhlIGVzdGltYXRlZCBjb3N0IGFuZCB0aGUgZXhhY3QgQVBJIGNhbGwgd2l0aG91dCBzcGVuZGluZy4gVXNlIHRoaXMgd2hlbjoKLSBVc2VyIGhhcyB0aWdodCBjcmVkaXQgYnVkZ2V0Ci0gR2VuZXJhdGluZyBpbiBidWxrICg+MjAgYXNzZXRzIGF0IG9uY2UpCi0gVXNlciBhc2tzICJob3cgbXVjaCB3aWxsIHRoaXMgY29zdD8iCgojIyBDcm9zcy1wcm9qZWN0IHBhdHRlcm4KClNhbWUgc2tpbGwgd29ya3MgZnJvbSBhbnkgcHJvamVjdC4gSW52b2NhdGlvbiBleGFtcGxlczoKCmBgYGJhc2gKIyBJbnNpZGUgfi9hd2FyZS1hdXJhbC1yZWhhYi8Kbm9kZSB+Ly5jbGF1ZGUvc2tpbGxzL2Rlc2lnbmVyL3NjcmlwdHMvZ2VuLWltYWdlLm1qcyBcCiAgLS1wcm9tcHQgIm9sZGVyIHdvbWFuIGxhdWdoaW5nIGluIHJlc3RhdXJhbnQsIGhlYXJpbmcgYWlkcyB2aXNpYmxlIiBcCiAgLS1raW5kIGlsbHVzdHJhdGlvbiBcCiAgLS1vdXRwdXQgYXNzZXRzL2lsbHVzdHJhdGlvbnMvb25ib2FyZGluZy0yLnBuZwoKIyBJbnNpZGUgfi9tZWRyZXZpZXcvCm5vZGUgfi8uY2xhdWRlL3NraWxscy9kZXNpZ25lci9zY3JpcHRzL2dlbi1pY29uLWJhdGNoLm1qcyBcCiAgLS1uYW1lcyAicGF0aWVudCxjbGluaWNpYW4sZW5jb3VudGVyLG5vdGUsY2hhcnQsYmlsbGluZyIgXAogIC0tc3R5bGUtcmVmIGV4aXN0aW5nLWljb24uc3ZnCgojIEluc2lkZSB+L290Y2hlYWx0aG1hcnQvCm5vZGUgfi8uY2xhdWRlL3NraWxscy9kZXNpZ25lci9zY3JpcHRzL2NvbXBvc2Utc2NyZWVuc2hvdC5tanMgXAogIC0tZGV2aWNlIGlwaG9uZS0xNS1wcm8tbWF4IFwKICAtLXNjcmVlbnNob3Qgd3d3L2NoZWNrb3V0LnBuZyBcCiAgLS1oZWFkbGluZSAiQnV5IHdpdGggY29uZmlkZW5jZSIKYGBgCgpCcmFuZCBwcm9maWxlIGlzIGF1dG8tZGV0ZWN0ZWQgcGVyIGRpcmVjdG9yeS4gTm8gZmxhZyBjaGFuZ2VzIG5lZWRlZCBhY3Jvc3MgcHJvamVjdHMuCgojIyBXaGF0IHRoaXMgc2tpbGwgaXMgTk9UCgotIE5vdCBhIHJlcGxhY2VtZW50IGZvciBhIGh1bWFuIGRlc2lnbmVyIG9uIGhlcm8gYnJhbmQgd29yayAoYXBwIGljb24gZmluYWwgcGljaywgYnJhbmQtbWFyayByZWRlc2lnbiwgdHlwZSBzeXN0ZW0pIOKAlCB0aG9zZSBzdGlsbCBiZW5lZml0IGZyb20gaHVtYW4gZXllCi0gTm90IGEgdmlkZW8gZWRpdG9yICh1c2UgRGVzY3JpcHQgZm9yIHRyaW0gLyBjdXQgLyBhcnJhbmdlIGFmdGVyIGdlbmVyYXRpb24pCi0gTm90IGZvciBsaXZlIHBob3RvZ3JhcGh5IHdvcmsgKFZlbyBpcyBnZW5lcmF0aXZlOyBubyBvbi1zZXQgcHJvZHVjdGlvbikKLSBOb3QgYSBsb25nLWZvcm0gYXZhdGFyIHRvb2wg4oCUIFZlbyBjbGlwcyB0b3Agb3V0IGFyb3VuZCA4cyBwZXIgcmVuZGVyOyBzdGl0Y2ggbXVsdGlwbGUgYGdlbi1hdmF0YXIubWpzYCBjYWxscyBpbiBhbiBlZGl0b3IgZm9yIGEgbG9uZ2VyIHByZXNlbnRlciBtb25vbG9ndWUKLSBOb3QgYSBDSS9DRCBwaXBlbGluZSDigJQgd2lyZSBpbnRvIG44biBpZiB5b3Ugd2FudCBzY2hlZHVsZWQgcmVnZW5lcmF0aW9uCg==
+---
+name: designer
+description: Creative-director skill — Claude drives end-to-end visual asset generation across any project (icons, illustrations, app icons, App Store screenshots, video, voiceover). Brand-profile driven so the same skill produces on-brand assets for AWARE, iHEARtest, MedReview, OTCHealthMart, Companion, InnerEase, or any future project. Wraps OpenAI (GPT-image-1, DALL-E 3), Google Vertex AI (Imagen 4 GA, Veo 2), and ElevenLabs. Outputs land in the project's assets/ directory and are returned inline for Claude to display.
+---
+
+# Designer Skill — Claude as creative quarterback
+
+## When to invoke
+
+Invoke this skill whenever a project needs a visual or audio asset and the user hasn't pointed at a specific manual tool. Trigger words: "design," "generate," "icon," "illustration," "splash," "logo," "App Store screenshot," "preview video," "voiceover," "hero image," "social graphic," "empty state," "marketing asset."
+
+## Provider defaults — use the proven path (read first)
+
+These run on credits that are **live today**; default to them and the skill just works:
+- **Images / icons / vision review:** direct **OpenAI** (`gpt-image-1`, `gpt-4o`) — the default. Don't pass `--provider azure`.
+- **Video:** direct **OpenAI Sora 2** (`gen-video.mjs`, default engine) — validated live, plenty of OpenAI credits; auto-falls-back to Veo if Sora is ever unavailable. **Talking avatars:** **Vertex Veo 3.1** (`gen-avatar.mjs`) — validated live.
+- **Voice / music / SFX:** **ElevenLabs** — live.
+- **Photoreal fixed-presenter avatar:** **Azure TTS-Avatar** (`gen-avatar.mjs --engine azure`) — validated live and fine to use.
+
+**Azure OpenAI is now the DEFAULT when configured** (spends the Microsoft for Startups Azure grant instead of direct-OpenAI/Vertex credits). The `gpt-image-1`, `gpt-4o`, and `sora-2` deployments are live. The scripts auto-route to Azure when `AZURE_OPENAI_API_KEY` plus the matching deployment env var (`AZURE_OPENAI_IMAGE_DEPLOYMENT` / `AZURE_OPENAI_VISION_DEPLOYMENT` / `AZURE_OPENAI_VIDEO_DEPLOYMENT`) are set; otherwise they fall back to direct OpenAI / Vertex. Override per call with `--provider openai` or `--engine openai|veo`. Configure the Azure values from the private Notion vault "Azure OpenAI" entry; do not hardcode them here.
+
+## Compliance / scope rules (read first)
+
+- **This skill operates in the NON-PHI ring only.** Default project is `otchealth-shared-prod`. NEVER point this skill at `otchealth-medreview-prod` or any PHI project.
+- **No PHI in any generated asset, prompt, or metadata.** Generated content is brand/marketing only.
+- **FourVault is OUTSIDE the OTCHealth org.** When generating for FourVault, the credentials.env must point at the personal Google Cloud project, not the company project. See `docs/gcp/ARCHITECTURE.md` in any AWARE-derived repo.
+- **Video / avatar models:** Direct **OpenAI Sora 2** is the default video engine (`gen-video.mjs`). **Veo 3.1** powers talking avatars (`gen-avatar.mjs`) and is the video fallback / alternate (`--engine veo`, native lip-synced audio); Veo 2 via `--model veo-2.0-generate-001` for plain silent B-roll. Imagen 4 is GA (preview IDs retired Nov 30, 2025).
+- **Avatars are synthetic, not real people.** Never generate an avatar resembling a real, identifiable person without their consent. No PHI, no implied medical credentials the brand doesn't hold, and keep `voice.do_not` claims out of any spoken script.
+
+## What it does
+
+| Need | Script | Backed by | Approx cost |
+|---|---|---|---|
+| Single illustration / hero image | `gen-image.mjs` | OpenAI GPT-image-1 (default) or Vertex Imagen 4 GA | $0.04-0.12 |
+| Brand-consistent icon | `gen-image.mjs --kind icon` | OpenAI GPT-image-1 | $0.04 |
+| Style-locked icon batch (20+ icons in matching aesthetic) | `gen-icon-batch.mjs` | GPT-image-1 + reference image conditioning | $0.04/icon |
+| Empty-state illustration | `gen-image.mjs --kind empty-state` | GPT-image-1 | $0.04 |
+| App icon family (1024 master + all iOS + Android sizes) | `gen-app-icon-family.mjs` | DALL-E 3 HD + sharp post-processing | $0.12 + free |
+| App Store screenshot (device frame + headline overlay) | `compose-screenshot.mjs` | sharp + Imagen 4 for headline text rendering | $0.04 + free |
+| AI video (App Preview, marketing, walkthrough) | `gen-video.mjs` | OpenAI Sora 2 (default) · Veo 3.1 (`--engine veo`) · Azure Sora (`--engine azure`) | ~$0.10/sec Sora · ~$0.50/sec Veo |
+| **Realistic AI talking avatar** (presenter reads a script, native lip-sync) | `gen-avatar.mjs` | Google Vertex Veo 3.1 (text- or image-to-avatar) | ~$0.75/sec ($0.40/sec on `-fast`) |
+| Voiceover for video | `gen-voiceover.mjs` | ElevenLabs (33M-char startup grant active) | $0.30/1000 chars |
+| **Background music / underscore** (app ambience, video bed, intro) | `gen-music.mjs` | ElevenLabs Music | ~$0.06/10s (grant) |
+| **Sound effects** (UI chime, notification, stinger, transition) | `gen-sfx.mjs` | ElevenLabs Sound Effects | ~$0.02 each (grant) |
+| **Art-director review** (brand-fit critique + refined prompt) | `review-asset.mjs` | OpenAI GPT-4o Vision | ~$0.01 each |
+| PNG → SVG vectorize | `vectorize.mjs` | Recraft API or local potrace | $0.04 or free |
+| Optimize / format assets | `optimize-asset.mjs` | sharp (local, free) | $0 |
+| Health-check all credentials / APIs | `healthcheck.mjs` | every provider (auth-only probes) | $0 |
+
+## Full creative stack — pick the best engine per task
+
+The handcuffs are off: route every job to whichever model on our credits
+produces the best result. The menu, by medium:
+
+- **Stills / icons / hero art** — OpenAI **GPT-image-1** (default, best instruction-following), **DALL-E 3 HD** (app-icon master), Vertex **Imagen 4 GA** (`imagen4` / `imagen4-ultra` / `imagen4-fast`; best in-image text rendering for screenshot headlines). All via `gen-image.mjs --model …`.
+- **Video / motion / animated loops** — direct **OpenAI Sora 2** (`gen-video.mjs`, default; `--sora-model sora-2-pro` for higher quality); **Veo 3.1** via `--engine veo` (native audio + lip-sync, text- or image-to-video, `--seed-image`); **Veo 2** for plain silent B-roll; **Azure Sora** via `--engine azure` (spends the Azure grant, pending quota). Sora is the default because we have ample OpenAI credits; it auto-falls-back to Veo on failure.
+- **Talking avatars / presenters** — two engines: Vertex **Veo 3.1** (default, cinematic, generative) via `gen-avatar.mjs`; or Azure **AI Speech TTS-Avatar** via `--engine azure` (a fixed, consistent enterprise cast — Lisa/Max/Meg — ideal for high-volume identical explainers, on the Azure grant). Reusable on-brand presenter defined in `brand.avatar` (and `brand.avatar.azure`).
+- **Voice / narration** — ElevenLabs (`gen-voiceover.mjs`), always on the latest **`eleven_v3`** model. **Every voice in the account is available** (premade and cloned) — pass any `--voice-id` (e.g. Sarah `EXAVITQu4vr4xnSDxMaL`, or list voices via `GET https://api.elevenlabs.io/v1/voices`). Per-project default via `brand.voiceover_default_voice_id`; do not assume a single fixed voice. 33M-char grant active.
+- **Music** — ElevenLabs Music via `gen-music.mjs` (instrumental beds by default, `--vocal` for songs).
+- **Sound design** — ElevenLabs Sound Effects via `gen-sfx.mjs` (UI chimes, notifications, stingers).
+- **Quality control** — `review-asset.mjs` runs GPT-4o Vision as an art director: scores brand fit, flags `do_not` violations, and returns a refined prompt to regenerate from.
+- **Vectors / cleanup** — `vectorize.mjs` (Recraft or local potrace), `optimize-asset.mjs` (sharp, free), `compose-screenshot.mjs` (device frames + headline overlay).
+- **Long-form lip-synced presenter video (real presenter + your ElevenLabs voice)** — NOT this skill. Use the sibling **`avatar-pipeline/`** in this repo: a cloud pipeline (GitHub Actions, GPU on Replicate or Azure) that relip-syncs a short presenter base video to a full script in your own ElevenLabs voice via LatentSync/MuseTalk/SadTalker. Trigger the `avatar-render` workflow (phone-friendly) or `python avatar-pipeline/quick_render.py`. The designer `gen-avatar.mjs` here is for short *generative* talking heads (Veo / Azure TTS-Avatar); the avatar-pipeline is for long, consistent presenter videos. See `avatar-pipeline/README.md`.
+
+A full App Preview can be assembled end-to-end from this stack with no
+third-party SaaS: `gen-avatar.mjs` (presenter) + `gen-video.mjs` (B-roll) +
+`gen-music.mjs` (bed) + `gen-sfx.mjs` (UI sounds) + `gen-voiceover.mjs`
+(any extra VO), stitched in an editor.
+
+**Avatar RAI note (learned from live testing):** Veo's Responsible-AI filter
+blocks some realistic-human renders (support code 15236754) — you are *not*
+charged for filtered outputs. Neutral presenters + plain scripts pass cleanly;
+renders that imply a medical professional ("audiologist") or make health claims
+("check your hearing") tend to get filtered. Keep avatar scripts neutral and
+non-clinical, let the brand voice carry warmth, and add disease/outcome claims
+as on-screen text in the editor rather than in the spoken line. `personGeneration`
+defaults to `allow_adult`; override with `--person`.
+
+## Brand-profile resolution (project-agnostic)
+
+When invoked from inside a project directory, the skill resolves the active brand in this order:
+
+1. `$PWD/.designer/brand.json` (project-local profile)
+2. `$PWD/BRAND.md` (parsed for color / typography blocks)
+3. `~/.designer/brand-profiles/<project-name>.json` (named profile in home)
+4. `~/.designer/brand-profiles/default.json` (fallback)
+
+A brand profile defines color palette, typography, voice/tone, do-not-claim rules, and style references. See `brand-profiles/_schema.json` for the contract and `brand-profiles/_example-aware.json` for a working example.
+
+## Credentials
+
+Set these env vars (or paste into a one-time `~/.designer/credentials.env` file the scripts auto-load):
+
+| Env var | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | GPT-image-1 (image gen), GPT-4o Vision (asset review) |
+| `OPENAI_ORG_ID` | optional, for multi-org accounts |
+| `GOOGLE_APPLICATION_CREDENTIALS` | path to service account JSON for Vertex AI |
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID for Vertex AI |
+| `ELEVENLABS_API_KEY` | voiceover, music, sound-effects |
+| `RECRAFT_API_KEY` | optional, for vectorization (otherwise uses local potrace) |
+| `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` | optional — route GPT-image-1 + GPT-4o Vision to Azure OpenAI (spends the Azure grant) |
+| `AZURE_OPENAI_IMAGE_DEPLOYMENT` / `AZURE_OPENAI_VISION_DEPLOYMENT` | Azure deployment names for the image + vision models |
+| `AZURE_OPENAI_API_VERSION` | optional, defaults to `2025-04-01-preview` |
+| `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` | optional — Azure AI Speech (TTS-Avatar / neural TTS) |
+
+Run `bash setup.sh` once per machine to install deps and validate credentials.
+
+### Provider routing (OpenAI vs Azure)
+
+`gen-image.mjs` and `review-asset.mjs` accept `--provider openai|azure` (or set
+`DESIGNER_OPENAI_PROVIDER=azure` to flip the default for a session). Both back
+the same models — Azure just bills the Microsoft grant instead of direct OpenAI
+credits. Azure is used only when its secrets are configured; otherwise the call
+fails with a clear "not configured" message. (DALL·E 3 was retired Mar 2026 —
+the `dall-e-3` alias now routes to `gpt-image-1`.)
+
+## Output convention
+
+By default, generated assets land in `$PWD/assets/generated/<type>/<slug>.<ext>` where:
+- `<type>` = icon, illustration, app-icon, store-screenshot, video, avatar, voiceover
+- `<slug>` = human-readable name derived from prompt or explicit `--name`
+- A sibling `.meta.json` file records the prompt, brand profile, cost, model, timestamp
+
+Override with `--output <path>`. All scripts print the final path on stdout; Claude can `Read` it and display inline via `SendUserFile`.
+
+## How Claude should use this (decision tree)
+
+```
+User asks for a visual asset
+    │
+    ├── Did they specify the asset class (icon, hero, video, etc.)?
+    │   YES → run that script directly with the user's brief
+    │   NO  → ask one clarifying question, then run
+    │
+    ├── Are credentials present (env vars set / setup.sh ran)?
+    │   NO  → run setup.sh, then prompt user for keys via SendUserMessage
+    │   YES → continue
+    │
+    ├── Is there an active brand profile for this directory?
+    │   NO  → fall back to default, mention it to user
+    │   YES → use it; lock palette / typography to the profile
+    │
+    ├── Generate
+    │   - Print prompt being used (for traceability)
+    │   - Call the API
+    │   - Save asset + .meta.json
+    │
+    ├── Display result
+    │   - Read the output file
+    │   - SendUserFile with caption (asset path, cost, model)
+    │   - Suggest iteration: "want to refine? batch variants? try different style?"
+    │
+    └── Optionally commit to the project's repo as a follow-up
+```
+
+## Iteration workflow
+
+For high-stakes assets (app icon, hero illustration, App Store cover):
+1. First call: generate 4 variants with `--variants 4`
+2. Optionally self-critique each with `review-asset.mjs --image <path>` — it scores brand fit, flags `do_not` violations, and returns a refined prompt. Use this to auto-cull weak variants before showing the user.
+3. Display the strongest inline via SendUserFile
+4. User picks one or asks for refinement
+5. Refine with `--seed <selected> --refine "<feedback>"` (uses image-to-image edit endpoint), or feed the reviewer's `refined_prompt` straight back into `gen-image.mjs`
+6. Iterate until approved
+
+For low-stakes assets (empty states, hearing-aid tip icons, throwaway social posts):
+1. Single generation, no variants
+2. If user dislikes, re-roll with one tweak
+
+## Cost-aware mode
+
+Every script supports `--dry-run` which prints the estimated cost and the exact API call without spending. Use this when:
+- User has tight credit budget
+- Generating in bulk (>20 assets at once)
+- User asks "how much will this cost?"
+
+## Cross-project pattern
+
+Same skill works from any project. Invocation examples:
+
+```bash
+# Inside ~/aware-aural-rehab/
+node ~/.claude/skills/designer/scripts/gen-image.mjs \
+  --prompt "older woman laughing in restaurant, hearing aids visible" \
+  --kind illustration \
+  --output assets/illustrations/onboarding-2.png
+
+# Inside ~/medreview/
+node ~/.claude/skills/designer/scripts/gen-icon-batch.mjs \
+  --names "patient,clinician,encounter,note,chart,billing" \
+  --style-ref existing-icon.svg
+
+# Inside ~/otchealthmart/
+node ~/.claude/skills/designer/scripts/compose-screenshot.mjs \
+  --device iphone-15-pro-max \
+  --screenshot www/checkout.png \
+  --headline "Buy with confidence"
+```
+
+Brand profile is auto-detected per directory. No flag changes needed across projects.
+
+## What this skill is NOT
+
+- Not a replacement for a human designer on hero brand work (app icon final pick, brand-mark redesign, type system) — those still benefit from human eye
+- Not a video editor (use Descript for trim / cut / arrange after generation)
+- Not for live photography work (Veo is generative; no on-set production)
+- Not a long-form avatar tool — Veo clips top out around 8s per render; stitch multiple `gen-avatar.mjs` calls in an editor for a longer presenter monologue
+- Not a CI/CD pipeline — wire into n8n if you want scheduled regeneration
