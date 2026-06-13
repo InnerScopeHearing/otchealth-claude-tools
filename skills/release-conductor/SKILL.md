@@ -16,9 +16,7 @@ AND Guardian cleared. PHI app: `gates.phiReview = pass`. Run the Pre-launch chec
   - Capawesome: code-signed bundles + automatic rollback + audit logs.
   - Use channels; gate health-critical flows with auto-rollback on crash-rate.
   - Migrate any app still on **Appflow** first (it sunsets Dec 31 2027).
-- **Native change** (new plugin, native code, store metadata): cut a **Codemagic** build
-  (`codemagic.yaml`). iOS build/sign/submit is cloud-only, you have no Mac. Phased
-  rollout; watch release health.
+- **Native change** (new plugin, native code, store metadata): build iOS on **Depot macOS runners via GitHub Actions** — the org standard as of 2026-06-13 (spends the $5k Depot grant instead of Codemagic cash; operator has no Mac, so it stays cloud). Android native builds run on **Depot ubuntu** Linux CI. Signing uses an App Store Connect API key + distribution cert/profile (ideally fastlane match) stored as GitHub Actions secrets. Codemagic is DEPRECATED and cut over per app once a green Depot iOS build is proven. Phased rollout; watch release health.
 
 ## Monetization go-live
 Take products live via **RevenueCat** where applicable. Pull store assets from Creative.

@@ -27,7 +27,7 @@ In addition to the manifest, scaffold:
    SystemBars edge-to-edge.
 3. **Monetization (RevenueCat)** + **Telemetry (Sentry+PostHog via telemetry-wiring)** +
    **i18n** stubs.
-4. **CI**: Codemagic (native, iOS cloud-only) + GitHub Actions (web/services, Depot runners).
+4. **CI**: Depot macOS runners for iOS native (GitHub Actions) + Depot ubuntu for web/Android/services. (Codemagic deprecated 2026-06-13 — migrated to Depot to use the grant instead of cash.)
 5. **Test scaffold** via test-author, green from commit one.
 6. **Supply-chain hardening** via supply-chain-guard (cooldowns, no auto-merge, SHA-pins).
 
