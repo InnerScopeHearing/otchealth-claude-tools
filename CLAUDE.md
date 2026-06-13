@@ -74,3 +74,6 @@ assume unless the user says otherwise.
 - `skills/designer/` - the creative skill (icons, video, avatars, voice, music).
 - `avatar-pipeline/` - the cloud avatar render pipeline.
 - `setup/session-start.sh` - the installer that hydrates skills + credentials.
+
+### iOS build runner correction (2026-06-13)
+- Use the **`depot-macos-26`** runner (Xcode 26 / iOS 26 SDK). `depot-macos-latest` = macOS 15 / Xcode 16.4, which Apple REJECTS (altool 409: must be built with the iOS 26 SDK). Depot iOS is PROVEN GREEN end-to-end — iHEARtest 1.5.15 / CFBundleVersion 43 shipped to TestFlight; cut Codemagic billing. Build numbers follow **ASC CFBundleVersion** (the Codemagic build counter is retired). Full Hyperagent-session sync: see `otchealth-cto/CLAUDE.md`.
