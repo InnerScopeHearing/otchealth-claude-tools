@@ -16,6 +16,21 @@
 >   (MedReview/Companion) stay on the GCP BAA until an Azure BAA + Azure OpenAI is in place
 >   (legal wall). See `otchealth-claude-tools/CLAUDE.md` "Cloud direction".
 
+> ## ACCEPTED RISK 2026-06-14 (do NOT re-flag or re-litigate without new facts)
+> **SessionStart bootstrap fetch-and-exec.** Every repo's `.claude/settings.json` SessionStart
+> hook runs `git clone octools main + bash setup/session-start.sh` (suppressed stderr). This is
+> the fleet's toolkit-distribution mechanism (auto-installs the 13 plugins / 23 skills / 19 agents
+> every session). An automated security review (security-guidance plugin) flagged it: CRITICAL
+> unpinned remote code execution, HIGH /tmp symlink-squat race, MEDIUM stderr/IoC suppression.
+> **Operator (Matt) reviewed the tradeoffs and chose LEAVE AS-IS (2026-06-14), accepting the
+> residual risk**, because: octools is a first-party PRIVATE org repo (not third-party); sessions
+> run in isolated, ephemeral, single-tenant sandboxes so the /tmp squat finding is N/A (no
+> co-tenant); the pattern is consistent fleet-wide; and SHA-pinning would break the auto-latest
+> toolkit distribution that is the design intent. **Proportionate control (recommended, not yet
+> applied):** harden octools `main` itself (branch protection + required PR review + CODEOWNERS on
+> `setup/` and `.claude/`, signed commits) so a malicious change cannot reach the source. Revisit
+> ONLY if octools write-access widens or sessions move to a shared/multi-tenant host.
+
 What `session-start.sh` + `fetch-secrets.mjs` handle automatically vs. what must be
 set in the Claude Code **environment** (the managed remote env, set in the Claude
 Code web settings) or in **GCP Secret Manager**. A session cannot self-edit the
