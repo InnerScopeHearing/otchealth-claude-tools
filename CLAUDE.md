@@ -76,7 +76,7 @@ assume unless the user says otherwise.
 - `dream-team/` - the coordinated agent + skill architecture (roster, interconnect,
   installable agent definitions, app manifest schema).
   - **`dream-team/FLEET-TOOLKIT-REFERENCE.md` = the master, tool-level index** of EVERY
-    capability (MCP connectors + their tools, the custom gateway's 38 tools, the 23 skills,
+    capability (MCP connectors + their tools, the custom gateway's 41 tools, the 23 skills,
     the 13 plugins, the 19 agents) + the routing policy. Read it first to know the toolkit.
 - `app-kit/` - the portable app lifecycle kits (startup -> maintenance + LESSONS).
 - `skills/designer/` - the creative skill (icons, video, avatars, voice, music).

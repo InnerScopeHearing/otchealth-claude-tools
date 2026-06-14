@@ -176,7 +176,7 @@ Azure (portal + Microsoft Learn MCP + the azure-sp SP; ARM via REST), Firebase, 
 
 ---
 
-## 2. UNIFIED GATEWAY — `otchealth-mcp-server` (38 tools, our custom MCP)
+## 2. UNIFIED GATEWAY — `otchealth-mcp-server` (41 tools, our custom MCP)
 One endpoint (`https://mcp.otchealth.app/mcp`, OAuth) fronting the stack with strict Zod
 input, a compliance guardrail, audit logging, and scope gating (READ_ONLY_MODE /
 ENABLE_WRITE_TOOLS / ENABLE_HIGH_RISK_TOOLS / DRY_RUN_DEFAULT). PHI carved OUT. Full design +
@@ -200,9 +200,11 @@ main; pending Azure redeploy + env (Matt gate).
 - **n8n meta (2)**: `n8n_list_workflows`, `n8n_get_execution`.
 - **Netlify read (2)**: `netlify_list_sites`, `netlify_list_site_deploys`.
 - **Gumroad read (2)**: `gumroad_list_products`, `gumroad_list_sales` (buyer PII omitted).
+- **Capability Catalog (3)**: `catalog_list_tools`, `catalog_service_capabilities`,
+  `catalog_audit_unused` — the gateway self-describes (tools auto-register; audit surfaces
+  un-wired surface). Run `catalog_audit_unused` to see the live backlog.
 - **BACKLOG (not yet built)**: Depot (builds/cache/grant-burn), PostHog-management (PHI carve-out
-  + build-failing test), Capability Catalog (`catalog_list_tools`/`_service_capabilities`/`_audit_unused`),
-  RevenueCat, Twilio+ElevenLabs, GitHub passthrough, Azure/Firebase modules.
+  + build-failing test), RevenueCat, Twilio+ElevenLabs, GitHub passthrough, Azure/Firebase modules.
 
 ---
 
