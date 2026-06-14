@@ -80,7 +80,7 @@ set +o pipefail
 # commit-commands, feature-dev, frontend-design, hookify, plugin-dev, agent-sdk-dev,
 # security-guidance. The marketplace clones over public HTTPS (no auth).
 if command -v claude >/dev/null 2>&1; then
-  FLEET_PLUGINS="code-review pr-review-toolkit commit-commands feature-dev frontend-design hookify plugin-dev agent-sdk-dev security-guidance"
+  FLEET_PLUGINS="code-review pr-review-toolkit commit-commands feature-dev frontend-design hookify plugin-dev agent-sdk-dev security-guidance ralph-wiggum explanatory-output-style learning-output-style claude-opus-4-5-migration"
   if ! claude plugin marketplace list 2>/dev/null | grep -q "claude-code-plugins"; then
     echo "[octools] Registering official plugin marketplace (anthropics/claude-code)..."
     claude plugin marketplace add anthropics/claude-code >/dev/null 2>&1 \

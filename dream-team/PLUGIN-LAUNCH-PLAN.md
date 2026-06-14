@@ -35,9 +35,14 @@ session re-applies them. Marketplace: `anthropics/claude-code` (public HTTPS, no
 | plugin-dev | devkit | We BUILD plugins/skills; toolkit for it. |
 | agent-sdk-dev | architect | We build the Dream Team agents + the gateway on the Agent SDK. |
 
-Deliberately NOT enabled fleet-wide: `ralph-wiggum` (niche self-loop; invoke ad hoc),
-`explanatory-output-style` / `learning-output-style` (change interaction style; opt-in
-per session), `claude-opus-4-5-migration` (irrelevant; we run Opus 4.8).
+FULL DEPLOYMENT (Matt directive 2026-06-14 "deploy all skills and plugins"): the
+remaining 4 official-marketplace plugins are now also installed + enabled fleet-wide -
+`ralph-wiggum` (iterative self-loop dev), `explanatory-output-style` +
+`learning-output-style` (available but only active when selected via /output-style, so
+enabling does not change default behavior), and `claude-opus-4-5-migration` (moot on Opus
+4.8, included for completeness). All **13** official plugins are deployed. The role packs
+(Finance/Legal/etc.) are Claude.ai app skills (toggled on by Matt, Wave 3 DONE); vendor
+plugins are MCP connectors (Wave 2, account-level).
 
 Verify in any session: `claude plugin list` shows the 9 as `enabled`.
 
