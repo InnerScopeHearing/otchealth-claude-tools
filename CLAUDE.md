@@ -8,11 +8,14 @@ assume unless the user says otherwise.
   or local Xcode workflow.
 - **iOS builds and App Store submission are cloud-only.** You cannot `xcodebuild`
   or code-sign iOS on Windows, so every iOS build/sign/submit runs on a cloud
-  macOS machine: **Depot macOS runners (GitHub Actions) — PRIMARY as of
-  2026-06-13**, spending the $5k Depot grant instead of Codemagic cash.
-  **Codemagic is deprecated** and cut over per app once a green Depot iOS build
-  is proven (the personal CI mirror GBGolfMatt/aware-aural-rehab-ci is affected
-  too). Signing assets (App Store Connect API key, distribution cert + profile)
+  macOS machine: **Depot macOS runners (GitHub Actions) — the EXCLUSIVE iOS build
+  path for EVERY app (Matt directive 2026-06-14)**, spending the $5k Depot grant.
+  **Codemagic is FULLY RETIRED. Never instruct any agent to use Codemagic.** Every
+  app's iOS build is a Depot macOS GitHub Actions workflow (port iHEARtest's
+  `.github/workflows/ios-depot.yml`, runner `depot-macos-26`); build numbering =
+  ASC CFBundleVersion. Any remaining `codemagic.yaml` is dead and to be removed per
+  app. This supersedes any Codemagic mention still left in a per-app CLAUDE.md/docs
+  (the personal CI mirror GBGolfMatt/aware-aural-rehab-ci is on Depot too). Signing assets (App Store Connect API key, distribution cert + profile)
   live in the Notion API Tokens & Credentials vault and load as GitHub Actions
   secrets; fastlane match is the preferred manager. Monitor Depot grant burn
   (macOS minutes cost ~10x Linux). Android builds run on Linux (Depot ubuntu), so
