@@ -17,20 +17,21 @@ Access-path legend:
 | GitHub | first-party MCP (+ gateway passthrough) | LIVE (MCP) | builds dispatched here (ios-depot.yml) |
 | Notion | first-party MCP (+ gateway passthrough) | LIVE | vault + briefings |
 | PostHog | first-party MCP (+ gateway mgmt module) | MCP CONNECTED 2026-06-13 | funnels/flags/experiments; PHI projects read-only |
-| n8n | native instance MCP (+ gateway client exists) | MCP REPOINTED to self-host (/mcp-server/http) | gateway has src/n8n; builder-MCP is separate |
+| n8n | native instance MCP (+ gateway client) | MCP CONNECTED to self-host (/mcp-server/http) 2026-06-14 | gateway has src/n8n; the workflow-builder MCP is separate |
 | Customer.io | gateway (13+ tools) + first-party MCP | LIVE (gateway Phase 1) | workspace 193366 |
 | Cloudflare | gateway (DNS/email tools) + Composio | LIVE (gateway) | zone otchealth.app |
 | Microsoft Graph / M365 | gateway (src/graph) + first-party MCP | LIVE | COO Outlook nervous system |
 | Intercom | gateway (src/intercom) + first-party MCP | LIVE | support / Fin |
 | Shopify | gateway (src/shopify) + Composio | client built | storefront ops |
 | Stripe | gateway (src/stripe) + Composio | client built | payments (HITECH 1179) |
-| **Depot** | **gateway module - FULL API** (+ Actions for builds) | TO ADD (Phase 2) | full API not just grant-burn: builds, cache, usage, runners |
+| **Depot** | **gateway module - FULL API** (+ Actions for builds) | BUILT (gateway Phase 2; pending Azure redeploy) | NO standalone Depot remote MCP - reaches Claude via the gateway. Full API: builds, cache, usage/grant-burn |
 | Netlify | first-party MCP (+ gateway) | MCP LIVE | INND site deploy |
 | RevenueCat | API-skill (gateway module) | MCP allowlist-gated | use v2 API until allowlisted |
 | Twilio + ElevenLabs | gateway module | TO ADD (Phase 3) | voice fleet (Helen/Sarah/Roger/Fin) |
 | Gumroad | skill | LIVE (skill) | digital products |
 | Daytona | skill / CLI | per use | parallel sandboxes ($10k grant) |
 | Sentry | first-party MCP (if retained) | optional | secondary to PostHog |
+| HeyGen (avatar video) | first-party Remote MCP (OAuth) | CONNECTED 2026-06-14 | uses the SUBSCRIPTION credits, NOT the paid API; never wire via n8n (that bills the API). URL mcp.heygen.com/mcp/v1/ |
 | Designer (image/voice/video) | skill (local, OpenAI/Vertex/ElevenLabs) | LIVE (degraded: keys unprovisioned) | non-PHI ring only |
 | CI / iOS+Android builds | GitHub Actions (Depot runners) | LIVE | NOT a gateway concern - dispatch via GitHub MCP |
 
