@@ -1,43 +1,54 @@
-# TODAY — the COO's directive (regenerate each morning; mark results through the day)
+# TODAY — COO directive for 2026-06-14 (Sunday / Monday-oriented)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-14. Calendar: Monday June 15 free 9am–2:30pm PT (Therapy 3pm Roseville).
+Tuesday June 16 blocked 8:30–11:30am PT (Mindful Health Solutions).
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in bank: $0. Burn: ~$50K/mo. Runway: 0 months.
+**What has changed since 06-09:** Stripe IS live (Matt confirmed 06-10). n8n is on self-host.
+Reactivation sends went out. Gumroad content is fully drafted. The stalemate is decision-making.
 
-## Today's 3 moves (do these, in order)
+## Monday's 3 moves (action window: 9am–2:30pm PT)
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
-- Report back: sent? to how many?
+### Move 1 (15 min) — End the Send 3 v2 stalemate
+COO-10: Draft 141 in Customer.io has been sitting since June 5. It is the cheapest live
+demand test we have: 6,800 non-openers, $99 TReO pair offer, funnel page now correctly
+linked (the zero-conversion root cause is fixed).
+- Open Customer.io. Say YES (send it) or NO (we move to phone+Amazon). Either answer.
+- This is the only move where indecision IS the loss.
 Status: [ ] not started
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
+### Move 2 (2–3 hrs) — Go live on Gumroad in ONE sitting
+COO-2: 8 product listings are drafted. 12 full SOPs are written. Zero gates.
+Steps (all in the same session): create Gumroad account → paste 8 listings → upload PDFs
+→ set prices ($49–149) → enable instant delivery → publish.
+- Claude can regenerate branded PDFs from the SOP text if needed. Just ask in a session.
+- Success = shareable Gumroad store URL. Report back.
 Status: [ ] not started
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
+### Move 3 (30 min) — File the FDA OTC Establishment Registration
+Stripe is live. FDA registration (~$10K, <2 weeks) is NOW the only gate on the $2–3M
+inventory pool. File it today and start the clock.
+- Go to FDA FURLS: https://www.accessdata.fda.gov/scripts/oie/
+- Report back: filed? confirmation number?
 Status: [ ] not started
 
 ## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+More infrastructure. More CTO work. More "reviewing options." The system is done.
+If you feel the pull toward tooling, that is the avoidance pattern. Come back to Move 1.
 
-## Yesterday's results
-(none logged yet)
+## Calendar note
+COO booked a Gumroad focus block Monday 9am–12pm PT. Therapy at 3pm in Roseville —
+leave by 2:30pm at latest (1899 E Roseville Pkwy #100).
 
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+## Pending Matt decisions (queue from prior sessions)
+- COO-10: Send 3 v2 YES or NO (overdue since June 5)
+- COO-13: Matrix hearing aid — tease-only or sell live? (live store vs compliance conflict)
+- COO-5: Rotate COO routine fire token (HARD GATE)
+- COO-4: Rotate GCP SA + PostHog keys (HARD GATE, blocks investor/public actions)
+
+## What the COO already did this run
+- Claimed the day (morning marker created)
+- Read calendar: Monday window confirmed (9am–2:30pm)
+- Updated stale task statuses (Stripe live, n8n self-host confirmed)
+- Sent morning brief from coo@innd.com
