@@ -47,14 +47,16 @@ Stripe, Shopify, Cloudflare, Microsoft 365/Graph, Microsoft Learn, Gmail, Interc
 Netlify, Sentry, Twilio, HeyGen, Hyperframes, Canva, Miro, QuickBooks, Mercury,
 AWS Marketplace, Composio.
 
-ADD these to match the audit's Tier 1-3 (each = a connect/OAuth click in the Claude
-client; a session cannot do it):
-- **Neon** (Postgres for MedReview/Flatstick/FourVault/Companion) - HIGH.
-- **Firebase** (Companion backend) - HIGH.
-- **Azure** - infra lives here; today we use the portal + Microsoft Learn MCP. Add the
-  Azure MCP for resource/deploy visibility (the gateway redeploy is an Azure task).
-- **RevenueCat** - MCP is OAuth-allowlist-gated (Hyperagent not allowlisted yet; request
-  emailed). Until then the RevenueCat v2 API skill is the working layer.
+Status (Matt, 2026-06-14): of the Tier-1 adds, **only Neon connected** (now live);
+**Azure, Firebase, RevenueCat did NOT connect** from the Claude client (not offered /
+failed). Implication: reach those services through the **unified gateway** (its modules
+call them by API) rather than chasing a native connector. This makes the gateway backlog
+(Depot/PostHog/Catalog + Azure/Firebase/RevenueCat modules) the priority path.
+- **Neon** - CONNECTED (Postgres for MedReview/Flatstick/FourVault/Companion).
+- **Azure / Firebase / RevenueCat** - no working client connector -> front them via the
+  gateway. Azure is also reachable today via the portal + Microsoft Learn MCP + the
+  azure-sp-* service principal in the vault. RevenueCat MCP stays OAuth-allowlist-gated;
+  RevenueCat v2 API skill is the working layer.
 - Second wave / as-needed: Figma, Runway, Apollo.io, ZoomInfo, Common Room, Postiz,
   Exa, Nimble, SearchFit SEO, Brand Voice, PDF Viewer, Slack, Auth0, Railway, Supabase.
   GATE each per the audit (GTM/outbound -> compliance-officer; PHI ring absolute).
@@ -70,12 +72,15 @@ Operations->coo, Data->(new), Product Management->coach, Engineering->builder.
 Skip Bio Research (not our lane). GATE: securities firewall on anything INND; outbound
 on GTM packs.
 
-## Secrets that unblock the connectors (operator/admin; no gcloud in the CTO sandbox)
-Provision in `otchealth-shared-prod` Secret Manager (values from the Notion API Vault):
-`openai-api-key`, `elevenlabs-api-key` (re-enable designer), `depot-token`,
-`posthog-personal-api-key`, `n8n-api-key`, plus per-connector tokens as Wave 2 adds them
-(`netlify-token`, `gumroad-access-token`, `sentry-auth-token`, `cloudflare-api-token`).
-See setup/CLAUDE-CODE-SETTINGS.md for the exact `gcloud secrets` commands.
+## Secrets - DONE (corrected 2026-06-14, no provisioning needed)
+`otchealth-shared-prod` already holds **40 secrets** and they hydrate cleanly via the
+claude-driver SA (no gcloud binary needed - the SA mints a token and calls the Secret
+Manager REST API; it has create + addVersion + access). All of `openai-api-key`,
+`elevenlabs-api-key`, `depot-token`, `posthog-personal-api-key`, `n8n-api-key`, plus a
+full Azure suite are PRESENT. Only optional `recraft-api-key` is absent. The stale
+"provision these" note is retired. `gumroad-access-token` is the one to ADD when the
+gateway Gumroad module goes live (value from the Notion vault). Fixed same day:
+`n8n-base-url` secret was the dead Cloud host -> now the self-host.
 
 ## Governance (binds every wave)
 Curate, do not install-all (context cost + attack surface). PHI ring absolute (no PHI

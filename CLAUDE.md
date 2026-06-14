@@ -82,3 +82,34 @@ assume unless the user says otherwise.
 
 ### iOS build runner correction (2026-06-13)
 - Use the **`depot-macos-26`** runner (Xcode 26 / iOS 26 SDK). `depot-macos-latest` = macOS 15 / Xcode 16.4, which Apple REJECTS (altool 409: must be built with the iOS 26 SDK). Depot iOS is PROVEN GREEN end-to-end — iHEARtest 1.5.15 / CFBundleVersion 43 shipped to TestFlight; cut Codemagic billing. Build numbers follow **ASC CFBundleVersion** (the Codemagic build counter is retired). Full Hyperagent-session sync: see `otchealth-cto/CLAUDE.md`.
+
+### Cloud direction: GCP -> Azure migration (Matt directive, 2026-06-14)
+- **We are moving most GCP services to Microsoft Azure** (Azure credits are the funded
+  lane). Default new infra/compute to Azure. The secret store stays `otchealth-shared-prod`
+  GCP Secret Manager for now (it hydrates every session); compute moves, the secret store
+  follows later if at all.
+- **Already staged at the credential level**: the vault now holds a full Azure suite —
+  `azure-openai-key` / `azure-openai-endpoint` / image+vision+video deployments,
+  `azure-speech-key` / `azure-speech-region`, and an `azure-sp-*` Contributor service
+  principal + `azure-subscription-id`. The designer skill's credentials template already
+  carries the `AZURE_OPENAI_*` / `AZURE_SPEECH_*` slots. So Azure OpenAI + Azure Speech
+  are the intended creative/inference path on Azure.
+- **LEGAL WALL (flag-and-hold, do NOT migrate silently):** MedReview's PHI workloads run
+  under the **GCP BAA** (Vertex AI Gemini 2.5 Pro, Cloud Run, Cloud Vision); Companion uses
+  Vertex Gemini Live + Firebase. Moving any PHI workload to Azure REQUIRES an Azure BAA +
+  Azure OpenAI (HIPAA-eligible) in place FIRST. Surface and wait for Matt + counsel; the CTO
+  does not move the PHI ring off its BAA on its own. Non-PHI apps migrate freely.
+
+### Secrets + n8n base URL reconciliation (2026-06-14)
+- **Secret state corrected:** `otchealth-shared-prod` holds **40 secrets** and they hydrate
+  cleanly via the claude-driver SA (no gcloud binary needed; the SA has create + addVersion +
+  access). The older "secrets never promoted / values missing" note in
+  `setup/CLAUDE-CODE-SETTINGS.md` was STALE — `openai-api-key`, `elevenlabs-api-key`,
+  `depot-token`, `posthog-personal-api-key`, `n8n-api-key`, and the full Azure suite are all
+  PRESENT. Only optional `recraft-api-key` is absent.
+- **Fixed:** the `n8n-base-url` secret still pointed at the dead Cloud host
+  (`otchealth.app.n8n.cloud`); set a new version to the self-host
+  `https://automation.otchealth.app` (the canonical target). It was overriding session-start's
+  default for anything reading the base URL from Secret Manager.
+- **Plugins:** 9 Claude Code dev/security plugins are installed + wired fleet-wide (see
+  `dream-team/PLUGIN-LAUNCH-PLAN.md`).
