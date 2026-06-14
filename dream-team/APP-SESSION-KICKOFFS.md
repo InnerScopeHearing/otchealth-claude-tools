@@ -65,8 +65,10 @@ App Store ID 6772572839. 38 screens vanilla JS in `www/`. RING: non-PHI (never t
 or FourVault data). COMPLIANCE: never claim FDA approval, never claim it treats/prevents
 dementia or cures hearing loss, no diagnosis, "may help" framing only. SENIOR a11y is a HARD
 gate (1.5x text, large targets, axe-core). BRAND: teal `#0d9488`, NEVER iHEARtest green
-`#81bc03`; 45-SVG line-icon system. BUILD: Codemagic, iOS cloud-only, last green build 53;
-never hand-edit project.pbxproj (patch Info.plist via plutil in a Codemagic step). Source of
+`#81bc03`; 45-SVG line-icon system. BUILD: Depot macOS via GitHub Actions, iOS cloud-only
+(Codemagic is RETIRED; port iHEARtest's ios-depot.yml, runner depot-macos-26; build number =
+ASC CFBundleVersion). Never hand-edit project.pbxproj (patch Info.plist via plutil in the build
+workflow step). Source of
 truth: `app.manifest.json`. Telemetry: Sentry wired, PostHog not yet. There is a personal CI
 mirror `GBGolfMatt/aware-aural-rehab-ci`.
 
@@ -89,7 +91,8 @@ Capacitor 6, baked into the IPA). Bundle `app.flatstick.ios`. HARD RULE: Flatsti
 escrows, or moves money (settlement = outbound Venmo/PayPal/Cash App links only); never weaken
 this in code or copy (17+, US, scorekeeping-not-gambling framing). Keep the money math pure +
 property-tested. Never hand-edit project.pbxproj. CI gate = "monorepo (typecheck + tests)".
-Codemagic to TestFlight from main.
+iOS builds via Depot macOS GitHub Actions to TestFlight (Codemagic retired; automatic signing
+via the ASC API key, build number = ASC CFBundleVersion).
 
 ### FourVault (fourvault) — COPPA (separate entity)
 Kids photograph trading cards, build a vault, get AI trade verdicts; parents gate everything.
@@ -145,8 +148,8 @@ Minimal standing CLAUDE.md; reconstruct from HANDOFF.md. Apply the template + th
 rules. Confirm ring + stack from HANDOFF before acting.
 
 ### aware-aural-rehab-ci (GBGolfMatt) — AWARE personal CI mirror
-Same app standard as AWARE; this is the personal CI mirror affected by the Codemagic -> Depot
-cutover. Treat as AWARE's CI twin; do not diverge app logic.
+Same app standard as AWARE; this is the personal CI mirror. Depot is the exclusive build path
+(Codemagic retired). Treat as AWARE's CI twin; do not diverge app logic.
 
 ---
 
