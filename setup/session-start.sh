@@ -71,6 +71,33 @@ fi
 set +e
 set +o pipefail
 
+# ─── Install fleet Claude Code plugins (official marketplace) ────────
+# Belt-and-suspenders for web sessions: .claude/settings.json declares the
+# marketplace + enabledPlugins, but the web "trust folder" gate can skip silent
+# auto-install. Registering + installing headlessly here makes the curated dev +
+# security plugins active every session. Best-effort; never aborts startup.
+# Curated set (see dream-team/PLUGIN-LAUNCH-PLAN.md): code-review, pr-review-toolkit,
+# commit-commands, feature-dev, frontend-design, hookify, plugin-dev, agent-sdk-dev,
+# security-guidance. The marketplace clones over public HTTPS (no auth).
+if command -v claude >/dev/null 2>&1; then
+  FLEET_PLUGINS="code-review pr-review-toolkit commit-commands feature-dev frontend-design hookify plugin-dev agent-sdk-dev security-guidance ralph-wiggum explanatory-output-style learning-output-style claude-opus-4-5-migration"
+  if ! claude plugin marketplace list 2>/dev/null | grep -q "claude-code-plugins"; then
+    echo "[octools] Registering official plugin marketplace (anthropics/claude-code)..."
+    claude plugin marketplace add anthropics/claude-code >/dev/null 2>&1 \
+      || echo "[octools] WARN: could not add plugin marketplace (offline?) — skipping plugin install."
+  fi
+  if claude plugin marketplace list 2>/dev/null | grep -q "claude-code-plugins"; then
+    INSTALLED="$(claude plugin list 2>/dev/null)"
+    for p in $FLEET_PLUGINS; do
+      if ! printf '%s' "$INSTALLED" | grep -q "${p}@claude-code-plugins"; then
+        claude plugin install "${p}@claude-code-plugins" >/dev/null 2>&1 \
+          && echo "[octools] plugin installed: ${p}" \
+          || echo "[octools] WARN: plugin install failed: ${p}"
+      fi
+    done
+  fi
+fi
+
 mkdir -p "${HOME}/.designer"
 CRED="${HOME}/.designer/credentials.env"
 SA_PATH="${HOME}/.gcp_claude_driver_sa.json"

@@ -1,5 +1,21 @@
 # Claude Code architecture / settings — change-list (2026-06-13)
 
+> ## UPDATE 2026-06-14 (supersedes the stale secret notes below)
+> - **Secrets are PRESENT, not missing.** `otchealth-shared-prod` holds **40 secrets**;
+>   `openai-api-key`, `elevenlabs-api-key`, `depot-token`, `posthog-personal-api-key`,
+>   `n8n-api-key`, and a full **Azure suite** (`azure-openai-key`, `azure-openai-endpoint`,
+>   image/vision/video deployments, `azure-speech-key`/`region`, `azure-sp-*` SP,
+>   `azure-subscription-id`) all exist and hydrate cleanly. Only optional `recraft-api-key`
+>   is absent. The "never promoted / values missing" State-found bullet below is obsolete.
+> - **No gcloud binary is needed.** The claude-driver SA can mint a token and call the
+>   Secret Manager REST API directly (verified: it holds `secretmanager.secrets.create`,
+>   `versions.add`, `versions.access`, `secrets.list`). `fetch-secrets.mjs` self-signs the JWT.
+> - **Fixed:** the `n8n-base-url` secret was still the dead Cloud host; new version set to
+>   `https://automation.otchealth.app`.
+> - **Cloud direction:** migrating most GCP services to **Azure** (credits). PHI workloads
+>   (MedReview/Companion) stay on the GCP BAA until an Azure BAA + Azure OpenAI is in place
+>   (legal wall). See `otchealth-claude-tools/CLAUDE.md` "Cloud direction".
+
 What `session-start.sh` + `fetch-secrets.mjs` handle automatically vs. what must be
 set in the Claude Code **environment** (the managed remote env, set in the Claude
 Code web settings) or in **GCP Secret Manager**. A session cannot self-edit the
