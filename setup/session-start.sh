@@ -131,6 +131,11 @@ GREPTILE_TOKEN_V="$(get_key GREPTILE_TOKEN)"
 REPLICATE_TOKEN_V="$(get_key REPLICATE_API_TOKEN)"
 N8N_API_KEY_V="$(get_key N8N_API_KEY)"
 N8N_BASE_URL_V="$(get_key N8N_BASE_URL)"
+# Pin the n8n SELF-HOST as the default (COO-21, 2026-06-11). n8n Cloud
+# (otchealth.app.n8n.cloud) is decommissioned; never let CLI/skill use fall back
+# to it. The first-party n8n MCP connection is repointed separately in the Claude
+# Code env settings (base URL + self-host API key from the Notion vault).
+N8N_BASE_URL_V="${N8N_BASE_URL_V:-https://automation.otchealth.app}"
 SENTRY_AUTH_TOKEN_V="$(get_key SENTRY_AUTH_TOKEN)"
 CLOUDFLARE_TOKEN_V="$(get_key CLOUDFLARE_API_TOKEN)"
 NETLIFY_TOKEN_V="$(get_key NETLIFY_TOKEN)"
@@ -204,6 +209,24 @@ chmod 600 "$CRED"
 [ -n "$AZ_OAI_KEY" ] && echo "[octools] AZURE_OPENAI: loaded (provider toggle available)" || echo "[octools] Azure OpenAI: not configured (optional)."
 SVC_LOADED="$(grep -cE '^(DEPOT_TOKEN|POSTHOG_PERSONAL_API_KEY|MIRO_TOKEN|MAKE_API_TOKEN|DAYTONA_API_KEY|GREPTILE_TOKEN|REPLICATE_API_TOKEN|N8N_API_KEY|SENTRY_AUTH_TOKEN)=' "$CRED" || true)"
 echo "[octools] Platform/service tokens loaded: ${SVC_LOADED} (provision the rest via 'gcloud secrets create' — see docs/PLATFORM.md)."
+
+# ─── Make the non-PHI fleet creds env-available in every shell ──────
+# credentials.env is file-based (the designer skill reads it directly), but
+# Bash tool calls start fresh shells from the user profile and so do NOT see the
+# keys as env vars. Source the file from the profile (idempotent, guarded) so
+# DEPOT_TOKEN / POSTHOG_PERSONAL_API_KEY / N8N_* / etc. are usable directly.
+# RING: these are NON-PHI fleet keys only (the SA never touches a PHI project).
+for PROFILE in "${HOME}/.bashrc" "${HOME}/.profile"; do
+  [ -e "$PROFILE" ] || continue
+  if ! grep -qF '.designer/credentials.env' "$PROFILE"; then
+    {
+      echo ''
+      echo '# octools: hydrate non-PHI fleet creds into the shell env (added by session-start.sh)'
+      echo '[ -f "$HOME/.designer/credentials.env" ] && set -a && . "$HOME/.designer/credentials.env" 2>/dev/null && set +a'
+    } >> "$PROFILE"
+    echo "[octools] Wired credentials.env into $PROFILE (fleet keys now env-available in new shells)."
+  fi
+done
 
 echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"
