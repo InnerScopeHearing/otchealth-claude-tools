@@ -116,3 +116,16 @@ assume unless the user says otherwise.
   default for anything reading the base URL from Secret Manager.
 - **Plugins:** 9 Claude Code dev/security plugins are installed + wired fleet-wide (see
   `dream-team/PLUGIN-LAUNCH-PLAN.md`).
+
+### Apple push + Sign-in keys (2026-06-14) — ONE push key for the whole fleet
+- **APNs push is portfolio-shared.** There is ONE team-scoped (all-topics) APNs key for every
+  app: Secret Manager **`apple-apns-key-p8`** (Key ID `DC8MP3LHX3`, Apple team `465UF9H72S`,
+  Production). When ANY app adds push, REUSE this secret and set the APNs topic to that app's
+  bundle id (`app.flatstick.ios`, `com.innerscope.aware`, `com.otchealth.companion`, ...). Do
+  NOT mint a per-app push key. Token-based APNs (ES256 provider JWT, kid=DC8MP3LHX3).
+- **Sign in with Apple (Flatstick):** Secret Manager **`flatstick-apple-signin-key-p8`**
+  (Key ID `ZYM7MW4JGS`, team `465UF9H72S`, client `app.flatstick.ios`). SiwA keys are team-level
+  and reusable if another app needs SiwA later.
+- Both .p8 are backend-only (never in an IPA or a repo); fetch via
+  `node setup/get-secret.mjs <id> <outfile>`. Backup copies + metadata also in the Notion
+  "API Tokens & Credentials" vault; both flagged for rotation.
