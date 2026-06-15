@@ -19,7 +19,35 @@ focus-group fix lists). Add to this every time something bites us.
   AppDelegate via awk; Capacitor regenerates the project and will clobber manual edits.
 - **Apple blocks programmatic app-record creation** (POST /v1/apps returns 403). Do
   it in the App Store Connect web UI.
-- Read the existing `codemagic.yaml` before adding build steps.
+- **iOS builds run on Depot macOS GitHub Actions (Codemagic retired).** Port iHEARtest's
+  `.github/workflows/ios-depot.yml` (runner `depot-macos-26` = Xcode 26 / iOS 26 SDK;
+  `depot-macos-latest` is macOS 15 / Xcode 16.4, which Apple REJECTS). Read that workflow,
+  not any `codemagic.yaml`, before adding build steps.
+
+### Depot iOS pipeline first-build bring-up (the Flatstick 7-build saga, 2026-06-15)
+A brand-new app's first Depot iOS build hits these in order. Fix ALL of them up front so you
+don't burn macOS minutes (~10x Linux) discovering them one at a time:
+1. **Sign with the FLEET key, not the MedReview key.** Cloud distribution signing works with
+   ASC key `9MR7PJHRYH` (issuer `b3d5e801-7d26-41cd-8128-39e88e96f713`); it reuses the shared
+   cloud-managed Apple Distribution cert `9BX5L8GA73` that iHEARtest/AWARE/FourVault/Fictionary
+   sign with. The MedReview key `3BX7556WXU` CANNOT do cloud distribution signing -> export
+   fails "Cloud signing permission error / No iOS Distribution certificate found". Set repo
+   secrets `APP_STORE_CONNECT_KEY_IDENTIFIER`=9MR7PJHRYH, `APP_STORE_CONNECT_ISSUER_ID`, and
+   `APP_STORE_CONNECT_PRIVATE_KEY` = the 9MR7PJHRYH PEM (.p8 contents). Do NOT revoke shared
+   distribution certs to "free a slot" -> it is a key/permission issue, not a cert-limit one.
+2. **`npx cap add ios || true` BEFORE `cap sync ios`.** The native iOS project is build-time
+   generated (untracked), so a fresh CI checkout has no ios platform yet.
+3. **Install the `xcodeproj` gem (pinned, e.g. `-v 1.27.0`) before any `ruby -e "require
+   'xcodeproj'"`.** The runner's system Ruby 2.6 lacks it (1.27.0 requires Ruby >= 2.0, installs fine).
+4. **Do not ship an entitlement the build does not use.** App Groups (or any capability whose
+   App ID is not enabled / whose container is not registered) makes the archive fail
+   "provisioning profile doesn't match the entitlements file". Include only entitlements a target
+   in THIS build consumes (no widget target in the build => no App Groups).
+5. **ExportOptions `method` MUST be `app-store-connect`** (not legacy `app-store`) so Xcode 26
+   uses ASC-API-key cloud distribution signing.
+6. **Set the build's repo vars + secrets BEFORE dispatching** (`VITE_*` build vars + the three
+   `APP_STORE_CONNECT_*` secrets), or the run fails minutes in. Note: empty GitHub *variables*
+   are rejected (leave a var unset = empty at build time); empty *secrets* are allowed.
 
 ## Process
 - **No automated tests** meant every release gated on a human checklist. Slow and
