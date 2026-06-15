@@ -81,6 +81,13 @@ const MAP = [
   { id: 'amzn-lwa-client-secret', env: 'AMZ_LWA_CLIENT_SECRET', required: false },
   { id: 'amzn-sp-refresh-token', env: 'AMZ_SP_REFRESH_TOKEN', required: false },
   { id: 'amzn-seller-id', env: 'AMZ_SELLER_ID', required: false },
+  // Plaid banking aggregator (CFO data pipeline; non-PHI finance). client_id + secret
+  // here; per-institution access tokens live as plaid-access-token-<inst> and are
+  // fetched-to-stdout on demand (get-secret.mjs), NOT emitted into the flat env.
+  // The plaid-banking skill (skills/plaid-banking) reads these.
+  { id: 'plaid-client-id', env: 'PLAID_CLIENT_ID', required: false },
+  { id: 'plaid-secret', env: 'PLAID_SECRET', required: false },
+  { id: 'plaid-env', env: 'PLAID_ENV', required: false },
   // App / cross-entity string secrets (single-store operator decision, 2026-06-08).
   { id: 'fourvault-gemini-api-key', env: 'FOURVAULT_GEMINI_API_KEY', required: false },
   { id: 'fourvault-neon-database-url', env: 'FOURVAULT_NEON_DATABASE_URL', required: false },
