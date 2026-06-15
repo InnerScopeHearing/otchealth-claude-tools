@@ -1,0 +1,15 @@
+# Dependabot — routine update cooldowns + human review (supply-chain-guard).
+# Security patches are exempt from the cooldown. Auto-merge is intentionally NOT enabled:
+# a bot PR is never auto-merged (the 2026 dependency-bot malware vector). Human review required.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "security"
