@@ -73,6 +73,14 @@ const MAP = [
   { id: 'cloudflare-api-token', env: 'CLOUDFLARE_API_TOKEN', required: false },        // Cloudflare
   { id: 'netlify-token', env: 'NETLIFY_TOKEN', required: false },                      // Netlify
   { id: 'railway-token', env: 'RAILWAY_TOKEN', required: false },                      // Railway
+  // Amazon Selling Partner API (SP-API) — OTCHealth Inc. seller account (non-PHI
+  // commerce; TReO PSAPs + catalog). LWA refresh-token auth, no AWS SigV4. The
+  // amazon-sp-api skill (skills/amazon-sp-api) reads these. Stored once the
+  // Developer Central app is created + self-authorized; safe to list ahead of that.
+  { id: 'amzn-lwa-client-id', env: 'AMZ_LWA_CLIENT_ID', required: false },
+  { id: 'amzn-lwa-client-secret', env: 'AMZ_LWA_CLIENT_SECRET', required: false },
+  { id: 'amzn-sp-refresh-token', env: 'AMZ_SP_REFRESH_TOKEN', required: false },
+  { id: 'amzn-seller-id', env: 'AMZ_SELLER_ID', required: false },
   // App / cross-entity string secrets (single-store operator decision, 2026-06-08).
   { id: 'fourvault-gemini-api-key', env: 'FOURVAULT_GEMINI_API_KEY', required: false },
   { id: 'fourvault-neon-database-url', env: 'FOURVAULT_NEON_DATABASE_URL', required: false },
