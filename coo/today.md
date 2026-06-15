@@ -1,43 +1,53 @@
 # TODAY — the COO's directive (regenerate each morning; mark results through the day)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-15 (Monday). Operating window 9am-5pm PT.
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in bank: $0 ($1.41 in Mercury). Burn ~$50K/mo. Zero runway. Every hour counts.
+
+## New intelligence (since yesterday)
+- **Gumroad account is LIVE** at matthewhealth.gumroad.com — but 0 products listed.
+- **Product line pivoted to hearing-care professionals** (audiologists + dispensers — Matt's LinkedIn audience). 7 products + bundles ready: Provider Edition $149, Owner Edition $149, Practice Pair $229, OTC Rule $129, Red-Flag $99, HIPAA $99, Trial $79, + FREE lead magnet. Files in otchealth-exec/coo/gumroad-launch/kits-audiology/.
+- **Shopify checkout is broken** — 0/9 orders completed in 14 days. Any email to the 85K list that sends traffic to the store converts to zero. Fix BEFORE sending draft 141.
+- **INND A/R: ~$175K+ from creditworthy institutions** (Cardinal Health ~$92K, RGH ~$63K, AmerisourceBergen ~$13K) — 100% overdue 90+ days. Biggest non-dilutive cash lever found. HARD GATE: INND, Matt+counsel to verify and pursue.
 
 ## Today's 3 moves (do these, in order)
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
-- Report back: sent? to how many?
+### Move 1 (15-30 min, zero gates) — LIST on Gumroad RIGHT NOW
+The account is open. The products are built. The only thing missing is you clicking "Add product" 7 times.
+- Go to matthewhealth.gumroad.com (creator dashboard)
+- Paste listings from otchealth-exec/coo/gumroad-launch/AUDIOLOGY-LISTINGS.md
+- Upload PDFs from kits-audiology/
+- Start with the FREE lead magnet + Practice Pair $229 as the anchor
+- Audiologist sign-off is ideal but do NOT let it be a blocker today — list it, get someone to review, update copy after
+- **Report back: store URL + first listing live**
 Status: [ ] not started
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
+### Move 2 (10 min decision) — Fix Shopify checkout OR kill draft 141
+The Customer.io draft 141 resend (6.8K non-openers, ~$99 TReO offer) is still on hold.
+The Shopify checkout has completed 0/9 orders in 14 days — it is broken.
+PICK ONE today:
+- Option A: Get the CTO to diagnose/fix Shopify checkout first, THEN approve draft 141
+- Option B: Cancel draft 141 entirely and redirect email effort to Gumroad (safer, faster)
+Do NOT approve draft 141 until the checkout is confirmed working.
+- **Report back: which option, decision logged**
 Status: [ ] not started
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
+### Move 3 (1 phone call, gated) — Call to verify INND A/R
+~$175K is on the books owed by Cardinal Health (~$92K) and RGH (~$63K). If any of it is real and collectible, it dwarfs every other short-term lever.
+This is INND/securities-gated — Matt + counsel only, no autonomous action.
+- Pull the QBO aging detail for Cardinal Health and RGH
+- Call each to confirm the balance is live (not already paid, not disputed)
+- If confirmed: engage collections / factor the receivable
+- **Report back: are the balances real?**
 Status: [ ] not started
 
 ## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+Building more tooling. Gumroad is READY. List the products.
+Draft 141 WITHOUT fixing checkout. That sends 6.8K people to a broken store.
+
+## Calendar note
+The Read Calendar workflow was unavailable this morning (webhook inactive — needs reactivation in n8n). Operating on assumed 9am-5pm window. Gumroad block booked at 9-9:30am.
 
 ## Yesterday's results
-(none logged yet)
-
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+(CRO session did significant work: heard-care line built, focus-grouped, refined to two editions. Gumroad account created. No products listed yet. Shopify checkout broken discovered.)
