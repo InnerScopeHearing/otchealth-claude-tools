@@ -48,6 +48,15 @@ don't burn macOS minutes (~10x Linux) discovering them one at a time:
 6. **Set the build's repo vars + secrets BEFORE dispatching** (`VITE_*` build vars + the three
    `APP_STORE_CONNECT_*` secrets), or the run fails minutes in. Note: empty GitHub *variables*
    are rejected (leave a var unset = empty at build time); empty *secrets* are allowed.
+7. **Committed Capacitor iOS project? Add the shared scheme.** A committed `ios/` usually has NO
+   shared scheme (the `App` scheme lives per-user in `xcuserdata`), so add
+   `App.xcodeproj/xcshareddata/xcschemes/App.xcscheme` (target blueprint
+   `504EC3031FED79650016851F` for the standard Capacitor template) or `xcodebuild` fails
+   "scheme App not found" in CI. (Generated projects via `cap add ios` get one at build time.)
+8. **If the repo's PR CI runs a repo-wide formatter gate (`prettier --check .`), pre-format the
+   new `ios-depot.yml` with the repo's own prettier before committing** — a freshly-authored
+   workflow YAML otherwise fails the format check on its first PR (Companion hit this; AWARE +
+   FourVault don't gate YAML formatting, so it's repo-specific — check `ci.yml` first).
 
 ## Process
 - **No automated tests** meant every release gated on a human checklist. Slow and
