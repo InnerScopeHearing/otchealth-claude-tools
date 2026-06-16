@@ -20,6 +20,8 @@
 //   node qbo.mjs <company> query "SELECT * FROM Account MAXRESULTS 50"
 //   node qbo.mjs <company> request <GET|POST|PUT> <path>   (JSON body on stdin for writes)
 
+import { mkdirSync, writeFileSync } from "node:fs";
+
 const ENV = (process.env.QBO_ENV || "production").toLowerCase();
 const API = ENV === "sandbox" ? "https://sandbox-quickbooks.api.intuit.com" : "https://quickbooks.api.intuit.com";
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
@@ -94,7 +96,37 @@ if (cmd === "company-info") {
   const body = ["POST", "PUT", "PATCH"].includes(m) ? await readStdin() : null;
   const path = (a2.startsWith("/") ? a2 : `/${a2}`) + (a2.includes("minorversion") ? "" : (a2.includes("?") ? "&" : "?") + `minorversion=${MINOR}`);
   await api(m, realm, path, token, body || null);
+} else if (cmd === "export") {
+  // Full company dump for migration/backup. Every migration path needs this EXTRACT step;
+  // also a clean audit backup if staying on QBO. Writes JSON per entity + key reports.
+  const outDir = a1 || `qbo-export-${KEY.toLowerCase()}`;
+  mkdirSync(outDir, { recursive: true });
+  const entities = ["CompanyInfo", "Account", "Customer", "Vendor", "Employee", "Item", "Class", "Department", "TaxCode", "TaxRate", "Term", "PaymentMethod", "Invoice", "Bill", "BillPayment", "Payment", "Purchase", "JournalEntry", "Deposit", "Transfer", "CreditMemo", "VendorCredit", "SalesReceipt", "RefundReceipt", "Estimate", "PurchaseOrder"];
+  for (const e of entities) {
+    let start = 1, all = [], page;
+    do {
+      const q = encodeURIComponent(`SELECT * FROM ${e} STARTPOSITION ${start} MAXRESULTS 1000`);
+      const r = await fetch(`${API}/v3/company/${realm}/query?query=${q}&minorversion=${MINOR}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+      if (!r.ok) { console.error(`  ${e}: HTTP ${r.status} (skipped)`); break; }
+      const j = await r.json();
+      page = (j.QueryResponse && j.QueryResponse[e]) || [];
+      all = all.concat(page);
+      start += 1000;
+    } while (page && page.length === 1000);
+    writeFileSync(`${outDir}/${e}.json`, JSON.stringify(all, null, 2));
+    console.error(`  ${e}: ${all.length}`);
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const reports = { TrialBalance: `start_date=2015-01-01&end_date=${today}`, GeneralLedger: `start_date=2015-01-01&end_date=${today}`, ProfitAndLoss: `start_date=2015-01-01&end_date=${today}`, BalanceSheet: `end_date=${today}` };
+  for (const [name, qs] of Object.entries(reports)) {
+    const r = await fetch(`${API}/v3/company/${realm}/reports/${name}?${qs}&minorversion=${MINOR}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+    if (!r.ok) { console.error(`  report ${name}: HTTP ${r.status} (skipped)`); continue; }
+    writeFileSync(`${outDir}/report-${name}.json`, await r.text());
+    console.error(`  report ${name}: saved`);
+  }
+  console.log(`Export complete -> ${outDir}/`);
+  process.exit(0);
 } else {
-  console.error("commands: company-info | query \"SELECT ...\" | request <METHOD> <path>");
+  console.error("commands: company-info | query \"SELECT ...\" | request <METHOD> <path> | export [outDir]");
   process.exit(2);
 }
