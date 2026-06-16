@@ -128,6 +128,8 @@ const MAP = [
   { id: 'github-app-id', env: 'GITHUB_APP_ID', required: false },
   { id: 'github-app-client-id', env: 'GITHUB_APP_CLIENT_ID', required: false },
   { id: 'github-app-installation-id', env: 'GITHUB_APP_INSTALLATION_ID', required: false },
+  // CFO source-doc store: the private GCS bucket name for financial exports/source docs.
+  { id: 'cfo-source-bucket', env: 'CFO_SOURCE_BUCKET', required: false },
   // App / cross-entity string secrets (single-store operator decision, 2026-06-08).
   { id: 'fourvault-gemini-api-key', env: 'FOURVAULT_GEMINI_API_KEY', required: false },
   { id: 'fourvault-neon-database-url', env: 'FOURVAULT_NEON_DATABASE_URL', required: false },
