@@ -109,6 +109,13 @@ const MAP = [
   { id: 'xero-client-id', env: 'XERO_CLIENT_ID', required: false },
   { id: 'xero-client-secret', env: 'XERO_CLIENT_SECRET', required: false },
   { id: 'xero-refresh-token', env: 'XERO_REFRESH_TOKEN', required: false },
+  // Per-org Xero refresh tokens (each org is a separate Xero account/login for the free deal).
+  // The xero skill reads SM `xero-refresh-token-<org>` directly via the SA; these env mirrors are
+  // a fallback. Each rotates on use; the skill auto-persists.
+  { id: 'xero-refresh-token-otchealth', env: 'XERO_REFRESH_TOKEN_OTCHEALTH', required: false },
+  { id: 'xero-refresh-token-innd', env: 'XERO_REFRESH_TOKEN_INND', required: false },
+  { id: 'xero-refresh-token-hearingassist', env: 'XERO_REFRESH_TOKEN_HEARINGASSIST', required: false },
+  { id: 'xero-refresh-token-personal', env: 'XERO_REFRESH_TOKEN_PERSONAL', required: false },
   // Microsoft Graph mail mining (CFO source-doc recovery; InnerScope M365 tenant, app-only).
   // The m365-mail skill reads these. App = otchealth-cto-graph-admin (OVER-PRIVILEGED + secret
   // exposed in chat -> rotate + trim to Mail.Read/User.Read.All/Files.Read.All before launch).
