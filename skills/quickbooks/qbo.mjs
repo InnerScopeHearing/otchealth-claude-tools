@@ -21,6 +21,9 @@
 //   node qbo.mjs <company> request <GET|POST|PUT> <path>   (JSON body on stdin for writes)
 
 import { mkdirSync, writeFileSync } from "node:fs";
+import crypto from "node:crypto";
+
+const SM_PROJECT = "otchealth-shared-prod";
 
 const ENV = (process.env.QBO_ENV || "production").toLowerCase();
 const API = ENV === "sandbox" ? "https://sandbox-quickbooks.api.intuit.com" : "https://quickbooks.api.intuit.com";
@@ -34,6 +37,30 @@ function need(name) {
     process.exit(2);
   }
   return v;
+}
+
+// ── Secret Manager write (persist Intuit's rotated refresh token) ──
+function smAvailable() { return !!process.env.GCP_CLAUDE_DRIVER_SA_JSON; }
+async function smToken() {
+  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const now = Math.floor(Date.now() / 1000);
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
+  const sig = crypto.createSign("RSA-SHA256").update(input).sign(sa.private_key, "base64url");
+  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(input + "." + sig)}` });
+  if (!r.ok) throw new Error("SM auth " + r.status);
+  return (await r.json()).access_token;
+}
+async function smAddVersion(t, id, v) {
+  const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } });
+  const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body });
+  let r = await add();
+  if (r.status === 404) {
+    const c = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) });
+    if (!c.ok && c.status !== 409) throw new Error("SM create " + c.status);
+    r = await add();
+  }
+  if (!r.ok) throw new Error("SM addVersion " + r.status);
 }
 
 async function accessToken(refresh) {
@@ -50,7 +77,12 @@ async function accessToken(refresh) {
     process.exit(1);
   }
   if (j.refresh_token && j.refresh_token !== refresh) {
-    console.error("NOTE: Intuit rotated the refresh token. Persist the new value to the vault for this company.");
+    if (smAvailable()) {
+      try { const t = await smToken(); await smAddVersion(t, `qbo-refresh-${KEY}`, j.refresh_token); console.error(`Intuit rotated ${KEY} refresh token -> persisted (qbo-refresh-${KEY}).`); }
+      catch (e) { console.error(`ROTATE PERSIST FAILED for ${KEY} (${e.message}): new refresh token NOT saved.`); }
+    } else {
+      console.error(`NOTE: Intuit rotated the ${KEY} refresh token but no SA to persist. Update qbo-refresh-${KEY} or it will expire.`);
+    }
   }
   return j.access_token;
 }
