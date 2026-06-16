@@ -194,7 +194,10 @@ for (const { id, env, required } of MAP) {
     console.error(`[fetch-secrets] ${id}: ${e.message}`);
   }
   if (val) {
-    process.stdout.write(`${env}=${val}\n`);
+    // Single-quote the value so it survives `eval`/`set -a` sourcing even when it
+    // contains shell metacharacters (|, spaces, $, etc.). Escape embedded quotes.
+    const safe = `'${val.replace(/'/g, "'\\''")}'`;
+    process.stdout.write(`${env}=${safe}\n`);
   } else if (required) {
     console.error(`[fetch-secrets] MISSING required secret '${id}' in ${PROJECT}. Create it (see README).`);
     hadRequiredMiss = true;
