@@ -81,6 +81,34 @@ const MAP = [
   { id: 'amzn-lwa-client-secret', env: 'AMZ_LWA_CLIENT_SECRET', required: false },
   { id: 'amzn-sp-refresh-token', env: 'AMZ_SP_REFRESH_TOKEN', required: false },
   { id: 'amzn-seller-id', env: 'AMZ_SELLER_ID', required: false },
+  // Plaid banking aggregator (CFO data pipeline; non-PHI finance). client_id + secret
+  // here; per-institution access tokens live as plaid-access-token-<inst> and are
+  // fetched-to-stdout on demand (get-secret.mjs), NOT emitted into the flat env.
+  // The plaid-banking skill (skills/plaid-banking) reads these.
+  { id: 'plaid-client-id', env: 'PLAID_CLIENT_ID', required: false },
+  { id: 'plaid-secret', env: 'PLAID_SECRET', required: false },
+  { id: 'plaid-env', env: 'PLAID_ENV', required: false },
+  // QuickBooks Online multi-company (CFO; non-PHI bookkeeping). One Intuit app, per-company
+  // realmId + refresh token. The quickbooks skill (skills/quickbooks) reads these. INND +
+  // HearingAssist writes are gated (public co). Refresh tokens ROTATE -> the recurring sync
+  // must persist new values back to the vault.
+  { id: 'qbo-client-id', env: 'QBO_CLIENT_ID', required: false },
+  { id: 'qbo-client-secret', env: 'QBO_CLIENT_SECRET', required: false },
+  { id: 'qbo-env', env: 'QBO_ENV', required: false },
+  { id: 'qbo-realm-otchealth', env: 'QBO_REALM_OTCHEALTH', required: false },
+  { id: 'qbo-refresh-otchealth', env: 'QBO_REFRESH_OTCHEALTH', required: false },
+  { id: 'qbo-realm-innd', env: 'QBO_REALM_INND', required: false },
+  { id: 'qbo-refresh-innd', env: 'QBO_REFRESH_INND', required: false },
+  { id: 'qbo-realm-hearingassist', env: 'QBO_REALM_HEARINGASSIST', required: false },
+  { id: 'qbo-refresh-hearingassist', env: 'QBO_REFRESH_HEARINGASSIST', required: false },
+  { id: 'qbo-realm-personal', env: 'QBO_REALM_PERSONAL', required: false },
+  { id: 'qbo-refresh-personal', env: 'QBO_REFRESH_PERSONAL', required: false },
+  // Xero multi-org (CFO; chosen platform). ONE app + ONE multi-tenant refresh token reaches all
+  // orgs (OTCHealth/INND/HearingAssist/personal) via Xero-tenant-id. The xero skill reads these.
+  // Refresh token ROTATES every use -> the recurring sync must persist new values back to the vault.
+  { id: 'xero-client-id', env: 'XERO_CLIENT_ID', required: false },
+  { id: 'xero-client-secret', env: 'XERO_CLIENT_SECRET', required: false },
+  { id: 'xero-refresh-token', env: 'XERO_REFRESH_TOKEN', required: false },
   // App / cross-entity string secrets (single-store operator decision, 2026-06-08).
   { id: 'fourvault-gemini-api-key', env: 'FOURVAULT_GEMINI_API_KEY', required: false },
   { id: 'fourvault-neon-database-url', env: 'FOURVAULT_NEON_DATABASE_URL', required: false },
