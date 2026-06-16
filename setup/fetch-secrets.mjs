@@ -122,6 +122,12 @@ const MAP = [
   { id: 'graph-mail-client-id', env: 'GRAPH_MAIL_CLIENT_ID', required: false },
   { id: 'graph-mail-client-secret', env: 'GRAPH_MAIL_CLIENT_SECRET', required: false },
   { id: 'graph-mail-tenant-id', env: 'GRAPH_MAIL_TENANT_ID', required: false },
+  // GitHub App "OTCHealth Fleet Bot" (org InnerScopeHearing) -> 15k/hr installation identity.
+  // Short identifiers here; the PRIVATE KEY (github-app-private-key, a PEM) is SM-ONLY and the
+  // github-app skill reads it directly from Secret Manager (PEMs are never emitted into env).
+  { id: 'github-app-id', env: 'GITHUB_APP_ID', required: false },
+  { id: 'github-app-client-id', env: 'GITHUB_APP_CLIENT_ID', required: false },
+  { id: 'github-app-installation-id', env: 'GITHUB_APP_INSTALLATION_ID', required: false },
   // App / cross-entity string secrets (single-store operator decision, 2026-06-08).
   { id: 'fourvault-gemini-api-key', env: 'FOURVAULT_GEMINI_API_KEY', required: false },
   { id: 'fourvault-neon-database-url', env: 'FOURVAULT_NEON_DATABASE_URL', required: false },
