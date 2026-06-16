@@ -109,12 +109,25 @@ const MAP = [
   { id: 'xero-client-id', env: 'XERO_CLIENT_ID', required: false },
   { id: 'xero-client-secret', env: 'XERO_CLIENT_SECRET', required: false },
   { id: 'xero-refresh-token', env: 'XERO_REFRESH_TOKEN', required: false },
+  // Per-org Xero refresh tokens (each org is a separate Xero account/login for the free deal).
+  // The xero skill reads SM `xero-refresh-token-<org>` directly via the SA; these env mirrors are
+  // a fallback. Each rotates on use; the skill auto-persists.
+  { id: 'xero-refresh-token-otchealth', env: 'XERO_REFRESH_TOKEN_OTCHEALTH', required: false },
+  { id: 'xero-refresh-token-innd', env: 'XERO_REFRESH_TOKEN_INND', required: false },
+  { id: 'xero-refresh-token-hearingassist', env: 'XERO_REFRESH_TOKEN_HEARINGASSIST', required: false },
+  { id: 'xero-refresh-token-personal', env: 'XERO_REFRESH_TOKEN_PERSONAL', required: false },
   // Microsoft Graph mail mining (CFO source-doc recovery; InnerScope M365 tenant, app-only).
   // The m365-mail skill reads these. App = otchealth-cto-graph-admin (OVER-PRIVILEGED + secret
   // exposed in chat -> rotate + trim to Mail.Read/User.Read.All/Files.Read.All before launch).
   { id: 'graph-mail-client-id', env: 'GRAPH_MAIL_CLIENT_ID', required: false },
   { id: 'graph-mail-client-secret', env: 'GRAPH_MAIL_CLIENT_SECRET', required: false },
   { id: 'graph-mail-tenant-id', env: 'GRAPH_MAIL_TENANT_ID', required: false },
+  // GitHub App "OTCHealth Fleet Bot" (org InnerScopeHearing) -> 15k/hr installation identity.
+  // Short identifiers here; the PRIVATE KEY (github-app-private-key, a PEM) is SM-ONLY and the
+  // github-app skill reads it directly from Secret Manager (PEMs are never emitted into env).
+  { id: 'github-app-id', env: 'GITHUB_APP_ID', required: false },
+  { id: 'github-app-client-id', env: 'GITHUB_APP_CLIENT_ID', required: false },
+  { id: 'github-app-installation-id', env: 'GITHUB_APP_INSTALLATION_ID', required: false },
   // App / cross-entity string secrets (single-store operator decision, 2026-06-08).
   { id: 'fourvault-gemini-api-key', env: 'FOURVAULT_GEMINI_API_KEY', required: false },
   { id: 'fourvault-neon-database-url', env: 'FOURVAULT_NEON_DATABASE_URL', required: false },
@@ -187,7 +200,10 @@ for (const { id, env, required } of MAP) {
     console.error(`[fetch-secrets] ${id}: ${e.message}`);
   }
   if (val) {
-    process.stdout.write(`${env}=${val}\n`);
+    // Single-quote the value so it survives `eval`/`set -a` sourcing even when it
+    // contains shell metacharacters (|, spaces, $, etc.). Escape embedded quotes.
+    const safe = `'${val.replace(/'/g, "'\\''")}'`;
+    process.stdout.write(`${env}=${safe}\n`);
   } else if (required) {
     console.error(`[fetch-secrets] MISSING required secret '${id}' in ${PROJECT}. Create it (see README).`);
     hadRequiredMiss = true;
