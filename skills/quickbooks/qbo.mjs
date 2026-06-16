@@ -45,7 +45,8 @@ async function accessToken(refresh) {
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
-    console.error(`token refresh failed ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
+    const tid = r.headers.get("intuit_tid") || "";
+    console.error(`token refresh failed ${r.status}${tid ? ` intuit_tid=${tid}` : ""}: ${JSON.stringify(j).slice(0, 300)}`);
     process.exit(1);
   }
   if (j.refresh_token && j.refresh_token !== refresh) {
@@ -61,7 +62,10 @@ async function api(method, realm, path, token, body) {
     body: body || undefined,
   });
   const text = await r.text();
-  console.error(`HTTP ${r.status} ${method} ${path}`);
+  // Capture Intuit's transaction id (intuit_tid) from response headers for support/troubleshooting.
+  const tid = r.headers.get("intuit_tid") || "";
+  console.error(`HTTP ${r.status} ${method} ${path}${tid ? ` intuit_tid=${tid}` : ""}`);
+  if (!r.ok) console.error(`ERROR body: ${text.slice(0, 500)}`);
   try { console.log(JSON.stringify(JSON.parse(text), null, 2)); } catch { console.log(text); }
   process.exit(r.ok ? 0 : 1);
 }
@@ -107,7 +111,7 @@ if (cmd === "company-info") {
     do {
       const q = encodeURIComponent(`SELECT * FROM ${e} STARTPOSITION ${start} MAXRESULTS 1000`);
       const r = await fetch(`${API}/v3/company/${realm}/query?query=${q}&minorversion=${MINOR}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
-      if (!r.ok) { console.error(`  ${e}: HTTP ${r.status} (skipped)`); break; }
+      if (!r.ok) { console.error(`  ${e}: HTTP ${r.status}${r.headers.get("intuit_tid") ? ` intuit_tid=${r.headers.get("intuit_tid")}` : ""} (skipped)`); break; }
       const j = await r.json();
       page = (j.QueryResponse && j.QueryResponse[e]) || [];
       all = all.concat(page);
@@ -120,7 +124,7 @@ if (cmd === "company-info") {
   const reports = { TrialBalance: `start_date=2015-01-01&end_date=${today}`, GeneralLedger: `start_date=2015-01-01&end_date=${today}`, ProfitAndLoss: `start_date=2015-01-01&end_date=${today}`, BalanceSheet: `end_date=${today}` };
   for (const [name, qs] of Object.entries(reports)) {
     const r = await fetch(`${API}/v3/company/${realm}/reports/${name}?${qs}&minorversion=${MINOR}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
-    if (!r.ok) { console.error(`  report ${name}: HTTP ${r.status} (skipped)`); continue; }
+    if (!r.ok) { console.error(`  report ${name}: HTTP ${r.status}${r.headers.get("intuit_tid") ? ` intuit_tid=${r.headers.get("intuit_tid")}` : ""} (skipped)`); continue; }
     writeFileSync(`${outDir}/report-${name}.json`, await r.text());
     console.error(`  report ${name}: saved`);
   }
