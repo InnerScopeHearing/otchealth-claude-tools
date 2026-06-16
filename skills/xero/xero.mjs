@@ -53,7 +53,15 @@ async function smReadLatest(t, id) {
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
 }
 async function smAddVersion(t, id, v) {
-  const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }) });
+  const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } });
+  const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body });
+  let r = await add();
+  if (r.status === 404) {
+    // Secret container does not exist yet (first per-org token). Create it, then add the version.
+    const c = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) });
+    if (!c.ok && c.status !== 409) throw new Error("SM create " + c.status);
+    r = await add();
+  }
   if (!r.ok) throw new Error("SM addVersion " + r.status);
 }
 
@@ -71,7 +79,12 @@ async function accessToken(orgKey) {
       }
     } catch (e) { console.error("SM read failed: " + e.message); }
   }
-  if (!refresh) refresh = process.env[`XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}`] || process.env.XERO_REFRESH_TOKEN;
+  if (!refresh) {
+    // Per-org env var is always allowed; the legacy unsuffixed XERO_REFRESH_TOKEN is the
+    // otchealth fallback ONLY. Never let another org silently borrow the otchealth token.
+    refresh = process.env[`XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}`];
+    if (!refresh && orgKey === "otchealth") refresh = process.env.XERO_REFRESH_TOKEN;
+  }
   if (!refresh) throw new Error(`No refresh token for org '${orgKey}' (SM ${secretId} / env XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}). Run the OAuth consent for this org first.`);
   const r = await fetch(TOKEN_URL, { method: "POST", headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}` });
   const j = await r.json().catch(() => ({}));
