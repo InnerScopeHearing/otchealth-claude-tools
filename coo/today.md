@@ -1,43 +1,40 @@
 # TODAY — the COO's directive (regenerate each morning; mark results through the day)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-16. Operating window 9am-5pm PT.
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. Clock is real.
 
-## Today's 3 moves (do these, in order)
+## Open moves (do these, in order)
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
+### Move 1 (OVERDUE + highest cash, ~30 min) — Send the reactivation email to 85K
+Draft is READY in COO Tasks ("Send reactivation email to 85K"). The COO wrote it.
+- Open Customer.io, find the draft, approve, send first segment.
 - Report back: sent? to how many?
-Status: [ ] not started
+Status: [ ] OVERDUE since June 6 — this is the only first move that matters
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
-Status: [ ] not started
+### Move 2 (first dollars in days) — Sign the Amazon TReO PDFs and list on Shopify
+NEW today: "ACTION (Needs Matt): Sign 3 Amazon TReO PDFs + upload to Apply-to-Sell"
+- Sign the 3 PDFs and upload to Amazon Apply-to-Sell (TReO PSAP listing gate).
+- This unlocks the Amazon channel — a real first-dollar path with no FDA gate.
+Status: [ ] not started — first-dollar gate
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
-Status: [ ] not started
+### Move 3 (cash in days) — List the Gumroad SOPs
+The COO generated all 14 SOP PDFs + a runbook. They are ready.
+- Create a Gumroad account (free), paste in the listings from COO-2, go live.
+- $49-149 per SOP, instant delivery, zero inventory.
+Status: [ ] not started — assets in hand, just needs the listing
 
 ## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+More tooling or building. The system is done. All three moves above are execution-only.
 
 ## Yesterday's results
-(none logged yet)
+- COO dispatched CRO (Gumroad live + SOP drafts) and CTO/Commerce (OTCHealthMart cleanup).
+- 14 SOP PDFs generated and queued.
+- Amazon TReO sign-PDFs task surfaced as first-dollar gate.
+- OTCHealthMart store cleanup in progress.
 
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+## Calendar note
+COO: Read Calendar workflow (xL0VYbElD15ttqKw) was inactive — could not read Matt's actual
+calendar this run. Blocks in the calendar today are unknown. Matt: re-activate the workflow
+in n8n self-host so the COO can book around real constraints.
