@@ -60,6 +60,25 @@ if (cmd === "link-token") {
     country_codes: ["US"],
     language: "en",
   });
+} else if (cmd === "hosted-link") {
+  // Plaid-hosted Link flow: returns a hosted_link_url the user opens in a browser to
+  // connect ONE institution (no embedded SDK needed). Save the link_token to retrieve
+  // the public_token afterwards with `get-link`.
+  await call("/link/token/create", {
+    user: { client_user_id: a1 || "cfo-otchealth" },
+    client_name: "OTCHealth CFO",
+    products: ["transactions"],
+    country_codes: ["US"],
+    language: "en",
+    hosted_link: {},
+  });
+} else if (cmd === "get-link") {
+  // After the user completes Hosted Link, retrieve the session (incl. public_token).
+  if (!a1) {
+    console.error("usage: plaid.mjs get-link <linkToken>");
+    process.exit(2);
+  }
+  await call("/link/token/get", { link_token: a1 });
 } else if (cmd === "exchange") {
   // Link returns a public_token; exchange it for the durable access_token (store in vault).
   if (!a1) {
@@ -84,6 +103,6 @@ if (cmd === "link-token") {
   if (a2) body.cursor = a2;
   await call("/transactions/sync", body);
 } else {
-  console.error("commands: link-token <userId> | exchange <publicToken> | balances <accessToken> | sync <accessToken> [cursor]");
+  console.error("commands: link-token <userId> | hosted-link <userId> | get-link <linkToken> | exchange <publicToken> | balances <accessToken> | sync <accessToken> [cursor]");
   process.exit(2);
 }
