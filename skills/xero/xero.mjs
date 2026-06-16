@@ -17,7 +17,35 @@
 
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const CONN_URL = "https://api.xero.com/connections";
+import crypto from "node:crypto";
+
 const API = "https://api.xero.com/api.xro/2.0";
+const SM_PROJECT = "otchealth-shared-prod";
+const SM_SECRET_ID = "xero-refresh-token";
+
+// --- Secret Manager (claude-driver SA): read-latest + persist the rotated refresh token ---
+// Xero rotates the refresh token on every use, so the skill reads the newest from SM and
+// writes the rotated one back, surviving unattended operation. Falls back to env if no SA.
+function smAvailable() { return !!process.env.GCP_CLAUDE_DRIVER_SA_JSON; }
+async function smToken() {
+  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const now = Math.floor(Date.now() / 1000);
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
+  const sig = crypto.createSign("RSA-SHA256").update(input).sign(sa.private_key, "base64url");
+  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(input + "." + sig)}` });
+  if (!r.ok) throw new Error("SM token " + r.status);
+  return (await r.json()).access_token;
+}
+async function smReadLatest(t) {
+  const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${SM_SECRET_ID}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
+  if (!r.ok) return null;
+  return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
+}
+async function smAddVersion(t, v) {
+  const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${SM_SECRET_ID}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }) });
+  if (!r.ok) throw new Error("SM addVersion " + r.status);
+}
 
 function need(name) {
   const v = process.env[name];
@@ -30,18 +58,31 @@ function need(name) {
 
 async function accessToken() {
   const basic = Buffer.from(`${need("XERO_CLIENT_ID")}:${need("XERO_CLIENT_SECRET")}`).toString("base64");
+  // Prefer the latest refresh token from Secret Manager (survives rotate-on-use); else env.
+  let smTok = null, refresh;
+  if (smAvailable()) {
+    try { smTok = await smToken(); refresh = await smReadLatest(smTok); }
+    catch (e) { console.error("SM read failed, using env XERO_REFRESH_TOKEN: " + e.message); }
+  }
+  if (!refresh) refresh = need("XERO_REFRESH_TOKEN");
   const r = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(need("XERO_REFRESH_TOKEN"))}`,
+    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}`,
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     console.error(`token refresh failed ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
     process.exit(1);
   }
-  if (j.refresh_token && j.refresh_token !== process.env.XERO_REFRESH_TOKEN) {
-    console.error("NOTE: Xero rotated the refresh token. Persist the new value to the vault.");
+  // Xero rotates the refresh token on EVERY use; persist the new one or the connection dies.
+  if (j.refresh_token && j.refresh_token !== refresh) {
+    if (smTok) {
+      try { await smAddVersion(smTok, j.refresh_token); console.error("Xero rotated the refresh token -> persisted to Secret Manager."); }
+      catch (e) { console.error("ROTATE PERSIST FAILED (" + e.message + "): new refresh token NOT saved; connection may break."); }
+    } else {
+      console.error("NOTE: Xero rotated the refresh token but no SA to persist it. Update xero-refresh-token in the vault or the connection will break.");
+    }
   }
   return j.access_token;
 }
