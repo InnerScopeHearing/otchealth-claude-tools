@@ -88,6 +88,13 @@ const MAP = [
   { id: 'plaid-client-id', env: 'PLAID_CLIENT_ID', required: false },
   { id: 'plaid-secret', env: 'PLAID_SECRET', required: false },
   { id: 'plaid-env', env: 'PLAID_ENV', required: false },
+  // Massive market data (a Polygon.io white-label; same REST API + S3 flat-files surface).
+  // Powers the innd-stock skill: true VWAP + per-day trade count + OTC consolidated tape
+  // (plan window ~2 years). Two REST keys for rate-limit failover. The S3 flat-files creds
+  // (massive-s3-*) are fetched on demand, NOT hydrated into the flat env. Non-PHI, public
+  // market data only (internal CFO records; securities firewall = never for stock promotion).
+  { id: 'massive-api-key', env: 'MASSIVE_API_KEY', required: false },
+  { id: 'massive-api-key-2', env: 'MASSIVE_API_KEY_2', required: false },
   // QuickBooks Online multi-company (CFO; non-PHI bookkeeping). One Intuit app, per-company
   // realmId + refresh token. The quickbooks skill (skills/quickbooks) reads these. INND +
   // HearingAssist writes are gated (public co). Refresh tokens ROTATE -> the recurring sync
