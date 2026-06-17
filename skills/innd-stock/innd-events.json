@@ -1,0 +1,17 @@
+{
+  "_comment": "Verified INND corporate events for the CFO stock workbook. Splits from Polygon/Massive reference + Seeking Alpha. Press releases from StockTitan / PR Newswire / company IR. Public data, internal CFO record-keeping only (securities firewall: never for promotion). Dates are the announcement/effective date; the skill attaches each to the nearest trading day on or after.",
+  "splits": [
+    { "date": "2024-08-22", "from": 2500, "to": 1, "note": "1-for-2500 reverse stock split (effective)" }
+  ],
+  "events": [
+    { "date": "2023-03-01", "text": "HearingAssist brand launches on Target.com" },
+    { "date": "2023-03-02", "text": "World Hearing Day: OTC hearing aids offered in 1,500+ Walmart Vision Centers + Walmart.com" },
+    { "date": "2023-04-03", "text": "FY2022 financial results announced (reported a profitable year)" },
+    { "date": "2023-04-05", "text": "HearingAssist brand launches on Walgreens.com" },
+    { "date": "2023-09-07", "text": "Retains SmallCapVoice.com for investor relations" },
+    { "date": "2023-11-16", "text": "iHEAR Matrix OTC hearing aids launch in 4,218 Walmart stores ($499/pair)" },
+    { "date": "2024-08-22", "text": "1-for-2500 reverse stock split effective" },
+    { "date": "2025-04-24", "text": "OTCHealthMart.com grand opening announced" },
+    { "date": "2025-10-22", "text": "Strategic alliance in Ainnova Tech's acquisition of OTCHealth Inc.: retail ops (Walmart, CVS, Target, Walgreens, 15,000+ pharmacies) transition to OTCHealth; INND to receive equity + profit participation in OTCHealth and Ainnova" }
+  ]
+}

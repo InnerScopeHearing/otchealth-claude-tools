@@ -53,6 +53,23 @@ const BUCKET = process.env.CFO_SOURCE_BUCKET || "otchealth-cfo-source-docs";
 const OBJECT = "innd-stock/INND-daily-stock-history.xlsx";
 const START_EPOCH = 1451606400; // 2016-01-01 (Yahoo returns from the stock's first available day)
 
+// ---- corporate events (splits + press releases), verified, from innd-events.json ----
+function loadEvents(){
+  try { return JSON.parse(readFileSync(join(HERE, "innd-events.json"), "utf8")); }
+  catch { return { splits: [], events: [] }; }
+}
+const EVENTS = loadEvents();
+// Split factor to convert a SPLIT-ADJUSTED price to AS-TRADED (and the inverse for volume).
+// For a reverse split (from:2500 -> to:1) effective on `date`, prices BEFORE the effective
+// date are back-adjusted x2500 in adjusted feeds; as-traded = adjusted / factor. Volume is
+// the inverse: as-traded volume = adjusted volume x factor. factor = product of (from/to)
+// for every split whose effective date is AFTER the given trading day.
+function splitFactor(date){
+  let f = 1;
+  for (const s of EVENTS.splits || []) if (s.date > date) f *= (s.from / s.to);
+  return f;
+}
+
 // ---- GCS (via the claude-driver SA) ---------------------------------------
 function need(n){ const v=process.env[n]; if(!v){ console.error("Missing env "+n); process.exit(2);} return v; }
 async function gcsToken(scope){
@@ -92,9 +109,14 @@ async function fetchYahoo(fromEpoch){
   for(let i=0;i<ts.length;i++){
     const o=q.open?.[i], h=q.high?.[i], l=q.low?.[i], c=q.close?.[i], v=q.volume?.[i];
     if(o==null||c==null||h==null||l==null) continue; // skip halted/empty days
+    const date = new Date(ts[i]*1000).toISOString().slice(0,10);
+    // Yahoo's INND series is SPLIT-ADJUSTED (it back-adjusts the whole history for the
+    // 2024-08-22 1:2500 split; verified: Yahoo 2024-06-24 close 0.375 / vol 4966 == the
+    // adjusted Polygon values). Convert to AS-TRADED so the workbook shows what actually
+    // traded: price / factor, volume x factor.
+    const f = splitFactor(date);
     rows.push({
-      date: new Date(ts[i]*1000).toISOString().slice(0,10),
-      open:o, high:h, low:l, close:c, adjClose: adj[i]!=null?adj[i]:c, volume: v||0,
+      date, open:o/f, high:h/f, low:l/f, close:c/f, volume: (v||0)*f, src:"yahoo",
     });
   }
   rows.sort((a,b)=> a.date<b.date?-1:1);
@@ -131,14 +153,17 @@ async function fetchMassiveDaily(maxDays){
   for(const days of windows){
     const from = ymd(new Date(Date.now()-days*86400000)), to = ymd(today);
     try{
-      const j = await massiveGET(`/v2/aggs/ticker/${TICKER}/range/1/day/${from}/${to}?adjusted=true&sort=asc&limit=50000`);
+      // adjusted=false -> AS-TRADED prices, ACTUAL volume, and the true as-traded VWAP (vw)
+      // + trade count (n). We keep the whole workbook on the as-traded basis (split handling
+      // is explicit via the Split-Adj Close column + the Corporate Actions sheet).
+      const j = await massiveGET(`/v2/aggs/ticker/${TICKER}/range/1/day/${from}/${to}?adjusted=false&sort=asc&limit=50000`);
       const rows = (j.results||[]).map(x=>({
         date: new Date(x.t).toISOString().slice(0,10),
         open:x.o, high:x.h, low:x.l, close:x.c, volume:x.v||0,
-        adjClose:x.c, vwapTrue: x.vw!=null?x.vw:null, trades: x.n!=null?x.n:null,
+        vwapTrue: x.vw!=null?x.vw:null, trades: x.n!=null?x.n:null,
         src:"massive",
       }));
-      console.error(`Massive: ${rows.length} daily bars ${from}..${to} (true VWAP + trade counts)`);
+      console.error(`Massive: ${rows.length} daily bars ${from}..${to} (as-traded; true VWAP + trade counts)`);
       return rows;
     }catch(e){
       if(e.status===403){ console.error(`Massive: ${days}d window not authorized, stepping down`); continue; }
@@ -157,30 +182,48 @@ function mergeByDate(baseRows, overlayRows){
 }
 
 // ---- derive computed columns ----------------------------------------------
-const HEADERS = ["Date","Open","High","Low","Close","Adj Close","Volume","VWAP","Trades","Daily Change ($)","Daily Change (%)","Dollar Volume (Close x Vol)","Traded Value ($) (Vol x VWAP)","Day Range (H-L)","Press Release / Corporate Event","Source"];
-function toRowArray(r, prevClose){
+// All OHLC / Volume / VWAP columns are AS-TRADED (what actually changed hands that day).
+// "Split-Adj Close" is the continuous, split-adjusted close (comparable across the
+// 2024-08-22 1:2500 reverse split). Daily Change is computed on the Split-Adj Close so the
+// split does not show up as a fake ~2500x one-day move.
+const HEADERS = ["Date","Open","High","Low","Close","Split-Adj Close","Volume","VWAP","Trades","Daily Change ($)","Daily Change (%)","Dollar Volume (Close x Vol)","Traded Value ($) (Vol x VWAP)","Day Range (H-L)","Press Release / Corporate Event","Source"];
+function toRowArray(r, prevAdjClose){
   const isMassive = r.src === "massive";
-  // VWAP: true volume-weighted from Massive when available, else the typical-price proxy.
+  // VWAP: true volume-weighted (as-traded) from Massive when available, else the proxy.
   const vwap = (isMassive && r.vwapTrue!=null) ? r.vwapTrue : (r.high + r.low + r.close)/3;
   const trades = (r.trades!=null) ? r.trades : "";
-  const chg = prevClose!=null ? r.close - prevClose : "";
-  const chgPct = (prevClose!=null && prevClose!==0) ? ((r.close - prevClose)/prevClose)*100 : "";
+  const splitAdjClose = r.close * splitFactor(r.date);     // continuous comparable series
+  const chg = prevAdjClose!=null ? splitAdjClose - prevAdjClose : "";
+  const chgPct = (prevAdjClose!=null && prevAdjClose!==0) ? ((splitAdjClose - prevAdjClose)/prevAdjClose)*100 : "";
   const vol = r.volume||0;
   const dollarVol = r.close * vol;          // simple proxy (closing price x shares)
   const tradedValue = vwap * vol;           // the real money traded: shares x VWAP (the avg price each share traded at)
   const source = isMassive
-    ? "Massive (Polygon): true VWAP + trade count, OTC consolidated"
-    : "Yahoo Finance (daily); VWAP = typical-price proxy (H+L+C)/3";
-  return [ r.date, r.open, r.high, r.low, r.close, r.adjClose, vol, vwap, trades, chg, chgPct, dollarVol, tradedValue, r.high - r.low, r.event||"", source ];
+    ? "Massive (Polygon): as-traded, true VWAP + trade count, OTC consolidated"
+    : "Yahoo Finance (daily, de-split to as-traded); VWAP = typical-price proxy (H+L+C)/3";
+  return [ r.date, r.open, r.high, r.low, r.close, splitAdjClose, vol, vwap, trades, chg, chgPct, dollarVol, tradedValue, r.high - r.low, r.event||"", source ];
+}
+
+// ---- attach verified press releases / corporate events to trading days -----
+function applyEvents(rows){
+  if(!rows.length) return;
+  const dates = rows.map(r=>r.date); // ascending
+  for(const ev of (EVENTS.events||[])){
+    const idx = dates.findIndex(d=> d>=ev.date); // first trading day on or after the event
+    if(idx<0) continue;
+    const cur = rows[idx].event || "";
+    rows[idx].event = cur ? (cur.includes(ev.text) ? cur : cur+" | "+ev.text) : ev.text;
+  }
 }
 
 // ---- workbook build / merge -----------------------------------------------
 function buildWorkbook(XLSX, rows){
+  applyEvents(rows);
   const aoa = [HEADERS];
-  let prev=null;
-  for(const r of rows){ aoa.push(toRowArray(r, prev)); prev=r.close; }
+  let prevAdj=null;
+  for(const r of rows){ aoa.push(toRowArray(r, prevAdj)); prevAdj = r.close * splitFactor(r.date); }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  // column widths (Date,O,H,L,C,Adj,Vol,VWAP,Trades,Chg$,Chg%,$Vol,TradedValue,Range,PR,Source)
+  // column widths (Date,O,H,L,C,SplitAdjC,Vol,VWAP,Trades,Chg$,Chg%,$Vol,TradedValue,Range,PR,Source)
   ws["!cols"] = [{wch:12},{wch:13},{wch:13},{wch:13},{wch:13},{wch:13},{wch:14},{wch:14},{wch:9},{wch:15},{wch:12},{wch:20},{wch:22},{wch:14},{wch:40},{wch:52}];
   // number formats (sub-penny prices need many decimals)
   const priceFmt="0.00000000", volFmt="#,##0", pctFmt="0.00", dollarFmt="#,##0.00";
@@ -205,21 +248,31 @@ function buildWorkbook(XLSX, rows){
     ["INND Daily Stock Price History"],
     ["Company", COMPANY+"  (OTC: INND)"],
     ["Purpose", "Internal CFO record-keeping. Public market data only; not investor-facing / not stock promotion."],
-    ["Price sources", "Massive (Polygon white-label) for the most recent ~2 years (true VWAP + trade count + OTC consolidated tape); Yahoo Finance for the deep history before that. Merged by date; the Source column on every row says which fed that day."],
+    ["Price sources", "Massive (Polygon white-label) for the most recent ~2 years (as-traded prices, true VWAP, actual volume + trade count, OTC consolidated tape); Yahoo Finance for the deep history before that. Merged by date; the Source column on every row says which fed that day."],
     ["History available from", rows.length?rows[0].date:"-"],
     ["Through", rows.length?rows[rows.length-1].date:"-"],
     ["Trading days", String(rows.length)],
     ["Massive (Polygon) coverage", `${rows.filter(r=>r.src==="massive").length} of ${rows.length} days carry TRUE VWAP + trade count (the rest use the Yahoo proxy).`],
-    ["Share-structure CAVEAT", "Prices are AS-TRADED and NOT on a constant share basis: INND has undergone reverse splits / share-structure changes, so early prices (e.g. ~$625 in 2017, ~$0.50 in mid-2024) are not share-for-share comparable to recent sub-penny prices. Adj Close does not carry INND's splits (Adj Close == Close here). Use within-period comparisons with care; ask the CTO for a split-adjusted series + share-count history if you need cross-period comparability."],
-    ["VWAP note", "For Massive (Polygon) rows the VWAP is the TRUE daily volume-weighted average price. For the older Yahoo rows it is the typical-price proxy (High+Low+Close)/3. The Source column flags each."],
+    ["PRICE BASIS = AS-TRADED", "Open / High / Low / Close / Volume / VWAP are AS-TRADED: what actually changed hands that day. INND did a 1-for-2500 reverse split on 2024-08-22 (see the Corporate Actions sheet). Yahoo reports a split-adjusted series, so its deep-history values are de-split back to as-traded here (price / 2500, volume x 2500 before 2024-08-22; verified against Polygon's raw feed)."],
+    ["Split-Adj Close column", "A continuous, split-adjusted close on today's share basis, comparable across the reverse split. Daily Change ($/%) is computed on THIS column, so the 2024-08-22 split is not shown as a fake ~2500x one-day move. The as-traded Close jumps ~2500x on the split date by design (that is what the tape shows)."],
+    ["VWAP note", "For Massive (Polygon) rows the VWAP is the TRUE daily volume-weighted average price (as-traded). For the older Yahoo rows it is the typical-price proxy (High+Low+Close)/3. The Source column flags each."],
     ["Trades note", "Trades = the day's number of executed transactions (Massive/Polygon). Blank for the older Yahoo-only history. A useful liquidity gauge for a thinly traded stock (some recent days have under 50 trades)."],
-    ["Two dollar-value columns", "Dollar Volume (Close x Vol) = the simple proxy that prices the whole day's shares at the closing price. Traded Value (Vol x VWAP) = the REAL money that changed hands = shares traded x VWAP (the average price each share actually traded at). Neither is a native feed field; both are computed here. Traded Value is the accurate one (for Massive rows it uses the true VWAP)."],
-    ["Press release / events", "Column reserved. INND is not an SEC/EDGAR filer; events come from OTC Markets / company IR and are added by the CTO."],
+    ["Two dollar-value columns", "Dollar Volume (Close x Vol) = the simple proxy that prices the whole day's shares at the closing price. Traded Value (Vol x VWAP) = the REAL money that changed hands = shares traded x VWAP (the average price each share actually traded at). Both are computed here, not native feed fields, and are basis-invariant. Traded Value is the accurate one (for Massive rows it uses the true VWAP)."],
+    ["Press release / events", "The Press Release / Corporate Event column is populated from verified public sources (StockTitan / PR Newswire / company IR / OTC Markets) for major INND milestones; see the Corporate Actions sheet for the full list. Most days have no event (blank)."],
     ["Updated", "Run `innd-stock update` daily after the US market close; it appends only new trading days (idempotent) and refreshes the recent window from Massive."],
     ["Generated (UTC)", new Date().toISOString()],
   ];
-  const wsa = XLSX.utils.aoa_to_sheet(about); wsa["!cols"]=[{wch:24},{wch:90}];
+  const wsa = XLSX.utils.aoa_to_sheet(about); wsa["!cols"]=[{wch:26},{wch:100}];
   XLSX.utils.book_append_sheet(wb, wsa, "About");
+
+  // Corporate Actions sheet: verified splits + the press-release / event log.
+  const ca = [["INND Corporate Actions and Press Releases (verified, public sources)"], [""], ["REVERSE STOCK SPLITS"], ["Effective date","Ratio","Note"]];
+  for(const s of (EVENTS.splits||[])) ca.push([s.date, `1-for-${s.from} (${s.from}:${s.to})`, s.note||""]);
+  ca.push([""], ["Price-basis math", "As-traded = split-adjusted price / 2500 before 2024-08-22 (=price on/after). Volume is the inverse (x2500 before). Verified: Yahoo 2024-06-24 close 0.375 / vol 4,966 == Polygon adjusted; Polygon raw = 0.0002 / 12,416,430 shares as-traded."], [""], ["PRESS RELEASES / CORPORATE EVENTS"], ["Date","Event"]);
+  for(const e of (EVENTS.events||[])) ca.push([e.date, e.text]);
+  ca.push([""], ["Note", "Public market data + public company announcements, compiled for INTERNAL CFO records only. Not investor-facing publishing and not stock promotion (securities firewall). INND is not an SEC/EDGAR filer; events sourced from StockTitan / PR Newswire / company IR / OTC Markets."]);
+  const wsca = XLSX.utils.aoa_to_sheet(ca); wsca["!cols"]=[{wch:16},{wch:110}];
+  XLSX.utils.book_append_sheet(wb, wsca, "Corporate Actions");
   return wb;
 }
 function sheetToRows(XLSX, wb){
@@ -229,8 +282,9 @@ function sheetToRows(XLSX, wb){
   for(let i=1;i<aoa.length;i++){ const a=aoa[i]; if(!a||!a[0]) continue;
     const source = String(a[15]||"");
     const isMassive = /Massive/i.test(source);
+    // Columns are AS-TRADED (col 5 "Split-Adj Close" is derived, not re-read).
     out.push({
-      date:String(a[0]).slice(0,10), open:+a[1],high:+a[2],low:+a[3],close:+a[4],adjClose:+a[5],volume:+a[6]||0,
+      date:String(a[0]).slice(0,10), open:+a[1],high:+a[2],low:+a[3],close:+a[4],volume:+a[6]||0,
       vwapTrue: isMassive && a[7]!=null && a[7]!=="" ? +a[7] : null,
       trades: a[8]!=null && a[8]!=="" ? +a[8] : null,
       event:a[14]||"", src: isMassive ? "massive" : "yahoo",
