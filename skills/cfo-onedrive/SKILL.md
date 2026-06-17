@@ -1,51 +1,75 @@
 ---
 name: cfo-onedrive
-description: The CFO's file exchange with Matt over his OneDrive (matthew@innd.com). Three folders at the OneDrive root, CFO Outgoing (Matt drops files here FOR the CFO), CFO Processed (CFO MOVES items here after handling them, her owned archive), CFO Incoming (CFO delivers work product here FOR Matt). Use to pick up what Matt left, process it, and deliver financials/work product back. Delegated access (acts as Matt, Files.ReadWrite); the tenant blocks app-only OneDrive so this uses a stored, auto-rotating delegated refresh token. Non-PHI ring.
+description: The CFO's control of Matt's OneDrive (matthew@innd.com). Full read/write/move/copy/dedupe across his WHOLE drive, plus the three-folder exchange at the root, CFO Outgoing (Matt drops files FOR the CFO), CFO Processed (the CFO's organized archive / audit data room), CFO Incoming (CFO delivers work product FOR Matt). Use to pick up what Matt left, build a per-company per-category audit data room, move/copy/dedupe files, and deliver financials back. Delegated access (acts as Matt, Files.ReadWrite over his entire OneDrive); the tenant blocks app-only OneDrive so this uses a stored, auto-rotating delegated refresh token. Non-PHI ring.
 ---
 
-# CFO <-> Matt OneDrive exchange
+# CFO OneDrive control
 
-The CFO's drop-box protocol with Matt, on his OneDrive. Three root folders:
+The CFO is the controlling party for Matt's OneDrive: full read/write/move/copy/dedupe across the
+whole drive, plus the exchange folders at the root.
 
 | Folder | Direction | Meaning |
 |--------|-----------|---------|
-| **CFO Outgoing** | Matt -> CFO | Matt drops files here for the CFO to review/process. The CFO's inbox. |
-| **CFO Processed** | CFO archive | After the CFO handles an item from Outgoing, she MOVES it here. Her owned, organized archive of everything worked. |
+| **CFO Outgoing** | Matt -> CFO | Matt drops files here for the CFO. The CFO's inbox. |
+| **CFO Processed** | CFO archive | The CFO's organized archive / audit data room. |
 | **CFO Incoming** | CFO -> Matt | The CFO delivers financials / work product here for Matt. |
 
-Mnemonic: the names are from Matt's point of view. "Outgoing" = going out from Matt to the CFO;
-"Incoming" = coming in to Matt from the CFO; "Processed" = the CFO's done pile.
+Mnemonic (from Matt's point of view): "Outgoing" = out from Matt to the CFO; "Incoming" = in to
+Matt from the CFO; "Processed" = the CFO's done pile.
 
-## Why delegated (not app-only)
-The InnerScope tenant BLOCKS app-only OneDrive access (returns 503 even with Files.ReadWrite.All
-granted). So this skill uses a DELEGATED refresh token (`graph-onedrive-refresh-token`) and acts
-AS Matt, scoped to `Files.ReadWrite`. The token rotates on every use and is auto-persisted back to
-Secret Manager, so it does not silently expire.
+## Access scope
+DELEGATED token (`graph-onedrive-refresh-token`), acts AS Matt, scoped to `Files.ReadWrite` =
+**full access to Matt's entire OneDrive**, not just the three folders. (The tenant blocks app-only
+OneDrive with 503, so delegated is the compliant path.) The token rotates on every use and is
+auto-persisted to Secret Manager. All `<path>` arguments are relative to the OneDrive ROOT, so the
+CFO can operate anywhere (e.g. `"CFO Processed/OTCHealth/Bank Statements"`, `"Documents/..."`).
 
 ## Credentials (hydrated)
 - `GRAPH_MAIL_CLIENT_ID` / `GRAPH_MAIL_CLIENT_SECRET` / `GRAPH_MAIL_TENANT_ID` (the app)
 - `GCP_CLAUDE_DRIVER_SA_JSON` (reads/writes `graph-onedrive-refresh-token` in Secret Manager)
-- Folder names override via `CFO_OUTGOING_FOLDER` / `CFO_INCOMING_FOLDER` / `CFO_PROCESSED_FOLDER`
-  (default "CFO Outgoing" / "CFO Incoming" / "CFO Processed").
+- Exchange-folder overrides: `CFO_OUTGOING_FOLDER` / `CFO_INCOMING_FOLDER` / `CFO_PROCESSED_FOLDER`.
 
 ## Commands
 ```
-node skills/cfo-onedrive/onedrive.mjs inbox                      # list CFO Outgoing (what Matt left for you)
-node skills/cfo-onedrive/onedrive.mjs pull <name> [localDir]     # download a file from CFO Outgoing
-node skills/cfo-onedrive/onedrive.mjs process <name>            # MOVE a file CFO Outgoing -> CFO Processed
-node skills/cfo-onedrive/onedrive.mjs deliver <localFile> [name] # upload work product to CFO Incoming
+# Exchange with Matt
+node skills/cfo-onedrive/onedrive.mjs inbox                       # list CFO Outgoing
+node skills/cfo-onedrive/onedrive.mjs process <name>             # MOVE CFO Outgoing/<name> -> CFO Processed
+node skills/cfo-onedrive/onedrive.mjs deliver <localFile> [name]  # upload to CFO Incoming
 node skills/cfo-onedrive/onedrive.mjs incoming-list | processed-list
+
+# Full-drive primitives (any path from the OneDrive root)
+node skills/cfo-onedrive/onedrive.mjs ls [path]                   # list a folder (default root)
+node skills/cfo-onedrive/onedrive.mjs tree [path]                 # recursive listing
+node skills/cfo-onedrive/onedrive.mjs stat <path>                 # size, content hash, ids
+node skills/cfo-onedrive/onedrive.mjs mkdir <path>               # create folder (mkdir -p)
+node skills/cfo-onedrive/onedrive.mjs mv <src> <destFolder> [newName]   # move (dest auto-created)
+node skills/cfo-onedrive/onedrive.mjs cp <src> <destFolder> [newName]   # copy/duplicate (async)
+node skills/cfo-onedrive/onedrive.mjs rm <path>                   # delete (-> recycle bin, recoverable)
+node skills/cfo-onedrive/onedrive.mjs upload <localFile> <destPath>     # upload to any path
+node skills/cfo-onedrive/onedrive.mjs download <path> [dir]       # download any file
+node skills/cfo-onedrive/onedrive.mjs catalog [path] [out.json]   # recursive inventory + dupe report
+node skills/cfo-onedrive/onedrive.mjs find-dupes [path]           # byte-identical files (same hash)
+node skills/cfo-onedrive/onedrive.mjs dataroom-init [parent]      # scaffold per-company + _Duplicates
 ```
 
-## The loop the CFO runs
-1. `inbox` to see what Matt dropped in CFO Outgoing.
-2. `pull <name>` to download and work it.
-3. When done, `process <name>` to MOVE it to CFO Processed (so Outgoing only ever holds un-handled
-   items, and Processed is the organized record of everything worked).
-4. `deliver <file>` to put financials / work product into CFO Incoming for Matt.
+## Building the audit data room (the CFO's workflow)
+1. `inbox` to see what Matt dropped; `catalog "CFO Outgoing" outgoing.json` for a full inventory
+   with content hashes.
+2. `dataroom-init` to scaffold `CFO Processed/Audit Data Room/<Company>/` for OTCHealth, InnerScope,
+   Hearing Assist, Personal, plus a `_Duplicates` folder. Adjust company names as needed.
+3. Add category subfolders per company, OTCHealth first, e.g.
+   `mkdir "CFO Processed/Audit Data Room/OTCHealth/Bank Statements"` (Invoices, Bills, Receipts,
+   Tax/1099s, Payroll, Contracts, Corporate, Financial Statements, Other).
+4. `mv "CFO Outgoing/<file>" "CFO Processed/Audit Data Room/<Company>/<Category>"` to file each doc.
+5. `find-dupes "CFO Processed"` then `mv` byte-identical extras into the `_Duplicates` folder
+   (dedupe by MOVE, never delete, so nothing is lost).
+6. `catalog "CFO Processed/Audit Data Room" data-room-catalog.json` for the final index, and
+   `deliver` it (or a summary) to Matt via CFO Incoming.
 
 ## Guardrails
-- Non-PHI ring only. Never place MedReview / PHI data here.
-- The token acts AS Matt on his OneDrive; treat it as sensitive (it is on the rotate list).
-- Large source-doc datasets (full QBO/Xero exports) belong in the GCS `cfo-store` bucket, not
-  OneDrive; OneDrive is for the working exchange with Matt (requests + deliverables + reviewed docs).
+- Non-PHI ring only. Never place MedReview / PHI data in OneDrive.
+- The token acts AS Matt across his whole OneDrive; it is sensitive (on the rotate-before-launch list).
+- INND material is internal-only (securities firewall): do not surface document CONTENTS externally
+  or commit raw financials to any git repo. The GCS `cfo-store` bucket is the durable bulk archive;
+  OneDrive is the human-facing working data room.
+- `rm` sends to the recycle bin (recoverable), but prefer `mv` to `_Duplicates` for dedupe.
