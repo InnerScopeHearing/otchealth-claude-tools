@@ -88,8 +88,18 @@ but fetched on demand only. `xlsx` (SheetJS) auto-installs on first run.
 ## Keeping it updated (the daily skill)
 Run `update` once per business day after the US market close (~4pm ET). It downloads the stored
 workbook, fills any new Yahoo day, then overlays the recent Massive window (true VWAP + trade
-count, refreshing the tail), and re-uploads. Idempotent, safe to re-run. Schedule via n8n (daily
-cron) or a GitHub Actions scheduled workflow; the CTO can wire the schedule.
+count, refreshing the tail), and re-uploads. Idempotent, safe to re-run.
+
+### Automated on Azure (LIVE)
+The update runs automatically on an **Azure Container Apps Job** (the funded-credit lane):
+- Job `innd-stock-daily` in RG `otchealth-automation-rg` (westus2), environment
+  `otchealth-jobs-env`. Schedule: cron `30 22 * * 1-5` (weekdays 22:30 UTC, after the US close).
+- It runs `node:20-slim`, injects the skill from job secrets (base64), `npm i xlsx`, and runs
+  `update` with `STORAGE_BACKEND=azure` -> writes Azure Blob. No registry or repo clone needed.
+- Trigger a manual run: `POST .../Microsoft.App/jobs/innd-stock-daily/start` (ARM, azure-sp).
+- IMPORTANT: the skill code is baked into the job's `skill-mjs-b64` / `skill-events-b64`
+  secrets, so it is FROZEN at deploy time. When this skill or `innd-events.json` changes,
+  re-deploy the job (re-PUT it with fresh base64) so the job runs the new code.
 
 ## Guardrails
 - Public market data, internal CFO records only. Never publish, post, or use for stock
