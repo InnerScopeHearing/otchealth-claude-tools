@@ -64,8 +64,35 @@ Stored in `otchealth-shared-prod`, loaded by `setup/fetch-secrets.mjs`:
 - **Secrets.** `client_id`, `secret`, and every access token live in Secret Manager,
   flagged for rotation, never in chat or a repo.
 
+## History limits (HARD Plaid facts, verified live 2026-06-17)
+- **Plaid maxes out at 24 months (730 days) for BOTH transactions AND statements.**
+  Plaid rejects a longer statements window with "Statements product only supports a
+  maximum of 2 years of data." So Plaid CANNOT provide 3-4 years by any product.
+- The old 90-day shortfall was because the link token never set `days_requested`
+  (Plaid defaults to 90). The skill now requests the max (730) on every link.
+- **`days_requested` / statements apply at LINK time.** An already-connected item only
+  has the history it was linked with, so extending an existing connection requires a
+  re-auth: `update-link <accessToken> [statements]` -> open the hosted URL -> re-consent.
+  New links get 730 days automatically.
+- **For 3-4 year history, do NOT use Plaid.** Use the QBO exports (back to 2015) + Xero
+  in the GCS `cfo-store` bucket. Architecture: QBO/Xero = multi-year history of record;
+  Plaid = the most recent 24 months (live reconciliation) + 24 months of PDF statements.
+
+## Statements (PDF) + extra commands
+The Statements product IS enabled on the account. Pull PDF statements (24 months) per item:
+```
+node skills/plaid-banking/plaid.mjs statements-list <accessToken>
+node skills/plaid-banking/plaid.mjs statements-download <accessToken> <statementId> [outFile.pdf]
+```
+Other commands: `item <accessToken>` (config/products), `accounts <accessToken>`
+(account list), `transactions <accessToken> [days]` (date-window pull via /transactions/get,
+default+max 730), `update-link <accessToken> [statements]` (re-auth to backfill 730d / add statements).
+
+Connected items (each token in SM as `plaid-access-token-<inst>`): `schwab`, `chase-amazon`,
+`wellsfargo`, `brex-hearingassist`. To get the deeper history + statements on these four,
+each must be re-linked once via `update-link`.
+
 ## Notes
-- `PLAID_ENV=sandbox` works immediately with test credentials; `production` requires
-  Plaid to approve the production-access request for the account.
+- `PLAID_ENV=production` is live (the production-access request is approved).
 - Plaid access tokens are durable (no expiry) but revocable; rotate on any suspected
   exposure and on offboarding an institution.
