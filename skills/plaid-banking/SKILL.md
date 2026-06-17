@@ -88,9 +88,26 @@ Other commands: `item <accessToken>` (config/products), `accounts <accessToken>`
 (account list), `transactions <accessToken> [days]` (date-window pull via /transactions/get,
 default+max 730), `update-link <accessToken> [statements]` (re-auth to backfill 730d / add statements).
 
-Connected items (each token in SM as `plaid-access-token-<inst>`): `schwab`, `chase-amazon`,
-`wellsfargo`, `brex-hearingassist`. To get the deeper history + statements on these four,
-each must be re-linked once via `update-link`.
+Connected items (each token in SM as `plaid-access-token-<inst>`), entity-tagged, all
+fresh-connected 2026-06-17 for the max 24-month history (+ statements where the institution
+supports it):
+- **OTCHealth:** `wellsfargo` (24mo + statements), `chase-amazon` (24mo + statements),
+  `schwab` (~14mo, Schwab's institutional max; NO Plaid statements), `mercury-otchealth`
+  (24mo + statements)
+- **InnerScope (INND, internal only / securities firewall):** `mercury-innerscope`
+  (24mo + statements; includes the DealMaker REG D + REG A raise accounts), `brex-innerscope`
+  (24mo, low activity; NO Plaid statements)
+- **HearingAssist (INND subsidiary):** `brex-hearingassist` (24mo; NO Plaid statements)
+
+Lessons learned (2026-06-17): `update-link` (update mode) does NOT backfill extended history
+on an already-connected item, so each was re-created as a FRESH connection (a fresh link's
+initial pull honors days_requested=730). Schwab + Brex do NOT support the Statements product
+(Plaid filters them out of a statements link, or returns ADDITIONAL_CONSENT_REQUIRED), so use
+transactions-only links for them. Mercury DOES support statements via Plaid (the Mercury MCP
+does not provide statements or detailed transactions, which is why Plaid Mercury was added).
+Mercury and Brex are multi-entity logins: Mercury's company toggle separates OTCHealth vs
+InnerScope cleanly, but Brex's session reuse does NOT, so InnerScope's Brex required a fresh
+sign-in in an incognito window with the separate InnerScope Brex login.
 
 ## Notes
 - `PLAID_ENV=production` is live (the production-access request is approved).
