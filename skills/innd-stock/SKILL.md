@@ -10,10 +10,21 @@ records. **Public market data only, internal record-keeping** (not IR publishing
 promotion). Non-PHI ring; INND material stays internal (securities firewall).
 
 ## What it captures (per trading day)
-Date, Open, High, Low, Close, Adjusted Close, Volume, **VWAP**, **Trades** (count), Daily
+Date, Open, High, Low, Close, **Split-Adj Close**, Volume, **VWAP**, **Trades** (count), Daily
 Change ($ and %), **Dollar Volume (Close x Vol)**, **Traded Value (Vol x VWAP)**, Day Range,
-a Press Release / Corporate Event column, and a per-row Source tag. A second "About" sheet
-records the sources, the VWAP note, the two dollar-value methods, and the share-structure caveat.
+a populated **Press Release / Corporate Event** column, and a per-row Source tag. Plus two
+extra sheets: "About" (sources, basis, the two dollar-value methods) and **"Corporate Actions"**
+(the verified reverse split + the dated press-release log).
+
+## Price basis = AS-TRADED (with a split-adjusted column)
+All OHLC / Volume / VWAP are **as-traded** (what actually changed hands that day). INND did a
+**1-for-2500 reverse split on 2024-08-22** (verified: Polygon reference + Seeking Alpha). Yahoo
+reports a split-adjusted series, so its deep history is de-split back to as-traded here (price /
+2500, volume x 2500 before 2024-08-22; this ties out exactly to Polygon's raw feed). The
+**Split-Adj Close** column is the continuous comparable series, and **Daily Change is computed on
+it**, so the reverse split is not shown as a fake ~2500x one-day move (the as-traded Close does
+jump on the split date by design, since that is what the tape shows). The reverse split is loaded
+from `innd-events.json` via a split-factor function, so adding a future split is a one-line edit.
 
 ## Sources (HYBRID - best of both)
 - **Massive** (`api.massive.com`) is a **Polygon.io white-label** - the same REST API + S3
