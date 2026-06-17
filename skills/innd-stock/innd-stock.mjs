@@ -94,6 +94,56 @@ async function gcsUpload(tok, buf){
   return `gs://${BUCKET}/${OBJECT}`;
 }
 
+// ---- Azure Blob Storage (SharedKey auth; the funded-credit lane) -----------
+const AZ_ACCT = process.env.AZURE_STORAGE_ACCOUNT;
+const AZ_KEY = process.env.AZURE_STORAGE_KEY;
+const AZ_CONTAINER = process.env.AZURE_STORAGE_CONTAINER || "innd-stock";
+const AZ_BLOB = "INND-daily-stock-history.xlsx";
+const AZ_VER = "2021-08-06";
+const XLSX_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+function azureConfigured(){ return !!(AZ_ACCT && AZ_KEY); }
+function azSig(method, xms, contentLength, contentType){
+  const canon = Object.keys(xms).sort().map(k=>`${k}:${xms[k]}`).join("\n")+"\n"+`/${AZ_ACCT}/${AZ_CONTAINER}/${AZ_BLOB}`;
+  const sts = [method,"","",contentLength||"","",contentType||"","","","","","","",canon].join("\n");
+  return `SharedKey ${AZ_ACCT}:${crypto.createHmac("sha256",Buffer.from(AZ_KEY,"base64")).update(sts,"utf8").digest("base64")}`;
+}
+async function azureUpload(buf){
+  const xms = { "x-ms-blob-type":"BlockBlob", "x-ms-date":new Date().toUTCString(), "x-ms-version":AZ_VER };
+  const auth = azSig("PUT", xms, String(buf.length), XLSX_CT);
+  const r = await fetch(`https://${AZ_ACCT}.blob.core.windows.net/${AZ_CONTAINER}/${AZ_BLOB}`,{method:"PUT",headers:{...xms,"Content-Type":XLSX_CT,Authorization:auth},body:buf});
+  if(!r.ok) throw new Error("Azure upload "+r.status+" "+(await r.text()).slice(0,160));
+  return `azure://${AZ_ACCT}/${AZ_CONTAINER}/${AZ_BLOB}`;
+}
+async function azureDownload(){
+  const xms = { "x-ms-date":new Date().toUTCString(), "x-ms-version":AZ_VER };
+  const auth = azSig("GET", xms, "", "");
+  const r = await fetch(`https://${AZ_ACCT}.blob.core.windows.net/${AZ_CONTAINER}/${AZ_BLOB}`,{headers:{...xms,Authorization:auth}});
+  if(r.status===404) return null;
+  if(!r.ok) throw new Error("Azure download "+r.status+" "+(await r.text()).slice(0,160));
+  return Buffer.from(await r.arrayBuffer());
+}
+
+// ---- storage backend switch (STORAGE_BACKEND = gcs | azure; default gcs) ----
+// The Azure Container Apps Job sets STORAGE_BACKEND=azure (+ MIRROR_GCS=1 to keep the
+// legacy GCS copy fresh during the transition).
+const BACKEND = (process.env.STORAGE_BACKEND || "gcs").toLowerCase();
+function storageURI(){ return BACKEND==="azure" ? `azure://${AZ_ACCT}/${AZ_CONTAINER}/${AZ_BLOB}` : `gs://${BUCKET}/${OBJECT}`; }
+async function storageDownload(){
+  if(BACKEND==="azure"){ if(!azureConfigured()){ console.error("STORAGE_BACKEND=azure but AZURE_STORAGE_* unset"); process.exit(2);} return await azureDownload(); }
+  return await gcsDownload(await gcsToken("https://www.googleapis.com/auth/devstorage.read_only"));
+}
+async function storageUpload(buf){
+  if(BACKEND==="azure"){
+    const uri = await azureUpload(buf);
+    if(process.env.MIRROR_GCS==="1" && process.env.GCP_CLAUDE_DRIVER_SA_JSON){
+      try { await gcsUpload(await gcsToken("https://www.googleapis.com/auth/devstorage.read_write"), buf); console.error("mirrored to GCS"); }
+      catch(e){ console.error("GCS mirror failed (non-fatal): "+e.message); }
+    }
+    return uri;
+  }
+  return await gcsUpload(await gcsToken("https://www.googleapis.com/auth/devstorage.read_write"), buf);
+}
+
 // ---- Yahoo Finance daily history ------------------------------------------
 async function fetchYahoo(fromEpoch){
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${TICKER}?period1=${fromEpoch}&period2=${Math.floor(Date.now()/1000)}&interval=1d&includeAdjustedClose=true`;
@@ -305,11 +355,10 @@ try {
     const wb = buildWorkbook(XLSX, rows);
     const buf = XLSX.write(wb, { type:"buffer", bookType:"xlsx" });
     if (cmd === "local") { const f=process.argv[3]||"INND-daily-stock-history.xlsx"; writeFileSync(f, buf); console.log(`wrote ${rows.length} trading days -> ${f} (${rows[0].date}..${rows[rows.length-1].date})`); }
-    else { const tok=await gcsToken("https://www.googleapis.com/auth/devstorage.read_write"); const uri=await gcsUpload(tok, buf); console.log(`backfilled ${rows.length} trading days (${rows[0].date}..${rows[rows.length-1].date}) -> ${uri}`); }
+    else { const uri=await storageUpload(buf); console.log(`backfilled ${rows.length} trading days (${rows[0].date}..${rows[rows.length-1].date}) -> ${uri}`); }
 
   } else if (cmd === "update") {
-    const tok = await gcsToken("https://www.googleapis.com/auth/devstorage.read_write");
-    const existing = await gcsDownload(tok);
+    const existing = await storageDownload();
     let rows;
     if (!existing) {
       console.error("no existing workbook; running full backfill");
@@ -328,14 +377,13 @@ try {
     }
     const wb2 = buildWorkbook(XLSX, rows);
     const buf = XLSX.write(wb2, { type:"buffer", bookType:"xlsx" });
-    const uri = await gcsUpload(tok, buf);
+    const uri = await storageUpload(buf);
     console.log(`updated workbook -> ${uri} (through ${rows[rows.length-1].date}, ${rows.length} days)`);
 
   } else if (cmd === "status") {
-    const tok = await gcsToken("https://www.googleapis.com/auth/devstorage.read_only");
-    const existing = await gcsDownload(tok);
+    const existing = await storageDownload();
     if (!existing) { console.log("no workbook stored yet; run `backfill`"); }
-    else { const wb=XLSX.read(existing,{type:"buffer"}); const rows=sheetToRows(XLSX,wb); console.log(`stored workbook: ${rows.length} trading days, ${rows[0]?.date}..${rows[rows.length-1]?.date} (gs://${BUCKET}/${OBJECT})`); }
+    else { const wb=XLSX.read(existing,{type:"buffer"}); const rows=sheetToRows(XLSX,wb); console.log(`stored workbook: ${rows.length} trading days, ${rows[0]?.date}..${rows[rows.length-1]?.date} (${storageURI()})`); }
 
   } else { console.error("commands: backfill | update | status | local <file>"); process.exit(2); }
 } catch (e) { console.error("ERROR: "+e.message); process.exit(1); }
