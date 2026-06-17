@@ -1,0 +1,8 @@
+{
+  "name": "innd-stock",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "INND (InnerScope Hearing Technologies, OTC) daily stock-price history for the CFO records: backfill + ongoing daily append to an Excel workbook.",
+  "dependencies": { "xlsx": "0.18.5" }
+}
