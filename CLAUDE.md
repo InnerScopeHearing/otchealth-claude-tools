@@ -31,6 +31,11 @@ assume unless the user says otherwise.
   audiogram idea for iHEARtest.
 
 ## Standing rules (compliance + process)
+- **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
+  single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a
+  direct API call, over navigating website UIs. Whenever a task can be done with a paste-ready command
+  or script, ALWAYS give that as the PRIMARY path and fill in the real identifiers so it runs as-is;
+  UI click-paths are a fallback only.
 - **PHI ring boundary.** Designer/creative tooling and any non-BAA service operate
   in the **non-PHI ring only**. Never point them at `otchealth-medreview-prod` or
   any PHI project. No PHI in generated assets, prompts, metadata, analytics,
