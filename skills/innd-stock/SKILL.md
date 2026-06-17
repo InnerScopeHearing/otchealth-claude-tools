@@ -62,10 +62,16 @@ from `innd-events.json` via a split-factor function, so adding a future split is
 - INND is **not** an SEC/EDGAR filer; the Press Release / Event column is sourced from OTC
   Markets / company IR (added separately).
 
-## Storage
-Canonical workbook lives in the CFO source-doc bucket:
-`gs://otchealth-cfo-source-docs/innd-stock/INND-daily-stock-history.xlsx`. One file that grows
-over time. (Override the bucket with `CFO_SOURCE_BUCKET`.)
+## Storage (GCS or Azure Blob)
+`STORAGE_BACKEND` selects where the workbook lives:
+- `gcs` (default): `gs://otchealth-cfo-source-docs/innd-stock/INND-daily-stock-history.xlsx`
+  (override the bucket with `CFO_SOURCE_BUCKET`). Auth: `GCP_CLAUDE_DRIVER_SA_JSON`.
+- `azure` (the funded-credit lane, used by the scheduled job): Azure Blob
+  `azure://otchealthcfodata/innd-stock/INND-daily-stock-history.xlsx` (storage account in
+  `otchealth-automation-rg`, westus2). Auth: `AZURE_STORAGE_ACCOUNT` + `AZURE_STORAGE_KEY`
+  (+ `AZURE_STORAGE_CONTAINER`, default `innd-stock`), SharedKey. Set `MIRROR_GCS=1` to also
+  write the legacy GCS copy each run during the transition.
+One file that grows over time, either way.
 
 ## Commands
 ```
