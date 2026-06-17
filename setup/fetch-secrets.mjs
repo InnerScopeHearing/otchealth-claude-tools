@@ -95,6 +95,13 @@ const MAP = [
   // market data only (internal CFO records; securities firewall = never for stock promotion).
   { id: 'massive-api-key', env: 'MASSIVE_API_KEY', required: false },
   { id: 'massive-api-key-2', env: 'MASSIVE_API_KEY_2', required: false },
+  // Azure Blob storage for the INND stock workbook (the funded-credit storage lane;
+  // GCP -> Azure migration). The innd-stock skill reads/writes here when
+  // STORAGE_BACKEND=azure (the scheduled Azure Container Apps Job sets that). Account key
+  // is sensitive -> flagged for rotation.
+  { id: 'azure-cfo-storage-account', env: 'AZURE_STORAGE_ACCOUNT', required: false },
+  { id: 'azure-cfo-storage-container', env: 'AZURE_STORAGE_CONTAINER', required: false },
+  { id: 'azure-cfo-storage-key', env: 'AZURE_STORAGE_KEY', required: false },
   // QuickBooks Online multi-company (CFO; non-PHI bookkeeping). One Intuit app, per-company
   // realmId + refresh token. The quickbooks skill (skills/quickbooks) reads these. INND +
   // HearingAssist writes are gated (public co). Refresh tokens ROTATE -> the recurring sync
