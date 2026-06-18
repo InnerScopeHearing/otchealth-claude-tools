@@ -35,7 +35,8 @@ node skills/pdf/pdf.mjs create <in.md|.html> <out.pdf> --title "..."            
   (local OCR, no cloud). Reserve the `vision` engine for non-sensitive company docs.
 
 ## The loop (run for every document)
-1. **Pick up:** `node skills/cfo-onedrive/onedrive.mjs inbox` (lists CLO Outgoing). For each
+1. **Pick up:** `node skills/cfo-onedrive/onedrive.mjs inbox` (lists CLO Outgoing). SKIP the
+   folder guide (any file whose name starts with "READ ME", "README", or "_"). For each real
    file: `node skills/cfo-onedrive/onedrive.mjs download "CLO Outgoing/<name>" /tmp/clo`.
 2. **Digest:** OCR/read it to text (`pdf read` or `pdf ocr --engine tesseract` for sensitive).
    Read the whole thing. Identify: document type, parties, dates, jurisdiction, the matter it
@@ -62,6 +63,17 @@ node skills/pdf/pdf.mjs create <in.md|.html> <out.pdf> --title "..."            
 7. **Index:** after a batch, build the catalog + dupe report:
    `node skills/cfo-onedrive/onedrive.mjs catalog "CLO Processed" clo-catalog.json`
    and `find-dupes "CLO Processed"`. Deliver `clo-catalog.json` (or a readable index) to CLO Incoming.
+8. **Data-room hygiene (keep the archive clean):** run the version report:
+   `node skills/cfo-onedrive/onedrive.mjs version-report "CLO Processed" version-report.md`
+   It produces a REAL report: (a) exact duplicates (byte-identical, same content hash) and
+   (b) draft-vs-final version clusters (the same document at different versions, e.g.
+   "Complaint draft / v2 / FINAL"), with the likely-current version flagged (final/executed
+   in the name, else newest, else largest) and a recoverable move plan into a `_Superseded`
+   folder. It NEVER moves or deletes anything; you CONFIRM each cluster (a v2 and a FINAL can
+   both be legitimately kept, e.g. an as-filed vs a working copy), then run the printed `mv`
+   commands so superseded copies are archived, not lost. Deliver `version-report.md` to CLO
+   Incoming so Matt sees what was de-duplicated and why. Re-run after every batch to keep the
+   matter archive clean and the document index unambiguous.
 
 ## What "learning" means here (do not skip)
 After processing, the matter file, not your memory, holds the knowledge: an accurate
