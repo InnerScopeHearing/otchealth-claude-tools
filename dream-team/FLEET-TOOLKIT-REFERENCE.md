@@ -250,6 +250,14 @@ Curation rationale + the connector/role-pack waves: `PLUGINS-MARKETPLACE-AUDIT.m
   **example-skills** (canvas-design, mcp-builder, brand-guidelines, doc-coauthoring, webapp-testing,
   skill-creator, frontend-design, ...). These are LICENSED (not redistributable), so they install
   via the marketplace, never vendored. Wired in `.claude/settings.json` + `session-start.sh`.
+- **wshobson `claude-code-workflows`** (MIT, 84 plugins, added 2026-06-18): autoUpdate OFF
+  (third-party, reviewed at cc37bfd). 21 best skills vendored into `skills/`; only a curated,
+  human-approved plugin set enabled: **hr-legal-compliance** (CLO: legal-advisor + hr-pro agents)
+  + **security-compliance** (guardian: security-auditor agent + compliance-check). Rest install
+  on demand; see `FLEET-SKILLS-RECOMMENDATIONS.md`.
+- **Context7 MCP** (added 2026-06-18, user scope via `session-start.sh`): live, version-pinned
+  library docs (`https://mcp.context7.com/mcp`, keyless). The top builder add - eliminates
+  hallucinated package APIs. Surgical add (held the ~40-50 active-tool ceiling in mind).
 
 ## 5. DREAM TEAM AGENTS (19; `Agent` tool; installed by session-start.sh)
 architect, builder, capital, coach, commerce, compliance-officer, coo, creative,

@@ -119,15 +119,39 @@ if command -v claude >/dev/null 2>&1; then
     done
   fi
   # wshobson "claude-code-workflows" marketplace (MIT, 84 domain plugins / 156 skills).
-  # REGISTER ONLY (do not mass-enable: each plugin ships its own subagents+commands and
-  # would bloat every session's context + the curated roster). The best individual skills
-  # are already vendored into skills/. Any agent can install a specific plugin on demand:
-  #   claude plugin install <plugin>@claude-code-workflows
-  # See dream-team/FLEET-SKILLS-RECOMMENDATIONS.md for the per-agent plugin map.
+  # SUPPLY-CHAIN HARDENING (security review 2026-06-18): this is a THIRD-PARTY marketplace,
+  # so autoUpdate is OFF in .claude/settings.json (no tracking of its moving default branch;
+  # reviewed at commit cc37bfd). We do NOT mass-enable and we do NOT allow agent-initiated
+  # installs from it. Only a CURATED, human-approved set is installed here (declared in
+  # settings.json enabledPlugins). The best individual skills are already vendored into
+  # skills/. To add another plugin, a human edits this list + enabledPlugins after a review.
+  WSHOBSON_PLUGINS="hr-legal-compliance security-compliance"   # CLO + guardian compliance (no hooks; reviewed)
   if ! claude plugin marketplace list 2>/dev/null | grep -q "claude-code-workflows"; then
-    echo "[octools] Registering wshobson claude-code-workflows marketplace (on-demand)..."
+    echo "[octools] Registering wshobson claude-code-workflows marketplace (curated, no autoUpdate)..."
     claude plugin marketplace add wshobson/agents >/dev/null 2>&1 \
       || echo "[octools] WARN: could not add claude-code-workflows marketplace (offline?)."
+  fi
+  if claude plugin marketplace list 2>/dev/null | grep -q "claude-code-workflows"; then
+    INSTALLED="$(claude plugin list 2>/dev/null)"
+    for p in $WSHOBSON_PLUGINS; do
+      if ! printf '%s' "$INSTALLED" | grep -q "${p}@claude-code-workflows"; then
+        claude plugin install "${p}@claude-code-workflows" >/dev/null 2>&1 \
+          && echo "[octools] curated wshobson plugin installed: ${p}" \
+          || echo "[octools] WARN: wshobson plugin install failed: ${p}"
+      fi
+    done
+  fi
+fi
+
+# ─── Fleet MCP servers (user scope; surgical adds only - tool-ceiling discipline) ───
+# Context7 = live, version-pinned library docs (kills hallucinated package APIs). Top
+# builder add. Free remote endpoint, no secret. Re-registered each session (~/.claude.json
+# is ephemeral). Add a CONTEXT7_API_KEY header later for higher limits if needed.
+if command -v claude >/dev/null 2>&1; then
+  if ! claude mcp list 2>/dev/null | grep -q "context7"; then
+    claude mcp add --transport http --scope user context7 https://mcp.context7.com/mcp >/dev/null 2>&1 \
+      && echo "[octools] MCP added: context7 (live library docs)" \
+      || echo "[octools] WARN: could not add context7 MCP (offline?)."
   fi
 fi
 

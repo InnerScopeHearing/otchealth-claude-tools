@@ -195,13 +195,23 @@ vendored (see skills/VENDORED.md). The remaining plugins install on demand:
 - **VoltAgent/awesome-claude-code-subagents** (MIT) - product / legal / business specialist subagents.
 - **ComposioHQ/awesome-claude-skills** - content-research-writer, changelog-generator (NOTE: no LICENSE file -> reference only, do NOT vendor until licensed).
 
-### MCP server power-ups (a different class: LIVE tools, not instructions) - MATT-GATE connectors
+### MCP server power-ups (a different class: LIVE tools, not instructions)
 CAUTION: there is a ~40-50 active-tool ceiling; past it the model picks the wrong tool, and
 we already run 25+ MCP connectors. So add SURGICALLY, not in bulk:
-- **Context7** (live, version-pinned library docs) - the top builder add; kills hallucinated package APIs. Biggest gap we have.
-- **Playwright MCP** (browser automation) - qa visual/UI testing + JS-heavy scraping.
-- **Exa** or **Firecrawl** (web search / scraping) - growth + research-heavy agents (lighter than a full browser).
-These need connector setup (a Matt gate). Recommend wiring Context7 first.
+- **Context7** (live, version-pinned library docs) - WIRED fleet-wide 2026-06-18 via
+  `session-start.sh` (`claude mcp add --transport http --scope user context7
+  https://mcp.context7.com/mcp`, free remote, keyless). Kills hallucinated package APIs for
+  every builder. Add a CONTEXT7_API_KEY header later for higher limits.
+- **Playwright MCP** (browser automation) - qa visual/UI testing + JS-heavy scraping. Candidate.
+- **Exa** or **Firecrawl** (web search / scraping) - growth + research agents. Candidate.
+
+### Supply-chain hardening of the wshobson marketplace (security review 2026-06-18)
+Third-party marketplace, so: `autoUpdate: false` (no tracking its moving default branch;
+reviewed at commit `cc37bfd`); NO mass-enable and NO agent-initiated installs; only a
+CURATED, human-approved set is enabled in `.claude/settings.json`. Enabled now:
+`hr-legal-compliance` (CLO: legal-advisor + hr-pro agents + GDPR/employment skills) and
+`security-compliance` (guardian: security-auditor agent + compliance-check command, for
+SOC2/HIPAA/GDPR). Adding another wshobson plugin is a human edit + review, not an agent action.
 
 ## Rollout order (history)
 1. DONE: skills-discovery (registry self-service).
