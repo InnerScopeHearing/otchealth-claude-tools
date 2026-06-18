@@ -37,6 +37,8 @@
 //   download <path> [dir]              download any file by path
 //   catalog [path] [outfile]           recursive inventory -> JSON (+ duplicate-hash report)
 //   find-dupes [path]                  list groups of byte-identical files (same quickXorHash)
+//   version-report [path] [out.md]     exact dups + draft-vs-final version clusters + a
+//                                       recommended move plan (REPORT ONLY; human approves)
 //   dataroom-init [parent]             scaffold an audit data room (per-company + _Duplicates)
 import crypto from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -139,6 +141,54 @@ function dupeGroups(files) {
   const byHash = {};
   for (const f of files) { if (f.type !== "file" || !f.hash) continue; (byHash[f.hash] ||= []).push(f); }
   return Object.values(byHash).filter((g) => g.length > 1);
+}
+
+// Normalize a filename to a version-agnostic "base key" so drafts/finals of the same
+// document cluster together (e.g. "Complaint v2.docx", "Complaint DRAFT.docx",
+// "Complaint FINAL (signed).pdf" -> "complaint"). Strips version/status/date/copy markers.
+const STATUS_RE = /\b(final|finalized|complete|completed|draft|rev(?:ision|ised|\.?\s*\d+)?|version|ver|clean|redline(?:d)?|markup|tracked|comments?|signed|executed|fully\s*executed|conformed|updated|revised|amended|new|old|latest|copy|dupl?icate|backup|wip)\b/g;
+function normBase(name) {
+  let b = name.replace(/\.[a-z0-9]{1,5}$/i, "");            // drop extension
+  b = b.toLowerCase();
+  b = b.replace(/\b(19|20)\d{2}[-_.]\d{1,2}[-_.]\d{1,2}\b/g, " "); // YYYY-MM-DD
+  b = b.replace(/\b\d{1,2}[-_.]\d{1,2}[-_.]\d{2,4}\b/g, " ");      // M.D.YY / MM-DD-YYYY
+  b = b.replace(/\bv\.?\s*\d+(\.\d+)*\b/g, " ");            // v1, v2.3, v 4
+  b = b.replace(/[([{]\s*\d+\s*[)\]}]/g, " ");             // (1) [2] {3}
+  b = b.replace(/\bcopy\s+of\b/g, " ");
+  b = b.replace(STATUS_RE, " ");
+  b = b.replace(/[_\-]+/g, " ").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  return b;
+}
+// Group files into version clusters by normalized base name (and parent folder), excluding
+// exact-duplicate noise. Within each cluster, pick the recommended KEEP (final/executed in
+// name > latest modified > largest), the rest are superseded candidates. Human approves.
+function versionClusters(files) {
+  const by = {};
+  for (const f of files) {
+    if (f.type !== "file") continue;
+    const base = normBase(f.path.split("/").pop());
+    if (!base || base.length < 3) continue;               // too generic to cluster safely
+    const folder = f.path.split("/").slice(0, -1).join("/");
+    const key = `${folder}::${base}`;
+    (by[key] ||= []).push(f);
+  }
+  const clusters = [];
+  for (const [key, group] of Object.entries(by)) {
+    if (group.length < 2) continue;
+    const distinctNames = new Set(group.map((g) => g.path.split("/").pop()));
+    if (distinctNames.size < 2) continue;                 // same name = exact-dup territory, not a version cluster
+    const score = (f) => {
+      const n = f.path.toLowerCase();
+      let s = 0;
+      if (/\b(final|fully\s*executed|executed|signed|conformed)\b/.test(n)) s += 1e15;
+      s += new Date(f.modified || 0).getTime() * 1000;    // newer wins
+      s += (f.size || 0);                                  // larger wins as tie-break
+      return s;
+    };
+    const ranked = [...group].sort((a, b) => score(b) - score(a));
+    clusters.push({ base: key.split("::")[1], folder: key.split("::")[0], keep: ranked[0], superseded: ranked.slice(1) });
+  }
+  return clusters.sort((a, b) => b.superseded.length - a.superseded.length);
 }
 
 // Device-code consent: the OneDrive owner (e.g. Mark) signs in once at a URL with a
@@ -300,6 +350,43 @@ try {
     console.log(`${dupes.length} duplicate group(s) by content hash:`);
     for (const g of dupes) { console.log(`  [${g.length}x ${g[0].size}b]`); for (const f of g) console.log(`     ${f.path}`); }
 
+  } else if (cmd === "version-report") {
+    // Data-room hygiene: exact duplicates + draft-vs-final version clusters, with a
+    // recommended keep + move plan. REPORT ONLY (never moves/deletes; human approves).
+    const path = a1 || PROCESSED;
+    const SUP = process.env.CFO_SUPERSEDED_FOLDER || `${path}/_Superseded`;
+    const rows = (await walk(tok, path)).filter((r) => r.type === "file");
+    const dupes = dupeGroups(rows);
+    const clusters = versionClusters(rows);
+    const lines = [];
+    lines.push(`# Deduplication + version report: "${path}"`);
+    lines.push(`Generated ${new Date().toISOString().slice(0, 16).replace("T", " ")}Z. ${rows.length} files scanned. REVIEW before moving anything.`);
+    lines.push("");
+    lines.push(`## Exact duplicates (byte-identical, same content hash): ${dupes.length} group(s)`);
+    lines.push("Keep one, archive the rest. No information is lost.");
+    for (const g of dupes) {
+      const keep = [...g].sort((a, b) => new Date(a.modified || 0) - new Date(b.modified || 0))[0];
+      lines.push(`- [${g.length}x, ${g[0].size}b] keep: ${keep.path}`);
+      for (const f of g) if (f.path !== keep.path) lines.push(`    dup -> archive: ${f.path}`);
+    }
+    lines.push("");
+    lines.push(`## Version clusters (draft vs final of the same document): ${clusters.length} cluster(s)`);
+    lines.push("Heuristic match by normalized name; CONFIRM each before superseding (final/executed > newest > largest).");
+    for (const c of clusters) {
+      lines.push(`- "${c.base}" in ${c.folder || "(root)"}  [${c.superseded.length + 1} versions]`);
+      lines.push(`    KEEP (likely current): ${c.keep.path.split("/").pop()}  (${c.keep.modified}, ${c.keep.size}b)`);
+      for (const f of c.superseded) lines.push(`    superseded?: ${f.path.split("/").pop()}  (${f.modified}, ${f.size}b)`);
+    }
+    lines.push("");
+    lines.push(`## Suggested cleanup plan (move-based, recoverable; run AFTER you confirm)`);
+    lines.push(`Move extras to "${SUP}" so nothing is deleted and the audit trail is preserved:`);
+    for (const g of dupes) { const keep = [...g].sort((a, b) => new Date(a.modified || 0) - new Date(b.modified || 0))[0]; for (const f of g) if (f.path !== keep.path) lines.push(`  node skills/cfo-onedrive/onedrive.mjs mv "${f.path}" "${SUP}"`); }
+    for (const c of clusters) for (const f of c.superseded) lines.push(`  node skills/cfo-onedrive/onedrive.mjs mv "${f.path}" "${SUP}"`);
+    const report = lines.join("\n");
+    console.log(report);
+    if (a2) { writeFileSync(a2, report); console.log(`\n(written -> ${a2})`); }
+    console.log(`\nSUMMARY: ${dupes.length} exact-dup group(s), ${clusters.length} version cluster(s). Report only; nothing moved.`);
+
   } else if (cmd === "dataroom-init") {
     const parent = a1 || `${PROCESSED}/Audit Data Room`;
     const companies = ["OTCHealth", "InnerScope (INND)", "Hearing Assist", "Matthew Moore Personal"];
@@ -310,7 +397,7 @@ try {
     console.log(`  (add category subfolders per company with: mkdir "${parent}/OTCHealth/Bank Statements")`);
 
   } else {
-    console.error("commands: inbox | incoming-list | processed-list | pull <name> [dir] | process <name> | deliver <file> [name]\n          ls [path] | tree [path] | stat <path> | mkdir <path> | mv <src> <dest> [name] | cp <src> <dest> [name] | rm <path>\n          upload <file> <destPath> | download <path> [dir] | catalog [path] [out] | find-dupes [path] | dataroom-init [parent]");
+    console.error("commands: inbox | incoming-list | processed-list | pull <name> [dir] | process <name> | deliver <file> [name]\n          ls [path] | tree [path] | stat <path> | mkdir <path> | mv <src> <dest> [name] | cp <src> <dest> [name] | rm <path>\n          upload <file> <destPath> | download <path> [dir] | catalog [path] [out] | find-dupes [path] | version-report [path] [out.md] | dataroom-init [parent]");
     process.exit(2);
   }
 } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
