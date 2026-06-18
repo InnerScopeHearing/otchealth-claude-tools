@@ -112,6 +112,11 @@ const MAP = [
   // USC/CFR fetch. Both optional (the skill works without them at lower limits).
   { id: 'legal-courtlistener-token', env: 'LEGAL_COURTLISTENER_TOKEN', required: false },
   { id: 'govinfo-api-key', env: 'GOVINFO_API_KEY', required: false },
+  // Gmail retrieval (CLO) for Matt's PERSONAL Gmail. Read-only (gmail.readonly). Lets the CLO
+  // download emails + attachments that exist only in Gmail. Confidential/privileged.
+  { id: 'gmail-oauth-client-id', env: 'GMAIL_OAUTH_CLIENT_ID', required: false },
+  { id: 'gmail-oauth-client-secret', env: 'GMAIL_OAUTH_CLIENT_SECRET', required: false },
+  { id: 'gmail-refresh-token', env: 'GMAIL_REFRESH_TOKEN', required: false },
   // Context7 (live, version-pinned library docs MCP + REST). The Context7 MCP is wired with
   // this as a Bearer header in session-start; the env also lets any tool hit the REST API.
   { id: 'context7-api-key', env: 'CONTEXT7_API_KEY', required: false },
