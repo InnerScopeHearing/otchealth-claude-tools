@@ -96,6 +96,28 @@ if command -v claude >/dev/null 2>&1; then
       fi
     done
   fi
+  # Official Anthropic Agent Skills marketplace (anthropics/skills). These skills are
+  # LICENSED, NOT redistributable (Anthropic "use within the Services" terms forbid
+  # copying them into our repo), so we install them the AUTHORIZED way via the official
+  # marketplace instead of vendoring. document-skills = xlsx/docx/pptx/pdf; example-skills
+  # = canvas-design, mcp-builder, brand-guidelines, doc-coauthoring, webapp-testing,
+  # skill-creator, frontend-design, etc. Gives the fleet real Office-doc authoring.
+  AGENT_SKILL_PLUGINS="document-skills example-skills"
+  if ! claude plugin marketplace list 2>/dev/null | grep -q "anthropic-agent-skills"; then
+    echo "[octools] Registering Anthropic Agent Skills marketplace (anthropics/skills)..."
+    claude plugin marketplace add anthropics/skills >/dev/null 2>&1 \
+      || echo "[octools] WARN: could not add anthropic-agent-skills marketplace (offline?)."
+  fi
+  if claude plugin marketplace list 2>/dev/null | grep -q "anthropic-agent-skills"; then
+    INSTALLED="$(claude plugin list 2>/dev/null)"
+    for p in $AGENT_SKILL_PLUGINS; do
+      if ! printf '%s' "$INSTALLED" | grep -q "${p}@anthropic-agent-skills"; then
+        claude plugin install "${p}@anthropic-agent-skills" >/dev/null 2>&1 \
+          && echo "[octools] agent-skill plugin installed: ${p}" \
+          || echo "[octools] WARN: agent-skill plugin install failed: ${p}"
+      fi
+    done
+  fi
 fi
 
 mkdir -p "${HOME}/.designer"

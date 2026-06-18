@@ -6,6 +6,13 @@
         "repo": "anthropics/claude-code"
       },
       "autoUpdate": true
+    },
+    "anthropic-agent-skills": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/skills"
+      },
+      "autoUpdate": true
     }
   },
   "enabledPlugins": {
@@ -21,7 +28,9 @@
     "ralph-wiggum@claude-code-plugins": true,
     "explanatory-output-style@claude-code-plugins": true,
     "learning-output-style@claude-code-plugins": true,
-    "claude-opus-4-5-migration@claude-code-plugins": true
+    "claude-opus-4-5-migration@claude-code-plugins": true,
+    "document-skills@anthropic-agent-skills": true,
+    "example-skills@anthropic-agent-skills": true
   },
   "hooks": {
     "SessionStart": [
