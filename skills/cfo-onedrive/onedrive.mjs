@@ -64,15 +64,16 @@ async function smToken() {
 async function smRead(t, id) { const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 async function smWrite(t, id, v) { const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); let r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); } if (!r.ok) throw new Error("SM write " + r.status); }
 
-async function accessToken() {
+async function accessToken(user) {
   const smt = await smToken();
-  const refresh = await smRead(smt, "graph-onedrive-refresh-token");
-  if (!refresh) throw new Error("No graph-onedrive-refresh-token in Secret Manager. Run the OneDrive consent first.");
+  const key = user ? `graph-onedrive-refresh-token-${user}` : "graph-onedrive-refresh-token";
+  const refresh = await smRead(smt, key);
+  if (!refresh) throw new Error(`No ${key} in Secret Manager. Run the OneDrive consent first: onedrive.mjs consent ${user || "<user>"}`);
   const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID"), SEC = need("GRAPH_MAIL_CLIENT_SECRET");
   const r = await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: CID, client_secret: SEC, grant_type: "refresh_token", refresh_token: refresh, scope: "offline_access Files.ReadWrite" }) });
   const j = await r.json();
   if (!j.access_token) throw new Error("token refresh failed " + r.status + ": " + JSON.stringify(j).slice(0, 200));
-  if (j.refresh_token && j.refresh_token !== refresh) { try { await smWrite(smt, "graph-onedrive-refresh-token", j.refresh_token); console.error("rotated OneDrive refresh token -> persisted."); } catch (e) { console.error("ROTATE PERSIST FAILED: " + e.message); } }
+  if (j.refresh_token && j.refresh_token !== refresh) { try { await smWrite(smt, key, j.refresh_token); console.error("rotated OneDrive refresh token -> persisted."); } catch (e) { console.error("ROTATE PERSIST FAILED: " + e.message); } }
   return j.access_token;
 }
 async function gx(tok, method, path, opts = {}) { return fetch(path.startsWith("http") ? path : GRAPH + path, { method, headers: { Authorization: `Bearer ${tok}`, ...(opts.headers || {}) }, body: opts.body }); }
@@ -129,10 +130,47 @@ function dupeGroups(files) {
   return Object.values(byHash).filter((g) => g.length > 1);
 }
 
+// Device-code consent: the OneDrive owner (e.g. Mark) signs in once at a URL with a
+// code; we store their delegated refresh token as graph-onedrive-refresh-token-<user>.
+// No redirect URI / admin change needed (the app allows public-client device flow).
+async function runConsent(user) {
+  if (!user) { console.error("usage: onedrive.mjs consent <user>   (e.g. mark) -- that OneDrive owner signs in once)"); process.exit(2); }
+  const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID"), SEC = process.env.GRAPH_MAIL_CLIENT_SECRET;
+  const dc = await (await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/devicecode`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: CID, scope: "offline_access Files.ReadWrite User.Read" }) })).json();
+  if (!dc.device_code) throw new Error("devicecode failed: " + JSON.stringify(dc).slice(0, 200));
+  console.log(`\n=== OneDrive consent for "${user}" ===`);
+  console.log(`1. Open: ${dc.verification_uri}`);
+  console.log(`2. Enter code: ${dc.user_code}`);
+  console.log(`3. Sign in as the ${user} OneDrive owner and approve Files access.`);
+  console.log(`Waiting for sign-in (expires in ~${Math.round(dc.expires_in / 60)} min)...`);
+  const interval = (dc.interval || 5) * 1000, deadline = Date.now() + dc.expires_in * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, interval));
+    const body = { client_id: CID, grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: dc.device_code };
+    if (SEC) body.client_secret = SEC;
+    const tj = await (await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) })).json();
+    if (tj.refresh_token) {
+      await smWrite(await smToken(), `graph-onedrive-refresh-token-${user}`, tj.refresh_token);
+      console.log(`\nSUCCESS: stored graph-onedrive-refresh-token-${user}. Use it with:  onedrive.mjs --user ${user} tree`);
+      return;
+    }
+    if (tj.error === "authorization_pending") continue;
+    if (tj.error === "slow_down") { await new Promise((r) => setTimeout(r, 5000)); continue; }
+    throw new Error("consent failed: " + (tj.error || "?") + " - " + (tj.error_description || "").split("\n")[0].slice(0, 160));
+  }
+  throw new Error("consent timed out (code expired). Re-run consent.");
+}
+
 const args = process.argv.slice(2);
+// --user <name> selects an alternate owner's OneDrive (per-user delegated token
+// graph-onedrive-refresh-token-<name>); default is Matt's (graph-onedrive-refresh-token).
+let USERKEY = null;
+const ui = args.indexOf("--user");
+if (ui >= 0) { USERKEY = args[ui + 1]; args.splice(ui, 2); }
 const [cmd, a1, a2, a3] = args;
 try {
-  const tok = await accessToken();
+  if (cmd === "consent") { await runConsent(a1 || USERKEY); process.exit(0); }
+  const tok = await accessToken(USERKEY);
 
   if (cmd === "inbox" || cmd === "outgoing-list") {
     const items = await listChildren(tok, OUTGOING);
