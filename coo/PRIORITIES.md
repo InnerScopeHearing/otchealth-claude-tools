@@ -4,14 +4,15 @@ Ranked by cash impact x speed x "only Matt can do it." The COO pulls today's 1-3
 from the top of this list. Update status as items complete.
 
 ## NOW (this week — first dollars)
-1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
-   today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
-3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
-   connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
-4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
-   securities firewall). Rebuild the cadence you dropped. [open]
+1. **Decision: Send 3 v2 YES or NO** (COO-10). Draft 141 in Customer.io: 6,800
+   non-openers, $99 TReO pair, funnel page fixed. YES = Matt sends it. NO = pivot to
+   phone+Amazon. Either answer ends the stalemate. [OVERDUE since June 5, Matt-only]
+2. **Go live on Gumroad in one sitting.** 8 product listings + 12 SOPs are fully drafted
+   (COO-2). Create account, paste, upload PDFs, publish. First dollars in days. [Needs Matt]
+3. **File FDA OTC Establishment Registration** (~$10K, <2wk). Stripe is LIVE (confirmed
+   June 10). FDA is now the ONLY gate on the $2-3M inventory pool. [Matt-only, blocking]
+4. **Restart LinkedIn** — one factual post about a real product/milestone (securities
+   firewall). Rebuild the cadence you dropped. [open]
 
 ## THIS WEEK (protect + unlock)
 5. **HARD GATE - Rotate the GCP SA + PostHog all-access keys** (treat as compromised
@@ -31,3 +32,5 @@ from the top of this list. Update status as items complete.
 - More tooling. The operating system is DONE (see docs/SYSTEM-STATUS.md). Building is the
   avoidance pattern; redirect to a NOW item.
 - New grants that duplicate a filled lane (analytics=PostHog, etc.).
+- n8n migration (COO-21): DONE as of 2026-06-11. Self-host live at automation.otchealth.app.
+- Stripe connection: DONE as of 2026-06-10. FDA is the remaining inventory gate.
