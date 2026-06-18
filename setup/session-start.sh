@@ -143,17 +143,9 @@ if command -v claude >/dev/null 2>&1; then
   fi
 fi
 
-# ─── Fleet MCP servers (user scope; surgical adds only - tool-ceiling discipline) ───
-# Context7 = live, version-pinned library docs (kills hallucinated package APIs). Top
-# builder add. Free remote endpoint, no secret. Re-registered each session (~/.claude.json
-# is ephemeral). Add a CONTEXT7_API_KEY header later for higher limits if needed.
-if command -v claude >/dev/null 2>&1; then
-  if ! claude mcp list 2>/dev/null | grep -q "context7"; then
-    claude mcp add --transport http --scope user context7 https://mcp.context7.com/mcp >/dev/null 2>&1 \
-      && echo "[octools] MCP added: context7 (live library docs)" \
-      || echo "[octools] WARN: could not add context7 MCP (offline?)."
-  fi
-fi
+# NOTE: fleet MCP servers (context7, courtlistener) are registered LATER, after the
+# credentials/SA are available, so authenticated servers can read their key. See the
+# "Fleet MCP servers" block near the end of this script.
 
 mkdir -p "${HOME}/.designer"
 CRED="${HOME}/.designer/credentials.env"
@@ -287,6 +279,34 @@ append_if FOURVAULT_GEMINI_API_KEY "$FOURVAULT_GEMINI_V"
 append_if FOURVAULT_NEON_DATABASE_URL "$FOURVAULT_NEON_V"
 append_if FOURVAULT_NEON_DATABASE_URL_DIRECT "$FOURVAULT_NEON_DIRECT_V"
 chmod 600 "$CRED"
+
+# ─── Fleet MCP servers (user scope; SURGICAL adds only — ~40-50 active-tool ceiling) ───
+# Registered here (after the SA/credentials exist) so authenticated servers get their key.
+# ~/.claude.json is ephemeral, so re-register every session (idempotent: skip if present).
+#  - context7    = live, version-pinned library docs (kills hallucinated package APIs);
+#                  Bearer-keyed from context7-api-key for higher limits, keyless fallback.
+#  - courtlistener = the CLO's MCP over 9M+ opinions, dockets, citation networks; OAuth 2.1,
+#                  so first use prompts a ONE-TIME human consent (a physical gate).
+if command -v claude >/dev/null 2>&1; then
+  MCP_LIST="$(claude mcp list 2>/dev/null || true)"
+  if ! printf '%s' "$MCP_LIST" | grep -q "context7"; then
+    C7TMP="$(mktemp)"
+    if node "${TOOLS_DIR}/setup/get-secret.mjs" context7-api-key "$C7TMP" >/dev/null 2>&1 && [ -s "$C7TMP" ]; then
+      claude mcp add --transport http --scope user context7 https://mcp.context7.com/mcp \
+        --header "Authorization: Bearer $(cat "$C7TMP")" >/dev/null 2>&1 \
+        && echo "[octools] MCP added: context7 (authenticated)" || echo "[octools] WARN: context7 MCP add failed."
+    else
+      claude mcp add --transport http --scope user context7 https://mcp.context7.com/mcp >/dev/null 2>&1 \
+        && echo "[octools] MCP added: context7 (keyless)" || echo "[octools] WARN: context7 MCP add failed."
+    fi
+    shred -u "$C7TMP" 2>/dev/null || rm -f "$C7TMP"
+  fi
+  if ! printf '%s' "$MCP_LIST" | grep -q "courtlistener"; then
+    claude mcp add --transport http --scope user courtlistener https://mcp.courtlistener.com/ >/dev/null 2>&1 \
+      && echo "[octools] MCP added: courtlistener (OAuth — one-time consent on first use)" \
+      || echo "[octools] WARN: courtlistener MCP add failed."
+  fi
+fi
 
 [ -n "$OPENAI_KEY" ] && echo "[octools] OPENAI_API_KEY: loaded" || echo "[octools] WARN: OPENAI_API_KEY missing (create 'openai-api-key' secret)."
 [ -n "$ELEVEN_KEY" ] && echo "[octools] ELEVENLABS_API_KEY: loaded" || echo "[octools] WARN: ELEVENLABS_API_KEY missing (create 'elevenlabs-api-key' secret)."
