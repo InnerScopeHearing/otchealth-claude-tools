@@ -71,7 +71,8 @@ are: **federal securities**, **Nevada corporate (NRS)**, **California family + c
   correspondence. `matthew@innd.com` (legal-entity), `mark@innd.com`, `kim@innd.com`, plus
   `ap@innd.com` / `accounting@hearingassist.com` for contract/vendor + settlement threads.
 - **Legal store** (the `legal` skill): the CLO's own matter files, dockets, drafts, exhibit
-  indexes, and privilege logs. `company/` (committable-adjacent) vs `personal/` (the
+  indexes, and privilege logs. On **Azure Blob** (off Google), account `otchealthlegalstore`,
+  with a `company` container (committable-adjacent) and a SEPARATE `personal` container (the
   confidential divorce + civil matters, access-controlled, never in git or shared context).
 
 ## Matter index (the live book — populate + maintain via `legal matters`)
