@@ -62,6 +62,13 @@ async function smAddVersion(t, id, v) {
   }
   if (!r.ok) throw new Error("SM addVersion " + r.status);
 }
+// Read the latest secret version (the live, rotated refresh token).
+async function smReadLatest(t, id) {
+  const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error("SM access " + r.status);
+  return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
+}
 
 async function accessToken(refresh) {
   const basic = Buffer.from(`${need("QBO_CLIENT_ID")}:${need("QBO_CLIENT_SECRET")}`).toString("base64");
@@ -78,7 +85,7 @@ async function accessToken(refresh) {
   }
   if (j.refresh_token && j.refresh_token !== refresh) {
     if (smAvailable()) {
-      try { const t = await smToken(); await smAddVersion(t, `qbo-refresh-${KEY}`, j.refresh_token); console.error(`Intuit rotated ${KEY} refresh token -> persisted (qbo-refresh-${KEY}).`); }
+      try { const t = await smToken(); await smAddVersion(t, SREFRESH, j.refresh_token); console.error(`Intuit rotated ${KEY} refresh token -> persisted (${SREFRESH}).`); }
       catch (e) { console.error(`ROTATE PERSIST FAILED for ${KEY} (${e.message}): new refresh token NOT saved.`); }
     } else {
       console.error(`NOTE: Intuit rotated the ${KEY} refresh token but no SA to persist. Update qbo-refresh-${KEY} or it will expire.`);
@@ -117,8 +124,21 @@ if (!company || !cmd) {
   process.exit(2);
 }
 const KEY = company.toUpperCase().replace(/[^A-Z0-9]/g, "");
+const SREFRESH = `qbo-refresh-${KEY.toLowerCase()}`;   // the Secret Manager id (matches fetch-secrets)
 const realm = need(`QBO_REALM_${KEY}`);
-const refresh = need(`QBO_REFRESH_${KEY}`);
+// Resolve the refresh token FRESH from Secret Manager every call so a 2-call sequence never
+// presents the stale env token (which makes Intuit revoke the whole token family). The env
+// var QBO_REFRESH_<KEY> is only a fallback (first run before anything is persisted, or no SA).
+async function resolveRefresh() {
+  if (smAvailable()) {
+    try {
+      const live = await smReadLatest(await smToken(), SREFRESH);
+      if (live) { console.error(`refresh token: read fresh from Secret Manager (${SREFRESH}).`); return live; }
+    } catch (e) { console.error(`WARN: could not read ${SREFRESH} from SM (${e.message}); falling back to env.`); }
+  }
+  return need(`QBO_REFRESH_${KEY}`);
+}
+const refresh = await resolveRefresh();
 const token = await accessToken(refresh);
 
 if (cmd === "company-info") {
