@@ -19,7 +19,7 @@
         "source": "github",
         "repo": "wshobson/agents"
       },
-      "autoUpdate": true
+      "autoUpdate": false
     }
   },
   "enabledPlugins": {
@@ -37,7 +37,9 @@
     "learning-output-style@claude-code-plugins": true,
     "claude-opus-4-5-migration@claude-code-plugins": true,
     "document-skills@anthropic-agent-skills": true,
-    "example-skills@anthropic-agent-skills": true
+    "example-skills@anthropic-agent-skills": true,
+    "hr-legal-compliance@claude-code-workflows": true,
+    "security-compliance@claude-code-workflows": true
   },
   "hooks": {
     "SessionStart": [

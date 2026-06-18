@@ -46,6 +46,12 @@ adding their subagents/commands to our curated roster + every session's context.
 
 All 21 carry the wshobson MIT LICENSE in their dir.
 
+**Marketplace hardening (security review 2026-06-18):** the wshobson `claude-code-workflows`
+marketplace is third-party, so `autoUpdate: false` (frozen at reviewed commit cc37bfd, no
+moving-branch tracking). No agent-initiated installs. Only a curated, human-approved set is
+enabled in `.claude/settings.json`: `hr-legal-compliance` (CLO) + `security-compliance`
+(guardian). Both reviewed: no hooks, agents + skills + one command only.
+
 ## NOT vendored - licensed, installed via the authorized marketplace instead
 
 The official Anthropic Agent Skills (`anthropics/skills`, marketplace `anthropic-agent-skills`)
