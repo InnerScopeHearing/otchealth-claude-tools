@@ -245,6 +245,11 @@ Each ships agents/commands/skills (namespaced `<plugin>:<component>`):
 - **explanatory-output-style**, **learning-output-style** — available, opt-in via `/output-style`.
 - **claude-opus-4-5-migration** — moot on Opus 4.8 (installed for completeness).
 Curation rationale + the connector/role-pack waves: `PLUGINS-MARKETPLACE-AUDIT.md`, `PLUGIN-LAUNCH-PLAN.md`.
+- **Official Anthropic Agent Skills** (marketplace `anthropic-agent-skills` = `anthropics/skills`,
+  added 2026-06-18): **document-skills** (xlsx/docx/pptx/pdf, real Office authoring) +
+  **example-skills** (canvas-design, mcp-builder, brand-guidelines, doc-coauthoring, webapp-testing,
+  skill-creator, frontend-design, ...). These are LICENSED (not redistributable), so they install
+  via the marketplace, never vendored. Wired in `.claude/settings.json` + `session-start.sh`.
 
 ## 5. DREAM TEAM AGENTS (19; `Agent` tool; installed by session-start.sh)
 architect, builder, capital, coach, commerce, compliance-officer, coo, creative,

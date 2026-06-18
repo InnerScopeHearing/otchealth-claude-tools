@@ -141,13 +141,40 @@ a guardian pass; keep personal-matter work off any third-party runtime code.
 
 ---
 
-## Recommended rollout order
-1. **DONE:** vendor `skills-discovery` (fleet-wide self-service discovery).
-2. **Next (low risk, high value):** vendor the `@anthropics/skills` docx/pptx/xlsx suite
-   (CFO, COO, capital, growth all benefit) — official, no community-code risk.
-3. **CLO batch (guardian-reviewed):** the official legal plugins + edgartools +
-   contract-analyzer. Highest strategic value given the active GA FLSA + CA matters.
-4. **Builder/QA batch:** obra/superpowers planning+TDD+debugging, anthropics
-   frontend-design + webapp-testing.
-5. Everything else on demand, pulled by agents via `skills-discovery` and vendored after
-   a guardian pass when it proves useful more than once.
+## LIVE STATUS (2026-06-18) - what is installed fleet-wide now
+
+How a skill reaches every agent (new AND existing sessions):
+- **New / resumed sessions:** `setup/session-start.sh` runs on every session start. It (a)
+  copies every `skills/*/` in this repo into `~/.claude/skills` (the vendored MIT skills),
+  and (b) headless-installs the official Anthropic marketplace plugins. A "stale" chat, when
+  resumed, spins a fresh container that re-runs this, so it gets everything automatically.
+- **Actively-running session:** cannot be force-updated from outside. Two paths: the
+  `skills-discovery` skill (self-serve any registry skill at runtime), or re-run
+  `bash setup/session-start.sh` to re-hydrate the full pack immediately.
+
+INSTALLED (vendored, MIT, in `skills/` - see `skills/VENDORED.md`):
+- Workflow meta (ALL agents): brainstorming, writing-plans, executing-plans,
+  subagent-driven-development, test-driven-development, systematic-debugging,
+  verification-before-completion, dispatching-parallel-agents, requesting-code-review,
+  receiving-code-review.
+- Finance (finance-ops/CFO/capital): creating-financial-models, analyzing-financial-statements.
+- CLO: contract-analyzer, contract-redliner, edgartools (SEC structured data).
+- Meta: skills-discovery (registry self-serve).
+
+INSTALLED (official Anthropic marketplace `anthropic-agent-skills`, authorized-not-copied):
+- document-skills: xlsx, docx, pptx, pdf.
+- example-skills: canvas-design, mcp-builder, brand-guidelines, doc-coauthoring,
+  webapp-testing, skill-creator, frontend-design, internal-comms, theme-factory,
+  web-artifacts-builder.
+
+NOT installed (LegalZoom commercial plugin): the `@anthropics/claude-plugins-official`
+"legalzoom" plugin is a third-party commercial connector, not a self-contained skill;
+connect it deliberately if wanted, do not auto-enable.
+
+## Rollout order (history)
+1. DONE: skills-discovery (registry self-service).
+2. DONE: official Anthropic docs (document-skills + example-skills) via authorized marketplace.
+3. DONE: CLO batch (edgartools + contract-analyzer/redliner) + finance models, vendored MIT.
+4. DONE: builder/QA/meta workflow batch (superpowers) vendored MIT; webapp-testing via marketplace.
+5. ONGOING: the long tail is pulled on demand via `skills-discovery` and vendored (MIT +
+   guardian pass) when it proves useful more than once.
