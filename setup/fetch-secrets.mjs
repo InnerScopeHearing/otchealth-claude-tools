@@ -102,6 +102,16 @@ const MAP = [
   { id: 'azure-cfo-storage-account', env: 'AZURE_STORAGE_ACCOUNT', required: false },
   { id: 'azure-cfo-storage-container', env: 'AZURE_STORAGE_CONTAINER', required: false },
   { id: 'azure-cfo-storage-key', env: 'AZURE_STORAGE_KEY', required: false },
+  // Azure Blob storage for the CLO legal matter/docket store (off Google; dedicated account
+  // otchealthlegalstore with company + personal containers). The legal skill reads/writes
+  // here. The personal container holds confidential divorce + civil matters. Account key is
+  // sensitive -> flagged for rotation.
+  { id: 'azure-legal-storage-account', env: 'AZURE_LEGAL_STORAGE_ACCOUNT', required: false },
+  { id: 'azure-legal-storage-key', env: 'AZURE_LEGAL_STORAGE_KEY', required: false },
+  // Free legal-research tokens (CLO). CourtListener raises case-law limits; GovInfo unlocks
+  // USC/CFR fetch. Both optional (the skill works without them at lower limits).
+  { id: 'legal-courtlistener-token', env: 'LEGAL_COURTLISTENER_TOKEN', required: false },
+  { id: 'govinfo-api-key', env: 'GOVINFO_API_KEY', required: false },
   // QuickBooks Online multi-company (CFO; non-PHI bookkeeping). One Intuit app, per-company
   // realmId + refresh token. The quickbooks skill (skills/quickbooks) reads these. INND +
   // HearingAssist writes are gated (public co). Refresh tokens ROTATE -> the recurring sync

@@ -38,12 +38,15 @@ node skills/legal/legal.mjs note ainnova-deal "counsel reviewing disclosure timi
 ```
 
 ## Storage + confidentiality (HARD)
-- Store: GCS bucket `otchealth-legal-store` (auto-created on first use), prefixes
-  `company/matters/` and `personal/matters/`. Auth: `GCP_CLAUDE_DRIVER_SA_JSON`.
-- **Personal matters (divorce, civil) are confidential + privileged.** They are stored
-  ONLY under `personal/` and are never committed to git, never echoed into shared agent
+- Store: **Azure Blob** (off Google), dedicated storage account `otchealthlegalstore` with
+  two containers, `company` and `personal`, each holding `matters/<id>.json`. SharedKey auth
+  via `AZURE_LEGAL_STORAGE_ACCOUNT` + `AZURE_LEGAL_STORAGE_KEY` (hydrated from Secret Manager
+  `azure-legal-storage-account` / `azure-legal-storage-key`). The dedicated account keeps the
+  legal record off the shared CFO storage and on the funded Azure lane.
+- **Personal matters (divorce, civil) live in the SEPARATE `personal` container** and are
+  confidential + privileged. They are never committed to git, never echoed into shared agent
   context, and never co-mingled with company records. Only the CLO (and Matt) should touch
-  them. A separately-credentialed personal store + encryption is the recommended harden.
+  them. A separately-keyed personal account + at-rest encryption is the recommended harden.
 
 ## Guardrails
 - Citation-verify before relying on any case; "unverified" beats a confident fake.

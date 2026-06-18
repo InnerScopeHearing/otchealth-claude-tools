@@ -6,8 +6,9 @@
 // divorce + civil case) live under personal/ and are confidential, access-controlled, and
 // NEVER committed to git or shared into other agents' context.
 //
-// Store: GCS bucket (default otchealth-legal-store in otchealth-shared-prod), auth via the
-// claude-driver SA (GCP_CLAUDE_DRIVER_SA_JSON). Dependency-free (Node 18+).
+// Store: Azure Blob (off Google), account otchealthlegalstore, containers `company` and
+// `personal`, SharedKey auth via AZURE_LEGAL_STORAGE_ACCOUNT + AZURE_LEGAL_STORAGE_KEY.
+// Dependency-free (Node 18+).
 //
 // Usage:
 //   node legal.mjs cite "<case name or citation>"                 # verify authority exists (CourtListener)
@@ -20,8 +21,12 @@
 
 import crypto from "node:crypto";
 
-const BUCKET = process.env.LEGAL_STORE_BUCKET || "otchealth-legal-store";
-const PROJECT = process.env.GOOGLE_CLOUD_PROJECT || "otchealth-shared-prod";
+// Store lives on AZURE (off Google): dedicated storage account otchealthlegalstore, with
+// separate `company` and `personal` blob containers. The personal container holds the
+// confidential divorce + civil matters. SharedKey auth.
+const ACCT = process.env.AZURE_LEGAL_STORAGE_ACCOUNT || "otchealthlegalstore";
+const AKEY = process.env.AZURE_LEGAL_STORAGE_KEY;
+const AVER = "2021-06-08";
 
 // ---- args ----
 const argv = process.argv.slice(2);
@@ -94,46 +99,42 @@ async function edgar(q) {
   console.log("Use for securities precedent + comparables: find prior disclosure/risk-factor/agreement language across 20+ years of public filings.");
 }
 
-// ---- GCS store ----
-function need(n) { const v = process.env[n]; if (!v) { console.error("Missing env " + n); process.exit(2); } return v; }
-async function gcsToken() {
-  const sa = JSON.parse(need("GCP_CLAUDE_DRIVER_SA_JSON"));
-  const now = Math.floor(Date.now() / 1000), e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/devstorage.read_write", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
-  const s = crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
-  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(i + "." + s)}` });
-  if (!r.ok) throw new Error("GCS auth " + r.status);
-  return (await r.json()).access_token;
+// ---- Azure Blob store (SharedKey; container = company | personal) ----
+function ensureStore() {
+  if (!AKEY) { console.error(`Missing AZURE_LEGAL_STORAGE_KEY (hydrated from secret azure-legal-storage-key). The legal matter/docket store is on Azure (account ${ACCT}, containers company/personal).`); process.exit(2); }
 }
-async function ensureBucket(tok) {
-  const g = await fetch(`https://storage.googleapis.com/storage/v1/b/${BUCKET}`, { headers: { Authorization: `Bearer ${tok}` } });
-  if (g.ok) return;
-  if (g.status === 404) {
-    console.error(`Legal store bucket gs://${BUCKET} does not exist, and the claude-driver SA cannot create buckets.`);
-    console.error(`Create it once (admin / paste-ready), then re-run:`);
-    console.error(`  gcloud storage buckets create gs://${BUCKET} --project ${PROJECT} --location US --uniform-bucket-level-access`);
-    console.error(`Keeping legal matters (esp. the confidential personal divorce/civil) in their OWN bucket, separate from company financials, is the point.`);
-    process.exit(3);
-  }
-  throw new Error("bucket check " + g.status);
+function azSig(method, container, blob, xms, query, contentLength, contentType) {
+  const canonHeaders = Object.keys(xms).sort().map((k) => `${k.toLowerCase()}:${xms[k]}`).join("\n") + "\n";
+  let canonResource = `/${ACCT}/${container}` + (blob ? `/${blob}` : "");
+  if (query) for (const k of Object.keys(query).sort()) canonResource += `\n${k.toLowerCase()}:${query[k]}`;
+  const sts = [method, "", "", contentLength || "", "", contentType || "", "", "", "", "", "", "", canonHeaders + canonResource].join("\n");
+  return `SharedKey ${ACCT}:${crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64")}`;
 }
-async function putJSON(tok, name, obj) {
-  const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}`, { method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(obj, null, 2) });
-  if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160));
+async function putBlob(container, name, str) {
+  const xms = { "x-ms-blob-type": "BlockBlob", "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
+  const ct = "application/json";
+  const auth = azSig("PUT", container, name, xms, null, String(Buffer.byteLength(str)), ct);
+  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${container}/${name}`, { method: "PUT", headers: { ...xms, "Content-Type": ct, Authorization: auth }, body: str });
+  if (!r.ok) throw new Error("blob put " + r.status + " " + (await r.text()).slice(0, 160));
 }
-async function getJSON(tok, name) {
-  const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${encodeURIComponent(name)}?alt=media`, { headers: { Authorization: `Bearer ${tok}` } });
+async function getBlob(container, name) {
+  const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
+  const auth = azSig("GET", container, name, xms, null, "", "");
+  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${container}/${name}`, { headers: { ...xms, Authorization: auth } });
   if (r.status === 404) return null;
-  if (!r.ok) throw new Error("get " + r.status);
+  if (!r.ok) throw new Error("blob get " + r.status);
   return r.json();
 }
-async function listMatters(tok, ns) {
-  const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o?prefix=${encodeURIComponent(ns + "/matters/")}`, { headers: { Authorization: `Bearer ${tok}` } });
-  if (!r.ok) return [];
-  const j = await r.json();
-  return (j.items || []).map((o) => o.name);
+async function listMatterNames(container) {
+  const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
+  const auth = azSig("GET", container, "", xms, { comp: "list", prefix: "matters/", restype: "container" }, "", "");
+  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${container}?restype=container&comp=list&prefix=${encodeURIComponent("matters/")}`, { headers: { ...xms, Authorization: auth } });
+  if (r.status === 404) return [];
+  if (!r.ok) throw new Error("blob list " + r.status + " " + (await r.text()).slice(0, 120));
+  const xml = await r.text();
+  return [...xml.matchAll(/<Name>([^<]+)<\/Name>/g)].map((m) => m[1]); // matters/<id>.json
 }
-const matterPath = (ns, id) => `${ns}/matters/${id}.json`;
+const matterBlob = (id) => `matters/${id}.json`;
 
 // ---- main ----
 const cmd = pos[0];
@@ -142,33 +143,32 @@ try {
   if (cmd === "caselaw") { await caselaw(pos.slice(1).join(" ")); process.exit(0); }
   if (cmd === "edgar") { await edgar(pos.slice(1).join(" ")); process.exit(0); }
 
-  const tok = await gcsToken();
-  await ensureBucket(tok);
+  ensureStore();
 
   if (cmd === "matter" && pos[1] === "new") {
     const id = pos[2];
     if (!id) { console.error("usage: legal.mjs matter new <id> --client <c> --jur <j> --type <t> [--personal]"); process.exit(2); }
     const m = { id, namespace: NS, client: flag("client") || (personal ? "Matthew Moore (personal)" : "?"), jurisdiction: flag("jur") || flag("jurisdiction") || "?", type: flag("type") || "?", status: "open", opened: new Date().toISOString(), adverse: flag("adverse") || "", docket: [], notes: [] };
-    await putJSON(tok, matterPath(NS, id), m);
+    await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
     console.log(`opened matter ${NS}/${id} (${m.client}, ${m.jurisdiction}, ${m.type})${personal ? " [CONFIDENTIAL]" : ""}`);
 
   } else if (cmd === "matter" && pos[1] === "show") {
-    const id = pos[2]; const m = await getJSON(tok, matterPath(NS, id));
+    const id = pos[2]; const m = await getBlob(NS, matterBlob(id));
     if (!m) { console.log("no such matter"); } else console.log(JSON.stringify(m, null, 2));
 
   } else if (cmd === "matters") {
-    const names = await listMatters(tok, NS);
+    const names = await listMatterNames(NS);
     console.log(`${NS} matters: ${names.length}`);
-    for (const n of names) { const m = await getJSON(tok, n); if (m) console.log(`  ${m.id} | ${m.client} | ${m.jurisdiction} | ${m.type} | ${m.status} | deadlines: ${(m.docket || []).length}`); }
+    for (const n of names) { const m = await getBlob(NS, n); if (m) console.log(`  ${m.id} | ${m.client} | ${m.jurisdiction} | ${m.type} | ${m.status} | deadlines: ${(m.docket || []).length}`); }
     if (!personal) console.log("(personal matters are confidential; list with --personal)");
 
   } else if (cmd === "docket" && pos[1] === "add") {
     const id = pos[2], date = pos[3], what = pos.slice(4).join(" ");
     if (!id || !date || !what) { console.error('usage: legal.mjs docket add <id> <YYYY-MM-DD> "<what>" [--personal]'); process.exit(2); }
-    const m = await getJSON(tok, matterPath(NS, id)); if (!m) { console.error("no such matter " + id); process.exit(1); }
+    const m = await getBlob(NS, matterBlob(id)); if (!m) { console.error("no such matter " + id); process.exit(1); }
     m.docket = m.docket || []; m.docket.push({ date, what, added: new Date().toISOString().slice(0, 10) });
     m.docket.sort((a, b) => a.date < b.date ? -1 : 1);
-    await putJSON(tok, matterPath(NS, id), m);
+    await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
     console.log(`docketed ${date} "${what}" on ${NS}/${id}`);
 
   } else if (cmd === "docket" && pos[1] === "due") {
@@ -177,7 +177,7 @@ try {
     const today = new Date().toISOString().slice(0, 10);
     const rows = [];
     for (const ns of ["company", "personal"]) {
-      for (const n of await listMatters(tok, ns)) { const m = await getJSON(tok, n); for (const d of (m?.docket || [])) if (d.date <= cutoff) rows.push({ ns, id: m.id, ...d, overdue: d.date < today }); }
+      for (const n of await listMatterNames(ns)) { const m = await getBlob(ns, n); for (const d of (m?.docket || [])) if (d.date <= cutoff) rows.push({ ns, id: m.id, ...d, overdue: d.date < today }); }
     }
     rows.sort((a, b) => a.date < b.date ? -1 : 1);
     console.log(`deadlines through ${cutoff} (${rows.length}):`);
@@ -186,9 +186,9 @@ try {
   } else if (cmd === "note") {
     const id = pos[1], text = pos.slice(2).join(" ");
     if (!id || !text) { console.error('usage: legal.mjs note <id> "<text>" [--personal]'); process.exit(2); }
-    const m = await getJSON(tok, matterPath(NS, id)); if (!m) { console.error("no such matter " + id); process.exit(1); }
+    const m = await getBlob(NS, matterBlob(id)); if (!m) { console.error("no such matter " + id); process.exit(1); }
     m.notes = m.notes || []; m.notes.push({ ts: new Date().toISOString(), text });
-    await putJSON(tok, matterPath(NS, id), m);
+    await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
     console.log(`noted on ${NS}/${id}`);
 
   } else {
