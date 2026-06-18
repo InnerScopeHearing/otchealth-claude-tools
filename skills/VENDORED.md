@@ -27,6 +27,25 @@ Vendored 2026-06-18 by the CTO.
 | contract-redliner | OneWave-AI/claude-skills | 071454b | MIT |
 | edgartools | dgunning/edgartools (edgar/ai/skills) | ebb4ae2 | MIT |
 
+## MIT-licensed wave 2 - wshobson/agents skills (2026-06-18, commit cc37bfd)
+
+Cherry-picked SKILL-ONLY from the wshobson `claude-code-workflows` marketplace (MIT). We
+vendor the individual skills (not the whole plugins) so we get the capability WITHOUT
+adding their subagents/commands to our curated roster + every session's context. The full
+84-plugin marketplace is registered for on-demand install (`<plugin>@claude-code-workflows`).
+
+| Agent | Vendored skills |
+|-------|-----------------|
+| guardian | sast-configuration, threat-mitigation-mapping, attack-tree-construction |
+| CLO | employment-contract-templates, gdpr-data-handling |
+| qa (senior-a11y) | wcag-audit-patterns, screen-reader-testing |
+| medic | incident-runbook-templates, postmortem-writing, slo-implementation, distributed-tracing |
+| finance/capital | market-sizing-analysis, startup-financial-modeling, competitive-landscape, kpi-dashboard-design |
+| commerce | stripe-integration, billing-automation, pci-compliance |
+| cross-cutting | sql-optimization-patterns, error-handling-patterns, auth-implementation-patterns |
+
+All 21 carry the wshobson MIT LICENSE in their dir.
+
 ## NOT vendored - licensed, installed via the authorized marketplace instead
 
 The official Anthropic Agent Skills (`anthropics/skills`, marketplace `anthropic-agent-skills`)

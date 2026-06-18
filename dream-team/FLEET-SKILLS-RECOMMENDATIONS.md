@@ -171,10 +171,45 @@ NOT installed (LegalZoom commercial plugin): the `@anthropics/claude-plugins-off
 "legalzoom" plugin is a third-party commercial connector, not a self-contained skill;
 connect it deliberately if wanted, do not auto-enable.
 
+## WAVE 2 (2026-06-18) - wider sourcing beyond one marketplace
+
+### wshobson `claude-code-workflows` marketplace (MIT, 84 plugins / 156 skills) - REGISTERED
+The biggest single source. Registered fleet-wide (auto, on-demand). 21 best skills already
+vendored (see skills/VENDORED.md). The remaining plugins install on demand:
+`claude plugin install <plugin>@claude-code-workflows`. The best plugins by agent:
+- **guardian:** security-scanning, security-compliance (SOC2/HIPAA/GDPR), dependency-management, reverse-engineering.
+- **medic:** incident-response, observability-monitoring, error-diagnostics, distributed-debugging, application-performance.
+- **release-captain:** cicd-automation, deployment-strategies, deployment-validation, kubernetes-operations.
+- **builder:** javascript-typescript, frontend-mobile-development, code-refactoring, api-scaffolding, backend-development.
+- **qa:** unit-testing, tdd-workflows, api-testing-observability, accessibility-compliance.
+- **architect:** c4-architecture, database-design, full-stack-orchestration.
+- **CLO:** hr-legal-compliance, security-compliance.
+- **finance/capital:** business-analytics, startup-business-analyst, quantitative-trading.
+- **commerce/monetization:** payment-processing.
+- **growth/lifecycle:** seo-content-creation, seo-technical-optimization, seo-analysis-monitoring, content-marketing, social-publishing, customer-sales-automation.
+- **creative:** ui-design, brand-landingpage, meigen-ai-design.
+- **coo/cross-cutting:** developer-essentials, git-pr-workflows, agent-teams, context-management, conductor, pensyve (cross-session memory - evaluate; it ships a hook/runtime).
+
+### Other MIT collections (discover-on-demand via skills-discovery; vendor after guardian pass)
+- **davila7/claude-code-templates** (MIT) - seo-optimizer, market-research-reports, excel-analysis, big template lib + a components CLI.
+- **VoltAgent/awesome-claude-code-subagents** (MIT) - product / legal / business specialist subagents.
+- **ComposioHQ/awesome-claude-skills** - content-research-writer, changelog-generator (NOTE: no LICENSE file -> reference only, do NOT vendor until licensed).
+
+### MCP server power-ups (a different class: LIVE tools, not instructions) - MATT-GATE connectors
+CAUTION: there is a ~40-50 active-tool ceiling; past it the model picks the wrong tool, and
+we already run 25+ MCP connectors. So add SURGICALLY, not in bulk:
+- **Context7** (live, version-pinned library docs) - the top builder add; kills hallucinated package APIs. Biggest gap we have.
+- **Playwright MCP** (browser automation) - qa visual/UI testing + JS-heavy scraping.
+- **Exa** or **Firecrawl** (web search / scraping) - growth + research-heavy agents (lighter than a full browser).
+These need connector setup (a Matt gate). Recommend wiring Context7 first.
+
 ## Rollout order (history)
 1. DONE: skills-discovery (registry self-service).
 2. DONE: official Anthropic docs (document-skills + example-skills) via authorized marketplace.
 3. DONE: CLO batch (edgartools + contract-analyzer/redliner) + finance models, vendored MIT.
 4. DONE: builder/QA/meta workflow batch (superpowers) vendored MIT; webapp-testing via marketplace.
-5. ONGOING: the long tail is pulled on demand via `skills-discovery` and vendored (MIT +
-   guardian pass) when it proves useful more than once.
+5. DONE: wave 2 - registered the wshobson `claude-code-workflows` marketplace (84 plugins)
+   + vendored 21 best skills across guardian/CLO/qa/medic/finance/commerce/cross-cutting.
+6. ONGOING: the long tail is pulled on demand via `skills-discovery` + the registered
+   marketplaces, and vendored (MIT + guardian pass) when it proves useful more than once.
+   Next surgical MCP add: Context7 (live library docs) for the builders.

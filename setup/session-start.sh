@@ -118,6 +118,17 @@ if command -v claude >/dev/null 2>&1; then
       fi
     done
   fi
+  # wshobson "claude-code-workflows" marketplace (MIT, 84 domain plugins / 156 skills).
+  # REGISTER ONLY (do not mass-enable: each plugin ships its own subagents+commands and
+  # would bloat every session's context + the curated roster). The best individual skills
+  # are already vendored into skills/. Any agent can install a specific plugin on demand:
+  #   claude plugin install <plugin>@claude-code-workflows
+  # See dream-team/FLEET-SKILLS-RECOMMENDATIONS.md for the per-agent plugin map.
+  if ! claude plugin marketplace list 2>/dev/null | grep -q "claude-code-workflows"; then
+    echo "[octools] Registering wshobson claude-code-workflows marketplace (on-demand)..."
+    claude plugin marketplace add wshobson/agents >/dev/null 2>&1 \
+      || echo "[octools] WARN: could not add claude-code-workflows marketplace (offline?)."
+  fi
 fi
 
 mkdir -p "${HOME}/.designer"
