@@ -69,10 +69,21 @@ async function accessToken(user) {
   const key = user ? `graph-onedrive-refresh-token-${user}` : "graph-onedrive-refresh-token";
   const refresh = await smRead(smt, key);
   if (!refresh) throw new Error(`No ${key} in Secret Manager. Run the OneDrive consent first: onedrive.mjs consent ${user || "<user>"}`);
-  const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID"), SEC = need("GRAPH_MAIL_CLIENT_SECRET");
-  const r = await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: CID, client_secret: SEC, grant_type: "refresh_token", refresh_token: refresh, scope: "offline_access Files.ReadWrite" }) });
-  const j = await r.json();
-  if (!j.access_token) throw new Error("token refresh failed " + r.status + ": " + JSON.stringify(j).slice(0, 200));
+  const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID");
+  // The app is both confidential and a public client (isFallbackPublicClient=true). The
+  // refresh-grant client auth depends on how THIS token was originally issued: tokens minted
+  // via the public device-code flow refresh WITHOUT a secret (AADSTS700025 if one is sent),
+  // while older confidential-issued tokens require the secret (AADSTS7000218 if absent). Try
+  // no-secret first, then fall back to with-secret.
+  async function refreshGrant(withSecret) {
+    const p = { client_id: CID, grant_type: "refresh_token", refresh_token: refresh, scope: "offline_access Files.ReadWrite" };
+    if (withSecret) p.client_secret = process.env.GRAPH_MAIL_CLIENT_SECRET || "";
+    const rr = await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(p) });
+    return rr.json();
+  }
+  let j = await refreshGrant(false);
+  if (!j.access_token && /7000218/.test(JSON.stringify(j))) j = await refreshGrant(true);
+  if (!j.access_token) throw new Error("token refresh failed: " + JSON.stringify(j).slice(0, 200));
   if (j.refresh_token && j.refresh_token !== refresh) { try { await smWrite(smt, key, j.refresh_token); console.error("rotated OneDrive refresh token -> persisted."); } catch (e) { console.error("ROTATE PERSIST FAILED: " + e.message); } }
   return j.access_token;
 }
@@ -135,7 +146,7 @@ function dupeGroups(files) {
 // No redirect URI / admin change needed (the app allows public-client device flow).
 async function runConsent(user) {
   if (!user) { console.error("usage: onedrive.mjs consent <user>   (e.g. mark) -- that OneDrive owner signs in once)"); process.exit(2); }
-  const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID"), SEC = process.env.GRAPH_MAIL_CLIENT_SECRET;
+  const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID");
   const dc = await (await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/devicecode`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: CID, scope: "offline_access Files.ReadWrite User.Read" }) })).json();
   if (!dc.device_code) throw new Error("devicecode failed: " + JSON.stringify(dc).slice(0, 200));
   console.log(`\n=== OneDrive consent for "${user}" ===`);
@@ -147,7 +158,6 @@ async function runConsent(user) {
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, interval));
     const body = { client_id: CID, grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: dc.device_code };
-    if (SEC) body.client_secret = SEC;
     const tj = await (await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) })).json();
     if (tj.refresh_token) {
       await smWrite(await smToken(), `graph-onedrive-refresh-token-${user}`, tj.refresh_token);
