@@ -115,6 +115,12 @@ const MAP = [
   // Context7 (live, version-pinned library docs MCP + REST). The Context7 MCP is wired with
   // this as a Bearer header in session-start; the env also lets any tool hit the REST API.
   { id: 'context7-api-key', env: 'CONTEXT7_API_KEY', required: false },
+  // Datadog observability ($100k startup credit). Infra + APM + logs. Site us3. App key
+  // (ddpat_) drives the management API (monitors/dashboards/synthetics/integrations).
+  // PHI WALL: never point Datadog at MedReview/Companion until a Datadog BAA is signed.
+  { id: 'datadog-api-key', env: 'DD_API_KEY', required: false },
+  { id: 'datadog-app-key', env: 'DD_APP_KEY', required: false },
+  { id: 'datadog-site', env: 'DD_SITE', required: false },
   // QuickBooks Online multi-company (CFO; non-PHI bookkeeping). One Intuit app, per-company
   // realmId + refresh token. The quickbooks skill (skills/quickbooks) reads these. INND +
   // HearingAssist writes are gated (public co). Refresh tokens ROTATE -> the recurring sync

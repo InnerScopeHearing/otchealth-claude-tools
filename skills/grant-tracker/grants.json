@@ -8,7 +8,7 @@
     { "name": "Make.com", "value": "$1,500 / 480k ops", "status": "active", "added": "2026-06-08", "termMonths": 12, "lane": "non-PHI sandbox automation only" },
     { "name": "ElevenLabs", "value": "33M chars", "status": "active", "added": "2026-05-01", "termMonths": 12, "lane": "voice/music/SFX" },
     { "name": "Porter.run", "value": "6 months free", "status": "hold", "added": "2026-06-08", "termMonths": 6, "lane": "deploy (K8s) - HOLD, Cloud Run covers it" },
-    { "name": "Datadog", "value": "pending approval", "status": "pending", "added": "2026-06-08", "termMonths": 12, "lane": "backend observability - hold for scale" },
+    { "name": "Datadog", "value": "$100,000", "status": "active", "added": "2026-06-18", "termMonths": 12, "lane": "observability: Azure infra + APM + logs + synthetics", "note": "LIVE 2026-06-18. Org OTCHealth Inc., site us3.datadoghq.com. Keys in Secret Manager (datadog-api-key/app-key/site, ROTATE). Azure cloud integration wired via azure-sp; synthetics on automation.otchealth.app + innd.com; 'OTCHealth Fleet Overview' dashboard. Skill: skills/datadog. PHI WALL: MedReview + Companion NOT instrumented until a Datadog BAA is signed. Metered usage burns fast, watch the credit." },
     { "name": "Mixpanel", "value": "1yr free", "status": "declined", "added": "2026-06-08", "termMonths": 12, "lane": "analytics - DECLINED (PostHog is the one)" },
     { "name": "Amplitude", "value": "1yr discount", "status": "declined", "added": "2026-06-08", "termMonths": 12, "lane": "analytics - DECLINED" },
     { "name": "Greptile", "value": "subscription", "status": "active", "added": "2026-06-03", "termMonths": 12, "lane": "code review" },

@@ -219,7 +219,9 @@ telemetry-wiring, test-author, voice-ops. Plus the fleet utility + ops skills: *
 (OCR read + create), **legal** (CLO citation verifier + Azure matter/docket store),
 **skills-discovery** (search the 50k-skill claude-plugins.dev registry on demand; the
 fleet meta-skill), amazon-sp-api, quickbooks, xero, cfo-store, cfo-onedrive, m365-mail,
-plaid-banking, github-app, innd-stock. (Descriptions + which agent wields each:
+plaid-banking, github-app, innd-stock, **datadog** (observability: Azure infra + APM + logs +
+synthetics, $100k credit; site us3; PHI wall on MedReview/Companion until a Datadog BAA).
+(Descriptions + which agent wields each:
 `SKILLS-CAPABILITY-MAP.md`.) Plus QA sub-skills (api-qa, ios-qa, web-qa, static-qa,
 phi-compliance-qa, release-readiness, test-suite-runner, persona-focus-group(-buyers)) and the
 Capacitor/Ionic packs, available when their plugins/skills load.
