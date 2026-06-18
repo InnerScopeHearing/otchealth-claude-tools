@@ -6,7 +6,7 @@ choose. Five layers:
 
 1. **MCP connectors** — first-party hosted MCPs connected in the Claude client (live in the session).
 2. **Unified gateway** — our custom MCP (`otchealth-mcp-server`), one endpoint fronting the stack.
-3. **Skills** — the 23 OTCHealth skills (`~/.claude/skills`, installed by `session-start.sh`).
+3. **Skills** — the OTCHealth skills (`~/.claude/skills`, installed by `session-start.sh`). Includes the fleet-wide **`pdf`** skill: high-grade OCR to read/review any PDF (incl. scanned) plus PDF creation from Markdown/HTML, for every agent.
 4. **Plugins** — the 13 official Claude Code marketplace plugins (agents/commands/skills).
 5. **Agents** — the 19 Dream Team subagents (`~/.claude/agents`).
 
