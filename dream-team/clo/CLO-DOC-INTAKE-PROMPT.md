@@ -63,17 +63,18 @@ node skills/pdf/pdf.mjs create <in.md|.html> <out.pdf> --title "..."            
 7. **Index:** after a batch, build the catalog + dupe report:
    `node skills/cfo-onedrive/onedrive.mjs catalog "CLO Processed" clo-catalog.json`
    and `find-dupes "CLO Processed"`. Deliver `clo-catalog.json` (or a readable index) to CLO Incoming.
-8. **Data-room hygiene (keep the archive clean):** run the version report:
-   `node skills/cfo-onedrive/onedrive.mjs version-report "CLO Processed" version-report.md`
-   It produces a REAL report: (a) exact duplicates (byte-identical, same content hash) and
-   (b) draft-vs-final version clusters (the same document at different versions, e.g.
-   "Complaint draft / v2 / FINAL"), with the likely-current version flagged (final/executed
-   in the name, else newest, else largest) and a recoverable move plan into a `_Superseded`
-   folder. It NEVER moves or deletes anything; you CONFIRM each cluster (a v2 and a FINAL can
-   both be legitimately kept, e.g. an as-filed vs a working copy), then run the printed `mv`
-   commands so superseded copies are archived, not lost. Deliver `version-report.md` to CLO
-   Incoming so Matt sees what was de-duplicated and why. Re-run after every batch to keep the
-   matter archive clean and the document index unambiguous.
+8. **Data-room hygiene (MANDATORY batch-close, run on EVERY intake batch):** close every
+   batch by running the version report WITH `--deliver`:
+   `node skills/cfo-onedrive/onedrive.mjs version-report "CLO Processed" --deliver`
+   This is not optional and not skippable: every intake batch ends with it. It produces a
+   REAL report, (a) exact duplicates (byte-identical, same content hash) and (b) draft-vs-final
+   version clusters (the same document at different versions, e.g. "Complaint draft / v2 /
+   FINAL"), with the likely-current version flagged (final/executed in the name, else newest,
+   else largest) and a recoverable move plan into a `_Superseded` folder, and `--deliver`
+   automatically files a timestamped copy to `CLO Incoming/Version Reports/` so Matt always
+   gets a fresh report per batch. The report NEVER moves or deletes anything; you CONFIRM each
+   cluster (a v2 and a FINAL can both be legitimately kept, e.g. an as-filed vs a working
+   copy), then run the printed `mv` commands so superseded copies are archived, not lost.
 
 ## What "learning" means here (do not skip)
 After processing, the matter file, not your memory, holds the knowledge: an accurate

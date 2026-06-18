@@ -37,8 +37,10 @@
 //   download <path> [dir]              download any file by path
 //   catalog [path] [outfile]           recursive inventory -> JSON (+ duplicate-hash report)
 //   find-dupes [path]                  list groups of byte-identical files (same quickXorHash)
-//   version-report [path] [out.md]     exact dups + draft-vs-final version clusters + a
-//                                       recommended move plan (REPORT ONLY; human approves)
+//   version-report [path] [out.md] [--deliver]  exact dups + draft-vs-final version clusters
+//                                       + a recommended move plan (REPORT ONLY; human approves).
+//                                       --deliver uploads a timestamped copy to
+//                                       <INCOMING>/Version Reports/ (the per-batch close).
 //   dataroom-init [parent]             scaffold an audit data room (per-company + _Duplicates)
 import crypto from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -353,7 +355,11 @@ try {
   } else if (cmd === "version-report") {
     // Data-room hygiene: exact duplicates + draft-vs-final version clusters, with a
     // recommended keep + move plan. REPORT ONLY (never moves/deletes; human approves).
-    const path = a1 || PROCESSED;
+    // `--deliver` uploads a timestamped copy to <INCOMING>/Version Reports/ (the batch-close).
+    const DELIVER = args.includes("--deliver");
+    const posArgs = args.slice(1).filter((x) => !x.startsWith("--"));
+    const path = posArgs[0] || PROCESSED;
+    const outFile = posArgs[1];
     const SUP = process.env.CFO_SUPERSEDED_FOLDER || `${path}/_Superseded`;
     const rows = (await walk(tok, path)).filter((r) => r.type === "file");
     const dupes = dupeGroups(rows);
@@ -384,7 +390,15 @@ try {
     for (const c of clusters) for (const f of c.superseded) lines.push(`  node skills/cfo-onedrive/onedrive.mjs mv "${f.path}" "${SUP}"`);
     const report = lines.join("\n");
     console.log(report);
-    if (a2) { writeFileSync(a2, report); console.log(`\n(written -> ${a2})`); }
+    if (outFile) { writeFileSync(outFile, report); console.log(`\n(written -> ${outFile})`); }
+    if (DELIVER) {
+      const ts = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+      const dest = `${INCOMING}/Version Reports/version-report-${ts}.md`;
+      await ensureFolder(tok, `${INCOMING}/Version Reports`);
+      const r = await gx(tok, "PUT", `${itemRef(dest)}:/content`, { headers: { "Content-Type": "text/markdown" }, body: Buffer.from(report, "utf8") });
+      if (r.ok) console.log(`delivered -> "${dest}" (${dupes.length} exact-dup group(s), ${clusters.length} version cluster(s))`);
+      else console.error(`deliver failed ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    }
     console.log(`\nSUMMARY: ${dupes.length} exact-dup group(s), ${clusters.length} version cluster(s). Report only; nothing moved.`);
 
   } else if (cmd === "dataroom-init") {
