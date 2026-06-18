@@ -182,10 +182,14 @@ Matter/docket store = Azure Blob `otchealthlegalstore`, `company` + `personal` c
   browser-capable client; in agent sessions, the token-backed `legal` skill above is the
   working CourtListener path.
 - **Gmail connector** (`mcp__Gmail__search_threads` / `get_thread`) - Matt's PERSONAL Gmail,
-  **Mattrmoore85@gmail.com**, the primary source for his personal-litigation correspondence
-  (divorce, custody, criminal, the civil suit). Confirm the connector is authenticated to that
-  exact account; if it is a different Google account, flag to Matt to connect Mattrmoore85@gmail.com.
-  READ-ONLY for the legal record; treat everything found as `personal` + privileged.
+  **Mattrmoore85@gmail.com**, for searching/reading his personal-litigation correspondence
+  (divorce, custody, criminal, the civil suit). READ-ONLY; treat everything as `personal` + privileged.
+- **`gmail` skill** (`skills/gmail/gmail.mjs`) - the connector CANNOT download attachment bytes;
+  this skill can. Use it to reach documents that exist ONLY as a Gmail attachment:
+  `search "<q>"`, `get <id>`, `export <id> <dir>` (saves the full .eml + extracts every
+  attachment), `pull "<q>" <dir>` (bulk per matter). Route exports into the legal store
+  `personal` area / `CLO Processed/Personal/<Matter>`, then run them through the pdf OCR + the
+  `legal` matter/docket store. (One-time setup: a Google Desktop OAuth client + `gmail consent`.)
 - **Notion** - the matter vault, "COO Tasks", "Bucket Briefings", credentials vault.
 - **Microsoft_365 / m365-mail** - legal correspondence across the 126 tenant mailboxes
   (matthew@innd.com, mark@innd.com, kim@innd.com, ap@innd.com, accounting@hearingassist.com).
