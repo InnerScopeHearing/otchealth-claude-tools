@@ -127,6 +127,21 @@ installable definitions are in `agents/<name>.md`.
 - **Hands to:** Release Captain (store assets), Growth (campaign assets). **From:**
   any agent that needs an asset.
 
+### 9. CLO (`clo`) — chief legal officer (executive)
+- **Job:** the in-house legal mind for OTCHealth, InnerScope (INND), HearingAssist, and
+  Matt personally. Securities (public penny-stock issuer), Nevada corporate (NRS), CA
+  family/divorce, CA civil litigation, and federal employment litigation (the GA FLSA
+  back-wage collective). Issue-spots, researches primary authority, drafts/redlines,
+  organizes discovery + dockets, assesses risk, prepares packets for licensed counsel.
+- **Comes online loaded:** reads `clo/CLO-BOOTSTRAP.md` (entities, securities posture,
+  active litigation, the free research arsenal) + `legal matters` / `legal docket due`.
+- **Wields skills:** `legal` (matter/docket store + citation verify + case-law + EDGAR),
+  `pdf` (OCR-read + produce filings), `m365-mail`, `cfo-onedrive --user mark` (agreements
+  archive). Invoke by saying "CLO" or "legal".
+- **Guardrails:** NOT a licensed attorney (prepares + flags; CA/NV/GA counsel reviews +
+  files); never fabricates authority (verify every cite); privilege + company-vs-personal
+  matter separation; securities firewall; anti-spoliation/litigation holds.
+
 ---
 
 ## Part 2 — The skills (equipment)
@@ -134,6 +149,8 @@ installable definitions are in `agents/<name>.md`.
 | Skill | Status | What it does | Primary wielder(s) |
 |---|---|---|---|
 | `designer` | **built** | Icons, illustrations, app-icon families, App Store screenshots, video, talking avatars, voiceover, music, SFX, art-director review. Brand-profile driven. | Creative, Growth, Release Captain |
+| `legal` | **built** | The CLO's backbone: citation VERIFIER (CourtListener, anti-hallucination), case-law search (9M+ opinions), SEC EDGAR full-text search, and a segregated matter + docket store (company vs confidential personal). Free legal research arsenal. | CLO |
+| `pdf` | **built** | High-grade OCR to read/review any PDF (incl. scanned) + create polished 8.5x11 PDFs from Markdown/HTML. Fleet-wide. | CLO, CFO, every agent |
 | `devkit` | **new** | The Claude Code operating layer: installs `/sandbox` config, the PostToolUse format/lint + PreToolUse test hooks, the Capacitor Agent Skills pack, the `CLAUDE.md` standard, and Spec Kit. Makes Claude Code itself faster and less glitchy. | Architect, Builder |
 | `scaffolder` | **new** | Startup-kit made executable: new app from name + brand profile -> repo, Capacitor 8, `app.manifest.json`, `CLAUDE.md`, RevenueCat/Sentry/PostHog stubs, CI, green test scaffold. | Builder |
 | `test-author` | **new** | Installs + authors the web-first test stack and CI gates (Vitest Browser Mode, Playwright Chromium+WebKit, axe-core, visual snapshots, Lighthouse CI) + Capacitor plugin manual mocks. | QA |
