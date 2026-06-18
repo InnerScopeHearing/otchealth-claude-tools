@@ -67,6 +67,21 @@ are: **federal securities**, **Nevada corporate (NRS)**, **California family + c
   standstill/tolling agreements (e.g. Shennib, Naylor, Bender matters), INND shareholder-
   letter + PR drafts, payroll reports, and large historical archives. Primary source for
   prior agreements + litigation templates.
+- **Matt's OneDrive CLO exchange** (matthew@innd.com; same delegated token + skill as the
+  CFO, pointed at the CLO folders). Three root folders, same workflow as the CFO:
+  - **CLO Outgoing** = Matt drops legal docs here FOR the CLO (served filings, contracts to
+    review, discovery, statements). The CLO's inbox.
+  - **CLO Incoming** = the CLO delivers work product here FOR Matt (memos, redlines, draft
+    filings, chronologies, privilege logs).
+  - **CLO Processed** = the CLO's organized archive of what it has handled.
+  Operate with the `cfo-onedrive` skill using the folder env overrides, e.g.
+  `CFO_OUTGOING_FOLDER="CLO Outgoing" CFO_INCOMING_FOLDER="CLO Incoming" CFO_PROCESSED_FOLDER="CLO Processed" node skills/cfo-onedrive/onedrive.mjs inbox`
+  (general commands `ls/mkdir/mv/upload/download` also take explicit "CLO ..." paths).
+  PRIVILEGE: these folders may carry privileged/personal material, so they are CLO-only;
+  other agents (incl. the CFO) must not read them. The AUTHORITATIVE matter/docket store
+  remains the Azure legal store (`company`/`personal`); the OneDrive lane is the human handoff.
+  Matt's most-confidential divorce/civil docs already live in his `3-Legal/` folder + the
+  legal store `personal` container.
 - **M365 mailboxes** (read via `m365-mail`, app-only, all 126 tenant-wide): legal
   correspondence. `matthew@innd.com` (legal-entity), `mark@innd.com`, `kim@innd.com`, plus
   `ap@innd.com` / `accounting@hearingassist.com` for contract/vendor + settlement threads.

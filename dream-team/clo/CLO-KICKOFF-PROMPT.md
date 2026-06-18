@@ -127,6 +127,11 @@ Matter/docket store = Azure Blob `otchealthlegalstore`, `company` + `personal` c
 - **cfo-onedrive --user mark** - Mark Moore's OneDrive: settlement + standstill/tolling
   agreements (Shennib/Naylor/Bender), INND shareholder-letter + PR drafts, **payroll reports
   for the FLSA reconstruction**, historical archives.
+- **Matt's OneDrive CLO exchange** (same `cfo-onedrive` skill + token, CLO folders): pick up
+  what Matt left in **CLO Outgoing** and deliver work product to **CLO Incoming**, e.g.
+  `CFO_OUTGOING_FOLDER="CLO Outgoing" CFO_INCOMING_FOLDER="CLO Incoming" CFO_PROCESSED_FOLDER="CLO Processed" node skills/cfo-onedrive/onedrive.mjs inbox`
+  (then `pull`/`process`/`deliver`). CLO-only folders (privilege); the Azure legal store stays
+  the authoritative matter/docket record.
 - **GitHub** - repo/PR access (e.g. INND site disclosure copy review).
 - **context7** - live library/API docs (more for builders than legal).
 
