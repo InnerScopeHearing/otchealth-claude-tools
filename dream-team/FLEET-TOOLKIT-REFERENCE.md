@@ -211,14 +211,22 @@ main; pending Azure redeploy + env (Matt gate).
 
 ---
 
-## 3. SKILLS (23; `Skill` tool; installed by session-start.sh)
+## 3. SKILLS (`Skill` tool; installed by session-start.sh)
 aso-growth, content-engine, coo, daily-briefing, designer, devkit, digital-products,
 eval-runner, grant-tracker, growth-pr, ir-support, lifecycle-crm, monetization, paid-ads,
 partnerships, raise-ops, release-conductor, scaffolder, storefront-cro, supply-chain-guard,
-telemetry-wiring, test-author, voice-ops. (Descriptions + which agent wields each:
+telemetry-wiring, test-author, voice-ops. Plus the fleet utility + ops skills: **pdf**
+(OCR read + create), **legal** (CLO citation verifier + Azure matter/docket store),
+**skills-discovery** (search the 50k-skill claude-plugins.dev registry on demand; the
+fleet meta-skill), amazon-sp-api, quickbooks, xero, cfo-store, cfo-onedrive, m365-mail,
+plaid-banking, github-app, innd-stock. (Descriptions + which agent wields each:
 `SKILLS-CAPABILITY-MAP.md`.) Plus QA sub-skills (api-qa, ios-qa, web-qa, static-qa,
 phi-compliance-qa, release-readiness, test-suite-runner, persona-focus-group(-buyers)) and the
 Capacitor/Ionic packs, available when their plugins/skills load.
+- **Expanding the toolkit:** `skills-discovery` lets any agent find expert skills it was
+  not shipped with. The curated agent-by-agent shopping list (which registry skills to
+  adopt for builders + the executive team, with risk tags + the vendor-not-npx adoption
+  model) is **`FLEET-SKILLS-RECOMMENDATIONS.md`**.
 
 ## 4. PLUGINS (13; official marketplace `claude-code-plugins` = anthropics/claude-code)
 Each ships agents/commands/skills (namespaced `<plugin>:<component>`):
