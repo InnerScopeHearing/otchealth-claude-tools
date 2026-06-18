@@ -8,7 +8,10 @@ choose. Five layers:
 2. **Unified gateway** — our custom MCP (`otchealth-mcp-server`), one endpoint fronting the stack.
 3. **Skills** — the OTCHealth skills (`~/.claude/skills`, installed by `session-start.sh`). Includes the fleet-wide **`pdf`** skill: high-grade OCR to read/review any PDF (incl. scanned) plus PDF creation from Markdown/HTML, for every agent.
 4. **Plugins** — the 13 official Claude Code marketplace plugins (agents/commands/skills).
-5. **Agents** — the 19 Dream Team subagents (`~/.claude/agents`).
+5. **Agents** — the Dream Team subagents (`~/.claude/agents`), including the **`clo`** Chief
+   Legal Officer (securities / Nevada corporate / CA family + civil / federal FLSA), which
+   comes online pre-loaded from `clo/CLO-BOOTSTRAP.md` and wields the `legal` skill (citation
+   verifier + case-law + SEC EDGAR + a segregated matter/docket store).
 
 ## Routing policy (which layer to use)
 1. **Direct API / first-party MCP first** where one exists (this doc's Sections 1-2).
