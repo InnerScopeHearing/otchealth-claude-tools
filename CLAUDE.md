@@ -99,6 +99,18 @@ assume unless the user says otherwise.
   lane). Default new infra/compute to Azure. The secret store stays `otchealth-shared-prod`
   GCP Secret Manager for now (it hydrates every session); compute moves, the secret store
   follows later if at all.
+
+#### Azure-default HARDENED (Matt directive, 2026-06-18)
+- **Use the Azure credits across the board; do NOT propose or default to Google Cloud
+  services again unless we have free credits for them.** Storage, compute, jobs, inference:
+  Azure first, every time. New data rooms / buckets / jobs go to Azure (Blob, Container Apps
+  Jobs, Azure OpenAI/Speech), not GCS/Vertex/Cloud Run. The CFO data room target is Azure Blob
+  (the `azure-cfo-storage-*` account), not `gs://otchealth-cfo-source-docs`.
+- The ONLY standing Google exceptions (do not relitigate each session): the `otchealth-shared-prod`
+  **Secret Manager** + the **claude-driver SA** (the free, established per-session hydration +
+  the SA that signs SM/GCS calls), and **MedReview's PHI workloads on the GCP BAA** (the legal
+  wall below; a PHI move to Azure needs an Azure BAA + HIPAA-eligible Azure OpenAI first). Both
+  are essentially free / BAA-bound. Everything else: Azure.
 - **Already staged at the credential level**: the vault now holds a full Azure suite —
   `azure-openai-key` / `azure-openai-endpoint` / image+vision+video deployments,
   `azure-speech-key` / `azure-speech-region`, and an `azure-sp-*` Contributor service
