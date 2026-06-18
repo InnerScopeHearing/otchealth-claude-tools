@@ -1,0 +1,9 @@
+{
+  "name": "octools-pdf-skill",
+  "private": true,
+  "type": "commonjs",
+  "description": "Fleet PDF toolkit: high-grade OCR (read PDFs) + PDF creation (Markdown/HTML to PDF).",
+  "dependencies": {
+    "marked": "^12.0.2"
+  }
+}
