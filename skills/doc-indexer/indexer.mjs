@@ -46,13 +46,14 @@ const containerOverride = takeVal("--container");
 const BUCKET_OV = takeVal("--bucket");
 const ACCT_OV = takeVal("--azure-account");
 const KEYSECRET_OV = takeVal("--key-secret");
+const idxOverride = takeVal("--index");
 const PREFIX = takeVal("--prefix", "");
 const LIMIT = parseInt(takeVal("--limit", "0"), 10) || 0;
 const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
 const FLUSH_EVERY = parseInt(takeVal("--flush", "150"), 10) || 150;
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
-const cmd = pos[0] || "index";
+const cmd = pos[0] || "help"; // require an explicit command; no-arg must NOT silently start a run
 const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "gcs").toLowerCase();
 const REINDEX = flags.has("--reindex");
 const NO_OCR = flags.has("--no-ocr");
@@ -354,6 +355,83 @@ async function runBuildCsv() {
   console.log(`wrote _CATALOG/catalog.csv (${rows.length} rows)`);
 }
 
+// ---------------- Azure AI Search (hybrid keyword + vector + semantic retrieval brain) ----------------
+// The managed retrieval brain (per the 2026-06-19 architecture decision). Push model: we compute
+// embeddings at index time (Azure OpenAI) and push docs; a query-time azureOpenAI vectorizer lets
+// agents query with plain text (service embeds the query) for hybrid keyword+vector+semantic.
+const AIS_API = "2024-07-01";
+const EMB_DIMS = parseInt(process.env.AZURE_OPENAI_EMBEDDING_DIMS || "3072", 10); // text-embedding-3-large=3072, -small=1536
+let AIS_EP, AIS_KEY, AOAI_EP, AOAI_KEY, AOAI_DEP, AOAI_MODEL, IDXNAME;
+async function aisInit() {
+  await initStorage(); // sets GBUCKET / CONTAINER for the derived index name
+  AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await sm("azure-search-endpoint")) || "").replace(/\/$/, "");
+  AIS_KEY = process.env.AZURE_SEARCH_KEY || (await sm("azure-search-admin-key"));
+  AOAI_EP = (process.env.AZURE_OPENAI_ENDPOINT || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
+  AOAI_KEY = process.env.AZURE_OPENAI_API_KEY || (await sm("azure-openai-key"));
+  AOAI_DEP = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
+  AOAI_MODEL = process.env.AZURE_OPENAI_EMBEDDING_MODEL || AOAI_DEP;
+  IDXNAME = (idxOverride || `${PROFILE}-${BACKEND === "gcs" ? GBUCKET : CONTAINER}`).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
+  if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key (provision the Azure AI Search resource)."); process.exit(2); }
+  if (!AOAI_EP || !AOAI_KEY) { console.error("Missing azure-openai-endpoint / azure-openai-key (needed for embeddings)."); process.exit(2); }
+}
+async function embed(texts) {
+  const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) });
+  if (!r.ok) throw new Error("embed " + r.status + " " + (await r.text()).slice(0, 120));
+  return (await r.json()).data.map((d) => d.embedding);
+}
+async function aisCreateIndex() {
+  const schema = {
+    name: IDXNAME,
+    fields: [
+      { name: "id", type: "Edm.String", key: true, filterable: true },
+      { name: "path", type: "Edm.String", searchable: true, retrievable: true },
+      { name: "entity", type: "Edm.String", filterable: true, facetable: true, searchable: true },
+      { name: "category", type: "Edm.String", filterable: true, facetable: true, searchable: true },
+      { name: "title", type: "Edm.String", searchable: true },
+      { name: "content", type: "Edm.String", searchable: true },
+      { name: "material", type: "Edm.Boolean", filterable: true },
+      { name: "contentVector", type: "Collection(Edm.Single)", searchable: true, retrievable: false, dimensions: EMB_DIMS, vectorSearchProfile: "vp" },
+    ],
+    vectorSearch: {
+      algorithms: [{ name: "hnsw", kind: "hnsw" }],
+      vectorizers: [{ name: "aoai", kind: "azureOpenAI", azureOpenAIParameters: { resourceUri: AOAI_EP, deploymentId: AOAI_DEP, apiKey: AOAI_KEY, modelName: AOAI_MODEL } }],
+      profiles: [{ name: "vp", algorithm: "hnsw", vectorizer: "aoai" }],
+    },
+    semantic: { configurations: [{ name: "sem", prioritizedFields: { titleField: { fieldName: "title" }, prioritizedContentFields: [{ fieldName: "content" }], prioritizedKeywordsFields: [{ fieldName: "category" }] } }] },
+  };
+  const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}?api-version=${AIS_API}`, { method: "PUT", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(schema) });
+  if (!r.ok) throw new Error("create index " + r.status + " " + (await r.text()).slice(0, 220));
+}
+async function aisPush(batch) {
+  const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}/docs/index?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
+  if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 220));
+}
+async function runSearchInit() { await aisInit(); await aisCreateIndex(); console.log(`Azure AI Search index ready: ${IDXNAME} (dims ${EMB_DIMS}, vectorizer ${AOAI_DEP})`); }
+async function runPushSearch() {
+  await aisInit(); await aisCreateIndex();
+  const rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  console.error(`[push-search] ${rows.length} docs with text -> index ${IDXNAME}`);
+  let n = 0, buf = [];
+  for (const r of rows) {
+    const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
+    let vec; try { vec = (await embed([(r.title + "\n" + txt).slice(0, 8000)]))[0]; } catch (e) { console.error("  embed fail " + r.path.slice(-40) + ": " + e.message); continue; }
+    buf.push({ "@search.action": "mergeOrUpload", id: crypto.createHash("sha1").update(r.path).digest("hex"), path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), content: txt.slice(0, 32000), material: !!r.material, contentVector: vec });
+    if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  pushed ${n}/${rows.length}`); }
+  }
+  if (buf.length) { await aisPush(buf); n += buf.length; }
+  console.log(`pushed ${n} docs to Azure AI Search index ${IDXNAME}`);
+}
+async function runCloudSearch(q) {
+  if (!q) { console.error('usage: cloud-search "<query>"'); process.exit(2); }
+  await aisInit();
+  const body = { search: q, top: LIMIT || 15, queryType: "semantic", semanticConfiguration: "sem", vectorQueries: [{ kind: "text", text: q, fields: "contentVector", k: 50 }], select: "path,entity,category,title" };
+  const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}/docs/search?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) { console.error("cloud-search " + r.status + " " + (await r.text()).slice(0, 220)); process.exit(1); }
+  const j = await r.json();
+  for (const d of j.value || []) console.log(`[${(d.category || "?").padEnd(30)}] ${d.entity}  ${d.path}`);
+  console.log(`(${(j.value || []).length} hits for: ${q}  via ${IDXNAME})`);
+}
+
 try {
   if (cmd === "index") await runIndex();
   else if (cmd === "search") await runSearch(pos.slice(1).join(" "));
@@ -361,5 +439,8 @@ try {
   else if (cmd === "status") await runStatus();
   else if (cmd === "propose-mapping") await runProposeMapping();
   else if (cmd === "build-csv") await runBuildCsv();
-  else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping\nflags: --profile finance|legal|generic --azure|--gcs --container c --azure-account a --bucket b --key-secret s --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
+  else if (cmd === "search-init") await runSearchInit();
+  else if (cmd === "push-search") await runPushSearch();
+  else if (cmd === "cloud-search") await runCloudSearch(pos.slice(1).join(" "));
+  else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>"\nflags: --profile finance|legal|generic --azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
 } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }

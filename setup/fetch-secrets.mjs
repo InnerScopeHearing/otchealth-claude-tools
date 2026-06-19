@@ -107,6 +107,12 @@ const MAP = [
   // sensitive -> rotation. Endpoint is non-secret but stored alongside for one hydration path.
   { id: 'azure-docintel-endpoint', env: 'AZURE_DOCINTEL_ENDPOINT', required: false },
   { id: 'azure-docintel-key', env: 'AZURE_DOCINTEL_KEY', required: false },
+  // Azure AI Search (the doc-indexer hybrid retrieval brain: keyword + vector + semantic) plus
+  // the Azure OpenAI embedding deployment used to vectorize the corpus. Admin key is sensitive
+  // -> rotation. (azure-openai-endpoint / azure-openai-key are already wired above.)
+  { id: 'azure-search-endpoint', env: 'AZURE_SEARCH_ENDPOINT', required: false },
+  { id: 'azure-search-admin-key', env: 'AZURE_SEARCH_KEY', required: false },
+  { id: 'azure-openai-embedding-deployment', env: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', required: false },
   // Azure Blob storage for the CLO legal matter/docket store (off Google; dedicated account
   // otchealthlegalstore with company + personal containers). The legal skill reads/writes
   // here. The personal container holds confidential divorce + civil matters. Account key is
