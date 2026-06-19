@@ -3,6 +3,17 @@
 Read this first. It is the standing context every Claude Code session should
 assume unless the user says otherwise.
 
+## CFO / INND audit reconstruction — load the project memory FIRST
+Before ANY CFO / INND / HearingAssist accounting or audit-reconstruction work, load the authoritative,
+living project memory from the (non-git, MNPI) Azure data room and treat it as the source of truth:
+`node skills/cfo-store/store.mjs --azure get "INND/_KNOWLEDGE-BASE/CFO_PROJECT_MEMORY.md" /tmp/cfo_memory.md`
+It carries the standing facts that compaction tends to drop — the entity structure (InnerScope parent =
+the iHEAR product business; HearingAssist II = a separate corporation selling HearingAssist products, both
+lines made by JingHao; Value Hearing; consolidation + the likely HearingAssist insolvency/deconsolidation),
+the audit posture (FY24+FY25 full audit, FY23 review, FY21-22 Fruci anchor), the QBO access state, and the
+phase plan. UPDATE that file at each phase boundary. Do NOT put financial figures or MNPI in git; the data
+room is the home for all CFO findings and the `_KNOWLEDGE-BASE/` working papers.
+
 ## Environment / host facts (do not suggest workflows that violate these)
 - **Operator host is a Windows PC. There is NO Mac.** Never propose a local macOS
   or local Xcode workflow.
