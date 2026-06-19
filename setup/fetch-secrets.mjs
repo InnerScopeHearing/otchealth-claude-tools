@@ -117,6 +117,10 @@ const MAP = [
   { id: 'gmail-oauth-client-id', env: 'GMAIL_OAUTH_CLIENT_ID', required: false },
   { id: 'gmail-oauth-client-secret', env: 'GMAIL_OAUTH_CLIENT_SECRET', required: false },
   { id: 'gmail-refresh-token', env: 'GMAIL_REFRESH_TOKEN', required: false },
+  // SharePoint ingestion (CFO) — dedicated app-only Graph app (Sites.Read.All) so the CFO can
+  // read Team-site document libraries (FinanceTeam WF-9145 statements, etc.). Read-only.
+  { id: 'graph-sites-client-id', env: 'GRAPH_SITES_CLIENT_ID', required: false },
+  { id: 'graph-sites-client-secret', env: 'GRAPH_SITES_CLIENT_SECRET', required: false },
   // Context7 (live, version-pinned library docs MCP + REST). The Context7 MCP is wired with
   // this as a Bearer header in session-start; the env also lets any tool hit the REST API.
   { id: 'context7-api-key', env: 'CONTEXT7_API_KEY', required: false },
