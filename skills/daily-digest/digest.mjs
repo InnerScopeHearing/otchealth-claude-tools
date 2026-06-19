@@ -19,11 +19,13 @@ const argv = process.argv.slice(2);
 const val = (n, d) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : d; };
 const ORG = val("--org", "InnerScopeHearing");
 const DATE = val("--date", new Date().toISOString().slice(0, 10));
-const DAYS = parseInt(val("--days", "1"), 10) || 1;
+const DAYS = parseInt(val("--days", "0"), 10) || 0; // 0 = single day (--date); >0 = trailing window
 const OUT = val("--out", `journal/${DATE}.md`);
 const GH = new URL("../github-app/gh-app.mjs", import.meta.url).pathname;
 
-const since = new Date(Date.now() - DAYS * 86400000).toISOString().slice(0, 10);
+const sinceDay = new Date(Date.now() - DAYS * 86400000).toISOString().slice(0, 10);
+const mergedQ = DAYS > 0 ? `merged:>=${sinceDay}` : `merged:${DATE}`;
+const windowLabel = DAYS > 0 ? `last ${DAYS} days (since ${sinceDay})` : DATE;
 function ghGraphql(query) { // gh-app.mjs `graphql` reads the query from STDIN; lean fields keep the response small
   try {
     const o = execFileSync("node", [GH, "graphql"], { input: query, maxBuffer: 32 * 1024 * 1024 }).toString("utf8");
@@ -31,7 +33,7 @@ function ghGraphql(query) { // gh-app.mjs `graphql` reads the query from STDIN; 
   } catch (e) { console.error("gh graphql failed: " + e.message.slice(0, 160)); return null; }
 }
 // the day's shipped work: merged PRs across the org (only number/title/repo -> small payload)
-const query = `query{ search(query:${JSON.stringify(`org:${ORG} is:pr is:merged merged:>=${since}`)}, type:ISSUE, first:100){ nodes{ ... on PullRequest { number title repository{ name } } } } }`;
+const query = `query{ search(query:${JSON.stringify(`org:${ORG} is:pr is:merged ${mergedQ}`)}, type:ISSUE, first:100){ nodes{ ... on PullRequest { number title repository{ name } } } } }`;
 const j = ghGraphql(query);
 const nodes = (j && j.data && j.data.search && j.data.search.nodes) || [];
 const prs = nodes.filter((n) => n && n.number).map((n) => ({ number: n.number, title: (n.title || "").replace(/\n/g, " "), repo: (n.repository && n.repository.name) || "?" }));
@@ -39,7 +41,7 @@ const byRepo = {};
 for (const p of prs) { (byRepo[p.repo] ||= []).push(p); }
 
 let md = `# Company Daily Digest — ${DATE}\n\n`;
-md += `> End-of-day knowledge digest for the fleet knowledge base. Window: merged since ${since}. `;
+md += `> End-of-day knowledge digest for the fleet knowledge base. Window: ${windowLabel}. `;
 md += `Generated ${new Date().toISOString()}.\n\n`;
 md += `## Shipped (${prs.length} merged PRs across ${Object.keys(byRepo).length} repos)\n`;
 if (!prs.length) md += `\n_No merged PRs in the window._\n`;
