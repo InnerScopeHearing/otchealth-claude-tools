@@ -36,8 +36,11 @@ assume unless the user says otherwise.
   WRITE-THROUGH every fact/decision/correction the instant it happens (`mem.mjs remember|decision|correct|
   pitfall --agent <a>`); RECALL before asserting any fact (the ledger wins over memory); capture the
   recurring wrong beliefs as **pitfalls** (knowing the incorrect facts matters as much as the facts).
-  Set `KB_AGENT=<agent>` to enable the SessionStart/PreCompact/Stop hooks. Full SOP:
-  `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`. Reference users: CFO + CLO.
+  Set `KB_AGENT=<agent>` to enable the SessionStart/PreCompact/Stop hooks. CONNECTED EXEC MEMORY: exec
+  agents publish `status "<what I'm working on>"` (auto-shared) and `--share` cross-team facts; `tail`/
+  `recall`/`team` automatically surface the whole exec team's status + shared facts, so everyone has the
+  company-wide picture. Rings hold: only explicit status/--share leaves a lane (keep non-sensitive);
+  `clo-personal` is never shared. Full SOP: `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`.
 - **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
   single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a
   direct API call, over navigating website UIs. Whenever a task can be done with a paste-ready command

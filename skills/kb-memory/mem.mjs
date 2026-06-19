@@ -1,27 +1,32 @@
 #!/usr/bin/env node
 // kb-memory — durable, append-only WORKING MEMORY for agents. Defeats context-window compaction:
-// facts / decisions / corrections / pitfalls are externalized the INSTANT they are stated, and
-// re-read on wake, so the chat window is disposable and nothing established is lost or silently
-// changed. Per-agent and RING-CORRECT (the ledger co-locates inside the agent's own store, so its
-// access control applies). Dependency-free; self-resolves creds from Secret Manager via the
-// claude-driver SA (GCP_CLAUDE_DRIVER_SA_JSON), exactly like doc-indexer.
+// facts / decisions / corrections / pitfalls / status are externalized the INSTANT they are stated,
+// and re-read on wake, so the chat window is disposable and nothing established is lost or silently
+// changed. Per-agent and RING-CORRECT (the private ledger co-locates inside the agent's own store).
+// Dependency-free; self-resolves creds from Secret Manager via the claude-driver SA.
 //
 // THE MODEL: the ledger is the source of truth; recall by READING it, never by trusting in-session
-// memory. Append-only + temporal supersession: corrections never delete the old fact, they record
-// "WAS x -> NOW y" so the history is intact (you can see how a fact changed). PITFALLS capture the
-// recurring WRONG beliefs the AI keeps forming, so they are corrected at the source.
+// memory. Append-only + temporal supersession (corrections keep WAS->NOW). PITFALLS capture the
+// recurring WRONG beliefs the AI keeps forming.
+//
+// CONNECTED EXEC MEMORY: each agent keeps a PRIVATE lane (ring-correct). `status` (always) and any
+// entry written with `--share` ALSO publish a copy to the broadly-readable EXEC TEAM feed
+// (otchealthcommons/company-journal/_MEMORY/_exec/<agent>.jsonl, ONE file per agent = no clobber),
+// which every agent's tail / recall / team automatically reads. So the whole exec team shares facts
+// and sees each other's project status, while privilege / MNPI DETAIL stays in each private lane
+// (only what you explicitly `status` / `--share` ever leaves your lane). The CLO PERSONAL lane is
+// HARD-EXCLUDED from sharing (attorney privilege).
 //
 // Verbs:
-//   remember "<fact>"            --agent cfo [--tags a,b] [--source "Matt 2026-06-19"]
-//   decision "<decision made>"   --agent cfo [...]
-//   correct  "<the CORRECT fact>" --agent cfo --was "<the wrong belief>" [--supersedes <id>]
-//   pitfall  "<recurring mistake + the truth + the rule>" --agent cfo     # do/don't, known AI error
-//   recall   "<query>"           --agent cfo [--n 25]
-//   tail     --agent cfo [--n 40]        # ALL pitfalls + recent decisions/facts/corrections (wake read)
-//   render   --agent cfo                 # re-render the human-readable ledger .md
-//   list-agents
-//
-// Agents (ring-routed). Unknown agents fall back to the fleet commons namespace.
+//   remember "<fact>"   --agent cfo [--tags a,b] [--source "..."] [--share]
+//   decision "<made>"   --agent cfo [...] [--share]
+//   correct  "<right>"  --agent cfo --was "<wrong>" [--supersedes id] [--share]
+//   pitfall  "<lesson>" --agent cfo [--share]
+//   status   "<what I'm working on / project status>" --agent cfo    # ALWAYS shared to the exec team
+//   recall   "<query>"  --agent cfo [--n 25]    # searches YOUR lane + the shared TEAM feed
+//   tail     --agent cfo [--n 40]               # YOUR pitfalls/recent + the TEAM feed (company-wide)
+//   team     [--agent x] [--n 60]               # the whole exec team feed: who is working on what
+//   render   --agent cfo  |  list-agents
 import crypto from "node:crypto";
 
 const SM = "otchealth-shared-prod";
@@ -31,6 +36,10 @@ const AGENTS = {
   "clo-personal": { account: "otchealthlegalstore", accountSecret: "azure-legal-storage-account",  keySecret: "azure-legal-storage-key",  container: "personal",        ring: "legal PERSONAL (privileged + confidential, segregated)" },
   commons:        { account: "otchealthcommons",    accountSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal", ring: "fleet commons (shared)" },
 };
+// The executive team: agents whose status + shared facts flow into the connected team feed. Any agent
+// can publish/read; this set is documentation + the default `team` roster.
+const EXEC = ["coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth"];
+const NO_SHARE = new Set(["clo-personal"]); // privilege wall: personal-matter memory never leaves its lane
 
 // ---- args ----
 const argv = process.argv.slice(2);
@@ -44,6 +53,7 @@ const TAGS = (takeVal("--tags", "") || "").split(",").map((s) => s.trim()).filte
 const SOURCE = takeVal("--source", "");
 const WAS = takeVal("--was", "");
 const SUPERSEDES = takeVal("--supersedes", "");
+const SHARE = argv.includes("--share");
 const N = parseInt(takeVal("--n", "40"), 10) || 40;
 
 // ---- Secret Manager (claude-driver SA) ----
@@ -62,58 +72,79 @@ async function sm(id) {
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
 }
 
-// ---- Azure Blob (account SAS, like doc-indexer) ----
-let ACCT, AKEY, AZ_SAS;
+// ---- Azure Blob (account SAS) ----
 const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-function buildAzSas() {
+function buildSas(acct, key) {
   const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co";
   const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
   const se = new Date(Date.now() + 12 * 3600 * 1000).toISOString().slice(0, 19) + "Z";
-  const sts = [ACCT, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
-  const sig = crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64");
+  const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
+  const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64");
   return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
-let KEYBASE, JSONL, MD;
+// --- the agent's own private lane ---
+let ACCT, AKEY, AZ_SAS, KEYBASE, JSONL, MD;
 async function initStore() {
   if (!A) { console.error("need --agent <cfo|clo|clo-personal|commons|...>"); process.exit(2); }
   ACCT = process.env.KB_ACCOUNT || A.account || (await sm(A.accountSecret));
   AKEY = process.env.KB_KEY || (await sm(A.keySecret));
   if (!ACCT || !AKEY) { console.error(`Missing storage creds for agent '${AGENT}' (account ${A.account}, key secret ${A.keySecret}).`); process.exit(2); }
-  AZ_SAS = buildAzSas();
-  KEYBASE = A._file || AGENT;          // commons fallback uses the raw agent name as the file
-  JSONL = `_MEMORY/${KEYBASE}.jsonl`;
-  MD = `_MEMORY/${KEYBASE}.md`;
+  AZ_SAS = buildSas(ACCT, AKEY);
+  KEYBASE = A._file || AGENT;
+  JSONL = `_MEMORY/${KEYBASE}.jsonl`; MD = `_MEMORY/${KEYBASE}.md`;
 }
 const url = (name) => `https://${ACCT}.blob.core.windows.net/${A.container}/${encPath(name)}?${AZ_SAS}`;
 async function getText(name) { const r = await fetch(url(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return await r.text(); }
 async function putText(name, body, ct) { const r = await fetch(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160)); }
+
+// --- the shared EXEC team feed (commons; one file per agent => no cross-agent clobber) ---
+const C = AGENTS.commons;
+const SHARED_PREFIX = "_MEMORY/_exec/";
+let C_ACCT, C_SAS;
+async function commonsInit() { if (C_ACCT) return; C_ACCT = process.env.KB_COMMONS_ACCOUNT || C.account || (await sm(C.accountSecret)); const k = await sm(C.keySecret); if (!C_ACCT || !k) throw new Error("commons creds missing"); C_SAS = buildSas(C_ACCT, k); }
+const cUrl = (name) => `https://${C_ACCT}.blob.core.windows.net/${C.container}/${encPath(name)}?${C_SAS}`;
+async function cGet(name) { const r = await fetch(cUrl(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("cget " + r.status); return await r.text(); }
+async function cPut(name, body) { const r = await fetch(cUrl(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/x-ndjson" }, body }); if (!r.ok) throw new Error("cput " + r.status + " " + (await r.text()).slice(0, 160)); }
+async function cList(prefix) { const out = []; let marker = ""; do { let u = `https://${C_ACCT}.blob.core.windows.net/${C.container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${C_SAS}`; if (marker) u += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(u); if (!r.ok) break; const xml = await r.text(); for (const m of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(m[1]); marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker); return out; }
+const sharedKey = (agent) => `${SHARED_PREFIX}${agent}.jsonl`;
+async function publishShared(agent, entry) {
+  if (NO_SHARE.has(agent)) { console.error(`[kb-memory] NOTE: ${agent} is privileged; entry kept in the private lane only (NOT shared to the exec team).`); return false; }
+  await commonsInit();
+  const t = await cGet(sharedKey(agent));
+  const rows = t ? t.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) : [];
+  rows.push({ ...entry, agent });
+  await cPut(sharedKey(agent), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  return true;
+}
+async function readSharedAll() {
+  await commonsInit();
+  const blobs = (await cList(SHARED_PREFIX)).filter((n) => n.endsWith(".jsonl"));
+  const all = [];
+  for (const b of blobs) { const t = await cGet(b); if (!t) continue; for (const l of t.split(/\r?\n/).filter(Boolean)) { try { all.push(JSON.parse(l)); } catch {} } }
+  return all.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+}
 
 async function load() { const t = await getText(JSONL); if (!t) return []; return t.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
 function newId(rows) { const d = new Date().toISOString().slice(0, 10).replace(/-/g, ""); const n = rows.filter((r) => (r.id || "").startsWith(d)).length + 1; return `${d}-${String(n).padStart(3, "0")}`; }
 
 function renderMd(rows) {
   const fmt = (r) => `- [${(r.ts || "").slice(0, 10)}] ${r.text}${r.tags && r.tags.length ? `  _(#${r.tags.join(" #")})_` : ""}${r.source ? `  - ${r.source}` : ""}  \`${r.id}\``;
-  const active = rows.filter((r) => !rows.some((x) => x.supersedes === r.id)); // hide facts that were later superseded
-  const pit = active.filter((r) => r.type === "pitfall");
-  const dec = active.filter((r) => r.type === "decision");
-  const fac = active.filter((r) => r.type === "fact");
-  const cor = rows.filter((r) => r.type === "correction");
+  const active = rows.filter((r) => !rows.some((x) => x.supersedes === r.id));
   const sortNew = (a, b) => (b.ts || "").localeCompare(a.ts || "");
+  const sec = (t) => active.filter((r) => r.type === t).sort(sortNew);
+  const pit = sec("pitfall"), dec = sec("decision"), fac = sec("fact"), sta = sec("status"), cor = rows.filter((r) => r.type === "correction").sort(sortNew);
   let md = `# ${KEYBASE.toUpperCase()} Memory Ledger\n\n`;
   md += `> SOURCE OF TRUTH. Read this; do not trust in-session recall. Append-only, dated, newest-wins.\n`;
-  md += `> Updated ${new Date().toISOString()} - ${rows.length} entries (${pit.length} pitfalls, ${dec.length} decisions, ${fac.length} facts, ${cor.length} corrections).\n\n`;
-  md += `## PITFALLS - common mistakes / incorrect beliefs the AI keeps forming. DO NOT REPEAT.\n`;
-  md += (pit.length ? pit.sort(sortNew).map(fmt).join("\n") : "- (none yet)") + "\n\n";
-  md += `## DECISIONS (what we decided, and why)\n`;
-  md += (dec.length ? dec.sort(sortNew).map(fmt).join("\n") : "- (none yet)") + "\n\n";
-  md += `## FACTS (established, current)\n`;
-  md += (fac.length ? fac.sort(sortNew).map(fmt).join("\n") : "- (none yet)") + "\n\n";
-  md += `## CORRECTIONS (history - what was wrong vs what is right; old is retained on purpose)\n`;
-  md += (cor.length ? cor.sort(sortNew).map((r) => `- [${(r.ts || "").slice(0, 10)}] WAS: ${r.was || "?"}  ->  NOW: ${r.text}${r.source ? `  - ${r.source}` : ""}  \`${r.id}\``).join("\n") : "- (none yet)") + "\n";
+  md += `> Updated ${new Date().toISOString()} - ${rows.length} entries (${pit.length} pitfalls, ${dec.length} decisions, ${fac.length} facts, ${sta.length} status, ${cor.length} corrections).\n\n`;
+  md += `## PITFALLS - common mistakes / incorrect beliefs the AI keeps forming. DO NOT REPEAT.\n` + (pit.length ? pit.map(fmt).join("\n") : "- (none yet)") + "\n\n";
+  md += `## STATUS - current projects / what I am working on (shared to the exec team)\n` + (sta.length ? sta.map(fmt).join("\n") : "- (none yet)") + "\n\n";
+  md += `## DECISIONS (what we decided, and why)\n` + (dec.length ? dec.map(fmt).join("\n") : "- (none yet)") + "\n\n";
+  md += `## FACTS (established, current)\n` + (fac.length ? fac.map(fmt).join("\n") : "- (none yet)") + "\n\n";
+  md += `## CORRECTIONS (history - what was wrong vs what is right; old is retained on purpose)\n` + (cor.length ? cor.map((r) => `- [${(r.ts || "").slice(0, 10)}] WAS: ${r.was || "?"}  ->  NOW: ${r.text}${r.source ? `  - ${r.source}` : ""}  \`${r.id}\``).join("\n") : "- (none yet)") + "\n";
   return md;
 }
 
-async function append(type) {
+async function append(type, share) {
   if (!TEXT) { console.error(`need text: mem.mjs ${type} "<text>" --agent <a>`); process.exit(2); }
   await initStore();
   const rows = await load();
@@ -121,38 +152,68 @@ async function append(type) {
   rows.push(entry);
   await putText(JSONL, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "application/x-ndjson");
   await putText(MD, renderMd(rows), "text/markdown; charset=utf-8");
-  console.log(`[kb-memory] ${type} -> ${AGENT} (${A.ring}) id=${entry.id}. Ledger now ${rows.length} entries. md=${MD}`);
+  let shared = false;
+  if (share || type === "status") shared = await publishShared(AGENT, entry);
+  console.log(`[kb-memory] ${type} -> ${AGENT} (${A.ring}) id=${entry.id}. Private ledger ${rows.length} entries${shared ? "; PUBLISHED to exec team feed" : ""}.`);
 }
 
-function matchq(r, terms) { const hay = `${r.type} ${r.text} ${r.was || ""} ${(r.tags || []).join(" ")} ${r.source || ""}`.toLowerCase(); return terms.every((t) => hay.includes(t)); }
+function matchq(r, terms) { const hay = `${r.type} ${r.text} ${r.was || ""} ${(r.tags || []).join(" ")} ${r.source || ""} ${r.agent || ""}`.toLowerCase(); return terms.every((t) => hay.includes(t)); }
+function teamLines(shared) {
+  // latest status per agent + recent shared facts/decisions
+  const latestStatus = {};
+  for (const r of shared) { if (r.type === "status" && !latestStatus[r.agent]) latestStatus[r.agent] = r; }
+  return { latestStatus };
+}
 
 (async () => {
-  if (["remember", "fact"].includes(cmd)) return append("fact");
-  if (cmd === "decision") return append("decision");
-  if (cmd === "pitfall") return append("pitfall");
-  if (cmd === "correct") { if (!WAS) console.error("(tip: pass --was \"<wrong belief>\" so the correction records what to stop believing)"); return append("correction"); }
-  if (cmd === "list-agents") { for (const [k, v] of Object.entries(AGENTS)) console.log(`${k.padEnd(14)} ${v.account}/${v.container}  [${v.ring}]`); return; }
+  if (["remember", "fact"].includes(cmd)) return append("fact", SHARE);
+  if (cmd === "decision") return append("decision", SHARE);
+  if (cmd === "pitfall") return append("pitfall", SHARE);
+  if (cmd === "status") return append("status", true);
+  if (cmd === "correct") { if (!WAS) console.error("(tip: pass --was \"<wrong belief>\" so the correction records what to stop believing)"); return append("correction", SHARE); }
+  if (cmd === "list-agents") { for (const [k, v] of Object.entries(AGENTS)) console.log(`${k.padEnd(14)} ${v.account}/${v.container}  [${v.ring}]`); console.log(`exec team: ${EXEC.join(", ")}`); return; }
+  if (cmd === "team") {
+    const shared = await readSharedAll();
+    const { latestStatus } = teamLines(shared);
+    console.log(`# EXEC TEAM feed - what every agent is working on + shared facts (${shared.length} shared entries)`);
+    console.log("## CURRENT STATUS (latest per agent):");
+    for (const ag of Object.keys(latestStatus).sort()) { const r = latestStatus[ag]; console.log(`- [${ag}] [${(r.ts || "").slice(0, 10)}] ${r.text}`); }
+    console.log("## RECENT SHARED (facts / decisions / status, newest first):");
+    for (const r of shared.slice(0, N)) console.log(`[${r.agent}] [${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}`);
+    return;
+  }
   if (!A) { console.error("need --agent <cfo|clo|clo-personal|commons|...>"); process.exit(2); }
   await initStore();
   const rows = await load();
   if (cmd === "render") { await putText(MD, renderMd(rows), "text/markdown; charset=utf-8"); console.log(`rendered ${MD} (${rows.length} entries)`); return; }
   if (cmd === "recall") {
     const terms = TEXT.toLowerCase().split(/\s+/).filter(Boolean);
-    const hits = rows.filter((r) => matchq(r, terms)).sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, N);
-    console.log(`# recall "${TEXT}" @ ${AGENT} - ${hits.length} hit(s)`);
-    for (const r of hits) console.log(`[${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}${r.was ? `  (was: ${r.was})` : ""}${r.source ? `  - ${r.source}` : ""}  \`${r.id}\``);
+    const own = rows.filter((r) => matchq(r, terms)).sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, N);
+    let team = [];
+    try { team = (await readSharedAll()).filter((r) => r.agent !== AGENT && matchq(r, terms)).slice(0, N); } catch {}
+    console.log(`# recall "${TEXT}" @ ${AGENT} - ${own.length} in your lane, ${team.length} in the team feed`);
+    console.log("## YOUR LANE:"); for (const r of own) console.log(`[${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}${r.was ? `  (was: ${r.was})` : ""}  \`${r.id}\``);
+    console.log("## TEAM:"); for (const r of team) console.log(`[${r.agent}] [${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}`);
     return;
   }
   if (cmd === "tail") {
     const pit = rows.filter((r) => r.type === "pitfall");
     const rest = rows.filter((r) => r.type !== "pitfall").sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, N);
-    console.log(`# ${AGENT} ledger - ALL ${pit.length} pitfalls + ${rest.length} recent entries (source of truth)`);
-    console.log("## PITFALLS (do not repeat):");
-    for (const r of pit) console.log(`- ${r.text}  \`${r.id}\``);
-    console.log("## RECENT:");
-    for (const r of rest.reverse()) console.log(`[${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}${r.was ? `  (was: ${r.was})` : ""}`);
+    console.log(`# ${AGENT} ledger + TEAM view (source of truth)`);
+    console.log(`## YOUR PITFALLS (${pit.length}, do not repeat):`); for (const r of pit) console.log(`- ${r.text}  \`${r.id}\``);
+    console.log("## YOUR RECENT (facts / decisions / status / corrections):"); for (const r of rest.slice().reverse()) console.log(`[${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}${r.was ? `  (was: ${r.was})` : ""}`);
+    try {
+      const shared = await readSharedAll();
+      const { latestStatus } = teamLines(shared);
+      const others = Object.keys(latestStatus).filter((a) => a !== AGENT).sort();
+      console.log("## TEAM - company-wide, what every OTHER exec agent is working on (latest status):");
+      if (!others.length) console.log("- (no team status published yet)");
+      for (const ag of others) { const r = latestStatus[ag]; console.log(`- [${ag}] [${(r.ts || "").slice(0, 10)}] ${r.text}`); }
+      const recentShared = shared.filter((r) => r.agent !== AGENT && r.type !== "status").slice(0, 10);
+      if (recentShared.length) { console.log("## TEAM - recent shared facts/decisions:"); for (const r of recentShared) console.log(`[${r.agent}] [${r.type}] ${r.text}`); }
+    } catch (e) { console.log("## TEAM - (feed unavailable: " + e.message + ")"); }
     return;
   }
-  console.error("verbs: remember | decision | correct | pitfall | recall | tail | render | list-agents");
+  console.error("verbs: remember | decision | correct | pitfall | status | recall | tail | team | render | list-agents");
   process.exit(2);
 })().catch((e) => { console.error("ERROR: " + e.message); process.exit(1); });
