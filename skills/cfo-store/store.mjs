@@ -30,6 +30,8 @@ import { join, relative, dirname, extname } from "node:path";
 const argv = process.argv.slice(2);
 function takeVal(name) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return null; }
 const containerOverride = takeVal("--container"); // valued flag: pull it (and its value) out before positional parse
+const accountOverride = takeVal("--account");      // override the Azure storage account (e.g. otchealthlegalstore)
+const keySecretOverride = takeVal("--key-secret"); // override which SM secret holds the account key
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
 const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "gcs").toLowerCase();
@@ -104,44 +106,41 @@ async function runGcs() {
 
 // ============================ Azure backend ============================
 const AVER = "2021-12-02";
-let ACCT, AKEY, CONTAINER;
+let ACCT, AKEY, CONTAINER, SAS;
 async function azCred() {
-  ACCT = process.env.AZURE_STORAGE_ACCOUNT || (await smRead("azure-cfo-storage-account")) || "otchealthcfodata";
-  // The CFO data room gets its OWN container (cfo-source-docs), separate from the narrower
-  // innd-stock workbook lane that the shared azure-cfo-storage-container secret points at.
-  // Override with --container <name> or CFO_AZURE_CONTAINER if ever needed.
+  ACCT = accountOverride || process.env.AZURE_STORAGE_ACCOUNT || (await smRead("azure-cfo-storage-account")) || "otchealthcfodata";
+  // Default container is the CFO data room (cfo-source-docs). The CLO legal store uses
+  //   --account otchealthlegalstore --key-secret azure-legal-storage-key --container company|personal
   CONTAINER = containerOverride || process.env.CFO_AZURE_CONTAINER || "cfo-source-docs";
-  AKEY = process.env.AZURE_STORAGE_KEY || (await smRead("azure-cfo-storage-key"));
-  if (!AKEY) { console.error(`Missing AZURE_STORAGE_KEY (secret azure-cfo-storage-key). The CFO Azure data room is account ${ACCT}, container ${CONTAINER}. Provision the storage account key into Secret Manager (azure-cfo-storage-key) to enable the Azure backend.`); process.exit(2); }
+  AKEY = (keySecretOverride ? await smRead(keySecretOverride) : null) || process.env.AZURE_STORAGE_KEY || (await smRead("azure-cfo-storage-key"));
+  if (!AKEY) { console.error(`Missing storage key for account ${ACCT}, container ${CONTAINER} (secret ${keySecretOverride || "azure-cfo-storage-key"}).`); process.exit(2); }
+  SAS = buildAzSas();
 }
 const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-function azSig(method, blob, xms, query, contentLength, contentType) {
-  const canonHeaders = Object.keys(xms).sort().map((k) => `${k.toLowerCase()}:${xms[k]}`).join("\n") + "\n";
-  let canonResource = `/${ACCT}/${CONTAINER}` + (blob ? `/${blob}` : "");
-  if (query) for (const k of Object.keys(query).sort()) canonResource += `\n${k.toLowerCase()}:${query[k]}`;
-  const sts = [method, "", "", contentLength || "", "", contentType || "", "", "", "", "", "", "", canonHeaders + canonResource].join("\n");
-  return `SharedKey ${ACCT}:${crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64")}`;
+// Account SAS: signs the SAS fields, not the blob path, so special-char names (spaces, &, +,
+// parens) work where per-request SharedKey canonicalization 403s. Includes delete (rm).
+function buildAzSas() {
+  const sv = "2021-12-02", sp = "rwdlc", ss = "b", srt = "co";
+  const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
+  const se = new Date(Date.now() + 12 * 3600 * 1000).toISOString().slice(0, 19) + "Z";
+  const sts = [ACCT, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
+  const sig = crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64");
+  return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
 async function azCreateContainer() {
-  const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
-  const auth = azSig("PUT", "", xms, { restype: "container" }, "", "");
-  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container`, { method: "PUT", headers: { ...xms, Authorization: auth } });
+  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&${SAS}`, { method: "PUT" });
   if (r.ok) return "created";
   if (r.status === 409) return "exists";
   throw new Error("container create " + r.status + " " + (await r.text()).slice(0, 160));
 }
 async function azPut(name, buf, ctype) {
-  const xms = { "x-ms-blob-type": "BlockBlob", "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
   const ct = ctype || ctOf(name);
-  const auth = azSig("PUT", name, xms, null, String(buf.length), ct);
-  let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}`, { method: "PUT", headers: { ...xms, "Content-Type": ct, Authorization: auth }, body: buf });
+  let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${SAS}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct }, body: buf });
   if (r.status === 404) { await azCreateContainer(); return azPut(name, buf, ctype); } // container missing -> create + retry
   if (!r.ok) throw new Error("blob put " + r.status + " " + (await r.text()).slice(0, 160));
 }
 async function azGet(name) {
-  const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
-  const auth = azSig("GET", name, xms, null, "", "");
-  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}`, { headers: { ...xms, Authorization: auth } });
+  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${SAS}`);
   if (r.status === 404) return null;
   if (!r.ok) throw new Error("blob get " + r.status);
   return Buffer.from(await r.arrayBuffer());
@@ -149,14 +148,10 @@ async function azGet(name) {
 async function azList(prefix) {
   const out = []; let marker = "";
   do {
-    const query = { comp: "list", restype: "container" };
-    if (prefix) query.prefix = prefix;
-    const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
-    const auth = azSig("GET", "", xms, marker ? { ...query, marker } : query, "", "");
-    let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list`;
+    let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list&${SAS}`;
     if (prefix) url += `&prefix=${encodeURIComponent(prefix)}`;
     if (marker) url += `&marker=${encodeURIComponent(marker)}`;
-    const r = await fetch(url, { headers: { ...xms, Authorization: auth } });
+    const r = await fetch(url);
     if (r.status === 404) return out;
     if (!r.ok) throw new Error("blob list " + r.status + " " + (await r.text()).slice(0, 160));
     const xml = await r.text();
@@ -172,9 +167,7 @@ async function azList(prefix) {
   return out;
 }
 async function azDelete(name) {
-  const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
-  const auth = azSig("DELETE", name, xms, null, "", "");
-  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}`, { method: "DELETE", headers: { ...xms, Authorization: auth } });
+  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${SAS}`, { method: "DELETE" });
   if (r.status === 404) return false;
   if (!r.ok) throw new Error("blob delete " + r.status + " " + (await r.text()).slice(0, 160));
   return true;
