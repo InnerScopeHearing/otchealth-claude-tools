@@ -104,9 +104,26 @@ const LEGAL_CATS = [
 ];
 const LEGAL_MATERIAL = new Set(["00_Pleadings", "01_Motions", "02_Discovery", "03_Orders-and-Rulings", "06_Family-Law-Disclosures", "05_Contracts-and-Agreements", "11_Securities-Regulatory"]);
 const FINANCE_NONACCT = /\b(brochure|press release|logo|banner|screenshot|product (spec|sheet)|510\(k\)|fda|marketing|website|social media|advertis|packaging|user manual|datasheet)\b/i;
+// Commerce (CRO): Shopify + Amazon SP-API + the owned PSAP/TReO inventory liquidation. Non-PHI.
+const COMMERCE_CATS = [
+  ["01_Supplier-and-Vendor-Contracts", /supplier|vendor agreement|purchase order|\bpo\b|manufacturing agreement|distribution agreement|wholesale|\bmsa\b|terms of supply/i],
+  ["06_Compliance-and-Claims", /\bpsap\b|personal sound amplif|hearing aid|\bfda\b|\bftc\b|listing compliance|warning letter|prop 65|labeling|claim substantiation/i],
+  ["00_Product-Listings", /listing|product (title|description|detail|page)|\basin\b|\bsku\b|bullet points|a\+ content/i],
+  ["02_Inventory-and-Catalog", /inventory|stock count|catalog|\btreo\b|\bfba\b|warehouse|lot |serial number/i],
+  ["03_Orders-and-Fulfillment", /\border\b|fulfillment|shipment|tracking number|packing slip|carrier|\brma\b/i],
+  ["04_Pricing-and-Offers", /pricing|price list|discount|coupon|promotion|bundle|\bmap policy\b|margin/i],
+  ["07_Payments-and-HSA-FSA", /\bhsa\b|\bfsa\b|stripe|payout|chargeback|merchant account|payment processor/i],
+  ["09_Returns-and-Warranty", /return|warranty|refund policy|defect|replacement/i],
+  ["08_Customer-and-CRM", /customer (list|database)|\bcrm\b|subscriber|email list|segment/i],
+  ["10_Reports-and-Analytics", /sales report|analytics|conversion rate|\bgmv\b|revenue report|shopifyql|seller report/i],
+  ["05_Channel-and-Marketplace", /amazon|shopify|seller central|marketplace|retail channel|walmart|\bcvs\b|walgreens/i],
+];
+const COMMERCE_MATERIAL = new Set(["01_Supplier-and-Vendor-Contracts", "06_Compliance-and-Claims", "04_Pricing-and-Offers"]);
+const COMMERCE_NONACCT = /\b(logo|banner|lifestyle photo|hero image|video|social media|ad creative)\b/i;
 const PROFILES = {
   finance: { azAccountEnv: "AZURE_STORAGE_ACCOUNT", azAccountSecret: "azure-cfo-storage-account", azAccount: "otchealthcfodata", azKeyEnv: "AZURE_STORAGE_KEY", azKeySecret: "azure-cfo-storage-key", azContainer: "cfo-source-docs", gcsBucket: "otchealth-cfo-source-docs", cats: FINANCE_CATS, material: FINANCE_MATERIAL, nonacct: FINANCE_NONACCT, pathCat: (p) => (p.toLowerCase().startsWith("qbo-export/") ? "15_Source-Accounting-Exports(QBO)" : null) },
   legal: { azAccountEnv: "AZURE_LEGAL_STORAGE_ACCOUNT", azAccountSecret: "azure-legal-storage-account", azAccount: "otchealthlegalstore", azKeyEnv: "AZURE_LEGAL_STORAGE_KEY", azKeySecret: "azure-legal-storage-key", azContainer: "company", gcsBucket: null, cats: LEGAL_CATS, material: LEGAL_MATERIAL, nonacct: null, pathCat: () => null },
+  commerce: { azAccountEnv: "AZURE_COMMERCE_STORAGE_ACCOUNT", azAccountSecret: "azure-commerce-storage-account", azAccount: "otchealthcommerce", azKeyEnv: "AZURE_COMMERCE_STORAGE_KEY", azKeySecret: "azure-commerce-storage-key", azContainer: "commerce-source-docs", gcsBucket: null, cats: COMMERCE_CATS, material: COMMERCE_MATERIAL, nonacct: COMMERCE_NONACCT, pathCat: () => null },
   generic: { azAccountEnv: "AZURE_STORAGE_ACCOUNT", azAccountSecret: "azure-cfo-storage-account", azAccount: null, azKeyEnv: "AZURE_STORAGE_KEY", azKeySecret: "azure-cfo-storage-key", azContainer: null, gcsBucket: null, cats: [], material: new Set(), nonacct: null, pathCat: () => null },
 };
 const P = PROFILES[PROFILE] || PROFILES.generic;

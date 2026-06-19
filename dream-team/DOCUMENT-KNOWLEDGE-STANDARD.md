@@ -53,7 +53,7 @@ container, so they inherit its access control.
 |---|---|---|---|---|---|---|
 | Finance / audit | CFO | `otchealthcfodata` | `cfo-source-docs` | `finance` | non-PHI / MNPI-aware | **LIVE** |
 | Legal | CLO | `otchealthlegalstore` | `company`, `personal` | `legal` | privileged (personal) / MNPI (company) | **LIVE** |
-| Commerce | CRO / commerce | `otchealthcommerce`* | `catalog`, `suppliers`, `orders` | `commerce`* | non-PHI | onboard |
+| Commerce | CRO / commerce | `otchealthcommerce` (own account) | `commerce-source-docs` | `commerce` (built: 00-10 taxonomy) | non-PHI | profile + intake LIVE; store pending one-line provision + key |
 | Capital / IR | Capital | `otchealthcapital`* | `raise`, `ir`, `captable` | `capital`* | **MNPI / securities** | onboard (gated) |
 | Product / Apps | per App Lead | `otchealthproduct`* | per-app container | `product`* | non-PHI (FourVault COPPA carve-out) | onboard |
 | Growth / Marketing | Growth | `otchealthgrowth`* | `assets`, `pr`, `content` | `growth`* | non-PHI | onboard |

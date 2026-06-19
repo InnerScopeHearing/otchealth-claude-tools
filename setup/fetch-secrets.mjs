@@ -102,6 +102,10 @@ const MAP = [
   { id: 'azure-cfo-storage-account', env: 'AZURE_STORAGE_ACCOUNT', required: false },
   { id: 'azure-cfo-storage-container', env: 'AZURE_STORAGE_CONTAINER', required: false },
   { id: 'azure-cfo-storage-key', env: 'AZURE_STORAGE_KEY', required: false },
+  // Commerce data room (CRO): dedicated account otchealthcommerce, container commerce-source-docs.
+  // Own account so the commerce key does not unlock the finance/legal rooms. Key -> rotate.
+  { id: 'azure-commerce-storage-account', env: 'AZURE_COMMERCE_STORAGE_ACCOUNT', required: false },
+  { id: 'azure-commerce-storage-key', env: 'AZURE_COMMERCE_STORAGE_KEY', required: false },
   // Azure Document Intelligence (Form Recognizer) for the CFO audit data-room indexer: read +
   // layout OCR on the image-only / mangled tier (account otchealth-docintel, eastus). Key is
   // sensitive -> rotation. Endpoint is non-secret but stored alongside for one hydration path.
