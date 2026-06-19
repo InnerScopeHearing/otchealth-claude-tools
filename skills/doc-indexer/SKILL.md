@@ -24,6 +24,23 @@ flat catalog + SQLite FTS retrieval, reorg applied during a single storage cutov
    `_INBOX-UNCLASSIFIED`; off-topic -> `_NON-ACCOUNTING`.
 5. append a catalog row to `_CATALOG/catalog.jsonl` and insert into the FTS5 index.
 
+## Understanding tier: Azure Content Understanding (CU)
+The model-grade understanding engine (2026-06-19 decision). Per doc, in ONE call, CU returns clean
+Markdown plus structured fields - classify into the profile taxonomy, document type, summary, date,
+counterparty, amount, materiality - using a Foundry model deployment (gpt-4.1-mini default). It
+replaces the regex first-pass with real understanding and overwrites the `_TEXT/` sidecar with CU
+Markdown (so AI Search + FTS index the high-quality text). Runs on the Foundry resource
+(`azure-foundry-endpoint` / `azure-foundry-key`).
+```
+node skills/doc-indexer/indexer.mjs cu-defaults  --profile <p>                 # point CU at the model deployments (one-time)
+node skills/doc-indexer/indexer.mjs cu-init      --profile <p>                 # create the custom audit analyzer
+node skills/doc-indexer/indexer.mjs cu-calibrate --profile <p> [--limit 200]   # real cost on a sample -> projects full-corpus $
+node skills/doc-indexer/indexer.mjs understand   --profile <p> [--azure|--gcs] [--limit n] [--reindex]  # full CU pass, resumable
+```
+Recommended flow: `index --no-ocr` (fast free inventory) -> `cu-calibrate` (know the bill) ->
+`understand` (full CU pass) -> `push-search` (into Azure AI Search). CU bills per page; gpt-4.1-mini
+is ~80% cheaper than gpt-4.1. `cu-calibrate` reads CU's `usage` object for the real number.
+
 ## Two retrieval layers
 - **Free portable core (always built):** `_TEXT/` sidecars + `node:sqlite` FTS5 index -> the `search`
   command (keyword/phrase), plus `rg` over sidecars. Zero infra, offline, lives in the room.
@@ -100,6 +117,9 @@ The rule classifier is a FIRST PASS; the owning agent refines categories before 
 - finance: `azure-cfo-storage-account`/`-key`, `cfo-source-bucket`
 - legal: `azure-legal-storage-account`/`azure-legal-storage-key`
 - OCR: `azure-docintel-endpoint` / `azure-docintel-key` (otchealth-docintel, eastus). ROTATE-BEFORE-LAUNCH.
+- CU understanding: `azure-foundry-endpoint` / `azure-foundry-key` / `azure-foundry-gen-deployment`
+  (otchealth-foundry, eastus, gpt-4.1-mini). Retrieval brain: `azure-search-endpoint` /
+  `azure-search-admin-key` + `azure-openai-embedding-deployment`. ROTATE-BEFORE-LAUNCH.
 
 ## Guardrails
 - **Non-PHI ring only.** Never point at a MedReview/PHI source. PHI-scan non-accounting media before

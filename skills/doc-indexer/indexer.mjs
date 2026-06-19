@@ -432,6 +432,114 @@ async function runCloudSearch(q) {
   console.log(`(${(j.value || []).length} hits for: ${q}  via ${IDXNAME})`);
 }
 
+// ============================ Azure Content Understanding (the "understand" tier) ============================
+// CU = the generative understanding engine (2026-06-19 decision). Per doc it returns clean Markdown
+// + structured fields (classify into our taxonomy, doc type, summary, date, counterparty, amount,
+// materiality) in ONE call, using a Foundry model deployment (gpt-4.1-mini default). It replaces the
+// regex first-pass with model-grade understanding and overwrites the sidecar text with CU Markdown.
+// Runs on the Foundry resource (azure-foundry-endpoint/-key). Pending live validation on provisioning.
+const CU_API = "2025-11-01";
+const CU_ANALYZER = `otc-${PROFILE}-audit`;
+let CU_EP, CU_KEY, CU_GEN_DEP, CU_EMB_DEP;
+async function cuInit() {
+  await initStorage();
+  CU_EP = (process.env.AZURE_FOUNDRY_ENDPOINT || (await sm("azure-foundry-endpoint")) || "").replace(/\/$/, "");
+  CU_KEY = process.env.AZURE_FOUNDRY_KEY || (await sm("azure-foundry-key"));
+  CU_GEN_DEP = process.env.AZURE_FOUNDRY_GEN_DEPLOYMENT || (await sm("azure-foundry-gen-deployment")) || "gpt-4.1-mini";
+  CU_EMB_DEP = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
+  if (!CU_EP || !CU_KEY) { console.error("Missing azure-foundry-endpoint / azure-foundry-key (provision the Foundry resource)."); process.exit(2); }
+}
+const cuH = () => ({ "Ocp-Apim-Subscription-Key": CU_KEY, "Content-Type": "application/json" });
+async function cuPoll(url) { for (let i = 0; i < 120; i++) { await sleep(1500); const r = await fetch(url, { headers: { "Ocp-Apim-Subscription-Key": CU_KEY } }); if (!r.ok) continue; const j = await r.json(); const s = (j.status || "").toLowerCase(); if (s === "succeeded") return j; if (s === "failed") throw new Error("CU op failed: " + JSON.stringify(j).slice(0, 180)); } throw new Error("CU poll timeout"); }
+async function cuSetDefaults() {
+  await cuInit();
+  const body = { modelDeployments: { [CU_GEN_DEP]: CU_GEN_DEP, [CU_EMB_DEP]: CU_EMB_DEP } };
+  const r = await fetch(`${CU_EP}/contentunderstanding/defaults?api-version=${CU_API}`, { method: "PATCH", headers: cuH(), body: JSON.stringify(body) });
+  console.log(`CU defaults PATCH -> ${r.status}${r.ok ? " (gen=" + CU_GEN_DEP + ", emb=" + CU_EMB_DEP + ")" : " " + (await r.text()).slice(0, 200)}`);
+}
+function cuAnalyzerDef() {
+  const cats = (P.cats || []).map((c) => c[0]); cats.push("_NON-ACCOUNTING", "_INBOX-UNCLASSIFIED");
+  const entityEnum = PROFILE === "finance" ? ["InnerScope", "HearingAssist", "OTCHealth", "iHEAR", "Personal", "QBO-Mixed", "Unknown"] : ["Company", "Personal", "Unknown"];
+  return {
+    description: `OTCHealth ${PROFILE} audit analyzer: classify + extract + summarize`,
+    baseAnalyzerId: "prebuilt-documentAnalyzer",
+    config: { returnDetails: true },
+    fieldSchema: { name: `OTC_${PROFILE}_Audit`, fields: {
+      Category: { type: "string", method: "classify", description: "The single best audit category for this document.", enum: cats },
+      Entity: { type: "string", method: "classify", description: "Which company/entity this document belongs to.", enum: entityEnum },
+      DocumentType: { type: "string", method: "generate", description: "Short human label for the document type, e.g. 'Bank statement', 'Promissory note', 'Invoice', 'Board minutes'." },
+      Summary: { type: "string", method: "generate", description: "One or two sentence factual summary of what this document is and contains. No speculation." },
+      DocumentDate: { type: "string", method: "generate", description: "Primary date of the document as YYYY-MM-DD if present, else empty." },
+      Counterparty: { type: "string", method: "generate", description: "The other party (vendor, customer, bank, court, or person), if any." },
+      Amount: { type: "string", method: "generate", description: "The most significant monetary amount in the document (with currency), if any." },
+      Material: { type: "boolean", method: "classify", description: "True if financially or legally material/significant (statements, agreements, equity, debt, raises, M&A, workpapers, board, related-party, pleadings); false for routine items." },
+    } },
+  };
+}
+async function cuEnsureAnalyzer() {
+  const r = await fetch(`${CU_EP}/contentunderstanding/analyzers/${CU_ANALYZER}?api-version=${CU_API}`, { method: "PUT", headers: cuH(), body: JSON.stringify(cuAnalyzerDef()) });
+  if (r.status === 409) return;
+  if (!(r.status === 201 || r.status === 200)) throw new Error("CU analyzer create " + r.status + " " + (await r.text()).slice(0, 240));
+  const op = r.headers.get("operation-location"); if (op) { try { await cuPoll(op); } catch {} }
+}
+async function cuAnalyze(buf) {
+  const r = await fetch(`${CU_EP}/contentunderstanding/analyzers/${CU_ANALYZER}:analyze?api-version=${CU_API}`, { method: "POST", headers: { "Ocp-Apim-Subscription-Key": CU_KEY, "Content-Type": "application/octet-stream" }, body: buf });
+  if (r.status === 429) { await sleep(4000); return cuAnalyze(buf); }
+  if (!(r.status === 202 || r.status === 200)) throw new Error("CU analyze " + r.status + " " + (await r.text()).slice(0, 180));
+  const op = r.headers.get("operation-location"); const j = op ? await cuPoll(op) : await r.json();
+  const res = j.result || j; const contents = res.contents || [];
+  const md = contents.map((c) => c.markdown || "").join("\n\n").trim();
+  const f = (contents[0] && contents[0].fields) || res.fields || {};
+  const val = (k) => { const x = f[k]; if (x == null) return ""; return x.valueString ?? x.valueBoolean ?? x.valueNumber ?? x.valueDate ?? x.value ?? ""; };
+  return { md, fields: { Category: val("Category"), Entity: val("Entity"), DocumentType: val("DocumentType"), Summary: val("Summary"), DocumentDate: val("DocumentDate"), Counterparty: val("Counterparty"), Amount: val("Amount"), Material: val("Material") }, usage: res.usage || j.usage || {} };
+}
+function costFromUsage(u) { // illustrative published rates; calibrate before the full run
+  const extraction = ((u.documentPagesStandard || 0) + (u.documentPagesBasic || 0)) / 1000 * 5 + (u.documentPagesMinimal || 0) / 1000 * 1;
+  const ctx = (u.contextualizationToken || 0) / 1e6 * 1;
+  const tk = u.tokens || {}; let tin = 0, tout = 0; for (const [k, v] of Object.entries(tk)) { if (k.endsWith("-input")) tin += v; else if (k.endsWith("-output")) tout += v; }
+  const tokcost = tin / 1e6 * 0.40 + tout / 1e6 * 1.60; // gpt-4.1-mini global (illustrative)
+  const pages = (u.documentPagesStandard || 0) + (u.documentPagesBasic || 0) + (u.documentPagesMinimal || 0);
+  return { pages, cost: extraction + ctx + tokcost };
+}
+async function runUnderstand() {
+  await cuInit(); await cuEnsureAnalyzer();
+  const rows = await loadCatalog();
+  const todo = rows.filter((r) => (REINDEX || !r.cu) && !r.err);
+  console.error(`[understand] profile=${PROFILE} analyzer=${CU_ANALYZER} model=${CU_GEN_DEP}; ${todo.length} docs${LIMIT ? ` (limit ${LIMIT})` : ""}.`);
+  let n = 0, since = 0, totCost = 0, totPages = 0;
+  for (const r of todo) {
+    if (LIMIT && n >= LIMIT) break;
+    try {
+      const buf = await getBuf(r.path); if (!buf) { r.err = "missing"; continue; }
+      const a = await cuAnalyze(buf);
+      if (a.fields.Category) r.category = a.fields.Category;
+      if (a.fields.Entity && a.fields.Entity !== "Unknown") r.entity = a.fields.Entity;
+      r.doc_type = a.fields.DocumentType; r.summary = a.fields.Summary; r.doc_date = a.fields.DocumentDate; r.counterparty = a.fields.Counterparty; r.amount = a.fields.Amount;
+      r.material = a.fields.Material === true || a.fields.Material === "true" || P.material.has(r.category);
+      r.cu = true; r.cu_engine = "cu:" + CU_GEN_DEP;
+      if (a.md && !NO_TEXT) { try { await putBuf(TEXT_PREFIX + r.path + ".txt", Buffer.from(a.md, "utf8"), "text/plain; charset=utf-8"); r.sidecar = true; r.engine = "cu:" + CU_GEN_DEP; } catch {} }
+      const c = costFromUsage(a.usage); totCost += c.cost; totPages += c.pages; r.cu_pages = c.pages;
+    } catch (e) { r.err = "cu: " + e.message.slice(0, 120); }
+    n++; since++;
+    if (since >= Math.min(FLUSH_EVERY, 50)) { await flushCatalog(rows); since = 0; console.error(`  understood ${n}/${todo.length} | ~$${totCost.toFixed(2)} / ${totPages} pages`); }
+  }
+  await flushCatalog(rows);
+  console.log(`[understand] +${n} docs | ~$${totCost.toFixed(2)} over ${totPages} pages (~$${totPages ? (totCost / totPages * 1000).toFixed(2) : "?"}/1k pages). Next: push-search.`);
+}
+async function runCuCalibrate() {
+  const N = LIMIT || 200;
+  await cuInit(); await cuEnsureAnalyzer();
+  const rows = await loadCatalog(); const sample = rows.filter((r) => !r.err).slice(0, N);
+  if (!sample.length) { console.error("no catalog yet; run `index --no-ocr` first to inventory the room."); process.exit(1); }
+  console.error(`[cu-calibrate] running CU on ${sample.length} representative docs (analyzer ${CU_ANALYZER}, model ${CU_GEN_DEP})...`);
+  let cost = 0, pages = 0, ok = 0;
+  for (const r of sample) { try { const buf = await getBuf(r.path); if (!buf) continue; const a = await cuAnalyze(buf); const c = costFromUsage(a.usage); cost += c.cost; pages += c.pages; ok++; } catch (e) { console.error("  fail " + r.path.slice(-40) + ": " + e.message.slice(0, 80)); } }
+  const total = rows.length, perDoc = ok ? cost / ok : 0, perPage = pages ? cost / pages : 0;
+  console.log(`\n[cu-calibrate] ${ok} docs, ${pages} pages, $${cost.toFixed(2)} actual (model ${CU_GEN_DEP})`);
+  console.log(`  per-doc ~$${perDoc.toFixed(4)} | per-1k-pages ~$${(perPage * 1000).toFixed(2)}`);
+  console.log(`  PROJECTED full corpus (${total} docs): ~$${(perDoc * total).toFixed(0)}`);
+}
+
 try {
   if (cmd === "index") await runIndex();
   else if (cmd === "search") await runSearch(pos.slice(1).join(" "));
@@ -442,5 +550,9 @@ try {
   else if (cmd === "search-init") await runSearchInit();
   else if (cmd === "push-search") await runPushSearch();
   else if (cmd === "cloud-search") await runCloudSearch(pos.slice(1).join(" "));
-  else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>"\nflags: --profile finance|legal|generic --azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
+  else if (cmd === "cu-defaults") await cuSetDefaults();
+  else if (cmd === "cu-init") { await cuInit(); await cuEnsureAnalyzer(); console.log("CU analyzer ready: " + CU_ANALYZER); }
+  else if (cmd === "understand") await runUnderstand();
+  else if (cmd === "cu-calibrate") await runCuCalibrate();
+  else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
 } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }

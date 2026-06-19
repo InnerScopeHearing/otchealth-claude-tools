@@ -113,6 +113,12 @@ const MAP = [
   { id: 'azure-search-endpoint', env: 'AZURE_SEARCH_ENDPOINT', required: false },
   { id: 'azure-search-admin-key', env: 'AZURE_SEARCH_KEY', required: false },
   { id: 'azure-openai-embedding-deployment', env: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', required: false },
+  // Azure AI Foundry resource powering Content Understanding (the doc-indexer "understand" tier:
+  // generative classify + field extraction + summary) and its model deployments. Key sensitive
+  // -> rotation. (otchealth-foundry, eastus; gen model gpt-4.1-mini.)
+  { id: 'azure-foundry-endpoint', env: 'AZURE_FOUNDRY_ENDPOINT', required: false },
+  { id: 'azure-foundry-key', env: 'AZURE_FOUNDRY_KEY', required: false },
+  { id: 'azure-foundry-gen-deployment', env: 'AZURE_FOUNDRY_GEN_DEPLOYMENT', required: false },
   // Azure Blob storage for the CLO legal matter/docket store (off Google; dedicated account
   // otchealthlegalstore with company + personal containers). The legal skill reads/writes
   // here. The personal container holds confidential divorce + civil matters. Account key is
