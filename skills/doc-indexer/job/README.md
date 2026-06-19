@@ -54,8 +54,29 @@ az containerapp job create -n doc-indexer-librarian -g otchealth-automation-rg \
 
 Notes
 - The same image serves the **legal** profile (`--profile legal --azure --container company` / `personal`)
-  for the CLO - create a `doc-indexer-legal` job the same way.
+  for the CLO - create a `doc-indexer-legal` job the same way. Company and personal each get their own
+  index/catalog/sidecars; the personal container is privileged (CLO-only), never co-mingled.
 - `index`/`understand`/`push-search` are all **resumable** (catalog checkpoint), so a job that is
   retried or rescheduled never repeats finished work.
 - ROTATE-BEFORE-LAUNCH: the gcpsa job secret is the claude-driver SA; treat it as sensitive.
 - Region: the job env is westus2; Search/Foundry are eastus - cross-region API calls, fine.
+
+### CRITICAL: `--args` must be SEPARATE tokens, not a comma string
+`az containerapp job create/update --args` takes a space-separated list (each token is one element of
+the container `args` array). Do NOT pass `--args "librarian.sh,finance"` - in Cloud Shell PowerShell
+that is stored as a SINGLE literal arg `librarian.sh,finance`, so `/bin/sh` tries to open a file with a
+comma in its name and the job fails instantly (Failed, with no app logs because the container never
+runs the script). Pass each token separately and quoted:
+
+```
+--command "/bin/sh" --args "/app/skills/doc-indexer/job/librarian.sh" "legal" "--container" "company"
+```
+
+(daily-digest worked despite this bug only because its args were a single token, `nightly.sh`.)
+
+### Speeding up the `understand` (Content Understanding) pass
+CU analyze+poll is ~30-60s per document; the pass runs a **bounded worker pool** (default 8 in parallel,
+tune with `--concurrency N` or the `CU_CONCURRENCY` env var). 429s self-retry honoring `Retry-After`.
+The pass is resumable, so even if a librarian run hits `replicaTimeout` it picks up the unfinished tail
+next run. For a large room, raise `--replica-timeout` and/or `--concurrency` rather than expecting one
+run to finish thousands of docs in a single execution.
