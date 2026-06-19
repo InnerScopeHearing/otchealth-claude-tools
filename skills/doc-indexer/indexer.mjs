@@ -135,12 +135,15 @@ let GBUCKET, ACCT, CONTAINER, AKEY, _gtok = null, _gtokAt = 0;
 async function gAuth() { if (!_gtok || Date.now() - _gtokAt > 50 * 60 * 1000) { _gtok = await gToken("https://www.googleapis.com/auth/devstorage.read_write"); _gtokAt = Date.now(); } return _gtok; }
 const AVER = "2021-12-02";
 const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-function azSig(method, blob, xms, query, contentLength, contentType) {
-  const ch = Object.keys(xms).sort().map((k) => `${k.toLowerCase()}:${xms[k]}`).join("\n") + "\n";
-  let cr = `/${ACCT}/${CONTAINER}` + (blob ? `/${blob}` : "");
-  if (query) for (const k of Object.keys(query).sort()) cr += `\n${k.toLowerCase()}:${query[k]}`;
-  const sts = [method, "", "", contentLength || "", "", contentType || "", "", "", "", "", "", "", ch + cr].join("\n");
-  return `SharedKey ${ACCT}:${crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64")}`;
+let AZ_SAS; // account SAS for blob ops: signs the SAS fields, not the blob path, so special-char
+// names (spaces, parens, +, &) work where per-request SharedKey canonicalization 403s.
+function buildAzSas() {
+  const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co";
+  const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
+  const se = new Date(Date.now() + 12 * 3600 * 1000).toISOString().slice(0, 19) + "Z";
+  const sts = [ACCT, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
+  const sig = crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64");
+  return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
 async function initStorage() {
   if (BACKEND === "gcs") {
@@ -150,6 +153,7 @@ async function initStorage() {
     CONTAINER = containerOverride || process.env.CFO_AZURE_CONTAINER || P.azContainer || "data-room";
     AKEY = (KEYSECRET_OV ? await sm(KEYSECRET_OV) : null) || process.env[P.azKeyEnv] || (await sm(P.azKeySecret));
     if (!AKEY) { console.error(`Missing storage key for profile ${PROFILE} (secret ${KEYSECRET_OV || P.azKeySecret}). Account ${ACCT}, container ${CONTAINER}.`); process.exit(2); }
+    AZ_SAS = buildAzSas();
   }
 }
 async function listAll(prefix) {
@@ -159,17 +163,17 @@ async function listAll(prefix) {
     while (url) { const r = await fetch(url, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (!r.ok) throw new Error("list " + r.status); const j = await r.json(); for (const o of j.items || []) out.push({ name: o.name, size: +o.size, mtime: o.updated }); url = j.nextPageToken ? `https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o?maxResults=1000&pageToken=${j.nextPageToken}${prefix ? `&prefix=${encodeURIComponent(prefix)}` : ""}` : null; }
   } else {
     let marker = "";
-    do { const q = { comp: "list", restype: "container" }; if (prefix) q.prefix = prefix; if (marker) q.marker = marker; const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER }; const auth = azSig("GET", "", xms, q, "", ""); let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list`; if (prefix) url += `&prefix=${encodeURIComponent(prefix)}`; if (marker) url += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(url, { headers: { ...xms, Authorization: auth } }); if (!r.ok) throw new Error("list " + r.status); const xml = await r.text(); for (const m of xml.matchAll(/<Blob>([\s\S]*?)<\/Blob>/g)) { const b = m[1]; const name = (b.match(/<Name>([^<]+)<\/Name>/) || [])[1]; const size = +((b.match(/<Content-Length>([^<]+)<\/Content-Length>/) || [])[1] || 0); const mtime = (b.match(/<Last-Modified>([^<]+)<\/Last-Modified>/) || [])[1] || ""; if (name) out.push({ name, size, mtime }); } marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker);
+    do { let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list&${AZ_SAS}`; if (prefix) url += `&prefix=${encodeURIComponent(prefix)}`; if (marker) url += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(url); if (!r.ok) throw new Error("list " + r.status); const xml = await r.text(); for (const m of xml.matchAll(/<Blob>([\s\S]*?)<\/Blob>/g)) { const b = m[1]; const name = (b.match(/<Name>([^<]+)<\/Name>/) || [])[1]; const size = +((b.match(/<Content-Length>([^<]+)<\/Content-Length>/) || [])[1] || 0); const mtime = (b.match(/<Last-Modified>([^<]+)<\/Last-Modified>/) || [])[1] || ""; if (name) out.push({ name, size, mtime }); } marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker);
   }
   return out;
 }
 async function getBuf(name) {
   if (BACKEND === "gcs") { const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(name)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer()); }
-  const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER }; const auth = azSig("GET", name, xms, null, "", ""); const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}`, { headers: { ...xms, Authorization: auth } }); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer());
+  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer());
 }
 async function putBuf(name, buf, ct) {
   if (BACKEND === "gcs") { const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${GBUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}`, { method: "POST", headers: { Authorization: `Bearer ${await gAuth()}`, "Content-Type": ct || "application/octet-stream" }, body: buf }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 120)); return; }
-  const xms = { "x-ms-blob-type": "BlockBlob", "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER }; const c = ct || "application/octet-stream"; const auth = azSig("PUT", name, xms, null, String(buf.length), c); const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}`, { method: "PUT", headers: { ...xms, "Content-Type": c, Authorization: auth }, body: buf }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 120));
+  const c = ct || "application/octet-stream"; const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": c }, body: buf }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 120));
 }
 
 // ---------------- text extraction ----------------
@@ -377,9 +381,13 @@ async function aisInit() {
   if (!AOAI_EP || !AOAI_KEY) { console.error("Missing azure-openai-endpoint / azure-openai-key (needed for embeddings)."); process.exit(2); }
 }
 async function embed(texts) {
-  const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) });
-  if (!r.ok) throw new Error("embed " + r.status + " " + (await r.text()).slice(0, 120));
-  return (await r.json()).data.map((d) => d.embedding);
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await sleep((ra ? ra * 1000 : 0) + 1500 * (attempt + 1)); continue; }
+    if (!r.ok) throw new Error("embed " + r.status + " " + (await r.text()).slice(0, 120));
+    return (await r.json()).data.map((d) => d.embedding);
+  }
+  throw new Error("embed 429 exhausted");
 }
 async function aisCreateIndex() {
   const schema = {
