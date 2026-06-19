@@ -102,6 +102,11 @@ const MAP = [
   { id: 'azure-cfo-storage-account', env: 'AZURE_STORAGE_ACCOUNT', required: false },
   { id: 'azure-cfo-storage-container', env: 'AZURE_STORAGE_CONTAINER', required: false },
   { id: 'azure-cfo-storage-key', env: 'AZURE_STORAGE_KEY', required: false },
+  // Azure Document Intelligence (Form Recognizer) for the CFO audit data-room indexer: read +
+  // layout OCR on the image-only / mangled tier (account otchealth-docintel, eastus). Key is
+  // sensitive -> rotation. Endpoint is non-secret but stored alongside for one hydration path.
+  { id: 'azure-docintel-endpoint', env: 'AZURE_DOCINTEL_ENDPOINT', required: false },
+  { id: 'azure-docintel-key', env: 'AZURE_DOCINTEL_KEY', required: false },
   // Azure Blob storage for the CLO legal matter/docket store (off Google; dedicated account
   // otchealthlegalstore with company + personal containers). The legal skill reads/writes
   // here. The personal container holds confidential divorce + civil matters. Account key is
