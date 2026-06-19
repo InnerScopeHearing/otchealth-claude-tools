@@ -4,6 +4,7 @@
 # journals itself every night and the knowledge base compounds. One secret only: the claude-driver
 # SA (GCP_CLAUDE_DRIVER_SA_JSON) self-resolves the GitHub App key + all Azure keys from Secret Manager.
 set -e
+[ -n "$GCP_CLAUDE_DRIVER_SA_JSON_B64" ] && export GCP_CLAUDE_DRIVER_SA_JSON=$(printf "%s" "$GCP_CLAUDE_DRIVER_SA_JSON_B64" | base64 -d)
 DATE=$(date -u +%F)
 echo "[nightly] $DATE - generating digest"
 node /app/skills/daily-digest/digest.mjs --out "/tmp/$DATE.md"

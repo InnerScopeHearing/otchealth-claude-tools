@@ -4,6 +4,7 @@
 # the doc-indexer profile (finance | legal | commerce | commons). One secret only: the claude-driver
 # SA (GCP_CLAUDE_DRIVER_SA_JSON) self-resolves all Azure keys from Secret Manager.
 set -e
+[ -n "$GCP_CLAUDE_DRIVER_SA_JSON_B64" ] && export GCP_CLAUDE_DRIVER_SA_JSON=$(printf "%s" "$GCP_CLAUDE_DRIVER_SA_JSON_B64" | base64 -d)
 PROFILE="${1:-finance}"
 shift 2>/dev/null || true
 echo "[librarian] profile=$PROFILE $*"
