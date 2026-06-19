@@ -100,12 +100,21 @@ assume unless the user says otherwise.
   GCP Secret Manager for now (it hydrates every session); compute moves, the secret store
   follows later if at all.
 
-#### Azure-default HARDENED (Matt directive, 2026-06-18)
-- **Use the Azure credits across the board; do NOT propose or default to Google Cloud
+#### Azure-default HARDENED (Matt directive, 2026-06-18)- **Use the Azure credits across the board; do NOT propose or default to Google Cloud
   services again unless we have free credits for them.** Storage, compute, jobs, inference:
   Azure first, every time. New data rooms / buckets / jobs go to Azure (Blob, Container Apps
   Jobs, Azure OpenAI/Speech), not GCS/Vertex/Cloud Run. The CFO data room target is Azure Blob
   (the `azure-cfo-storage-*` account), not `gs://otchealth-cfo-source-docs`.
+- **Azure ACCOUNT scoping (Matt directive, 2026-06-19): all Azure storage/compute/data rooms go
+  under the `matthew@otchealth.app` account/subscription, NOT the `matthew@innd.com` admin
+  (legal-entity) account.** Keep the Azure resource estate off the INND admin identity. NOTE the
+  two distinct identities that get conflated: the **M365 / Entra tenant** for SharePoint + mail +
+  the admin apps (graph-mail, the CFO SharePoint Ingestion app) is the **INND tenant** (id
+  `9acb23d0-2448-4cd3-b26d-7eafecb76eaf`, admin matthew@innd.com) — that is just the SOURCE of the
+  files and is unavoidable; the **Azure subscription** for the DESTINATION storage must be the
+  otchealth.app one. The azure-sp/azure-cfo-storage used so far is on Azure tenant
+  `4ab58580-cc9c-49f7-b5c7-a77f84fdc270` (different from the INND M365 tenant); confirm with Matt
+  whether `4ab58580` IS the otchealth.app account before migrating the data room onto it.
 - The ONLY standing Google exceptions (do not relitigate each session): the `otchealth-shared-prod`
   **Secret Manager** + the **claude-driver SA** (the free, established per-session hydration +
   the SA that signs SM/GCS calls), and **MedReview's PHI workloads on the GCP BAA** (the legal
