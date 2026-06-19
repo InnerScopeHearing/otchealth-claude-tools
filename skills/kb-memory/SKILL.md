@@ -24,15 +24,32 @@ relevant slice is ever pulled into context. Retrieval, not retention.
 
 ## Verbs
 ```
-node skills/kb-memory/mem.mjs remember "<fact>"            --agent cfo [--tags a,b] [--source "Matt 2026-06-19"]
-node skills/kb-memory/mem.mjs decision "<decision + why>"  --agent cfo [...]
-node skills/kb-memory/mem.mjs correct  "<the CORRECT fact>" --agent cfo --was "<the wrong belief>" [--supersedes <id>]
-node skills/kb-memory/mem.mjs pitfall  "<recurring mistake + truth + rule>" --agent cfo
-node skills/kb-memory/mem.mjs recall   "<query>"           --agent cfo [--n 25]
-node skills/kb-memory/mem.mjs tail     --agent cfo [--n 40]     # ALL pitfalls + recent entries (wake read)
+node skills/kb-memory/mem.mjs remember "<fact>"            --agent cfo [--tags a,b] [--source "Matt 2026-06-19"] [--share]
+node skills/kb-memory/mem.mjs decision "<decision + why>"  --agent cfo [...] [--share]
+node skills/kb-memory/mem.mjs correct  "<the CORRECT fact>" --agent cfo --was "<the wrong belief>" [--supersedes <id>] [--share]
+node skills/kb-memory/mem.mjs pitfall  "<recurring mistake + truth + rule>" --agent cfo [--share]
+node skills/kb-memory/mem.mjs status   "<what I'm working on / project status>" --agent cfo   # ALWAYS shared to the exec team
+node skills/kb-memory/mem.mjs recall   "<query>"           --agent cfo [--n 25]    # searches YOUR lane + the TEAM feed
+node skills/kb-memory/mem.mjs tail     --agent cfo [--n 40]     # YOUR pitfalls/recent + the TEAM feed (company-wide)
+node skills/kb-memory/mem.mjs team     [--n 60]                # the whole exec team feed: who is working on what
 node skills/kb-memory/mem.mjs render   --agent cfo             # re-render the human ledger .md
 node skills/kb-memory/mem.mjs list-agents
 ```
+
+## Connected executive memory (each agent has its lane; the team shares automatically)
+Every agent keeps a PRIVATE lane (ring-correct). Two things ALSO publish a copy to a shared EXEC TEAM
+feed (`otchealthcommons/company-journal/_MEMORY/_exec/<agent>.jsonl`, one file per agent so there is no
+cross-agent clobber):
+- **`status`** (always) - the agent's current projects / what it's working on.
+- **any entry written with `--share`** - a fact/decision/pitfall the whole team should know.
+Every agent's **`tail` / `recall` / `team` automatically read the whole feed**, so each exec agent sees
+its own detailed lane PLUS what every other exec agent is doing - the company-wide picture. Exec roster:
+coo, cfo, clo, cto, capital, commerce, compliance, rainmaker, growth (any agent can publish/read).
+
+**Rings stay intact.** The shared feed is broadly readable, so only what you explicitly `status` /
+`--share` ever leaves your lane - keep those NON-sensitive (no MNPI specifics, no privilege). Detailed
+facts default to PRIVATE. The **`clo-personal`** lane is HARD-EXCLUDED from sharing (attorney privilege):
+its `status`/`--share` is a no-op that stays in the private lane.
 
 ## Agents + rings (the ledger co-locates in the agent's own store)
 | `--agent` | store / container | ring |

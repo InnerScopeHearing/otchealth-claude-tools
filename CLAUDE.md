@@ -49,8 +49,11 @@ room is the home for all CFO findings and the `_KNOWLEDGE-BASE/` working papers.
   recurring wrong beliefs as **pitfalls** (knowing the incorrect facts matters as much as the facts).
   **ANY correction the user gives MUST be persisted with `mem.mjs correct "<NOW>" --agent <a> --was "<WAS>"`
   BEFORE you respond — non-negotiable; the `UserPromptSubmit` hook reminds you every turn.** Set
-  `KB_AGENT=<agent>` to enable the SessionStart/UserPromptSubmit/PreCompact/Stop hooks. Full SOP:
-  `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`. Reference users: CFO + CLO.
+  `KB_AGENT=<agent>` to enable the SessionStart/UserPromptSubmit/PreCompact/Stop hooks. CONNECTED EXEC
+  MEMORY: exec agents publish `status "<what I'm working on>"` (auto-shared) and `--share` cross-team facts;
+  `tail`/`recall`/`team` surface the whole exec team's status + shared facts, so everyone has the company-wide
+  picture. Rings hold: only explicit status/--share leaves a lane (keep non-sensitive); `clo-personal` is
+  never shared. Full SOP: `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`. Reference users: CFO + CLO.
 - **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
   single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a
   direct API call, over navigating website UIs. Whenever a task can be done with a paste-ready command

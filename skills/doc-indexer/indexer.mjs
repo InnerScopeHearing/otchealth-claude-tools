@@ -196,6 +196,24 @@ async function putBuf(name, buf, ct) {
   const c = ct || "application/octet-stream"; const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": c }, body: buf }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 120));
 }
 
+// ---- single-writer lease on the catalog (Azure) -------------------------------------------
+// `understand` rewrites the whole catalog.jsonl, so two concurrent passes (cron overlap, a manual
+// run, or an in-session worker) clobber each other and a stale snapshot can REGRESS progress. A
+// 60s renewable blob lease on a lock file makes the write mutually exclusive: a second worker that
+// can't acquire it exits cleanly instead of corrupting. Auto-expires in 60s if a holder dies.
+const LOCK_BLOB = "_CATALOG/.understand.lock";
+const azLockUrl = () => `https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(LOCK_BLOB)}?${AZ_SAS}`;
+async function leaseAcquire() {
+  if (BACKEND !== "azure") return { id: null, skip: true };          // lease only on azure rooms
+  try { await fetch(azLockUrl(), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "If-None-Match": "*", "Content-Length": "0" }, body: "" }); } catch {} // create-if-absent; ignore exists/leased
+  const proposed = crypto.randomUUID();
+  const r = await fetch(azLockUrl() + "&comp=lease", { method: "PUT", headers: { "x-ms-lease-action": "acquire", "x-ms-lease-duration": "60", "x-ms-proposed-lease-id": proposed } });
+  if (r.status === 201) return { id: r.headers.get("x-ms-lease-id") || proposed };
+  return { id: null, busy: true, status: r.status };                 // 409 = already leased
+}
+async function leaseRenew(id) { if (id) try { await fetch(azLockUrl() + "&comp=lease", { method: "PUT", headers: { "x-ms-lease-action": "renew", "x-ms-lease-id": id } }); } catch {} }
+async function leaseRelease(id) { if (id) try { await fetch(azLockUrl() + "&comp=lease", { method: "PUT", headers: { "x-ms-lease-action": "release", "x-ms-lease-id": id } }); } catch {} }
+
 // ---------------- text extraction ----------------
 const stripTags = (s) => s.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#?\w+;/g, " ").replace(/\s+/g, " ").trim();
 const alnum = (s) => (s.match(/[a-z0-9]/gi) || []).length;
@@ -575,10 +593,19 @@ async function runUnderstand() {
       if (since >= Math.min(FLUSH_EVERY, 50)) { since = 0; await maybeFlush(); console.error(`  understood ${n}/${work.length} | ~$${totCost.toFixed(2)} / ${totPages} pages`); }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, work.length || 1) }, () => worker()));
-  await flushCatalog(rows);
-  const tail = budgetHit ? ` | stopped at ${MAX_MIN}min budget, ${work.length - n} docs deferred to next run (resumable)` : "";
-  console.log(`[understand] +${n} docs | ~$${totCost.toFixed(2)} over ${totPages} pages (~$${totPages ? (totCost / totPages * 1000).toFixed(2) : "?"}/1k pages)${tail}. Next: push-search.`);
+  if (!work.length) { console.error("[understand] nothing to enrich (all caught up)."); return; }
+  const lease = await leaseAcquire();
+  if (lease.busy) { console.error(`[understand] SKIP: another understand worker holds the catalog lease (HTTP ${lease.status}). Exiting cleanly to avoid clobbering the shared catalog; the active writer continues (resumable).`); return; }
+  const renewTimer = lease.id ? setInterval(() => leaseRenew(lease.id), 30000) : null;
+  try {
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, work.length || 1) }, () => worker()));
+    await flushCatalog(rows);
+    const tail = budgetHit ? ` | stopped at ${MAX_MIN}min budget, ${work.length - n} docs deferred to next run (resumable)` : "";
+    console.log(`[understand] +${n} docs | ~$${totCost.toFixed(2)} over ${totPages} pages (~$${totPages ? (totCost / totPages * 1000).toFixed(2) : "?"}/1k pages)${tail}. Next: push-search.`);
+  } finally {
+    if (renewTimer) clearInterval(renewTimer);
+    await leaseRelease(lease.id);
+  }
 }
 async function runCuCalibrate() {
   const N = LIMIT || 200;
