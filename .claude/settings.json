@@ -6,6 +6,20 @@
         "repo": "anthropics/claude-code"
       },
       "autoUpdate": true
+    },
+    "anthropic-agent-skills": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/skills"
+      },
+      "autoUpdate": true
+    },
+    "claude-code-workflows": {
+      "source": {
+        "source": "github",
+        "repo": "wshobson/agents"
+      },
+      "autoUpdate": false
     }
   },
   "enabledPlugins": {
@@ -21,7 +35,11 @@
     "ralph-wiggum@claude-code-plugins": true,
     "explanatory-output-style@claude-code-plugins": true,
     "learning-output-style@claude-code-plugins": true,
-    "claude-opus-4-5-migration@claude-code-plugins": true
+    "claude-opus-4-5-migration@claude-code-plugins": true,
+    "document-skills@anthropic-agent-skills": true,
+    "example-skills@anthropic-agent-skills": true,
+    "hr-legal-compliance@claude-code-workflows": true,
+    "security-compliance@claude-code-workflows": true
   },
   "hooks": {
     "SessionStart": [
@@ -30,6 +48,30 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/setup/session-start.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/skills/kb-memory/kb-inject.sh\" session"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/skills/kb-memory/kb-inject.sh\" precompact"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/skills/kb-memory/kb-inject.sh\" stop"
           }
         ]
       }

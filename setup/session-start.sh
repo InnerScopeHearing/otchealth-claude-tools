@@ -96,7 +96,56 @@ if command -v claude >/dev/null 2>&1; then
       fi
     done
   fi
+  # Official Anthropic Agent Skills marketplace (anthropics/skills). These skills are
+  # LICENSED, NOT redistributable (Anthropic "use within the Services" terms forbid
+  # copying them into our repo), so we install them the AUTHORIZED way via the official
+  # marketplace instead of vendoring. document-skills = xlsx/docx/pptx/pdf; example-skills
+  # = canvas-design, mcp-builder, brand-guidelines, doc-coauthoring, webapp-testing,
+  # skill-creator, frontend-design, etc. Gives the fleet real Office-doc authoring.
+  AGENT_SKILL_PLUGINS="document-skills example-skills"
+  if ! claude plugin marketplace list 2>/dev/null | grep -q "anthropic-agent-skills"; then
+    echo "[octools] Registering Anthropic Agent Skills marketplace (anthropics/skills)..."
+    claude plugin marketplace add anthropics/skills >/dev/null 2>&1 \
+      || echo "[octools] WARN: could not add anthropic-agent-skills marketplace (offline?)."
+  fi
+  if claude plugin marketplace list 2>/dev/null | grep -q "anthropic-agent-skills"; then
+    INSTALLED="$(claude plugin list 2>/dev/null)"
+    for p in $AGENT_SKILL_PLUGINS; do
+      if ! printf '%s' "$INSTALLED" | grep -q "${p}@anthropic-agent-skills"; then
+        claude plugin install "${p}@anthropic-agent-skills" >/dev/null 2>&1 \
+          && echo "[octools] agent-skill plugin installed: ${p}" \
+          || echo "[octools] WARN: agent-skill plugin install failed: ${p}"
+      fi
+    done
+  fi
+  # wshobson "claude-code-workflows" marketplace (MIT, 84 domain plugins / 156 skills).
+  # SUPPLY-CHAIN HARDENING (security review 2026-06-18): this is a THIRD-PARTY marketplace,
+  # so autoUpdate is OFF in .claude/settings.json (no tracking of its moving default branch;
+  # reviewed at commit cc37bfd). We do NOT mass-enable and we do NOT allow agent-initiated
+  # installs from it. Only a CURATED, human-approved set is installed here (declared in
+  # settings.json enabledPlugins). The best individual skills are already vendored into
+  # skills/. To add another plugin, a human edits this list + enabledPlugins after a review.
+  WSHOBSON_PLUGINS="hr-legal-compliance security-compliance"   # CLO + guardian compliance (no hooks; reviewed)
+  if ! claude plugin marketplace list 2>/dev/null | grep -q "claude-code-workflows"; then
+    echo "[octools] Registering wshobson claude-code-workflows marketplace (curated, no autoUpdate)..."
+    claude plugin marketplace add wshobson/agents >/dev/null 2>&1 \
+      || echo "[octools] WARN: could not add claude-code-workflows marketplace (offline?)."
+  fi
+  if claude plugin marketplace list 2>/dev/null | grep -q "claude-code-workflows"; then
+    INSTALLED="$(claude plugin list 2>/dev/null)"
+    for p in $WSHOBSON_PLUGINS; do
+      if ! printf '%s' "$INSTALLED" | grep -q "${p}@claude-code-workflows"; then
+        claude plugin install "${p}@claude-code-workflows" >/dev/null 2>&1 \
+          && echo "[octools] curated wshobson plugin installed: ${p}" \
+          || echo "[octools] WARN: wshobson plugin install failed: ${p}"
+      fi
+    done
+  fi
 fi
+
+# NOTE: fleet MCP servers (context7, courtlistener) are registered LATER, after the
+# credentials/SA are available, so authenticated servers can read their key. See the
+# "Fleet MCP servers" block near the end of this script.
 
 mkdir -p "${HOME}/.designer"
 CRED="${HOME}/.designer/credentials.env"
@@ -230,6 +279,34 @@ append_if FOURVAULT_GEMINI_API_KEY "$FOURVAULT_GEMINI_V"
 append_if FOURVAULT_NEON_DATABASE_URL "$FOURVAULT_NEON_V"
 append_if FOURVAULT_NEON_DATABASE_URL_DIRECT "$FOURVAULT_NEON_DIRECT_V"
 chmod 600 "$CRED"
+
+# ─── Fleet MCP servers (user scope; SURGICAL adds only — ~40-50 active-tool ceiling) ───
+# Registered here (after the SA/credentials exist) so authenticated servers get their key.
+# ~/.claude.json is ephemeral, so re-register every session (idempotent: skip if present).
+#  - context7    = live, version-pinned library docs (kills hallucinated package APIs);
+#                  Bearer-keyed from context7-api-key for higher limits, keyless fallback.
+#  - courtlistener = the CLO's MCP over 9M+ opinions, dockets, citation networks; OAuth 2.1,
+#                  so first use prompts a ONE-TIME human consent (a physical gate).
+if command -v claude >/dev/null 2>&1; then
+  MCP_LIST="$(claude mcp list 2>/dev/null || true)"
+  if ! printf '%s' "$MCP_LIST" | grep -q "context7"; then
+    C7TMP="$(mktemp)"
+    if node "${TOOLS_DIR}/setup/get-secret.mjs" context7-api-key "$C7TMP" >/dev/null 2>&1 && [ -s "$C7TMP" ]; then
+      claude mcp add --transport http --scope user context7 https://mcp.context7.com/mcp \
+        --header "Authorization: Bearer $(cat "$C7TMP")" >/dev/null 2>&1 \
+        && echo "[octools] MCP added: context7 (authenticated)" || echo "[octools] WARN: context7 MCP add failed."
+    else
+      claude mcp add --transport http --scope user context7 https://mcp.context7.com/mcp >/dev/null 2>&1 \
+        && echo "[octools] MCP added: context7 (keyless)" || echo "[octools] WARN: context7 MCP add failed."
+    fi
+    shred -u "$C7TMP" 2>/dev/null || rm -f "$C7TMP"
+  fi
+  if ! printf '%s' "$MCP_LIST" | grep -q "courtlistener"; then
+    claude mcp add --transport http --scope user courtlistener https://mcp.courtlistener.com/ >/dev/null 2>&1 \
+      && echo "[octools] MCP added: courtlistener (OAuth — one-time consent on first use)" \
+      || echo "[octools] WARN: courtlistener MCP add failed."
+  fi
+fi
 
 [ -n "$OPENAI_KEY" ] && echo "[octools] OPENAI_API_KEY: loaded" || echo "[octools] WARN: OPENAI_API_KEY missing (create 'openai-api-key' secret)."
 [ -n "$ELEVEN_KEY" ] && echo "[octools] ELEVENLABS_API_KEY: loaded" || echo "[octools] WARN: ELEVENLABS_API_KEY missing (create 'elevenlabs-api-key' secret)."

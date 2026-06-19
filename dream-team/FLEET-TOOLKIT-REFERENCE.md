@@ -8,7 +8,10 @@ choose. Five layers:
 2. **Unified gateway** — our custom MCP (`otchealth-mcp-server`), one endpoint fronting the stack.
 3. **Skills** — the OTCHealth skills (`~/.claude/skills`, installed by `session-start.sh`). Includes the fleet-wide **`pdf`** skill: high-grade OCR to read/review any PDF (incl. scanned) plus PDF creation from Markdown/HTML, for every agent.
 4. **Plugins** — the 13 official Claude Code marketplace plugins (agents/commands/skills).
-5. **Agents** — the 19 Dream Team subagents (`~/.claude/agents`).
+5. **Agents** — the Dream Team subagents (`~/.claude/agents`), including the **`clo`** Chief
+   Legal Officer (securities / Nevada corporate / CA family + civil / federal FLSA), which
+   comes online pre-loaded from `clo/CLO-BOOTSTRAP.md` and wields the `legal` skill (citation
+   verifier + case-law + SEC EDGAR + a segregated matter/docket store).
 
 ## Routing policy (which layer to use)
 1. **Direct API / first-party MCP first** where one exists (this doc's Sections 1-2).
@@ -208,14 +211,24 @@ main; pending Azure redeploy + env (Matt gate).
 
 ---
 
-## 3. SKILLS (23; `Skill` tool; installed by session-start.sh)
+## 3. SKILLS (`Skill` tool; installed by session-start.sh)
 aso-growth, content-engine, coo, daily-briefing, designer, devkit, digital-products,
 eval-runner, grant-tracker, growth-pr, ir-support, lifecycle-crm, monetization, paid-ads,
 partnerships, raise-ops, release-conductor, scaffolder, storefront-cro, supply-chain-guard,
-telemetry-wiring, test-author, voice-ops. (Descriptions + which agent wields each:
+telemetry-wiring, test-author, voice-ops. Plus the fleet utility + ops skills: **pdf**
+(OCR read + create), **legal** (CLO citation verifier + Azure matter/docket store),
+**skills-discovery** (search the 50k-skill claude-plugins.dev registry on demand; the
+fleet meta-skill), amazon-sp-api, quickbooks, xero, cfo-store, cfo-onedrive, m365-mail,
+plaid-banking, github-app, innd-stock, **datadog** (observability: Azure infra + APM + logs +
+synthetics, $100k credit; site us3; PHI wall on MedReview/Companion until a Datadog BAA).
+(Descriptions + which agent wields each:
 `SKILLS-CAPABILITY-MAP.md`.) Plus QA sub-skills (api-qa, ios-qa, web-qa, static-qa,
 phi-compliance-qa, release-readiness, test-suite-runner, persona-focus-group(-buyers)) and the
 Capacitor/Ionic packs, available when their plugins/skills load.
+- **Expanding the toolkit:** `skills-discovery` lets any agent find expert skills it was
+  not shipped with. The curated agent-by-agent shopping list (which registry skills to
+  adopt for builders + the executive team, with risk tags + the vendor-not-npx adoption
+  model) is **`FLEET-SKILLS-RECOMMENDATIONS.md`**.
 
 ## 4. PLUGINS (13; official marketplace `claude-code-plugins` = anthropics/claude-code)
 Each ships agents/commands/skills (namespaced `<plugin>:<component>`):
@@ -234,6 +247,19 @@ Each ships agents/commands/skills (namespaced `<plugin>:<component>`):
 - **explanatory-output-style**, **learning-output-style** — available, opt-in via `/output-style`.
 - **claude-opus-4-5-migration** — moot on Opus 4.8 (installed for completeness).
 Curation rationale + the connector/role-pack waves: `PLUGINS-MARKETPLACE-AUDIT.md`, `PLUGIN-LAUNCH-PLAN.md`.
+- **Official Anthropic Agent Skills** (marketplace `anthropic-agent-skills` = `anthropics/skills`,
+  added 2026-06-18): **document-skills** (xlsx/docx/pptx/pdf, real Office authoring) +
+  **example-skills** (canvas-design, mcp-builder, brand-guidelines, doc-coauthoring, webapp-testing,
+  skill-creator, frontend-design, ...). These are LICENSED (not redistributable), so they install
+  via the marketplace, never vendored. Wired in `.claude/settings.json` + `session-start.sh`.
+- **wshobson `claude-code-workflows`** (MIT, 84 plugins, added 2026-06-18): autoUpdate OFF
+  (third-party, reviewed at cc37bfd). 21 best skills vendored into `skills/`; only a curated,
+  human-approved plugin set enabled: **hr-legal-compliance** (CLO: legal-advisor + hr-pro agents)
+  + **security-compliance** (guardian: security-auditor agent + compliance-check). Rest install
+  on demand; see `FLEET-SKILLS-RECOMMENDATIONS.md`.
+- **Context7 MCP** (added 2026-06-18, user scope via `session-start.sh`): live, version-pinned
+  library docs (`https://mcp.context7.com/mcp`, keyless). The top builder add - eliminates
+  hallucinated package APIs. Surgical add (held the ~40-50 active-tool ceiling in mind).
 
 ## 5. DREAM TEAM AGENTS (19; `Agent` tool; installed by session-start.sh)
 architect, builder, capital, coach, commerce, compliance-officer, coo, creative,

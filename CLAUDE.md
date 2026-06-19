@@ -42,6 +42,13 @@ room is the home for all CFO findings and the `_KNOWLEDGE-BASE/` working papers.
   audiogram idea for iHEARtest.
 
 ## Standing rules (compliance + process)
+- **Working memory: the ledger is the source of truth, not the chat (Matt directive 2026-06-19).**
+  Long sessions compact and silently drop exact facts. Use the **`kb-memory`** skill so nothing is lost:
+  WRITE-THROUGH every fact/decision/correction the instant it happens (`mem.mjs remember|decision|correct|
+  pitfall --agent <a>`); RECALL before asserting any fact (the ledger wins over memory); capture the
+  recurring wrong beliefs as **pitfalls** (knowing the incorrect facts matters as much as the facts).
+  Set `KB_AGENT=<agent>` to enable the SessionStart/PreCompact/Stop hooks. Full SOP:
+  `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`. Reference users: CFO + CLO.
 - **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
   single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a
   direct API call, over navigating website UIs. Whenever a task can be done with a paste-ready command
@@ -110,6 +117,27 @@ room is the home for all CFO findings and the `_KNOWLEDGE-BASE/` working papers.
   lane). Default new infra/compute to Azure. The secret store stays `otchealth-shared-prod`
   GCP Secret Manager for now (it hydrates every session); compute moves, the secret store
   follows later if at all.
+
+#### Azure-default HARDENED (Matt directive, 2026-06-18)- **Use the Azure credits across the board; do NOT propose or default to Google Cloud
+  services again unless we have free credits for them.** Storage, compute, jobs, inference:
+  Azure first, every time. New data rooms / buckets / jobs go to Azure (Blob, Container Apps
+  Jobs, Azure OpenAI/Speech), not GCS/Vertex/Cloud Run. The CFO data room target is Azure Blob
+  (the `azure-cfo-storage-*` account), not `gs://otchealth-cfo-source-docs`.
+- **Azure ACCOUNT scoping (Matt directive, 2026-06-19): all Azure storage/compute/data rooms go
+  under the `matthew@otchealth.app` account/subscription, NOT the `matthew@innd.com` admin
+  (legal-entity) account.** Keep the Azure resource estate off the INND admin identity. NOTE the
+  two distinct identities that get conflated: the **M365 / Entra tenant** for SharePoint + mail +
+  the admin apps (graph-mail, the CFO SharePoint Ingestion app) is the **INND tenant** (id
+  `9acb23d0-2448-4cd3-b26d-7eafecb76eaf`, admin matthew@innd.com) — that is just the SOURCE of the
+  files and is unavoidable; the **Azure subscription** for the DESTINATION storage must be the
+  otchealth.app one. The azure-sp/azure-cfo-storage used so far is on Azure tenant
+  `4ab58580-cc9c-49f7-b5c7-a77f84fdc270` (different from the INND M365 tenant); confirm with Matt
+  whether `4ab58580` IS the otchealth.app account before migrating the data room onto it.
+- The ONLY standing Google exceptions (do not relitigate each session): the `otchealth-shared-prod`
+  **Secret Manager** + the **claude-driver SA** (the free, established per-session hydration +
+  the SA that signs SM/GCS calls), and **MedReview's PHI workloads on the GCP BAA** (the legal
+  wall below; a PHI move to Azure needs an Azure BAA + HIPAA-eligible Azure OpenAI first). Both
+  are essentially free / BAA-bound. Everything else: Azure.
 - **Already staged at the credential level**: the vault now holds a full Azure suite —
   `azure-openai-key` / `azure-openai-endpoint` / image+vision+video deployments,
   `azure-speech-key` / `azure-speech-region`, and an `azure-sp-*` Contributor service

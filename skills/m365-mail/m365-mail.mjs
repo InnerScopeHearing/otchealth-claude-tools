@@ -15,6 +15,7 @@
 //   node m365-mail.mjs search <mailbox> "<terms>" [top]        # $search subject+body+attachments
 //   node m365-mail.mjs since <mailbox> <YYYY-MM-DD> [top]      # msgs w/ attachments since a date
 //   node m365-mail.mjs attachments <mailbox> <messageId> <dir> # download a message's attachments
+//   node m365-mail.mjs export <mailbox> <messageId> <dir>      # full email (headers+body html) + attachments, ready for the pdf skill
 import { mkdirSync, writeFileSync } from "node:fs";
 
 const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID"), SEC = need("GRAPH_MAIL_CLIENT_SECRET");
@@ -77,7 +78,31 @@ if (cmd === "users") {
     }
   }
   if (!n) console.log("no file attachments on this message");
+} else if (cmd === "export") {
+  // Full email -> a folder ready for the pdf skill: email.html (headers + body) + attachments.
+  if (!a1 || !a2 || !a3) { console.error("usage: m365-mail.mjs export <mailbox> <messageId> <dir>"); process.exit(2); }
+  mkdirSync(a3, { recursive: true });
+  const m = await gget(tok, `${GBASE}/users/${enc(a1)}/messages/${enc(a2)}?$select=subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments`);
+  const esc = (s) => String(s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const addr = (r) => (r && r.emailAddress && r.emailAddress.address) || "";
+  const to = (m.toRecipients || []).map(addr).join(", "), cc = (m.ccRecipients || []).map(addr).join(", ");
+  const hdr = `<table style="border-collapse:collapse;margin-bottom:14px;font:11pt sans-serif"><tr><td style="padding:2px 10px 2px 0"><b>From</b></td><td>${esc(addr(m.from))}</td></tr><tr><td style="padding:2px 10px 2px 0"><b>To</b></td><td>${esc(to)}</td></tr>${cc ? `<tr><td style="padding:2px 10px 2px 0"><b>Cc</b></td><td>${esc(cc)}</td></tr>` : ""}<tr><td style="padding:2px 10px 2px 0"><b>Date</b></td><td>${esc(m.receivedDateTime)}</td></tr><tr><td style="padding:2px 10px 2px 0"><b>Subject</b></td><td>${esc(m.subject)}</td></tr><tr><td style="padding:2px 10px 2px 0"><b>Mailbox</b></td><td>${esc(a1)}</td></tr></table><hr>`;
+  const body = m.body && m.body.contentType === "html" ? m.body.content : `<pre style="white-space:pre-wrap;font:11pt sans-serif">${esc(m.body && m.body.content)}</pre>`;
+  const style = "<style>@page{size:Letter;margin:1in}body{font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:11pt;color:#1a1a1a}img{max-width:100%}table{max-width:100%}</style>";
+  writeFileSync(`${a3}/email.html`, `<!doctype html><html><head><meta charset="utf-8"><title>${esc(m.subject) || "email"}</title>${style}</head><body>${hdr}${body}</body></html>`);
+  console.log(`wrote ${a3}/email.html`);
+  if (m.hasAttachments) {
+    const j = await gget(tok, `${GBASE}/users/${enc(a1)}/messages/${enc(a2)}/attachments`);
+    for (const att of j.value || []) {
+      if (att["@odata.type"] === "#microsoft.graph.fileAttachment" && att.contentBytes) {
+        const name = (att.name || "attachment").replace(/[^\w.\- ]/g, "_");
+        writeFileSync(`${a3}/${name}`, Buffer.from(att.contentBytes, "base64"));
+        console.log(`saved ${a3}/${name} (${att.size || "?"} bytes)`);
+      }
+    }
+  }
+  console.log(`-> print to PDF: node ~/.claude/skills/pdf/pdf.mjs create ${a3}/email.html ${a3}/email.pdf`);
 } else {
-  console.error("commands: users [substr] | search <mailbox> \"<terms>\" [top] | since <mailbox> <YYYY-MM-DD> [top] | attachments <mailbox> <messageId> <dir>");
+  console.error("commands: users [substr] | search <mailbox> \"<terms>\" [top] | since <mailbox> <YYYY-MM-DD> [top] | attachments <mailbox> <messageId> <dir> | export <mailbox> <messageId> <dir>");
   process.exit(2);
 }

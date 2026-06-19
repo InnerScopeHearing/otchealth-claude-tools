@@ -102,6 +102,59 @@ const MAP = [
   { id: 'azure-cfo-storage-account', env: 'AZURE_STORAGE_ACCOUNT', required: false },
   { id: 'azure-cfo-storage-container', env: 'AZURE_STORAGE_CONTAINER', required: false },
   { id: 'azure-cfo-storage-key', env: 'AZURE_STORAGE_KEY', required: false },
+  // Commerce data room (CRO): dedicated account otchealthcommerce, container commerce-source-docs.
+  // Own account so the commerce key does not unlock the finance/legal rooms. Key -> rotate.
+  { id: 'azure-commerce-storage-account', env: 'AZURE_COMMERCE_STORAGE_ACCOUNT', required: false },
+  { id: 'azure-commerce-storage-key', env: 'AZURE_COMMERCE_STORAGE_KEY', required: false },
+  // Fleet commons / company-journal (daily digests + shared learnings): dedicated account
+  // otchealthcommons, container company-journal. Own account (key can't reach finance/legal). Rotate.
+  { id: 'azure-commons-storage-account', env: 'AZURE_COMMONS_STORAGE_ACCOUNT', required: false },
+  { id: 'azure-commons-storage-key', env: 'AZURE_COMMONS_STORAGE_KEY', required: false },
+  // Azure Document Intelligence (Form Recognizer) for the CFO audit data-room indexer: read +
+  // layout OCR on the image-only / mangled tier (account otchealth-docintel, eastus). Key is
+  // sensitive -> rotation. Endpoint is non-secret but stored alongside for one hydration path.
+  { id: 'azure-docintel-endpoint', env: 'AZURE_DOCINTEL_ENDPOINT', required: false },
+  { id: 'azure-docintel-key', env: 'AZURE_DOCINTEL_KEY', required: false },
+  // Azure AI Search (the doc-indexer hybrid retrieval brain: keyword + vector + semantic) plus
+  // the Azure OpenAI embedding deployment used to vectorize the corpus. Admin key is sensitive
+  // -> rotation. (azure-openai-endpoint / azure-openai-key are already wired above.)
+  { id: 'azure-search-endpoint', env: 'AZURE_SEARCH_ENDPOINT', required: false },
+  { id: 'azure-search-admin-key', env: 'AZURE_SEARCH_KEY', required: false },
+  { id: 'azure-openai-embedding-deployment', env: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT', required: false },
+  // Azure AI Foundry resource powering Content Understanding (the doc-indexer "understand" tier:
+  // generative classify + field extraction + summary) and its model deployments. Key sensitive
+  // -> rotation. (otchealth-foundry, eastus; gen model gpt-4.1-mini.)
+  { id: 'azure-foundry-endpoint', env: 'AZURE_FOUNDRY_ENDPOINT', required: false },
+  { id: 'azure-foundry-key', env: 'AZURE_FOUNDRY_KEY', required: false },
+  { id: 'azure-foundry-gen-deployment', env: 'AZURE_FOUNDRY_GEN_DEPLOYMENT', required: false },
+  // Azure Blob storage for the CLO legal matter/docket store (off Google; dedicated account
+  // otchealthlegalstore with company + personal containers). The legal skill reads/writes
+  // here. The personal container holds confidential divorce + civil matters. Account key is
+  // sensitive -> flagged for rotation.
+  { id: 'azure-legal-storage-account', env: 'AZURE_LEGAL_STORAGE_ACCOUNT', required: false },
+  { id: 'azure-legal-storage-key', env: 'AZURE_LEGAL_STORAGE_KEY', required: false },
+  // Free legal-research tokens (CLO). CourtListener raises case-law limits; GovInfo unlocks
+  // USC/CFR fetch. Both optional (the skill works without them at lower limits).
+  { id: 'legal-courtlistener-token', env: 'LEGAL_COURTLISTENER_TOKEN', required: false },
+  { id: 'govinfo-api-key', env: 'GOVINFO_API_KEY', required: false },
+  // Gmail retrieval (CLO) for Matt's PERSONAL Gmail. Read-only (gmail.readonly). Lets the CLO
+  // download emails + attachments that exist only in Gmail. Confidential/privileged.
+  { id: 'gmail-oauth-client-id', env: 'GMAIL_OAUTH_CLIENT_ID', required: false },
+  { id: 'gmail-oauth-client-secret', env: 'GMAIL_OAUTH_CLIENT_SECRET', required: false },
+  { id: 'gmail-refresh-token', env: 'GMAIL_REFRESH_TOKEN', required: false },
+  // SharePoint ingestion (CFO) — dedicated app-only Graph app (Sites.Read.All) so the CFO can
+  // read Team-site document libraries (FinanceTeam WF-9145 statements, etc.). Read-only.
+  { id: 'graph-sites-client-id', env: 'GRAPH_SITES_CLIENT_ID', required: false },
+  { id: 'graph-sites-client-secret', env: 'GRAPH_SITES_CLIENT_SECRET', required: false },
+  // Context7 (live, version-pinned library docs MCP + REST). The Context7 MCP is wired with
+  // this as a Bearer header in session-start; the env also lets any tool hit the REST API.
+  { id: 'context7-api-key', env: 'CONTEXT7_API_KEY', required: false },
+  // Datadog observability ($100k startup credit). Infra + APM + logs. Site us3. App key
+  // (ddpat_) drives the management API (monitors/dashboards/synthetics/integrations).
+  // PHI WALL: never point Datadog at MedReview/Companion until a Datadog BAA is signed.
+  { id: 'datadog-api-key', env: 'DD_API_KEY', required: false },
+  { id: 'datadog-app-key', env: 'DD_APP_KEY', required: false },
+  { id: 'datadog-site', env: 'DD_SITE', required: false },
   // QuickBooks Online multi-company (CFO; non-PHI bookkeeping). One Intuit app, per-company
   // realmId + refresh token. The quickbooks skill (skills/quickbooks) reads these. INND +
   // HearingAssist writes are gated (public co). Refresh tokens ROTATE -> the recurring sync

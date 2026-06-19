@@ -37,6 +37,10 @@
 //   download <path> [dir]              download any file by path
 //   catalog [path] [outfile]           recursive inventory -> JSON (+ duplicate-hash report)
 //   find-dupes [path]                  list groups of byte-identical files (same quickXorHash)
+//   version-report [path] [out.md] [--deliver]  exact dups + draft-vs-final version clusters
+//                                       + a recommended move plan (REPORT ONLY; human approves).
+//                                       --deliver uploads a timestamped copy to
+//                                       <INCOMING>/Version Reports/ (the per-batch close).
 //   dataroom-init [parent]             scaffold an audit data room (per-company + _Duplicates)
 import crypto from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -64,15 +68,27 @@ async function smToken() {
 async function smRead(t, id) { const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 async function smWrite(t, id, v) { const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); let r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); } if (!r.ok) throw new Error("SM write " + r.status); }
 
-async function accessToken() {
+async function accessToken(user) {
   const smt = await smToken();
-  const refresh = await smRead(smt, "graph-onedrive-refresh-token");
-  if (!refresh) throw new Error("No graph-onedrive-refresh-token in Secret Manager. Run the OneDrive consent first.");
-  const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID"), SEC = need("GRAPH_MAIL_CLIENT_SECRET");
-  const r = await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: CID, client_secret: SEC, grant_type: "refresh_token", refresh_token: refresh, scope: "offline_access Files.ReadWrite" }) });
-  const j = await r.json();
-  if (!j.access_token) throw new Error("token refresh failed " + r.status + ": " + JSON.stringify(j).slice(0, 200));
-  if (j.refresh_token && j.refresh_token !== refresh) { try { await smWrite(smt, "graph-onedrive-refresh-token", j.refresh_token); console.error("rotated OneDrive refresh token -> persisted."); } catch (e) { console.error("ROTATE PERSIST FAILED: " + e.message); } }
+  const key = user ? `graph-onedrive-refresh-token-${user}` : "graph-onedrive-refresh-token";
+  const refresh = await smRead(smt, key);
+  if (!refresh) throw new Error(`No ${key} in Secret Manager. Run the OneDrive consent first: onedrive.mjs consent ${user || "<user>"}`);
+  const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID");
+  // The app is both confidential and a public client (isFallbackPublicClient=true). The
+  // refresh-grant client auth depends on how THIS token was originally issued: tokens minted
+  // via the public device-code flow refresh WITHOUT a secret (AADSTS700025 if one is sent),
+  // while older confidential-issued tokens require the secret (AADSTS7000218 if absent). Try
+  // no-secret first, then fall back to with-secret.
+  async function refreshGrant(withSecret) {
+    const p = { client_id: CID, grant_type: "refresh_token", refresh_token: refresh, scope: "offline_access Files.ReadWrite" };
+    if (withSecret) p.client_secret = process.env.GRAPH_MAIL_CLIENT_SECRET || "";
+    const rr = await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(p) });
+    return rr.json();
+  }
+  let j = await refreshGrant(false);
+  if (!j.access_token && /7000218/.test(JSON.stringify(j))) j = await refreshGrant(true);
+  if (!j.access_token) throw new Error("token refresh failed: " + JSON.stringify(j).slice(0, 200));
+  if (j.refresh_token && j.refresh_token !== refresh) { try { await smWrite(smt, key, j.refresh_token); console.error("rotated OneDrive refresh token -> persisted."); } catch (e) { console.error("ROTATE PERSIST FAILED: " + e.message); } }
   return j.access_token;
 }
 async function gx(tok, method, path, opts = {}) { return fetch(path.startsWith("http") ? path : GRAPH + path, { method, headers: { Authorization: `Bearer ${tok}`, ...(opts.headers || {}) }, body: opts.body }); }
@@ -129,10 +145,94 @@ function dupeGroups(files) {
   return Object.values(byHash).filter((g) => g.length > 1);
 }
 
+// Normalize a filename to a version-agnostic "base key" so drafts/finals of the same
+// document cluster together (e.g. "Complaint v2.docx", "Complaint DRAFT.docx",
+// "Complaint FINAL (signed).pdf" -> "complaint"). Strips version/status/date/copy markers.
+const STATUS_RE = /\b(final|finalized|complete|completed|draft|rev(?:ision|ised|\.?\s*\d+)?|version|ver|clean|redline(?:d)?|markup|tracked|comments?|signed|executed|fully\s*executed|conformed|updated|revised|amended|new|old|latest|copy|dupl?icate|backup|wip)\b/g;
+function normBase(name) {
+  let b = name.replace(/\.[a-z0-9]{1,5}$/i, "");            // drop extension
+  b = b.toLowerCase();
+  b = b.replace(/\b(19|20)\d{2}[-_.]\d{1,2}[-_.]\d{1,2}\b/g, " "); // YYYY-MM-DD
+  b = b.replace(/\b\d{1,2}[-_.]\d{1,2}[-_.]\d{2,4}\b/g, " ");      // M.D.YY / MM-DD-YYYY
+  b = b.replace(/\bv\.?\s*\d+(\.\d+)*\b/g, " ");            // v1, v2.3, v 4
+  b = b.replace(/[([{]\s*\d+\s*[)\]}]/g, " ");             // (1) [2] {3}
+  b = b.replace(/\bcopy\s+of\b/g, " ");
+  b = b.replace(STATUS_RE, " ");
+  b = b.replace(/[_\-]+/g, " ").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  return b;
+}
+// Group files into version clusters by normalized base name (and parent folder), excluding
+// exact-duplicate noise. Within each cluster, pick the recommended KEEP (final/executed in
+// name > latest modified > largest), the rest are superseded candidates. Human approves.
+function versionClusters(files) {
+  const by = {};
+  for (const f of files) {
+    if (f.type !== "file") continue;
+    const base = normBase(f.path.split("/").pop());
+    if (!base || base.length < 3) continue;               // too generic to cluster safely
+    const folder = f.path.split("/").slice(0, -1).join("/");
+    const key = `${folder}::${base}`;
+    (by[key] ||= []).push(f);
+  }
+  const clusters = [];
+  for (const [key, group] of Object.entries(by)) {
+    if (group.length < 2) continue;
+    const distinctNames = new Set(group.map((g) => g.path.split("/").pop()));
+    if (distinctNames.size < 2) continue;                 // same name = exact-dup territory, not a version cluster
+    const score = (f) => {
+      const n = f.path.toLowerCase();
+      let s = 0;
+      if (/\b(final|fully\s*executed|executed|signed|conformed)\b/.test(n)) s += 1e15;
+      s += new Date(f.modified || 0).getTime() * 1000;    // newer wins
+      s += (f.size || 0);                                  // larger wins as tie-break
+      return s;
+    };
+    const ranked = [...group].sort((a, b) => score(b) - score(a));
+    clusters.push({ base: key.split("::")[1], folder: key.split("::")[0], keep: ranked[0], superseded: ranked.slice(1) });
+  }
+  return clusters.sort((a, b) => b.superseded.length - a.superseded.length);
+}
+
+// Device-code consent: the OneDrive owner (e.g. Mark) signs in once at a URL with a
+// code; we store their delegated refresh token as graph-onedrive-refresh-token-<user>.
+// No redirect URI / admin change needed (the app allows public-client device flow).
+async function runConsent(user) {
+  if (!user) { console.error("usage: onedrive.mjs consent <user>   (e.g. mark) -- that OneDrive owner signs in once)"); process.exit(2); }
+  const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID");
+  const dc = await (await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/devicecode`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: CID, scope: "offline_access Files.ReadWrite User.Read" }) })).json();
+  if (!dc.device_code) throw new Error("devicecode failed: " + JSON.stringify(dc).slice(0, 200));
+  console.log(`\n=== OneDrive consent for "${user}" ===`);
+  console.log(`1. Open: ${dc.verification_uri}`);
+  console.log(`2. Enter code: ${dc.user_code}`);
+  console.log(`3. Sign in as the ${user} OneDrive owner and approve Files access.`);
+  console.log(`Waiting for sign-in (expires in ~${Math.round(dc.expires_in / 60)} min)...`);
+  const interval = (dc.interval || 5) * 1000, deadline = Date.now() + dc.expires_in * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, interval));
+    const body = { client_id: CID, grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: dc.device_code };
+    const tj = await (await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) })).json();
+    if (tj.refresh_token) {
+      await smWrite(await smToken(), `graph-onedrive-refresh-token-${user}`, tj.refresh_token);
+      console.log(`\nSUCCESS: stored graph-onedrive-refresh-token-${user}. Use it with:  onedrive.mjs --user ${user} tree`);
+      return;
+    }
+    if (tj.error === "authorization_pending") continue;
+    if (tj.error === "slow_down") { await new Promise((r) => setTimeout(r, 5000)); continue; }
+    throw new Error("consent failed: " + (tj.error || "?") + " - " + (tj.error_description || "").split("\n")[0].slice(0, 160));
+  }
+  throw new Error("consent timed out (code expired). Re-run consent.");
+}
+
 const args = process.argv.slice(2);
+// --user <name> selects an alternate owner's OneDrive (per-user delegated token
+// graph-onedrive-refresh-token-<name>); default is Matt's (graph-onedrive-refresh-token).
+let USERKEY = null;
+const ui = args.indexOf("--user");
+if (ui >= 0) { USERKEY = args[ui + 1]; args.splice(ui, 2); }
 const [cmd, a1, a2, a3] = args;
 try {
-  const tok = await accessToken();
+  if (cmd === "consent") { await runConsent(a1 || USERKEY); process.exit(0); }
+  const tok = await accessToken(USERKEY);
 
   if (cmd === "inbox" || cmd === "outgoing-list") {
     const items = await listChildren(tok, OUTGOING);
@@ -252,6 +352,55 @@ try {
     console.log(`${dupes.length} duplicate group(s) by content hash:`);
     for (const g of dupes) { console.log(`  [${g.length}x ${g[0].size}b]`); for (const f of g) console.log(`     ${f.path}`); }
 
+  } else if (cmd === "version-report") {
+    // Data-room hygiene: exact duplicates + draft-vs-final version clusters, with a
+    // recommended keep + move plan. REPORT ONLY (never moves/deletes; human approves).
+    // `--deliver` uploads a timestamped copy to <INCOMING>/Version Reports/ (the batch-close).
+    const DELIVER = args.includes("--deliver");
+    const posArgs = args.slice(1).filter((x) => !x.startsWith("--"));
+    const path = posArgs[0] || PROCESSED;
+    const outFile = posArgs[1];
+    const SUP = process.env.CFO_SUPERSEDED_FOLDER || `${path}/_Superseded`;
+    const rows = (await walk(tok, path)).filter((r) => r.type === "file");
+    const dupes = dupeGroups(rows);
+    const clusters = versionClusters(rows);
+    const lines = [];
+    lines.push(`# Deduplication + version report: "${path}"`);
+    lines.push(`Generated ${new Date().toISOString().slice(0, 16).replace("T", " ")}Z. ${rows.length} files scanned. REVIEW before moving anything.`);
+    lines.push("");
+    lines.push(`## Exact duplicates (byte-identical, same content hash): ${dupes.length} group(s)`);
+    lines.push("Keep one, archive the rest. No information is lost.");
+    for (const g of dupes) {
+      const keep = [...g].sort((a, b) => new Date(a.modified || 0) - new Date(b.modified || 0))[0];
+      lines.push(`- [${g.length}x, ${g[0].size}b] keep: ${keep.path}`);
+      for (const f of g) if (f.path !== keep.path) lines.push(`    dup -> archive: ${f.path}`);
+    }
+    lines.push("");
+    lines.push(`## Version clusters (draft vs final of the same document): ${clusters.length} cluster(s)`);
+    lines.push("Heuristic match by normalized name; CONFIRM each before superseding (final/executed > newest > largest).");
+    for (const c of clusters) {
+      lines.push(`- "${c.base}" in ${c.folder || "(root)"}  [${c.superseded.length + 1} versions]`);
+      lines.push(`    KEEP (likely current): ${c.keep.path.split("/").pop()}  (${c.keep.modified}, ${c.keep.size}b)`);
+      for (const f of c.superseded) lines.push(`    superseded?: ${f.path.split("/").pop()}  (${f.modified}, ${f.size}b)`);
+    }
+    lines.push("");
+    lines.push(`## Suggested cleanup plan (move-based, recoverable; run AFTER you confirm)`);
+    lines.push(`Move extras to "${SUP}" so nothing is deleted and the audit trail is preserved:`);
+    for (const g of dupes) { const keep = [...g].sort((a, b) => new Date(a.modified || 0) - new Date(b.modified || 0))[0]; for (const f of g) if (f.path !== keep.path) lines.push(`  node skills/cfo-onedrive/onedrive.mjs mv "${f.path}" "${SUP}"`); }
+    for (const c of clusters) for (const f of c.superseded) lines.push(`  node skills/cfo-onedrive/onedrive.mjs mv "${f.path}" "${SUP}"`);
+    const report = lines.join("\n");
+    console.log(report);
+    if (outFile) { writeFileSync(outFile, report); console.log(`\n(written -> ${outFile})`); }
+    if (DELIVER) {
+      const ts = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+      const dest = `${INCOMING}/Version Reports/version-report-${ts}.md`;
+      await ensureFolder(tok, `${INCOMING}/Version Reports`);
+      const r = await gx(tok, "PUT", `${itemRef(dest)}:/content`, { headers: { "Content-Type": "text/markdown" }, body: Buffer.from(report, "utf8") });
+      if (r.ok) console.log(`delivered -> "${dest}" (${dupes.length} exact-dup group(s), ${clusters.length} version cluster(s))`);
+      else console.error(`deliver failed ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    }
+    console.log(`\nSUMMARY: ${dupes.length} exact-dup group(s), ${clusters.length} version cluster(s). Report only; nothing moved.`);
+
   } else if (cmd === "dataroom-init") {
     const parent = a1 || `${PROCESSED}/Audit Data Room`;
     const companies = ["OTCHealth", "InnerScope (INND)", "Hearing Assist", "Matthew Moore Personal"];
@@ -262,7 +411,7 @@ try {
     console.log(`  (add category subfolders per company with: mkdir "${parent}/OTCHealth/Bank Statements")`);
 
   } else {
-    console.error("commands: inbox | incoming-list | processed-list | pull <name> [dir] | process <name> | deliver <file> [name]\n          ls [path] | tree [path] | stat <path> | mkdir <path> | mv <src> <dest> [name] | cp <src> <dest> [name] | rm <path>\n          upload <file> <destPath> | download <path> [dir] | catalog [path] [out] | find-dupes [path] | dataroom-init [parent]");
+    console.error("commands: inbox | incoming-list | processed-list | pull <name> [dir] | process <name> | deliver <file> [name]\n          ls [path] | tree [path] | stat <path> | mkdir <path> | mv <src> <dest> [name] | cp <src> <dest> [name] | rm <path>\n          upload <file> <destPath> | download <path> [dir] | catalog [path] [out] | find-dupes [path] | version-report [path] [out.md] | dataroom-init [parent]");
     process.exit(2);
   }
 } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }

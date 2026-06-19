@@ -49,8 +49,16 @@ node skills/cfo-onedrive/onedrive.mjs upload <localFile> <destPath>     # upload
 node skills/cfo-onedrive/onedrive.mjs download <path> [dir]       # download any file
 node skills/cfo-onedrive/onedrive.mjs catalog [path] [out.json]   # recursive inventory + dupe report
 node skills/cfo-onedrive/onedrive.mjs find-dupes [path]           # byte-identical files (same hash)
+node skills/cfo-onedrive/onedrive.mjs version-report [path] [out.md] [--deliver]  # exact dups + draft-vs-final clusters + move plan (REPORT ONLY); --deliver files a timestamped copy to <Incoming>/Version Reports/
 node skills/cfo-onedrive/onedrive.mjs dataroom-init [parent]      # scaffold per-company + _Duplicates
 ```
+
+`version-report` is the data-room hygiene tool: it flags both byte-identical duplicates AND
+draft-vs-final version clusters (same document at different versions, matched by a
+version-agnostic name key), picks the likely current one (final/executed in name, else
+newest, else largest), and prints a recoverable move plan into a `_Superseded` folder. It
+NEVER moves or deletes anything itself; a human confirms each cluster, then runs the printed
+`mv` commands. Works for both the CFO audit data room and the CLO matter archive.
 
 ## Building the audit data room (the CFO's workflow)
 1. `inbox` to see what Matt dropped; `catalog "CFO Outgoing" outgoing.json` for a full inventory
