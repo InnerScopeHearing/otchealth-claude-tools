@@ -15,4 +15,6 @@ WORKDIR /app
 COPY setup/ /app/setup/
 COPY skills/doc-indexer/ /app/skills/doc-indexer/
 COPY skills/cfo-store/ /app/skills/cfo-store/
+COPY skills/daily-digest/ /app/skills/daily-digest/
+COPY skills/github-app/ /app/skills/github-app/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]
