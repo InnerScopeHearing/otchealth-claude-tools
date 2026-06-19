@@ -51,6 +51,7 @@ const PREFIX = takeVal("--prefix", "");
 const LIMIT = parseInt(takeVal("--limit", "0"), 10) || 0;
 const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
 const FLUSH_EVERY = parseInt(takeVal("--flush", "150"), 10) || 150;
+const CONCURRENCY = Math.max(1, parseInt(takeVal("--concurrency", process.env.CU_CONCURRENCY || "8"), 10) || 8);
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help"; // require an explicit command; no-arg must NOT silently start a run
@@ -518,7 +519,7 @@ async function cuEnsureAnalyzer() {
 }
 async function cuAnalyze(buf) {
   const r = await fetch(`${CU_EP}/contentunderstanding/analyzers/${CU_ANALYZER}:analyzeBinary?api-version=${CU_API}`, { method: "POST", headers: { "Ocp-Apim-Subscription-Key": CU_KEY, "Content-Type": "application/octet-stream" }, body: buf });
-  if (r.status === 429) { await sleep(4000); return cuAnalyze(buf); }
+  if (r.status === 429) { const ra = parseInt(r.headers.get("retry-after") || "0", 10); await sleep((ra > 0 ? ra * 1000 : 4000) + Math.floor(Math.random() * 1000)); return cuAnalyze(buf); }
   if (!(r.status === 202 || r.status === 200)) throw new Error("CU analyze " + r.status + " " + (await r.text()).slice(0, 180));
   const op = r.headers.get("operation-location"); const j = op ? await cuPoll(op) : await r.json();
   const res = j.result || j; const contents = res.contents || [];
@@ -540,12 +541,16 @@ async function runUnderstand() {
   const rows = await loadCatalog();
   const todo = rows.filter((r) => (REINDEX || !r.cu) && !r.err && CU_OK.has((r.ext || "").toLowerCase()));
   const skipped = rows.filter((r) => !CU_OK.has((r.ext || "").toLowerCase())).length;
-  console.error(`[understand] profile=${PROFILE} analyzer=${CU_ANALYZER} model=${CU_GEN_DEP}; ${todo.length} docs${LIMIT ? ` (limit ${LIMIT})` : ""} (${skipped} non-CU types keep index-time text).`);
-  let n = 0, since = 0, totCost = 0, totPages = 0;
-  for (const r of todo) {
-    if (LIMIT && n >= LIMIT) break;
+  const work = LIMIT ? todo.slice(0, LIMIT) : todo;
+  console.error(`[understand] profile=${PROFILE} analyzer=${CU_ANALYZER} model=${CU_GEN_DEP}; ${work.length} docs (concurrency ${CONCURRENCY})${LIMIT ? ` (limit ${LIMIT})` : ""} (${skipped} non-CU types keep index-time text).`);
+  // Bounded worker pool: CU analyze + poll is ~30-60s/doc serially, the dominant cost. Running
+  // N in parallel (CU tolerates it; 429s self-retry in cuAnalyze) is the speedup. Resumable: each
+  // flushed catalog row marks r.cu, so a timeout/restart only re-does the unfinished tail.
+  let n = 0, since = 0, totCost = 0, totPages = 0, next = 0, flushing = false;
+  const maybeFlush = async () => { if (flushing) return; flushing = true; try { await flushCatalog(rows); } finally { flushing = false; } };
+  async function processOne(r) {
     try {
-      const buf = await getBuf(r.path); if (!buf) { r.err = "missing"; continue; }
+      const buf = await getBuf(r.path); if (!buf) { r.err = "missing"; return; }
       const a = await cuAnalyze(buf);
       if (a.fields.Category) r.category = a.fields.Category;
       if (a.fields.Entity && a.fields.Entity !== "Unknown") r.entity = a.fields.Entity;
@@ -555,9 +560,16 @@ async function runUnderstand() {
       if (a.md && !NO_TEXT) { try { await putBuf(TEXT_PREFIX + r.path + ".txt", Buffer.from(a.md, "utf8"), "text/plain; charset=utf-8"); r.sidecar = true; r.engine = "cu:" + CU_GEN_DEP; } catch {} }
       const c = costFromUsage(a.usage); totCost += c.cost; totPages += c.pages; r.cu_pages = c.pages;
     } catch (e) { r.err = "cu: " + e.message.slice(0, 120); }
-    n++; since++;
-    if (since >= Math.min(FLUSH_EVERY, 50)) { await flushCatalog(rows); since = 0; console.error(`  understood ${n}/${todo.length} | ~$${totCost.toFixed(2)} / ${totPages} pages`); }
   }
+  async function worker() {
+    for (;;) {
+      const i = next++; if (i >= work.length) return;
+      await processOne(work[i]);
+      n++; since++;
+      if (since >= Math.min(FLUSH_EVERY, 50)) { since = 0; await maybeFlush(); console.error(`  understood ${n}/${work.length} | ~$${totCost.toFixed(2)} / ${totPages} pages`); }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, work.length || 1) }, () => worker()));
   await flushCatalog(rows);
   console.log(`[understand] +${n} docs | ~$${totCost.toFixed(2)} over ${totPages} pages (~$${totPages ? (totCost / totPages * 1000).toFixed(2) : "?"}/1k pages). Next: push-search.`);
 }
