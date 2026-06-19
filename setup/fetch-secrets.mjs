@@ -106,6 +106,10 @@ const MAP = [
   // Own account so the commerce key does not unlock the finance/legal rooms. Key -> rotate.
   { id: 'azure-commerce-storage-account', env: 'AZURE_COMMERCE_STORAGE_ACCOUNT', required: false },
   { id: 'azure-commerce-storage-key', env: 'AZURE_COMMERCE_STORAGE_KEY', required: false },
+  // Fleet commons / company-journal (daily digests + shared learnings): dedicated account
+  // otchealthcommons, container company-journal. Own account (key can't reach finance/legal). Rotate.
+  { id: 'azure-commons-storage-account', env: 'AZURE_COMMONS_STORAGE_ACCOUNT', required: false },
+  { id: 'azure-commons-storage-key', env: 'AZURE_COMMONS_STORAGE_KEY', required: false },
   // Azure Document Intelligence (Form Recognizer) for the CFO audit data-room indexer: read +
   // layout OCR on the image-only / mangled tier (account otchealth-docintel, eastus). Key is
   // sensitive -> rotation. Endpoint is non-secret but stored alongside for one hydration path.
