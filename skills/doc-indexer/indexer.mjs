@@ -366,8 +366,10 @@ async function aisInit() {
   await initStorage(); // sets GBUCKET / CONTAINER for the derived index name
   AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await sm("azure-search-endpoint")) || "").replace(/\/$/, "");
   AIS_KEY = process.env.AZURE_SEARCH_KEY || (await sm("azure-search-admin-key"));
-  AOAI_EP = (process.env.AZURE_OPENAI_ENDPOINT || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
-  AOAI_KEY = process.env.AZURE_OPENAI_API_KEY || (await sm("azure-openai-key"));
+  // Embeddings live on the Foundry resource (text-embedding-3-large). Prefer the foundry
+  // openai endpoint + foundry key; fall back to the designer azure-openai resource.
+  AOAI_EP = (process.env.AZURE_FOUNDRY_OPENAI_ENDPOINT || (await sm("azure-foundry-openai-endpoint")) || process.env.AZURE_OPENAI_ENDPOINT || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
+  AOAI_KEY = process.env.AZURE_FOUNDRY_KEY || (await sm("azure-foundry-key")) || process.env.AZURE_OPENAI_API_KEY || (await sm("azure-openai-key"));
   AOAI_DEP = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
   AOAI_MODEL = process.env.AZURE_OPENAI_EMBEDDING_MODEL || AOAI_DEP;
   IDXNAME = (idxOverride || `${PROFILE}-${BACKEND === "gcs" ? GBUCKET : CONTAINER}`).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
@@ -439,7 +441,7 @@ async function runCloudSearch(q) {
 // regex first-pass with model-grade understanding and overwrites the sidecar text with CU Markdown.
 // Runs on the Foundry resource (azure-foundry-endpoint/-key). Pending live validation on provisioning.
 const CU_API = "2025-11-01";
-const CU_ANALYZER = `otc-${PROFILE}-audit`;
+const CU_ANALYZER = `otc_${PROFILE}_audit`; // CU analyzer ids: no hyphens
 let CU_EP, CU_KEY, CU_GEN_DEP, CU_EMB_DEP;
 async function cuInit() {
   await initStorage();
@@ -450,7 +452,8 @@ async function cuInit() {
   if (!CU_EP || !CU_KEY) { console.error("Missing azure-foundry-endpoint / azure-foundry-key (provision the Foundry resource)."); process.exit(2); }
 }
 const cuH = () => ({ "Ocp-Apim-Subscription-Key": CU_KEY, "Content-Type": "application/json" });
-async function cuPoll(url) { for (let i = 0; i < 120; i++) { await sleep(1500); const r = await fetch(url, { headers: { "Ocp-Apim-Subscription-Key": CU_KEY } }); if (!r.ok) continue; const j = await r.json(); const s = (j.status || "").toLowerCase(); if (s === "succeeded") return j; if (s === "failed") throw new Error("CU op failed: " + JSON.stringify(j).slice(0, 180)); } throw new Error("CU poll timeout"); }
+async function cuPoll(url) { for (let i = 0; i < 240; i++) { await sleep(1500); const r = await fetch(url, { headers: { "Ocp-Apim-Subscription-Key": CU_KEY } }); if (!r.ok) continue; const j = await r.json(); const s = (j.status || "").toLowerCase(); if (s === "succeeded") return j; if (s === "failed") throw new Error("CU op failed: " + JSON.stringify(j).slice(0, 180)); } throw new Error("CU poll timeout"); }
+const CU_OK = new Set(["pdf", "jpg", "jpeg", "png", "bmp", "heif", "tiff", "tif", "docx", "xlsx", "pptx", "html", "htm", "txt", "md", "rtf", "eml"]); // CU-supported input types; others (json/csv) keep index-time extraction
 async function cuSetDefaults() {
   await cuInit();
   const body = { modelDeployments: { [CU_GEN_DEP]: CU_GEN_DEP, [CU_EMB_DEP]: CU_EMB_DEP } };
@@ -462,8 +465,8 @@ function cuAnalyzerDef() {
   const entityEnum = PROFILE === "finance" ? ["InnerScope", "HearingAssist", "OTCHealth", "iHEAR", "Personal", "QBO-Mixed", "Unknown"] : ["Company", "Personal", "Unknown"];
   return {
     description: `OTCHealth ${PROFILE} audit analyzer: classify + extract + summarize`,
-    baseAnalyzerId: "prebuilt-documentAnalyzer",
-    config: { returnDetails: true },
+    baseAnalyzerId: "prebuilt-document",
+    models: { completion: CU_GEN_DEP, embedding: CU_EMB_DEP }, // classify/generate need a completion model
     fieldSchema: { name: `OTC_${PROFILE}_Audit`, fields: {
       Category: { type: "string", method: "classify", description: "The single best audit category for this document.", enum: cats },
       Entity: { type: "string", method: "classify", description: "Which company/entity this document belongs to.", enum: entityEnum },
@@ -472,18 +475,23 @@ function cuAnalyzerDef() {
       DocumentDate: { type: "string", method: "generate", description: "Primary date of the document as YYYY-MM-DD if present, else empty." },
       Counterparty: { type: "string", method: "generate", description: "The other party (vendor, customer, bank, court, or person), if any." },
       Amount: { type: "string", method: "generate", description: "The most significant monetary amount in the document (with currency), if any." },
-      Material: { type: "boolean", method: "classify", description: "True if financially or legally material/significant (statements, agreements, equity, debt, raises, M&A, workpapers, board, related-party, pleadings); false for routine items." },
+      Material: { type: "boolean", method: "generate", description: "True if financially or legally material/significant (statements, agreements, equity, debt, raises, M&A, workpapers, board, related-party, pleadings); false for routine items like a single AP invoice, a logo, or a QBO attachment." },
     } },
   };
 }
 async function cuEnsureAnalyzer() {
-  const r = await fetch(`${CU_EP}/contentunderstanding/analyzers/${CU_ANALYZER}?api-version=${CU_API}`, { method: "PUT", headers: cuH(), body: JSON.stringify(cuAnalyzerDef()) });
-  if (r.status === 409) return;
+  const ah = { "Ocp-Apim-Subscription-Key": CU_KEY };
+  const aurl = `${CU_EP}/contentunderstanding/analyzers/${CU_ANALYZER}?api-version=${CU_API}`;
+  const g = await fetch(aurl, { headers: ah });
+  if (g.ok) { const j = await g.json(); if ((j.status || "").toLowerCase() === "succeeded") return; await fetch(aurl, { method: "DELETE", headers: ah }); }
+  const r = await fetch(aurl, { method: "PUT", headers: cuH(), body: JSON.stringify(cuAnalyzerDef()) });
   if (!(r.status === 201 || r.status === 200)) throw new Error("CU analyzer create " + r.status + " " + (await r.text()).slice(0, 240));
-  const op = r.headers.get("operation-location"); if (op) { try { await cuPoll(op); } catch {} }
+  const op = r.headers.get("operation-location"); if (op) await cuPoll(op);
+  const v = await (await fetch(aurl, { headers: ah })).json();
+  if (!["succeeded", "ready"].includes((v.status || "").toLowerCase())) throw new Error("CU analyzer build " + (v.status || "?") + " models=" + JSON.stringify(v.models || {}) + " warn=" + JSON.stringify(v.warnings || []).slice(0, 200));
 }
 async function cuAnalyze(buf) {
-  const r = await fetch(`${CU_EP}/contentunderstanding/analyzers/${CU_ANALYZER}:analyze?api-version=${CU_API}`, { method: "POST", headers: { "Ocp-Apim-Subscription-Key": CU_KEY, "Content-Type": "application/octet-stream" }, body: buf });
+  const r = await fetch(`${CU_EP}/contentunderstanding/analyzers/${CU_ANALYZER}:analyzeBinary?api-version=${CU_API}`, { method: "POST", headers: { "Ocp-Apim-Subscription-Key": CU_KEY, "Content-Type": "application/octet-stream" }, body: buf });
   if (r.status === 429) { await sleep(4000); return cuAnalyze(buf); }
   if (!(r.status === 202 || r.status === 200)) throw new Error("CU analyze " + r.status + " " + (await r.text()).slice(0, 180));
   const op = r.headers.get("operation-location"); const j = op ? await cuPoll(op) : await r.json();
@@ -504,8 +512,9 @@ function costFromUsage(u) { // illustrative published rates; calibrate before th
 async function runUnderstand() {
   await cuInit(); await cuEnsureAnalyzer();
   const rows = await loadCatalog();
-  const todo = rows.filter((r) => (REINDEX || !r.cu) && !r.err);
-  console.error(`[understand] profile=${PROFILE} analyzer=${CU_ANALYZER} model=${CU_GEN_DEP}; ${todo.length} docs${LIMIT ? ` (limit ${LIMIT})` : ""}.`);
+  const todo = rows.filter((r) => (REINDEX || !r.cu) && !r.err && CU_OK.has((r.ext || "").toLowerCase()));
+  const skipped = rows.filter((r) => !CU_OK.has((r.ext || "").toLowerCase())).length;
+  console.error(`[understand] profile=${PROFILE} analyzer=${CU_ANALYZER} model=${CU_GEN_DEP}; ${todo.length} docs${LIMIT ? ` (limit ${LIMIT})` : ""} (${skipped} non-CU types keep index-time text).`);
   let n = 0, since = 0, totCost = 0, totPages = 0;
   for (const r of todo) {
     if (LIMIT && n >= LIMIT) break;
