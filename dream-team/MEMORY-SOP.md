@@ -26,6 +26,20 @@ making, each written as *"the AI keeps believing X; the truth is Y; the rule is 
 surfaced FIRST on every wake. A correction (`correct ... --was "<old>"`) keeps the old wrong fact on
 record next to the right one, on purpose, so it is never silently resurrected.
 
+## Connected executive memory (the team shares; each agent keeps its lane)
+The exec team (coo, cfo, clo, cto, capital, commerce, compliance, rainmaker, growth) is connected so
+everyone has the company-wide picture without breaking the rings:
+- Each agent keeps its **private lane** (full detail, including sensitive).
+- **`status "<what I'm working on>"`** (always) and any **`--share`** entry ALSO publish a copy to a
+  shared EXEC feed (one file per agent in the commons, no clobber).
+- Every agent's **`tail` / `recall` / `team`** automatically reads the whole feed, so each exec agent
+  sees its own lane PLUS every other agent's project status + shared facts.
+- **Rings hold:** only what you explicitly `status` / `--share` leaves your lane - keep it NON-sensitive
+  (no MNPI specifics, no privilege). Detailed/sensitive facts stay private by default. The CLO PERSONAL
+  lane is hard-excluded from sharing.
+- **Publish a `status` whenever your project state changes** (started X, shipped Y, blocked on Z), and
+  run `team` (or read the TEAM section of `tail`) on wake so you know what the rest of the company is doing.
+
 ## DO
 - **Write-through.** The instant a fact is established, a decision made, or Matt corrects something,
   append it to the ledger BEFORE continuing. Do not batch to end-of-session; compaction happens mid-session.
