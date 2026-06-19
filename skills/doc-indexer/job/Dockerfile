@@ -7,7 +7,10 @@
 #   az acr build -r <acr> -t doc-indexer:latest -f skills/doc-indexer/job/Dockerfile .
 # Creds: GCP_CLAUDE_DRIVER_SA_JSON (job secret) -> indexer self-resolves every Azure cred
 # (foundry/search/docintel/storage) from Secret Manager. No other secrets in the image.
-FROM node:22-slim
+# node:24-slim, not 22: the indexer's FTS5 index uses node:sqlite, which is flagless only on
+# Node >=23.4 (experimental + flag-gated on 22). Cloud Shell is v24, so this keeps the container
+# and the Cloud Shell test path identical.
+FROM node:24-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       poppler-utils tesseract-ocr unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
