@@ -24,15 +24,28 @@ flat catalog + SQLite FTS retrieval, reorg applied during a single storage cutov
    `_INBOX-UNCLASSIFIED`; off-topic -> `_NON-ACCOUNTING`.
 5. append a catalog row to `_CATALOG/catalog.jsonl` and insert into the FTS5 index.
 
+## Two retrieval layers
+- **Free portable core (always built):** `_TEXT/` sidecars + `node:sqlite` FTS5 index -> the `search`
+  command (keyword/phrase), plus `rg` over sidecars. Zero infra, offline, lives in the room.
+- **Azure AI Search brain (the managed upgrade, 2026-06-19 decision):** `push-search` ships the corpus
+  (metadata + content + embeddings) into an Azure AI Search index with **hybrid keyword + vector +
+  semantic** ranking; `cloud-search` queries it. Agents get meaning-based retrieval via one API; a
+  query-time Azure OpenAI vectorizer means callers just pass text. People browse the reorg'd taxonomy
+  on **OneDrive** (`cfo-onedrive`) + `catalog.csv`.
+
 ## Commands
 ```
 node skills/doc-indexer/indexer.mjs index   --profile <p> [--azure|--gcs] [--prefix x] [--limit n] [--reindex] \
                                             [--ocr-model prebuilt-read|prebuilt-layout] [--no-ocr] [--no-text]
-node skills/doc-indexer/indexer.mjs search "<query>" --profile <p> [--azure|--gcs] [--limit n]   # ranked FTS5
+node skills/doc-indexer/indexer.mjs search "<query>" --profile <p> [--azure|--gcs] [--limit n]   # free FTS5 (offline)
 node skills/doc-indexer/indexer.mjs status        --profile <p> [--azure|--gcs]   # cataloged vs total + breakdowns
 node skills/doc-indexer/indexer.mjs build-index   --profile <p> [--azure|--gcs]   # rebuild index.sqlite from sidecars
 node skills/doc-indexer/indexer.mjs build-csv     --profile <p> [--azure|--gcs]   # _CATALOG/catalog.csv
 node skills/doc-indexer/indexer.mjs propose-mapping --profile <p> [--azure|--gcs] # old->taxonomy mapping CSV
+# Azure AI Search brain (needs azure-search-endpoint/-admin-key + an Azure OpenAI embedding deployment)
+node skills/doc-indexer/indexer.mjs search-init   --profile <p> [--azure|--gcs] [--index name]   # create the index
+node skills/doc-indexer/indexer.mjs push-search   --profile <p> [--azure|--gcs] [--index name]   # embed + push corpus
+node skills/doc-indexer/indexer.mjs cloud-search "<query>" --profile <p> [--azure|--gcs] [--limit n]  # hybrid+semantic
 ```
 
 ## Profiles (storage + taxonomy)
