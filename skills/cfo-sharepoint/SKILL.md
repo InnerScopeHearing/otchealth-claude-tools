@@ -37,3 +37,8 @@ App-only client-credentials with the dedicated app **"OTCHealth CFO SharePoint I
   the `autoMode.environment` trusted list; otherwise the classifier blocks the pull (a bulk
   SharePoint -> storage pattern). That trust config is the operator step that turns it on.
 - Credentials flagged ROTATE-BEFORE-LAUNCH.
+- STATUS (2026-06-19): the "OTCHealth CFO SharePoint Ingestion" app (appId 2ce11702-003d-4638-
+  958a-9d0299518b84) was trimmed from over-broad (full-control / write / mail tenant-wide) down to
+  LEAST-PRIVILEGE **Sites.Read.All (read-only)** and VALIDATED end-to-end with the same key:
+  app-only token -> Finance Team site -> Documents library all read cleanly, zero loss of function.
+  Over-privilege risk CLOSED. The key still rotates before public launch.
