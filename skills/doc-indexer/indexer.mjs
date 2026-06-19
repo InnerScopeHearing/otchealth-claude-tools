@@ -52,6 +52,7 @@ const LIMIT = parseInt(takeVal("--limit", "0"), 10) || 0;
 const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
 const FLUSH_EVERY = parseInt(takeVal("--flush", "150"), 10) || 150;
 const CONCURRENCY = Math.max(1, parseInt(takeVal("--concurrency", process.env.CU_CONCURRENCY || "8"), 10) || 8);
+const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.CU_MAX_MINUTES || "0"), 10) || 0; // soft time budget for understand; 0 = no budget
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help"; // require an explicit command; no-arg must NOT silently start a run
@@ -546,7 +547,8 @@ async function runUnderstand() {
   // Bounded worker pool: CU analyze + poll is ~30-60s/doc serially, the dominant cost. Running
   // N in parallel (CU tolerates it; 429s self-retry in cuAnalyze) is the speedup. Resumable: each
   // flushed catalog row marks r.cu, so a timeout/restart only re-does the unfinished tail.
-  let n = 0, since = 0, totCost = 0, totPages = 0, next = 0, flushing = false;
+  let n = 0, since = 0, totCost = 0, totPages = 0, next = 0, flushing = false, budgetHit = false;
+  const startTs = Date.now();
   const maybeFlush = async () => { if (flushing) return; flushing = true; try { await flushCatalog(rows); } finally { flushing = false; } };
   async function processOne(r) {
     try {
@@ -563,6 +565,10 @@ async function runUnderstand() {
   }
   async function worker() {
     for (;;) {
+      // Soft time budget: stop pulling new work before the job's replicaTimeout so the run exits 0
+      // ("Succeeded") having flushed its progress, instead of being killed (which shows "Failed").
+      // The pass is resumable, so the next scheduled run picks up the unfinished tail.
+      if (MAX_MIN && (Date.now() - startTs) > MAX_MIN * 60000) { budgetHit = true; return; }
       const i = next++; if (i >= work.length) return;
       await processOne(work[i]);
       n++; since++;
@@ -571,7 +577,8 @@ async function runUnderstand() {
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, work.length || 1) }, () => worker()));
   await flushCatalog(rows);
-  console.log(`[understand] +${n} docs | ~$${totCost.toFixed(2)} over ${totPages} pages (~$${totPages ? (totCost / totPages * 1000).toFixed(2) : "?"}/1k pages). Next: push-search.`);
+  const tail = budgetHit ? ` | stopped at ${MAX_MIN}min budget, ${work.length - n} docs deferred to next run (resumable)` : "";
+  console.log(`[understand] +${n} docs | ~$${totCost.toFixed(2)} over ${totPages} pages (~$${totPages ? (totCost / totPages * 1000).toFixed(2) : "?"}/1k pages)${tail}. Next: push-search.`);
 }
 async function runCuCalibrate() {
   const N = LIMIT || 200;
