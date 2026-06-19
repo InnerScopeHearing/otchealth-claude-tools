@@ -31,6 +31,13 @@ assume unless the user says otherwise.
   audiogram idea for iHEARtest.
 
 ## Standing rules (compliance + process)
+- **Working memory: the ledger is the source of truth, not the chat (Matt directive 2026-06-19).**
+  Long sessions compact and silently drop exact facts. Use the **`kb-memory`** skill so nothing is lost:
+  WRITE-THROUGH every fact/decision/correction the instant it happens (`mem.mjs remember|decision|correct|
+  pitfall --agent <a>`); RECALL before asserting any fact (the ledger wins over memory); capture the
+  recurring wrong beliefs as **pitfalls** (knowing the incorrect facts matters as much as the facts).
+  Set `KB_AGENT=<agent>` to enable the SessionStart/PreCompact/Stop hooks. Full SOP:
+  `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`. Reference users: CFO + CLO.
 - **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
   single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a
   direct API call, over navigating website UIs. Whenever a task can be done with a paste-ready command

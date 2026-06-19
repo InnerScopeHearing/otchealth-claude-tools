@@ -48,6 +48,30 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/setup/session-start.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/skills/kb-memory/kb-inject.sh\" session"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/skills/kb-memory/kb-inject.sh\" precompact"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/skills/kb-memory/kb-inject.sh\" stop"
           }
         ]
       }
