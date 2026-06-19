@@ -47,7 +47,9 @@ room is the home for all CFO findings and the `_KNOWLEDGE-BASE/` working papers.
   WRITE-THROUGH every fact/decision/correction the instant it happens (`mem.mjs remember|decision|correct|
   pitfall --agent <a>`); RECALL before asserting any fact (the ledger wins over memory); capture the
   recurring wrong beliefs as **pitfalls** (knowing the incorrect facts matters as much as the facts).
-  Set `KB_AGENT=<agent>` to enable the SessionStart/PreCompact/Stop hooks. Full SOP:
+  **ANY correction the user gives MUST be persisted with `mem.mjs correct "<NOW>" --agent <a> --was "<WAS>"`
+  BEFORE you respond — non-negotiable; the `UserPromptSubmit` hook reminds you every turn.** Set
+  `KB_AGENT=<agent>` to enable the SessionStart/UserPromptSubmit/PreCompact/Stop hooks. Full SOP:
   `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`. Reference users: CFO + CLO.
 - **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
   single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a

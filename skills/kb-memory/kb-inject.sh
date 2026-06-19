@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fleet working-memory session integration. FAIL-SAFE by design: it must never break or block a
 # session. Modes: session (SessionStart -> inject the agent's ledger), precompact (PreCompact ->
-# remind to persist before the window compacts), stop (Stop -> remind to flush before ending).
+# remind to persist before the window compacts), stop (Stop -> remind to flush before ending),
+# userprompt (UserPromptSubmit -> capture any correction the user gives, every turn).
 # Enable per agent by exporting KB_AGENT=cfo|clo|clo-personal|<name> in that session/repo.
 set +e
 MODE="${1:-session}"
@@ -27,6 +28,14 @@ case "$MODE" in
   stop)
     [ -z "$AG" ] && exit 0
     echo "[kb-memory] Before ending: confirm new facts/decisions/corrections are written to the $AG ledger (mem.mjs ... --agent $AG)."
+    ;;
+  userprompt)
+    # Fires on EVERY user message: enforce that any correction the user gives is captured to the ledger NOW.
+    [ -z "$AG" ] && exit 0
+    echo "[kb-memory] CORRECTION CHECK ($AG): if the user's latest message corrects, contradicts, or revises ANY"
+    echo "prior fact, number, balance, entity, account, date, or assumption, FIRST persist it, THEN respond:"
+    echo "  node \"$MEM\" correct \"<the CORRECT fact>\" --agent $AG --was \"<the wrong belief>\" --source \"user $(date +%F)\""
+    echo "Also write-through any NEW fact/decision the user states (remember/decision). The ledger is the source of truth."
     ;;
 esac
 exit 0
