@@ -3,15 +3,28 @@
 Ranked by cash impact x speed x "only Matt can do it." The COO pulls today's 1-3 moves
 from the top of this list. Update status as items complete.
 
-## NOW (this week — first dollars)
-1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
-   today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
-3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
-   connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
+## NOW (this week — first dollars) — updated 2026-06-20
+
+0. **URGENT: Fund storage units (COO-36, TODAY).** Treelake (~$1,005/mo) + Security
+   Public Storage (~$146/mo) declining off the empty account. They hold the ~10,298-unit
+   inventory ($2-3M). Unpaid = lien = auction. Confirm + fund before anything else. [Matt]
+
+1. **Fix Shopify checkout (COO-35, OVERDUE since June 16).** Zero of 9 checkouts completed
+   in 14 days. Two 5-min fixes in Shopify admin: (a) confirm Stripe in live mode + run
+   real-card test on TReO $99 funnel; (b) move Matrix/Axis/Linx/CONNECT/STREAM/EAZE to
+   General shipping profile (they have no US zone now). Then send Draft 141 (6.8K warm
+   list). [Matt, blocking email campaign]
+
+2. **Gumroad: List 8 SOP products (COO-24).** 14 PDFs done at
+   otchealth-exec/coo/gumroad-launch/. Matt creates account + lists in ~20-30 min. First
+   dollars with zero gates. [Matt]
+
+3. **Amazon TReO: Sign 3 PDFs + upload (BRF-28).** cro/amazon/signing/. Commercial
+   invoice = the Amazon Apply-to-Sell upload. ~2K units, ~$30+ net/unit at $50. On
+   approval the CRO fires same day. [Matt, ~15 min]
+
 4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
-   securities firewall). Rebuild the cadence you dropped. [open]
+   securities firewall). [open]
 
 ## THIS WEEK (protect + unlock)
 5. **HARD GATE - Rotate the GCP SA + PostHog all-access keys** (treat as compromised
@@ -20,7 +33,8 @@ from the top of this list. Update status as items complete.
 6. **Verify/remove the unverified Intercom admin account** (identity in the private
    "COO - Confidential" note). [Matt, security]
 7. **Engage securities counsel** for the INND capital chain + the Reg D + litigation
-   disclosure. Gates the raise. [Matt-only]
+   disclosure. Also engage CPA/EA: INND has ~3 years of unfiled federal tax returns
+   (1120 + CA 100); NOLs at risk under Sec 382. Gates the raise. [Matt-only]
 
 ## IN MOTION (parallel, longer)
 8. **Reg D 506(c) outreach** to accredited contacts (counsel-approved every word).
