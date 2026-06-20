@@ -236,14 +236,14 @@ try {
 
   if (cmd === "inbox" || cmd === "outgoing-list") {
     const items = await listChildren(tok, OUTGOING);
-    console.log(`CFO Outgoing (Matt -> CFO): ${items.length} item(s)`);
+    console.log(`${OUTGOING} (Matt drops here): ${items.length} item(s)`);
     for (const f of items) console.log(`  ${((f.size ?? "") + "").padStart(10)}  ${(f.lastModifiedDateTime || "").slice(0, 10)}  ${f.name}${f.folder ? "/" : ""}`);
 
   } else if (cmd === "incoming-list") {
-    const items = await listChildren(tok, INCOMING); console.log(`CFO Incoming (CFO -> Matt): ${items.length}`); for (const f of items) console.log(`  ${f.name}${f.folder ? "/" : ""}`);
+    const items = await listChildren(tok, INCOMING); console.log(`${INCOMING} (delivered to Matt): ${items.length}`); for (const f of items) console.log(`  ${f.name}${f.folder ? "/" : ""}`);
 
   } else if (cmd === "processed-list") {
-    const items = await listChildren(tok, PROCESSED); console.log(`CFO Processed (archive): ${items.length}`); for (const f of items) console.log(`  ${f.name}${f.folder ? "/" : ""}`);
+    const items = await listChildren(tok, PROCESSED); console.log(`${PROCESSED} (archive): ${items.length}`); for (const f of items) console.log(`  ${f.name}${f.folder ? "/" : ""}`);
 
   } else if (cmd === "ls") {
     const path = a1 || "";
@@ -326,16 +326,16 @@ try {
     const name = a2 || basename(a1); const data = readFileSync(a1);
     const r = await gx(tok, "PUT", `${itemRef(INCOMING + "/" + name)}:/content`, { headers: { "Content-Type": "application/octet-stream" }, body: data });
     if (!r.ok) { console.error(`deliver ${r.status}: ${(await r.text()).slice(0, 160)}`); process.exit(1); }
-    console.log(`delivered "${name}" -> CFO Incoming (${data.length} bytes)`);
+    console.log(`delivered "${name}" -> ${INCOMING} (${data.length} bytes)`);
 
   } else if (cmd === "process") {
     if (!a1) { console.error("usage: process <name>"); process.exit(2); }
     const src = await getItem(tok, `${OUTGOING}/${a1}`, "id");
-    if (!src) { console.error(`"${a1}" not found in CFO Outgoing`); process.exit(1); }
+    if (!src) { console.error(`"${a1}" not found in ${OUTGOING}`); process.exit(1); }
     const destId = await ensureFolder(tok, PROCESSED);
     const r = await gx(tok, "PATCH", `/me/drive/items/${src.id}`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parentReference: { id: destId } }) });
     if (!r.ok) { console.error(`process ${r.status}: ${(await r.text()).slice(0, 160)}`); process.exit(1); }
-    console.log(`processed: moved "${a1}" CFO Outgoing -> CFO Processed`);
+    console.log(`processed: moved "${a1}" ${OUTGOING} -> ${PROCESSED}`);
 
   } else if (cmd === "catalog") {
     const path = a1 || PROCESSED;
