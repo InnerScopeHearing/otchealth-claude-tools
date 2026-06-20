@@ -20,3 +20,7 @@ assets/generated/
 # COO confidential runtime notes — sensitive specifics never go in git
 *.local.md
 coo/CONFIDENTIAL*
+
+# Per-environment Claude Code overrides (e.g. KB_AGENT). Environment-scoped, not repo-wide —
+# committing would force one agent's memory lane on every agent that shares this repo.
+.claude/settings.local.json

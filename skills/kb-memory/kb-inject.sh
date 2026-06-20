@@ -13,7 +13,12 @@ MEM="${CLAUDE_PROJECT_DIR:-.}/skills/kb-memory/mem.mjs"
 
 case "$MODE" in
   session)
-    [ -z "$AG" ] && exit 0
+    if [ -z "$AG" ]; then
+      echo "[kb-memory] WARNING: KB_AGENT is UNSET -> working-memory hooks are DISABLED (no ledger injected, no"
+      echo "  correction capture). This is the #1 cause of 'the agent keeps forgetting'. FIX: set KB_AGENT (e.g. cfo)"
+      echo "  in .claude/settings.local.json (env: {KB_AGENT: cfo}) or the environment env-var config."
+      exit 0
+    fi
     echo "===== WORKING MEMORY: ${AG} ledger (SOURCE OF TRUTH - read before trusting recall) ====="
     node "$MEM" tail --agent "$AG" --n 30 2>/dev/null || { echo "(kb-memory unavailable this session)"; exit 0; }
     echo ""
