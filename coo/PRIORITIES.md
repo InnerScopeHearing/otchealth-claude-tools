@@ -4,14 +4,22 @@ Ranked by cash impact x speed x "only Matt can do it." The COO pulls today's 1-3
 from the top of this list. Update status as items complete.
 
 ## NOW (this week — first dollars)
-1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
-   today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
-3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
-   connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
-4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
-   securities firewall). Rebuild the cadence you dropped. [open]
+1. **Sign 3 Amazon TReO PDFs** (otchealth-exec/cro/amazon/signing/) and upload to
+   Apply-to-Sell. CRO fires $50 listing same day. ~$30+/unit, ~2,000 stageable. 15 min.
+   [Matt-only, FIRST DOLLAR GATE, 10am block booked 2026-06-20]
+2. **Fund storage payments.** Treelake ~$1,005/mo + Security Public Storage ~$146/mo
+   declining off empty Mercury. Lien risk on the entire $2-3M inventory pool. Pay today.
+   [Matt-only, URGENT]
+3. **Fix Shopify checkout.** 0 of 9 recent sessions completing. Blockers: Stripe capture
+   broken, US shipping missing from hearing-aid products. No email campaign converts until
+   fixed. Prove with 1 live test purchase. [Matt + CTO/Mark]
+4. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs; Matt creates the
+   Gumroad account + lists them. First dollars in days. [open, next after Amazon PDFs]
+5. **Send the overdue email campaign.** Draft 141 / reactivation to the 85K. BLOCKED until
+   Shopify checkout is fixed (see above). [OVERDUE, unblocks after Move 3]
+6. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
+   connect Stripe. Unlocks the full $2-3M inventory pool. [Matt-only]
+7. **Restart LinkedIn** — one factual post about a real product/milestone. [open]
 
 ## THIS WEEK (protect + unlock)
 5. **HARD GATE - Rotate the GCP SA + PostHog all-access keys** (treat as compromised

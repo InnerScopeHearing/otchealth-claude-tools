@@ -76,9 +76,13 @@ Matt via Outlook/calendar. The COO gives 1-3 moves, never a wall; takes results;
   experience a real ops person.
 - **Heartbeat:** hourly nudge email (9-5 M-F PT) + daily calendar block. n8n
   `KzhxslBIB12QcKuW`.
-- **Hands (n8n primitives the COO calls):** `COO: Send Email` (`shpRZibsI81XfJiJ`),
-  `COO: Create Meeting` (`ZFkox8gT5vdEKk2Z`), `COO: Read Calendar` next 7 days
-  (`xL0VYbElD15ttqKw`).
+- **Hands (n8n primitives the COO calls, self-host IDs confirmed 2026-06-20):**
+  `COO: Send Email` (`jt4RVnYHI83EsOX9`, webhook path `coo-send-email`),
+  `COO: Create Meeting` (`28XO4EuN11LYx4yh`, webhook path `coo-create-meeting`),
+  `COO: Read Calendar` next 7 days (`PR3fEnWKJcxXyqES`, webhook path `coo-read-calendar`).
+  All three are active on the self-host at `https://automation.otchealth.app`.
+  The old IDs in SITUATION.md (`shpRZibsI81XfJiJ`, `ZFkox8gT5vdEKk2Z`, `xL0VYbElD15ttqKw`)
+  were from n8n Cloud (decommissioned) and do not exist on the self-host.
 - **Task backbone:** the "COO Tasks" Notion database; every action is logged there.
 - **Calendar is two-way:** Matt adds events so the COO sees his real constraints; the COO
   reads them before planning and books focused blocks only in free slots.
