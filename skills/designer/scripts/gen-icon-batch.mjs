@@ -84,7 +84,7 @@ async function genOne(name) {
             prompt,
             n: 1,
             size: '1024x1024',
-            response_format: 'b64_json',
+            // gpt-image-1 returns b64_json by default and REJECTS response_format (HTTP 400).
         };
         endpoint = 'https://api.openai.com/v1/images/generations';
     }
