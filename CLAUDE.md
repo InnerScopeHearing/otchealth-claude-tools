@@ -54,8 +54,20 @@ assume unless the user says otherwise.
   different branch without explicit permission. Open PRs as **draft**.
 - **Content rule.** No em dashes or en dashes in any *published app copy* (use
   commas, periods, line breaks). Internal docs like this one are exempt.
-- **Secrets.** Never paste secrets into chat. Tokens provided in chat are saved to
-  the Notion **API Tokens & Credentials** vault and flagged for rotation.
+- **Secrets.** Never paste secrets into chat. Tokens provided in chat are stored in
+  `otchealth-shared-prod` Secret Manager (`setup/set-secret.mjs`) and flagged for rotation.
+- **"API Vault" = the registry DATABASE, not a page (Matt directive 2026-06-20).** When Matt says
+  "go to the API Vault," it means the Notion **"API Tokens & Credentials (Registry)" database**
+  (its id is in Secret Manager as `notion-vault-db-id`; one row per credential with Service / Type /
+  Ring / Status / Secret Manager ID). The OLD monolithic "API Tokens & Credentials" page is a ~191KB
+  single page that `notion-fetch` ERRORS on ("result exceeds maximum allowed tokens"); it is now a
+  read-only LEGACY archive, never point an agent at it. How to USE the vault:
+  - **A value** lives in Secret Manager, fetch it by the row's **Secret Manager ID** via
+    `node setup/get-secret.mjs <id> <outfile>`. NEVER fetch a Notion page to get a value.
+  - **To find/list credentials** (which exist, rotation status, by service), QUERY the registry DB
+    (Notion MCP `query_data_sources` SQL, or a saved view). Do not load a page.
+  - **A new/rotated secret:** store it in Secret Manager, then run the **`vault-sync`** skill so the
+    registry row reflects it. The registry is reconciled FROM Secret Manager (skill: `skills/vault-sync`).
 - **Secret store (operator decision, 2026-06-08).** Per operator direction
   (seamless > separation), ALL app secrets, including MedReview (PHI) and FourVault
   (separate entity), are consolidated into the single `otchealth-shared-prod`
