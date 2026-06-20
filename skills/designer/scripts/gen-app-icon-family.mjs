@@ -72,12 +72,13 @@ const res = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
     headers,
     body: JSON.stringify({
-        model: 'dall-e-3',
+        model: 'gpt-image-1',
         prompt: masterPrompt,
         n: 1,
         size: '1024x1024',
-        quality: 'hd',
-        response_format: 'b64_json',
+        quality: 'high',
+        // gpt-image-1 ALWAYS returns b64_json and REJECTS response_format (HTTP 400) and the
+        // dall-e-3 quality value 'hd'. dall-e-3 is retired (Mar 2026). Do not reintroduce those.
     }),
 });
 if (!res.ok) {
@@ -98,7 +99,7 @@ writeMeta(masterPath, {
     user_prompt: userPrompt,
     full_prompt: masterPrompt,
     kind: 'app-icon-master',
-    model: 'dall-e-3-hd',
+    model: 'gpt-image-1',
     brand_name: brand.name,
     brand_source: brand._source,
     cost_estimate_usd: cost,
