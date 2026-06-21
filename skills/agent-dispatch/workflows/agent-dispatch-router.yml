@@ -1,0 +1,54 @@
+# agent-dispatch ROUTER (deploy in the HUB repo's .github/workflows/). Tier-B auto-wake, part 1 of 2.
+#
+# On a push that appends to dispatch/<to>.inbox.jsonl, this reads the NEW envelope lines and, for each,
+# fires a repository_dispatch (type: agent-dispatch) to the RECIPIENT agent's repo, whose
+# agent-dispatch-wake.yml then cold-starts that agent with `claude -p`. Loop-safe: routing is by the
+# envelope's `to`; a writer can only target its recipient. Generalizes iHEARtest's cto-bridge-notify.yml
+# from 2 Hyperagent agents to N Claude Code agents.
+#
+# SETUP (Matt + CTO), all token-gated so this skips cleanly until then:
+#   - dispatch/agents.json : { "<agent>": "owner/repo", ... }  (recipient -> the repo to wake)
+#   - secret FLEET_DISPATCH_TOKEN : a token that can repository_dispatch the agent repos (the
+#       otchealth-fleet-bot github-app installation token, or a fine-grained PAT with "Contents: write"
+#       on those repos). The default GITHUB_TOKEN is hub-repo-scoped and CANNOT dispatch other repos.
+#   - BUDGET : a per-UTC-day wake ceiling, because every wake draws the ONE shared weekly Max pool.
+#
+# Append "[skip-dispatch]" to a commit message to suppress routing (manual edits, backfills, ack commits).
+
+name: agent-dispatch router
+
+on:
+  push:
+    branches: [main]
+    paths: ['dispatch/*.inbox.jsonl']
+
+concurrency:
+  group: agent-dispatch-router
+  cancel-in-progress: false   # never drop a dispatch; serialize instead
+
+permissions:
+  contents: read
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    env:
+      FLEET_DISPATCH_TOKEN: ${{ secrets.FLEET_DISPATCH_TOKEN }}
+      BUDGET: "40"
+      BEFORE: ${{ github.event.before }}
+      AFTER: ${{ github.event.after }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Guard - skip flag + token presence
+        id: guard
+        run: |
+          MSG=$(git log -1 --pretty=%B)
+          if echo "$MSG" | grep -q '\[skip-dispatch\]'; then echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ -z "${FLEET_DISPATCH_TOKEN}" ]; then echo "FLEET_DISPATCH_TOKEN not set - routing disabled (Tier B off)"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Route new dispatches to recipient repos
+        if: steps.guard.outputs.skip == 'false'
+        run: node .github/scripts/agent-dispatch-route.mjs
