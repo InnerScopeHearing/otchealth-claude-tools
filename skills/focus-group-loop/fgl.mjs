@@ -87,8 +87,11 @@ async function reviewPersona(p, group, pitch, screens, prior) {
   return j;
 }
 
-// Average over SCORED personas only: a parse failure (rating=null) is tooling noise and is excluded,
-// never counted as 0 (a 0 would silently poison the 90% gate, the exact bug this guards against).
+// Average over SCORED personas only. A persona that could not produce a rating is TOOLING NOISE and is
+// EXCLUDED, never counted as 0: either the model returned unparseable JSON (_parse_fail), or the call
+// threw even after retry + fallback (an Azure OpenAI 429/throttle -> the runRound catch sets rating=null
+// + _parse_fail). A 0 would silently poison the 90% gate (throttled infra reading as "the product scored
+// 0", which is exactly what dragged PlantID's gate below 9.0 while every responding persona was 9.2+).
 function avg(arr) { const v = arr.filter(r => !r._parse_fail && r.rating != null); return v.length ? v.reduce((s, r) => s + (+r.rating || 0), 0) / v.length : 0; }
 function parseFails(arr) { return arr.filter(r => r._parse_fail).length; }
 
@@ -118,7 +121,10 @@ async function runRound() {
   const results = {}; const byId = {};
   for (const [g, people] of Object.entries(groups)) {
     results[g] = [];
-    for (const p of people) { process.stderr.write(`  ${p.name}... `); let r; try { r = await reviewPersona(p, g, pitch, screens, prior); } catch (e) { r = { id: p.id, name: p.name, group: g, rating: 0, _err: e.message }; } results[g].push(r); byId[p.id] = r; process.stderr.write(`${r.rating}/10\n`); }
+    // An UNCAUGHT call failure (e.g. Azure OpenAI 429 exhausted even after the foundry fallback) is an
+    // INFRA error, not a product score. Mark it excluded (rating=null + _parse_fail) so avg() drops it,
+    // exactly like an unparseable response, instead of scoring the product 0 and poisoning the gate.
+    for (const p of people) { process.stderr.write(`  ${p.name}... `); let r; try { r = await reviewPersona(p, g, pitch, screens, prior); } catch (e) { r = { id: p.id, name: p.name, group: g, rating: null, _parse_fail: true, _err: e.message }; } results[g].push(r); byId[p.id] = r; process.stderr.write(`${r.rating == null ? `excluded (${r._err ? "infra error" : "parse"})` : `${r.rating}/10`}\n`); }
   }
   const avgs = { customers: avg(results.customers), professionals: avg(results.professionals), investors: avg(results.investors) };
   const pass = Object.values(avgs).every(a => a >= PASS);
@@ -138,10 +144,10 @@ async function runRound() {
   const nFail = parseFails(results.customers) + parseFails(results.professionals) + parseFails(results.investors);
   console.log(`\n================ FOCUS GROUP LOOP — ${APP} ROUND ${ROUND} ================`);
   console.log(summary);
-  if (nFail) console.log(`(note: ${nFail} persona response(s) could not be parsed even after a retry and were EXCLUDED from the averages, not scored 0)`);
+  if (nFail) console.log(`(note: ${nFail} persona response(s) could not be scored - unparseable output or an Azure OpenAI throttle that survived retry + fallback - and were EXCLUDED from the averages, NOT scored 0. Raise the gpt-4o TPM quota or re-run to score them.)`);
   console.log(`GATE (>=90% all groups): ${pass ? "PASSED -> ship-ready per the panel" : "NOT YET -> execute the change list and re-run"}`);
   console.log(`\nPER-PERSON:`);
-  for (const g of ["customers", "professionals", "investors"]) for (const r of results[g]) console.log(`  [${g}] ${r.name}: ${r.rating}/10  ${g === "customers" ? (r.would_pay ? "would pay" : "would NOT pay") : g === "professionals" ? (r.would_associate ? "would put name on it" : "would NOT associate") : (r.would_invest ? `INVEST $${r.amount_usd} / ${r.equity_pct}% (val $${r.valuation_usd})` : "pass")}`);
+  for (const g of ["customers", "professionals", "investors"]) for (const r of results[g]) console.log(`  [${g}] ${r.name}: ${r.rating == null ? "n/a (excluded)" : `${r.rating}/10`}  ${r.rating == null ? "" : g === "customers" ? (r.would_pay ? "would pay" : "would NOT pay") : g === "professionals" ? (r.would_associate ? "would put name on it" : "would NOT associate") : (r.would_invest ? `INVEST $${r.amount_usd} / ${r.equity_pct}% (val $${r.valuation_usd})` : "pass")}`);
   console.log(`\nPRIORITIZED CHANGE LIST (top 15, pro fixes first):`);
   changeList.slice(0, 15).forEach((c, i) => console.log(`  ${i + 1}. ${c}`));
   if (pass && invest.length) { console.log(`\nINVESTOR HEADLINE: ${invest.length}/5 offered. Best terms: ${invest.map(i => `$${i.amount_usd}/${i.equity_pct}%`).join(", ")}`); }
