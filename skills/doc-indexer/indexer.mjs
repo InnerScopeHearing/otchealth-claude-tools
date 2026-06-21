@@ -65,6 +65,12 @@ const SM = "otchealth-shared-prod";
 const CATALOG_KEY = "_CATALOG/catalog.jsonl";
 const INDEX_KEY = "_CATALOG/index.sqlite";
 const TEXT_PREFIX = "_TEXT/";
+// Oversize guard: getBuf() loads each file fully into memory, so a multi-hundred-MB file
+// (videos, installers, archives, image-only decks) OOM-kills the indexer container and, under
+// `set -e`, kills the whole librarian run BEFORE understand/push-search. Such files carry no
+// document text anyway. Catalog them but skip extraction. Override with MAX_INDEX_MB.
+const MAX_INDEX_MB = parseInt(process.env.MAX_INDEX_MB || "200", 10);
+const MAX_INDEX_BYTES = MAX_INDEX_MB * 1024 * 1024;
 const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/"]; // our own artifacts
 const MAXTEXT = 400000; // chars persisted per doc
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -315,6 +321,14 @@ async function runIndex() {
     if (LIMIT && n >= LIMIT) break;
     const ext = extname(o.name).toLowerCase();
     const row = { path: o.name, backend: BACKEND, ext: ext.replace(".", ""), size: o.size, mtime: o.mtime, entity: entityOf(o.name), ts: new Date().toISOString() };
+    if (o.size > MAX_INDEX_BYTES) {
+      // Too large to load into memory safely; catalog it, skip text extraction (prevents OOM).
+      row.err = `oversize-skipped:${Math.round(o.size / 1e6)}MB>${MAX_INDEX_MB}MB`;
+      row.text_chars = 0; row.category = classify(o.name, "").category; row.title = basename(o.name);
+      rows.push(row); done.add(o.name); n++; since++;
+      if (since >= FLUSH_EVERY) { await flushCatalog(rows); since = 0; console.error(`  ...${n}/${todo.length} (oversize-skip ${row.path.slice(-48)})`); }
+      continue;
+    }
     try {
       const buf = await getBuf(o.name);
       if (!buf) { row.err = "missing"; }
@@ -455,19 +469,39 @@ async function aisPush(batch) {
   if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 220));
 }
 async function runSearchInit() { await aisInit(); await aisCreateIndex(); console.log(`Azure AI Search index ready: ${IDXNAME} (dims ${EMB_DIMS}, vectorizer ${AOAI_DEP})`); }
+async function aisExistingIds() {
+  // Resumability: collect ids already in the index so re-runs only push NEW docs. Without this,
+  // push-search re-embeds ALL docs every run, so a room too big to finish push-search in one
+  // window (finance: 16.6k docs) restarts from doc 1 each run and stays stuck at whatever a
+  // single window reaches. Paging $skip up to AI Search's 100k limit.
+  const ids = new Set();
+  for (let skip = 0; skip < 100000; skip += 1000) {
+    let r;
+    try { r = await fetch(`${AIS_EP}/indexes/${IDXNAME}/docs?api-version=${AIS_API}&$select=id&$top=1000&$skip=${skip}`, { headers: { "api-key": AIS_KEY } }); }
+    catch { break; }
+    if (!r.ok) break;
+    const v = (await r.json()).value || [];
+    for (const d of v) ids.add(d.id);
+    if (v.length < 1000) break;
+  }
+  return ids;
+}
 async function runPushSearch() {
   await aisInit(); await aisCreateIndex();
   const rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
-  console.error(`[push-search] ${rows.length} docs with text -> index ${IDXNAME}`);
-  let n = 0, buf = [];
+  const existing = REINDEX ? new Set() : await aisExistingIds(); // --reindex forces a full re-push
+  console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME}`);
+  let n = 0, skipped = 0, buf = [];
   for (const r of rows) {
+    const id = crypto.createHash("sha1").update(r.path).digest("hex");
+    if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
     let vec; try { vec = (await embed([(r.title + "\n" + txt).slice(0, 8000)]))[0]; } catch (e) { console.error("  embed fail " + r.path.slice(-40) + ": " + e.message); continue; }
-    buf.push({ "@search.action": "mergeOrUpload", id: crypto.createHash("sha1").update(r.path).digest("hex"), path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), content: txt.slice(0, 32000), material: !!r.material, contentVector: vec });
-    if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  pushed ${n}/${rows.length}`); }
+    buf.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), content: txt.slice(0, 32000), material: !!r.material, contentVector: vec });
+    if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  pushed ${n} (skip ${skipped})`); }
   }
   if (buf.length) { await aisPush(buf); n += buf.length; }
-  console.log(`pushed ${n} docs to Azure AI Search index ${IDXNAME}`);
+  console.log(`pushed ${n} new docs (${skipped} already present) to Azure AI Search index ${IDXNAME}`);
 }
 async function runCloudSearch(q) {
   if (!q) { console.error('usage: cloud-search "<query>"'); process.exit(2); }
