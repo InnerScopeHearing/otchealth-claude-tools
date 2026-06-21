@@ -1,3 +1,8 @@
+---
+name: shark-tank
+description: Pitch any business idea, app, product, or service to 5 AI twins of the well-known Shark Tank investors (Cuban, O'Leary, Greiner, Corcoran, John) and get a real Shark-Tank-style round. Each shark reacts in its own voice and deal style, rates it, decides in or out, and (if in) makes a concrete offer (equity, royalty, or loan), then a deal summary plus valuation range. INTERNAL AI SIMULATION ONLY (these are NOT the real people, produce NO real offers, and must NEVER be published or presented as a real endorsement). The same 5 sharks are also the investor seat inside focus-group-loop. Run it as a CLI script (node skills/shark-tank/shark-round.mjs pitch ...). Wielded by any agent pressure-testing an idea, and the CTO.
+---
+
 # shark-tank — AI-twin Shark Tank panel (standalone + the focus-group investor seat)
 
 Pitch ANY business idea, app, product, or service to 5 AI twins of the well-known Shark Tank

@@ -1,3 +1,8 @@
+---
+name: focus-group-loop
+description: Run a 20-persona focus group (10 demographic customers, 5 domain professionals, 5 AI-twin Shark Tank investors) against any app, website, or product, looped until all 3 groups average >= 90%. Personas review the ACTUAL rendered screenshots (catching real visual bugs, fonts, button alignment, text wrap, contrast), rate it out of 10, and answer their group's question (customers would-you-pay, professionals would-you-put-your-name-on-it, investors would-you-invest with a Shark-Tank offer). The professionals TEACH the builder the exact fixes. Each round is cataloged (--catalog) to the shared self-learning brain so a focus group on one app makes every app smarter. Use when an app needs an honest, looping product-quality gate. Run it as a CLI script (node skills/focus-group-loop/fgl.mjs round ...). Wielded by app-builder agents and the CTO.
+---
+
 # focus-group-loop — the autonomous "$10M-feel" product-improvement engine
 
 A reusable, fleet-wide loop that turns "is the app good?" into a measurable, looping signal and
