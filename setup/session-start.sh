@@ -48,6 +48,12 @@ for skdir in "${TOOLS_DIR}/skills/"*/; do
   cp -R "$skdir" "${SKILLS_DST}/${sk}"
 done
 
+# Record the commit the skills were installed from, so a long-running session can later detect it is
+# stale (origin/main moved on after it started). `octools-version.sh` compares this to origin/main.
+if git -C "$TOOLS_DIR" rev-parse HEAD >/dev/null 2>&1; then
+  git -C "$TOOLS_DIR" rev-parse HEAD > "${HOME}/.claude/.octools-installed-commit" 2>/dev/null || true
+fi
+
 # Designer carries Node deps (sharp). Skip if already present (warm cache).
 if [ -f "${DESIGNER_DST}/package.json" ] && [ ! -d "${DESIGNER_DST}/node_modules" ]; then
   echo "[octools] npm install (designer deps)..."
