@@ -83,3 +83,12 @@ The hooks are fail-safe: with no `KB_AGENT` they no-op (PreCompact prints a gene
   `clo` (company), never share to other agents, never commit to git.
 - CFO ledger is MNPI (INND material): it lives in the private finance store, not the shared commons.
 - Secrets never go in a ledger entry.
+
+## Semantic recall (vector) — `semantic.mjs`
+Keyword `recall` finds exact terms; **semantic recall** finds memories by MEANING, so a query
+like "how do we reconnect accounting software" surfaces the Xero re-consent pitfalls even with no
+shared keywords. Reuses the fleet's Azure AI Search + text-embedding-3-large (the data-room infra).
+Indexes ONLY the shared exec feed (`_MEMORY/_exec/*`), never a private or clo-personal lane.
+
+- `node skills/kb-memory/semantic.mjs reindex` - (re)build the `memory-exec` index (resumable; skips already-indexed). Run after a batch of new entries (or wire into the daily-digest job).
+- `node skills/kb-memory/semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall]` - vector + keyword (hybrid) recall across the whole exec team's memory.
