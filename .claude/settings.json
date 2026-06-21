@@ -72,6 +72,10 @@
           {
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/skills/kb-memory/kb-inject.sh\" stop"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/fleet-telemetry/telemetry.mjs\" session-end"
           }
         ]
       }
