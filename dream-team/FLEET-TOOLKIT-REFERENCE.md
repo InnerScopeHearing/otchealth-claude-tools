@@ -1,4 +1,4 @@
-# Fleet Toolkit Reference — the single source of truth (current 2026-06-14)
+# Fleet Toolkit Reference — the single source of truth (current 2026-06-21)
 
 Every capability available to an OTCHealth/InnerScope agent, mapped at the TOOL level so
 any future agent (including a fresh CTO) instantly knows what the toolkits are and how to
@@ -225,6 +225,27 @@ synthetics, $100k credit; site us3; PHI wall on MedReview/Companion until a Data
 `SKILLS-CAPABILITY-MAP.md`.) Plus QA sub-skills (api-qa, ios-qa, web-qa, static-qa,
 phi-compliance-qa, release-readiness, test-suite-runner, persona-focus-group(-buyers)) and the
 Capacitor/Ionic packs, available when their plugins/skills load.
+- **FLEET INTELLIGENCE + THE SHARED SUPER-BRAIN (use these first, every session):**
+  - **kb-memory** — the durable shared ledger that beats compaction. `mem.mjs remember|decision|
+    correct|pitfall|status|recall|team`; `semantic.mjs recall` (recall by MEANING); `reflect.mjs`
+    auto-extracts lessons at session end. RECALL before you assert; `--share` non-sensitive cross-team
+    facts. The source of truth.
+  - **company-brain** — `brain.mjs ask "<q>"`: one cited answer federated across every data room
+    (memory-exec, legal-company, finance, commerce, journal). The Billion Dollar Brain. Ask it before
+    researching. legal-personal excluded unless `--include-personal --agent clo`; answers are internal.
+  - **agent-evals** + **fleet-telemetry** — golden-task quality scoring + per-session LLM observability
+    into PostHog "Fleet Agents" 479484 (Fleet Intelligence #1).
+  - **focus-group-loop** + **shark-tank** — 20-persona product review (10 customers, 5 pros, 5 real
+    Shark-Tank AI twins) to a 90% gate; `--catalog` feeds the brain.
+  - **browser-agent** — hardened headless-Chromium for OAuth consents / signups / portal clicks
+    (autonomous on non-financial consents; hard gates stay human).
+  - **doc-indexer** + the data-room **librarians** — index/understand/push-search any document store
+    into Azure AI Search (the rooms the brain federates).
+  - **THE PROTOCOL:** `dream-team/SUPER-BRAIN-PROTOCOL.md` (the paste-ready onboarding prompt: stay
+    current via `setup/octools-version.sh` -> DRAW from the brain -> FEED write-through -> rings).
+    Model routing: `dream-team/MODEL-ROUTING.md`. Autonomy runners: `runbooks/overnight-autonomy.md`.
+- **Stay current:** a long-running session can run `bash /tmp/octools/setup/octools-version.sh` to
+  detect it is on stale toolkit code, and refresh.
 - **Expanding the toolkit:** `skills-discovery` lets any agent find expert skills it was
   not shipped with. The curated agent-by-agent shopping list (which registry skills to
   adopt for builders + the executive team, with risk tags + the vendor-not-npx adoption
