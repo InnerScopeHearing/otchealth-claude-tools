@@ -73,11 +73,14 @@ async function reviewPersona(p, group, pitch, screens, prior) {
 
 function avg(arr) { return arr.length ? arr.reduce((s, r) => s + (+r.rating || 0), 0) / arr.length : 0; }
 
-async function catalog(app, round, summary, topFixes) {
-  // cross-app learning: write the durable, GENERALIZABLE lessons to the shared brain (--share),
-  // which the memory-exec semantic index makes searchable by every app's agents.
+async function catalog(app, round, summary, d) {
+  // cross-app learning: write ALL THREE dimensions (customer + professional + investor) to the
+  // shared brain (--share), which the memory-exec semantic index makes searchable by every app's
+  // agents. So a focus group on one app teaches every builder what makes a product premium, what
+  // customers will pay for, and what investors fund.
   const mem = join(HERE, "..", "kb-memory", "mem.mjs");
-  const text = `Focus-Group-Loop ${app} round ${round}: groups ${summary}. TOP cross-app product lessons (from the pro panel): ${topFixes.slice(0, 5).join(" | ")}`;
+  const cut = (a) => (a || []).slice(0, 4).join(" | ");
+  const text = `Focus-Group-Loop ${app} R${round}: ${summary}. PRO TEACHING (premium-build, cross-app): ${cut(d.proFixes)}. CUSTOMERS want: ${cut(d.custAsks)}. INVESTOR concerns: ${cut(d.invConcerns)}.`;
   try { const { execFileSync } = await import("node:child_process"); execFileSync("node", [mem, "pitfall", text, "--agent", "focus-group", "--tags", `focus-group,${app},premium-ux`, "--share"], { stdio: "ignore" }); return true; } catch { return false; }
 }
 
@@ -121,7 +124,7 @@ async function runRound() {
   console.log(`\nPRIORITIZED CHANGE LIST (top 15, pro fixes first):`);
   changeList.slice(0, 15).forEach((c, i) => console.log(`  ${i + 1}. ${c}`));
   if (pass && invest.length) { console.log(`\nINVESTOR HEADLINE: ${invest.length}/5 offered. Best terms: ${invest.map(i => `$${i.amount_usd}/${i.equity_pct}%`).join(", ")}`); }
-  if (CATALOG) { const ok = await catalog(APP, ROUND, summary, proFixes); console.log(`\ncataloged to shared brain (cross-app learning): ${ok ? "yes" : "skipped"}`); }
+  if (CATALOG) { const custAsks = results.customers.flatMap(r => r.suggestions || []); const invConcerns = results.investors.flatMap(r => [...(r.feedback || []), ...(r.concerns || [])]); const ok = await catalog(APP, ROUND, summary, { proFixes, custAsks, invConcerns }); console.log(`\ncataloged to shared brain (customer + pro + investor, cross-app learning): ${ok ? "yes" : "skipped"}`); }
   console.log(`\nsaved: skills/focus-group-loop/results/${APP}-round-${ROUND}.json`);
   process.exit(pass ? 0 : 2); // exit 2 = not yet at 90% (loop continues)
 }
