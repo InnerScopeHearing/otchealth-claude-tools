@@ -34,7 +34,7 @@ async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/to
 
 let EP, KEY, DEP;
 async function initModel() { EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.FGL_MODEL || "gpt-4o"; if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key"); }
-async function ask(system, content, maxTokens = 900) {
+async function ask(system, content, maxTokens = 1600) {
   for (let a = 0; a < 5; a++) {
     const r = await fetch(`${EP}/openai/deployments/${DEP}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": KEY, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content }], max_tokens: maxTokens, temperature: 0.5 }) });
     if (r.status === 429) { await new Promise(s => setTimeout(s, 2000 * (a + 1))); continue; }
@@ -62,16 +62,25 @@ const GROUP_SPEC = {
 
 async function reviewPersona(p, group, pitch, screens, prior) {
   const spec = GROUP_SPEC[group];
-  const sys = `You are ${p.name}. ${p.brief}\nYou are in a product focus group for the app "${APP}". Be honest, specific, and demanding, you are helping build a 10-million-dollar-feeling product, so do not be polite for its own sake. ${group === "professionals" ? "Your job is to TEACH the builders: name exact defects and the exact fix." : ""}\nReturn ONLY compact JSON: ${spec.out}. rating is 0-10 (10 = premium, ship-ready, world-class).`;
+  const sys = `You are ${p.name}. ${p.brief}\nYou are in a product focus group for the app "${APP}". Be honest, specific, and demanding, you are helping build a 10-million-dollar-feeling product, so do not be polite for its own sake. ${group === "professionals" ? "Your job is to TEACH the builders: name exact defects and the exact fix." : ""}\nReturn ONLY compact JSON: ${spec.out}. Keep every array to AT MOST 4 short items so the JSON is never truncated. rating is 0-10 (10 = premium, ship-ready, world-class).`;
   const priorNote = prior && prior[p.id] ? `\n\nLAST ROUND you rated this ${prior[p.id].rating}/10 and raised: ${(prior[p.id].issues || prior[p.id].technical_issues || prior[p.id].feedback || []).slice(0, 4).join("; ")}. Note which of those were addressed this round and reflect that in your new rating.` : "";
   const content = [{ type: "text", text: `PITCH:\n${pitch}\n\nYou are now using the app. ${screens.length ? "The screenshots below are the ACTUAL screens, judge the real visual quality (alignment, typography, spacing, contrast, wrapping/overflow, broken or cheap-looking elements)." : "(No screenshots provided; review from the pitch + described flow.)"}${priorNote}\n\nYour group's required question: ${spec.question}` }, ...screens];
-  const out = await ask(sys, content);
-  const j = parseJson(out) || { rating: 0, _parse_fail: true };
+  let out = await ask(sys, content);
+  let j = parseJson(out);
+  // A truncated/invalid JSON must NOT hard-zero the persona (that silently poisoned the 90% gate:
+  // verbose personas blew the token cap, parsed to null, scored 0, and made the gate unreachable).
+  // Retry once with a bigger budget + a minified-only instruction; if it STILL fails, mark it a parse
+  // failure with rating=null so avg() EXCLUDES it (tooling noise) instead of scoring it 0 (product signal).
+  if (!j) { out = await ask(sys + "\nReturn ONLY minified JSON on a single line, no prose, no code fence.", content, 3000); j = parseJson(out); }
+  if (!j) j = { rating: null, _parse_fail: true };
   j.id = p.id; j.name = p.name; j.group = group;
   return j;
 }
 
-function avg(arr) { return arr.length ? arr.reduce((s, r) => s + (+r.rating || 0), 0) / arr.length : 0; }
+// Average over SCORED personas only: a parse failure (rating=null) is tooling noise and is excluded,
+// never counted as 0 (a 0 would silently poison the 90% gate, the exact bug this guards against).
+function avg(arr) { const v = arr.filter(r => !r._parse_fail && r.rating != null); return v.length ? v.reduce((s, r) => s + (+r.rating || 0), 0) / v.length : 0; }
+function parseFails(arr) { return arr.filter(r => r._parse_fail).length; }
 
 async function catalog(app, round, summary, d) {
   // cross-app learning: write ALL THREE dimensions (customer + professional + investor) to the
@@ -116,8 +125,10 @@ async function runRound() {
   const payload = { app: APP, round: ROUND, ts: new Date().toISOString(), avgs, pass, wouldPay, wouldAssoc, invest: invest.map(i => ({ name: i.name, amount_usd: i.amount_usd, equity_pct: i.equity_pct, valuation_usd: i.valuation_usd, terms: i.terms })), changeList, results, _byId: byId };
   writeFileSync(join(outDir, `${APP}-round-${ROUND}.json`), JSON.stringify(payload, null, 2));
 
+  const nFail = parseFails(results.customers) + parseFails(results.professionals) + parseFails(results.investors);
   console.log(`\n================ FOCUS GROUP LOOP — ${APP} ROUND ${ROUND} ================`);
   console.log(summary);
+  if (nFail) console.log(`(note: ${nFail} persona response(s) could not be parsed even after a retry and were EXCLUDED from the averages, not scored 0)`);
   console.log(`GATE (>=90% all groups): ${pass ? "PASSED -> ship-ready per the panel" : "NOT YET -> execute the change list and re-run"}`);
   console.log(`\nPER-PERSON:`);
   for (const g of ["customers", "professionals", "investors"]) for (const r of results[g]) console.log(`  [${g}] ${r.name}: ${r.rating}/10  ${g === "customers" ? (r.would_pay ? "would pay" : "would NOT pay") : g === "professionals" ? (r.would_associate ? "would put name on it" : "would NOT associate") : (r.would_invest ? `INVEST $${r.amount_usd} / ${r.equity_pct}% (val $${r.valuation_usd})` : "pass")}`);
