@@ -1,0 +1,59 @@
+# Overnight / unattended AGENT runner — the Tier-2 reference (Fleet Intelligence #4/#5).
+# Runs Claude Code HEADLESS on the Claude Max 20x SUBSCRIPTION (zero metered API spend), on a schedule
+# or on demand. See runbooks/overnight-autonomy.md (otchealth-cto) for the full standard.
+#
+# ONE setup step (Matt, once): `claude setup-token` -> paste the one-year token -> store it as the
+#   CLAUDE_CODE_OAUTH_TOKEN secret (repo or org). Until that secret exists this workflow is a no-op.
+# It is dispatch-only by default; uncomment the schedule to arm the nightly run.
+name: Overnight Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "The task prompt for the headless agent"
+        required: true
+        default: "Summarize what changed in this repo in the last 24h and open a draft PR with a short report."
+  # schedule:
+  #   - cron: "0 9 * * *"   # 09:00 UTC ~= 02:00 PT. Arm only after CLAUDE_CODE_OAUTH_TOKEN is set.
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    env:
+      # The Max-plan OAuth token (from `claude setup-token`). Subscription auth, NOT a metered key.
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — require the subscription token (never fall back to metered API)
+        run: |
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not set. Run 'claude setup-token' and add the secret. Refusing to run (would otherwise risk metered API spend)."
+            exit 1
+          fi
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run the agent task (subscription auth, zero metered spend)
+        env:
+          # Pass the task through an env var (never interpolate ${{ }} directly into the shell = injection-safe).
+          TASK: ${{ github.event.inputs.task }}
+        run: |
+          # ANTHROPIC_API_KEY takes precedence over the OAuth token; ensure it is unset so we stay on the Max plan.
+          unset ANTHROPIC_API_KEY
+          claude -p "$TASK" \
+            --permission-mode acceptEdits \
+            --output-format json | tee result.json
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overnight-agent-result
+          path: result.json
