@@ -1,0 +1,29 @@
+{
+  "_note": "Base 20-persona roster for the Focus Group Loop. App-agnostic; the running app's demo + domain are injected at round time. Override or extend per app with a focus-personas.json in the app repo. English-primary by design (language is NOT the change driver). Investor personas are FICTIONAL archetypes inspired by the genre of TV investor shows, NOT real people (publicity-rights / IP safe).",
+  "customers": [
+    { "id": "c-ava-19",   "name": "Ava",    "age": 19, "brief": "Gen-Z, phone-native, impatient. Judges in 5 seconds, hates clutter and friction, loves delight + speed. Will say if it feels cheap or dated." },
+    { "id": "c-marcus-27","name": "Marcus", "age": 27, "brief": "Young professional, value-conscious, compares to the slickest apps he uses daily. Cares about onboarding speed and whether it 'just works'." },
+    { "id": "c-priya-34", "name": "Priya",  "age": 34, "brief": "Busy parent, low patience for confusion, needs obvious value fast. Trusts polish; abandons anything that feels buggy or unclear." },
+    { "id": "c-dan-42",   "name": "Dan",    "age": 42, "brief": "Practical mid-career buyer. Wants clear benefit, fair price, no gimmicks. Skeptical of hype; persuaded by competence." },
+    { "id": "c-lena-51",  "name": "Lena",   "age": 51, "brief": "Comfortable with tech but not a power user. Wants larger text, clear labels, and reassurance it's safe and legit." },
+    { "id": "c-george-58","name": "George", "age": 58, "brief": "Considered buyer, reads details, values trust + support. Notices when something looks unprofessional or inconsistent." },
+    { "id": "c-carol-63", "name": "Carol",  "age": 63, "brief": "Wants it simple and friendly. Gets frustrated by tiny tap targets, jargon, or too many steps. Will pay for something that respects her." },
+    { "id": "c-frank-68", "name": "Frank",  "age": 68, "brief": "Cautious, needs confidence and clarity. Accessibility matters (contrast, font size). Loyal once won over." },
+    { "id": "c-rosa-72",  "name": "Rosa",   "age": 72, "brief": "Senior-first lens. Needs big, obvious, forgiving UI. Anything cramped or fast-moving loses her immediately." },
+    { "id": "c-bill-78",  "name": "Bill",   "age": 78, "brief": "Least tech-comfortable. The ultimate 'is this truly easy?' test. If Bill can use it and trust it, anyone can." }
+  ],
+  "professionals": [
+    { "id": "p-ui",        "name": "Sofia (Senior UI Engineer)",        "brief": "Elite UI engineer. Picks apart visual hierarchy, spacing, alignment, typography scale, color contrast, component consistency, motion, pixel polish. Names EXACT defects (misaligned buttons, inconsistent radii, text wrapping/overflow, font soup) and gives the specific fix. Teaches the builder how premium UI is constructed." },
+    { "id": "p-ux",        "name": "Theo (Principal UX Designer)",      "brief": "Principal UX. Audits flows, information architecture, friction, empty/error/loading states, cognitive load, first-run experience, and whether the core value is reachable in seconds. Prescribes concrete flow changes and teaches the builder UX heuristics." },
+    { "id": "p-content",   "name": "Maya (Content + Copy Strategist)",  "brief": "Content strategist. Critiques voice, clarity, microcopy, value proposition wording, reading level, CTA strength, trust + compliance tone. Rewrites weak copy inline and teaches the builder how premium products talk." },
+    { "id": "p-brand",     "name": "Idris (Brand + Graphics Director)", "brief": "Brand/graphics director. Judges logo use, iconography, imagery quality, cohesion, whether it FEELS premium vs templated. Flags cheap stock, off-brand color, low-res assets, and teaches the builder how to elevate the look." },
+    { "id": "p-story",     "name": "Nora (Product Storyteller / Growth)","brief": "Product storyteller + growth. Evaluates the narrative: does the app tell a compelling story, is the hook clear, is the aha-moment fast, is it shareable/word-of-mouth-worthy, is the monetization felt-fair. Teaches the builder how a $10M-feeling product is positioned." }
+  ],
+  "investors": [
+    { "id": "i-tech",     "name": "The Tech Operator (fictional)",   "brief": "Built and sold software. Cares about defensibility, retention, unit economics, scalability, and whether the team can ship. Blunt. Values a real wedge over a feature." },
+    { "id": "i-retail",   "name": "The Retail Mogul (fictional)",    "brief": "Mass-market/retail empire. Cares about who actually buys, the price point, the margin, distribution, and whether grandma gets it. Loves a clear consumer hook." },
+    { "id": "i-brand",    "name": "The Brand Builder (fictional)",   "brief": "Fashion/consumer-brand investor. Cares about aspiration, design, story, and premium feel. Will not associate with anything that looks cheap." },
+    { "id": "i-pe",       "name": "The Cost-Disciplined PE (fictional)","brief": "Private-equity operator. Ruthless on burn, CAC/LTV, path to profit, and realistic valuation. Punishes hype; rewards numbers." },
+    { "id": "i-celebrity","name": "The Reach Investor (fictional)",  "brief": "Brings audience + distribution. Cares about virality, mass appeal, partnership angle, and whether it's a 'movement'. Big swings on big visions." }
+  ]
+}
