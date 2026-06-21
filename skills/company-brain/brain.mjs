@@ -11,6 +11,7 @@
 //   node brain.mjs ask "<question>" [--rooms memory,legal,finance,commerce,journal] [--n 6] [--agent clo --include-personal]
 //   node brain.mjs rooms                      # list the indexes it can search
 import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
 const SM = "otchealth-shared-prod";
 const AIS_API = "2023-11-01";
 const argv = process.argv.slice(2);
@@ -19,7 +20,7 @@ const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] 
 const QUERY = argv.slice(1).filter((a, i, arr) => !a.startsWith("--") && !(i > 0 && arr[i - 1].startsWith("--"))).join(" ").trim();
 const PERK = parseInt(val("--n", "6"), 10) || 6;
 const AGENT = (val("--agent", "") || "").toLowerCase();
-const INCLUDE_PERSONAL = argv.includes("--include-personal") && AGENT === "clo";
+// The --include-personal privilege gate is enforced in selectRooms() (single source of truth).
 
 // room -> AI Search index. (Indexes built by doc-indexer per profile/container + kb-memory semantic.)
 const ROOMS = {
@@ -30,6 +31,17 @@ const ROOMS = {
   journal:  { index: "commons-company-journal",     label: "daily company journal + digests" },
 };
 const PERSONAL = { index: "legal-personal", label: "PRIVILEGED personal legal (CLO only)" };
+
+// The attorney-privilege wall, isolated as a PURE function so tests/brain-rooms.test.mjs can prove it
+// without any Azure call. legal-personal joins the target rooms ONLY when the caller is the CLO AND
+// explicitly passes --include-personal. Every other agent, and the flag without the clo agent, gets
+// the non-privileged rooms only. Single source of truth for room selection; no I/O here.
+export function selectRooms({ rooms = "", agent = "", includePersonal = false } = {}) {
+  const wanted = rooms ? rooms.split(",").map(s => s.trim()).filter(Boolean) : Object.keys(ROOMS);
+  const targets = wanted.filter(r => ROOMS[r]).map(r => ({ room: r, ...ROOMS[r] }));
+  if (includePersonal && String(agent).toLowerCase() === "clo") targets.push({ room: "personal", ...PERSONAL });
+  return targets;
+}
 
 function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
 async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
@@ -77,9 +89,7 @@ async function chat(system, user) {
 
 async function ask() {
   if (!QUERY) { console.error('ask "<question>"'); process.exit(2); }
-  const wanted = val("--rooms", "") ? val("--rooms", "").split(",").map(s => s.trim()) : Object.keys(ROOMS);
-  const targets = wanted.filter(r => ROOMS[r]).map(r => ({ room: r, ...ROOMS[r] }));
-  if (INCLUDE_PERSONAL) targets.push({ room: "personal", ...PERSONAL });
+  const targets = selectRooms({ rooms: val("--rooms", ""), agent: AGENT, includePersonal: argv.includes("--include-personal") });
   await init();
   const vec = await embed(QUERY);
   const all = [];
@@ -95,8 +105,13 @@ async function ask() {
   console.log(`\n--- grounded in ${top.length} sources across ${[...new Set(top.map(h => h.room))].join(", ")} ---`);
 }
 
-try {
-  if (cmd === "ask") await ask();
-  else if (cmd === "rooms") { console.log("Company-brain rooms (Azure AI Search indexes):"); for (const [k, v] of Object.entries(ROOMS)) console.log(`  ${k.padEnd(9)} ${v.index.padEnd(28)} ${v.label}`); console.log(`  personal  (CLO-only, --include-personal --agent clo) ${PERSONAL.label}`); }
-  else { console.error('usage: brain.mjs ask "<question>" [--rooms ...] [--n 6] | rooms'); process.exit(2); }
-} catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  (async () => {
+    try {
+      if (cmd === "ask") await ask();
+      else if (cmd === "rooms") { console.log("Company-brain rooms (Azure AI Search indexes):"); for (const [k, v] of Object.entries(ROOMS)) console.log(`  ${k.padEnd(9)} ${v.index.padEnd(28)} ${v.label}`); console.log(`  personal  (CLO-only, --include-personal --agent clo) ${PERSONAL.label}`); }
+      else { console.error('usage: brain.mjs ask "<question>" [--rooms ...] [--n 6] | rooms'); process.exit(2); }
+    } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+  })();
+}
