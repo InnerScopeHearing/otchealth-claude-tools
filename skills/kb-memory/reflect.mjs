@@ -22,11 +22,23 @@ const AGENT = (process.env.KB_AGENT || val("--agent", "") || "").toLowerCase();
 
 function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
 async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
-let EP, KEY, DEP;
-async function initModel() { EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.REFLECT_MODEL || "gpt-4o"; }
+let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
+async function initModel() {
+  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.REFLECT_MODEL || "gpt-4o";
+  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.REFLECT_FALLBACK_MODEL || "gpt-4.1-mini";
+}
+async function callChat(ep, key, dep, system, user, maxTokens, tries) {
+  for (let a = 0; a < tries; a++) {
+    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.3 }) });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
+    if (!r.ok) throw new Error("chat " + r.status); return (await r.json()).choices[0].message.content;
+  }
+  throw Object.assign(new Error("429"), { throttled: true });
+}
 async function ask(system, user, maxTokens = 700) {
-  const r = await fetch(`${EP}/openai/deployments/${DEP}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": KEY, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.3 }) });
-  if (!r.ok) throw new Error("chat " + r.status); return (await r.json()).choices[0].message.content;
+  // primary gpt-4o; fall back to the foundry deployment (separate quota) on sustained throttle (Fleet Intel #5)
+  try { return await callChat(EP, KEY, DEP, system, user, maxTokens, 4); }
+  catch (e) { if (e.throttled && FB_EP && FB_KEY) return await callChat(FB_EP, FB_KEY, FB_DEP, system, user, maxTokens, 5); throw e; }
 }
 
 // condense the transcript to the SIGNAL: user asks + assistant conclusions, tool noise dropped, capped
