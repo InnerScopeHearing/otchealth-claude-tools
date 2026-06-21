@@ -1,43 +1,62 @@
-# TODAY — the COO's directive (regenerate each morning; mark results through the day)
+# TODAY — COO directive for 2026-06-16 (Monday)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-16. Operating window: 9am-5pm PDT.
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+**Cash in bank: $1.41.** Burn ~$50K/mo. Runway: 0. Revenue since February: $0.
+Storage lien risk on the ~10,298-unit inventory ($2-3M). Treelake + Security Public Storage
+declining off the empty account every day. This is not a drill.
 
-## Today's 3 moves (do these, in order)
+## Calendar today
+- 8:30-11:30 AM PDT: Mindful Health Solutions (busy)
+- 11:30 AM - 5:00 PM: FREE
+- Tomorrow 9:00-9:30 AM: Plaid + OTCHealthMart intro (tentative, Gaby Sierra)
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
-- Report back: sent? to how many?
+## Today's 3 moves (free window: 11:30 AM on)
+
+### MOVE 1 (~30 min, ~12:00 PM) — Sign the Amazon TReO paperwork
+The Amazon TReO channel is built end-to-end. ~2,000 units stageable. ~$30+ net per unit at $50.
+The ONLY gate left is your signature on 3 PDFs.
+- Open otchealth-exec/cro/amazon/signing/ — three pre-filled PDFs are ready.
+- Sign them (digital or print-sign-scan).
+- Upload the commercial invoice to Amazon's brand approval / Apply-to-Sell form.
+- CRO fires the $50 singles listing same-day on approval.
 Status: [ ] not started
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
+### MOVE 2 (~20 min, ~1:00 PM) — Create Gumroad account + list the SOPs
+14 upload-ready SOP PDFs are done and waiting in otchealth-exec/coo/gumroad-launch/.
+The LAUNCH-RUNBOOK.md has the exact paste-in descriptions and prices.
+- Go to gumroad.com, create an OTCHealth account.
+- List each SOP at $49-149 with instant delivery.
+- Cash starts flowing in days, zero compliance gates.
 Status: [ ] not started
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
+### MOVE 3 (~45 min, ~2:00 PM) — Fix Shopify checkout (two confirmed blockers)
+The store has real traffic (~60 sessions/day) but 0 of 9 recent checkouts completed.
+TWO confirmed causes: (1) Stripe card payments not capturing on live orders, (2) US shipping
+profile missing on hearing-aid products. Both fixable in Shopify admin today.
+Fixing this unblocks Draft 141 (reactivation to 6,800+ warm contacts).
+- DISPATCH to CTO/Commerce (COO-29, already written) or fix yourself in Shopify admin:
+  (a) Test a real-card live purchase on TReO $99 funnel. Diagnose Stripe capture issue.
+  (b) Move iHEAR Matrix/Axis/Linx/CONNECT/STREAM/EAZE from "International Hearing
+      Amplifiers" shipping profile to the General profile (adds US rates).
+- Prove with one successful live test purchase. Then approve Draft 141.
 Status: [ ] not started
 
-## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+## Hard gate (do not skip)
+**Storage payments are failing.** Treelake (~$1,005/mo) + Security Public Storage (~$146/mo)
+hold your inventory. Fund or re-route TODAY. This is a lien/auction risk on the $2-3M pool.
 
-## Yesterday's results
-(none logged yet)
+## Don't send yet
+Draft 141 (reactivation email to 85K) — hold until Shopify checkout is proven live.
+Sending 6,800+ emails into a broken checkout wastes the most valuable warm-list send.
 
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+## Not a move today
+More tooling. The Plaid intro tomorrow is worth prepping for (payments infra?), but today
+is Sign + List + Fix.
+
+## Results (report back)
+Move 1: ___
+Move 2: ___
+Move 3: ___
+Storage: ___
