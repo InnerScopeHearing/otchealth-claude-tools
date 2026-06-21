@@ -84,11 +84,15 @@ async function catalog(app, round, summary, topFixes) {
 async function runRound() {
   const pf = val("--pitch", ""); const pitch = pf && existsSync(pf) ? readFileSync(pf, "utf8") : (val("--pitch-text", "") || `The app "${APP}".`);
   const roster = JSON.parse(readFileSync(val("--personas", join(HERE, "personas.json")), "utf8"));
+  // Investor seat = the SHARED Shark Tank roster (the same 5 AI-twin sharks as the standalone
+  // skills/shark-tank Shark Round). Single source of truth; falls back to personas.json investors.
+  let investors = roster.investors;
+  try { const sp = join(HERE, "..", "shark-tank", "sharks.json"); if (existsSync(sp)) { const sk = JSON.parse(readFileSync(sp, "utf8")); const sharks = sk.panel_default.map(id => sk.sharks.find(s => s.id === id)).filter(Boolean); if (sharks.length) investors = sharks; } } catch {}
   const prior = (() => { const f = val("--prior", ""); try { return f && existsSync(f) ? JSON.parse(readFileSync(f, "utf8"))._byId : null; } catch { return null; } })();
   const screens = loadScreens();
   await initModel();
   console.error(`[fgl] ${APP} round ${ROUND}: 20 personas on ${DEP}, ${screens.length} screenshot(s)${prior ? ", with prior-round memory" : ""}`);
-  const groups = { customers: roster.customers, professionals: roster.professionals, investors: roster.investors };
+  const groups = { customers: roster.customers, professionals: roster.professionals, investors };
   const results = {}; const byId = {};
   for (const [g, people] of Object.entries(groups)) {
     results[g] = [];
