@@ -10,6 +10,14 @@ test("avg EXCLUDES a parse-failed persona (never scores it 0) - guards the 90% g
   assert.equal(avg(rows), 9, "a parse failure must not drag a 9.0 group down to 6.0");
 });
 
+test("avg EXCLUDES an infra-errored persona (Azure 429 throttle), not just unparseable ones", () => {
+  // the exact shape runRound's catch now produces when a call throws after retry + fallback. This is
+  // what dragged PlantID's gate below 9.0 (9 throttled personas scored 0) while every responder was 9.2+.
+  const throttled = { rating: null, _parse_fail: true, _err: "chat 429 exhausted" };
+  assert.equal(avg([{ rating: 9 }, { rating: 9 }, throttled]), 9, "a throttled persona must not drag a 9.0 group to 6.0");
+  assert.equal(parseFails([{ rating: 9 }, throttled]), 1, "a throttled persona is counted among the excluded");
+});
+
 test("avg ignores null ratings even without the _parse_fail flag", () => {
   assert.equal(avg([{ rating: 8 }, { rating: null }]), 8);
 });
