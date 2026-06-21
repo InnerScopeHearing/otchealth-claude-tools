@@ -1,3 +1,8 @@
+---
+name: company-brain
+description: Ask the whole company one question and get a cited gpt-4o answer federated across every Azure AI Search room the fleet builds, agent lessons and decisions (memory-exec), the legal data room, the CFO finance room, the commerce room, and the company journal. The Billion Dollar Brain query layer, grounded across everything OTCHealth and InnerScope know. legal-personal (attorney-privileged) is EXCLUDED unless --include-personal --agent clo; non-PHI ring only; INND/securities content is MNPI and internal. Run it as a CLI script (node skills/company-brain/brain.mjs ask "<question>"). Use when you need an answer grounded in the company's own data rather than the open web. Wielded by every agent and by Matt.
+---
+
 # company-brain — ask the whole company one question, get a cited answer
 
 The Billion Dollar Brain query layer. Federates every Azure AI Search index the fleet builds, agent
