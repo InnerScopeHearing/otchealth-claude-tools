@@ -469,19 +469,39 @@ async function aisPush(batch) {
   if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 220));
 }
 async function runSearchInit() { await aisInit(); await aisCreateIndex(); console.log(`Azure AI Search index ready: ${IDXNAME} (dims ${EMB_DIMS}, vectorizer ${AOAI_DEP})`); }
+async function aisExistingIds() {
+  // Resumability: collect ids already in the index so re-runs only push NEW docs. Without this,
+  // push-search re-embeds ALL docs every run, so a room too big to finish push-search in one
+  // window (finance: 16.6k docs) restarts from doc 1 each run and stays stuck at whatever a
+  // single window reaches. Paging $skip up to AI Search's 100k limit.
+  const ids = new Set();
+  for (let skip = 0; skip < 100000; skip += 1000) {
+    let r;
+    try { r = await fetch(`${AIS_EP}/indexes/${IDXNAME}/docs?api-version=${AIS_API}&$select=id&$top=1000&$skip=${skip}`, { headers: { "api-key": AIS_KEY } }); }
+    catch { break; }
+    if (!r.ok) break;
+    const v = (await r.json()).value || [];
+    for (const d of v) ids.add(d.id);
+    if (v.length < 1000) break;
+  }
+  return ids;
+}
 async function runPushSearch() {
   await aisInit(); await aisCreateIndex();
   const rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
-  console.error(`[push-search] ${rows.length} docs with text -> index ${IDXNAME}`);
-  let n = 0, buf = [];
+  const existing = REINDEX ? new Set() : await aisExistingIds(); // --reindex forces a full re-push
+  console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME}`);
+  let n = 0, skipped = 0, buf = [];
   for (const r of rows) {
+    const id = crypto.createHash("sha1").update(r.path).digest("hex");
+    if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
     let vec; try { vec = (await embed([(r.title + "\n" + txt).slice(0, 8000)]))[0]; } catch (e) { console.error("  embed fail " + r.path.slice(-40) + ": " + e.message); continue; }
-    buf.push({ "@search.action": "mergeOrUpload", id: crypto.createHash("sha1").update(r.path).digest("hex"), path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), content: txt.slice(0, 32000), material: !!r.material, contentVector: vec });
-    if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  pushed ${n}/${rows.length}`); }
+    buf.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), content: txt.slice(0, 32000), material: !!r.material, contentVector: vec });
+    if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  pushed ${n} (skip ${skipped})`); }
   }
   if (buf.length) { await aisPush(buf); n += buf.length; }
-  console.log(`pushed ${n} docs to Azure AI Search index ${IDXNAME}`);
+  console.log(`pushed ${n} new docs (${skipped} already present) to Azure AI Search index ${IDXNAME}`);
 }
 async function runCloudSearch(q) {
   if (!q) { console.error('usage: cloud-search "<query>"'); process.exit(2); }
