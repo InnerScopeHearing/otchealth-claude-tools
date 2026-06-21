@@ -26,6 +26,7 @@
 // if chromium was installed into node_modules. Non-PHI ring only.
 import { readFileSync, mkdirSync, appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import crypto from "node:crypto";
 
 const SM = "otchealth-shared-prod";
@@ -33,14 +34,18 @@ const argv = process.argv.slice(2);
 const cmd = argv[0];
 
 // ---- hard-gate + 2FA signals (case-insensitive). A hit STOPS the run. ----------------------------
-const HARD_GATE = /\b(card number|cvv|cvc|credit card|debit card|payment method|billing address|routing number|bank account number|social security|ssn\b|date of birth|driver.?s? licen|passport number|docusign|adobe sign|sign here|e-?signature|i agree and sign|notariz)\b/i;
-const TWOFA = /\b(verification code|one[- ]time (code|passcode)|2-step|two[- ]factor|authenticator app|approve (this )?(sign|request) on your|enter the code|we (sent|texted) you a code|security code)\b/i;
+// Exported (with `allowed` below) so tests/browser-gates.test.mjs can assert the unattended-consent
+// rails directly: payment/KYC/e-sign copy -> HARD_GATE, OTP/2FA copy -> TWOFA, off-allowlist host -> refuse.
+export const HARD_GATE = /\b(card number|cvv|cvc|credit card|debit card|payment method|billing address|routing number|bank account number|social security|ssn\b|date of birth|driver.?s? licen|passport number|docusign|adobe sign|sign here|e-?signature|i agree and sign|notariz)\b/i;
+export const TWOFA = /\b(verification code|one[- ]time (code|passcode)|2-step|two[- ]factor|authenticator app|approve (this )?(sign|request) on your|enter the code|we (sent|texted) you a code|security code)\b/i;
 
 function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
 async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) throw new Error(`secret ${id} -> ${r.status}`); return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 
 const hostOf = (u) => { try { return new URL(u).host.toLowerCase(); } catch { return ""; } };
-const allowed = (host, allowlist) => allowlist.some(a => host === a.toLowerCase() || host.endsWith("." + a.toLowerCase()));
+// Domain-allowlist rail: exact host match OR a true sub-domain (the "." prefix prevents
+// notxero.com from matching xero.com, the suffix-confusion trap). Exported + pure.
+export const allowed = (host, allowlist) => allowlist.some(a => host === a.toLowerCase() || host.endsWith("." + a.toLowerCase()));
 
 function schema() {
   console.log(`browser-agent flow spec (JSON):
@@ -170,8 +175,13 @@ async function run() {
   process.exit(result.status === "OK" ? 0 : (result.status === "HARD_GATE" || result.status === "TWOFA_GATE") ? 3 : 1);
 }
 
-try {
-  if (cmd === "run") await run();
-  else if (cmd === "schema") schema();
-  else { console.error('usage: browser.mjs run <flow.json> | schema'); process.exit(2); }
-} catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  (async () => {
+    try {
+      if (cmd === "run") await run();
+      else if (cmd === "schema") schema();
+      else { console.error('usage: browser.mjs run <flow.json> | schema'); process.exit(2); }
+    } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+  })();
+}

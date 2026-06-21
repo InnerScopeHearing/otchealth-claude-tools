@@ -14,19 +14,20 @@ to bottom, one draft PR per item, run `bash run-tests.sh` before each commit.
   `if (import.meta.url === \`file://\${process.argv[1]}\`) { /* CLI dispatch */ }` and `export` the pure
   functions. This changes NO runtime behavior.
 
-## P1 — test the gate-integrity + ring-safety logic shipped this week
-1. **focus-group-loop `fgl.mjs`**: main-guard + export `avg`, `parseFails`, `parseJson`. Test: a
-   parse-failed persona (`{_parse_fail:true, rating:null}`) is EXCLUDED from `avg` (not scored 0); `avg`
-   of `[9,9,null-failed]` is 9, not 6; `parseJson` strips a ```json fence and trailing prose.
-   (Guards the bug that made the 90% gate unreachable.)
-2. **company-brain `brain.mjs`**: export the room-selection logic. Test: with no flags, `legal-personal`
-   is NOT in the target rooms; only `--include-personal --agent clo` includes it; any other agent with
-   `--include-personal` still excludes it. (Guards the attorney-privilege wall.)
-3. **browser-agent**: extend `selftest.mjs` (or add a unit test) for the HARD_GATE / TWOFA regexes
-   directly: assert "Card number"+"CVV", "SSN", "DocuSign", "routing number" match HARD_GATE; "enter the
-   verification code" matches TWOFA; ordinary copy does not. (Guards the unattended-consent safety rails.)
-4. **kb-memory `semantic.mjs`**: export `docId`. Test it is stable + collision-safe
-   (`agent__id` sanitized) so reindex never duplicates or collides.
+## P1 — test the gate-integrity + ring-safety logic shipped this week — DONE (PR claude/harden-p1-gate-tests)
+All four landed as pure-function exports behind an ESM main-guard (importing a skill no longer fires its
+CLI) plus `tests/*.test.mjs`. `bash run-tests.sh` = 110 tests green. No runtime behavior changed.
+1. DONE **focus-group-loop `fgl.mjs`**: exported `avg`/`parseFails`/`parseJson`; `tests/fgl.test.mjs`
+   proves a parse-failed persona is EXCLUDED from `avg` (`[9,9,null-failed]` -> 9, not 6) and `parseJson`
+   strips a ```json fence + trailing prose. (Guards the bug that made the 90% gate unreachable.)
+2. DONE **company-brain `brain.mjs`**: extracted the room selection into a pure `selectRooms()` (now the
+   single source of the privilege wall); `tests/brain-rooms.test.mjs` proves `legal-personal` is reachable
+   ONLY by `--agent clo --include-personal`, and that naming `personal` in `--rooms` cannot smuggle it in.
+3. DONE **browser-agent**: exported `HARD_GATE`/`TWOFA`/`allowed`; `tests/browser-gates.test.mjs` asserts
+   payment/KYC/e-sign -> HARD_GATE, OTP/2FA -> TWOFA, ordinary/OAuth-consent copy does NOT trip, and the
+   allowlist rejects suffix-confusion (`notxero.com`, `xero.com.evil.com`).
+4. DONE **kb-memory `semantic.mjs`**: exported `docId`; `tests/semantic-docid.test.mjs` proves it is
+   deterministic (idempotent reindex), Azure-key-charset-safe, and collision-free for realistic pairs.
 
 ## P2 — fleet resilience (Fleet Intelligence #5: model routing)
 5. Port the company-brain primary->fallback chat routing (gpt-4o -> foundry gpt-4.1-mini, separate quota)

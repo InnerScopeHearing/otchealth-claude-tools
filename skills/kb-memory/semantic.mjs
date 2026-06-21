@@ -13,6 +13,7 @@
 //   node semantic.mjs reindex                 # (re)build the memory-exec index from the exec feed (resumable: skips already-indexed)
 //   node semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall]
 import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
 const SM = "otchealth-shared-prod";
 const IDX = "memory-exec";
 const AIS_API = "2023-11-01";
@@ -118,7 +119,10 @@ async function readExecFeed() {
   }
   return entries;
 }
-const docId = (agent, id) => `${agent}__${id}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
+// Azure AI Search doc keys allow only [A-Za-z0-9_\-=]; this joins agent + entry id with `__` and
+// sanitizes the rest so reindex is idempotent (same entry -> same key -> mergeOrUpload, never a dup).
+// Exported for tests/semantic-docid.test.mjs (stability + key-charset safety). Pure.
+export const docId = (agent, id) => `${agent}__${id}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
 
 async function reindex() {
   await init(); await ensureIndex();
@@ -153,8 +157,13 @@ async function recall() {
   for (const h of hits) console.log(`[${h.agent}] [${h.type}] ${(h.ts || "").slice(0, 10)} (score ${(h["@search.score"] || 0).toFixed(3)})\n  ${(h.text || "").slice(0, 320)}${h.tags ? `\n  tags: ${h.tags}` : ""}\n`);
 }
 
-try {
-  if (cmd === "reindex") await reindex();
-  else if (cmd === "recall") await recall();
-  else { console.error('usage: semantic.mjs reindex | recall "<query>" [--n 12] [--agent x] [--type pitfall]'); process.exit(2); }
-} catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  (async () => {
+    try {
+      if (cmd === "reindex") await reindex();
+      else if (cmd === "recall") await recall();
+      else { console.error('usage: semantic.mjs reindex | recall "<query>" [--n 12] [--agent x] [--type pitfall]'); process.exit(2); }
+    } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+  })();
+}

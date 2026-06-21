@@ -17,7 +17,7 @@
 // Model: Azure OpenAI gpt-4o (vision-capable, credit-funded). Set FGL_MODEL to override.
 import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -150,5 +150,15 @@ async function runRound() {
   process.exit(pass ? 0 : 2); // exit 2 = not yet at 90% (loop continues)
 }
 
-try { if (cmd === "round") await runRound(); else { console.error('usage: fgl.mjs round --app <name> --pitch <file> [--screens <dir>] [--round N] [--prior <json>] [--catalog]'); process.exit(2); } }
-catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+// Pure scoring helpers are exported so tests/fgl.test.mjs can assert the gate-integrity invariant
+// (a parse-failed persona is EXCLUDED from the average, never scored 0) without spinning up a real
+// 20-persona run. The CLI dispatch below is main-guarded, so importing this file is side-effect-free.
+export { avg, parseFails, parseJson };
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  (async () => {
+    try { if (cmd === "round") await runRound(); else { console.error('usage: fgl.mjs round --app <name> --pitch <file> [--screens <dir>] [--round N] [--prior <json>] [--catalog]'); process.exit(2); } }
+    catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+  })();
+}
