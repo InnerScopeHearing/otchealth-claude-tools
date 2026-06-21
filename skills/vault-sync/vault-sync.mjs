@@ -1,13 +1,13 @@
 import { readFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os'; import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 const REPO=resolve(dirname(fileURLToPath(import.meta.url)),'..','..');
 const NV='2022-06-28';
 const d=mkdtempSync(join(tmpdir(),'vault-'));
-const sec=(id)=>{const f=join(d,id);execSync(`node ${REPO}/setup/get-secret.mjs ${id} ${f}`,{stdio:'ignore'});return readFileSync(f,'utf8').trim();};
+const sec=(id)=>{const f=join(d,id);execFileSync('node',[`${REPO}/setup/get-secret.mjs`,id,f],{stdio:'ignore'});return readFileSync(f,'utf8').trim();};
 const NK=sec('notion-api-key');
 const DB=(process.env.VAULT_DB_ID||sec('notion-vault-db-id')).replace(/-/g,'');
 const sa=JSON.parse(readFileSync(`${process.env.HOME}/.gcp_claude_driver_sa.json`,'utf8'));
