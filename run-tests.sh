@@ -7,6 +7,16 @@ ROOT="$(cd -- "$(dirname -- "$0")" && pwd)"
 cd "$ROOT"
 fail=0; ran=0
 
+echo "== syntax gate (node --check on every skill .mjs) =="
+syntax_bad=0
+while IFS= read -r f; do
+  if ! node --check "$f" 2>/tmp/synerr; then
+    echo "  SYNTAX ERROR: $f"; sed 's/^/    /' /tmp/synerr | head -3; syntax_bad=$((syntax_bad+1)); fail=1
+  fi
+done < <(find skills setup -path '*/node_modules' -prune -o -name '*.mjs' -print 2>/dev/null | sort)
+[ "$syntax_bad" -eq 0 ] && echo "  ok (all .mjs parse)" || echo "  ${syntax_bad} file(s) with syntax errors"
+ran=$((ran+1))
+
 echo "== node:test files (*.test.mjs) =="
 mapfile -t TESTS < <(find . -path './node_modules' -prune -o -path '*/node_modules' -prune -o -name '*.test.mjs' -print 2>/dev/null | sort)
 if [ "${#TESTS[@]}" -gt 0 ]; then
