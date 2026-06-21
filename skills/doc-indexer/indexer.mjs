@@ -65,6 +65,12 @@ const SM = "otchealth-shared-prod";
 const CATALOG_KEY = "_CATALOG/catalog.jsonl";
 const INDEX_KEY = "_CATALOG/index.sqlite";
 const TEXT_PREFIX = "_TEXT/";
+// Oversize guard: getBuf() loads each file fully into memory, so a multi-hundred-MB file
+// (videos, installers, archives, image-only decks) OOM-kills the indexer container and, under
+// `set -e`, kills the whole librarian run BEFORE understand/push-search. Such files carry no
+// document text anyway. Catalog them but skip extraction. Override with MAX_INDEX_MB.
+const MAX_INDEX_MB = parseInt(process.env.MAX_INDEX_MB || "200", 10);
+const MAX_INDEX_BYTES = MAX_INDEX_MB * 1024 * 1024;
 const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/"]; // our own artifacts
 const MAXTEXT = 400000; // chars persisted per doc
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -315,6 +321,14 @@ async function runIndex() {
     if (LIMIT && n >= LIMIT) break;
     const ext = extname(o.name).toLowerCase();
     const row = { path: o.name, backend: BACKEND, ext: ext.replace(".", ""), size: o.size, mtime: o.mtime, entity: entityOf(o.name), ts: new Date().toISOString() };
+    if (o.size > MAX_INDEX_BYTES) {
+      // Too large to load into memory safely; catalog it, skip text extraction (prevents OOM).
+      row.err = `oversize-skipped:${Math.round(o.size / 1e6)}MB>${MAX_INDEX_MB}MB`;
+      row.text_chars = 0; row.category = classify(o.name, "").category; row.title = basename(o.name);
+      rows.push(row); done.add(o.name); n++; since++;
+      if (since >= FLUSH_EVERY) { await flushCatalog(rows); since = 0; console.error(`  ...${n}/${todo.length} (oversize-skip ${row.path.slice(-48)})`); }
+      continue;
+    }
     try {
       const buf = await getBuf(o.name);
       if (!buf) { row.err = "missing"; }
