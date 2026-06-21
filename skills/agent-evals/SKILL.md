@@ -1,3 +1,8 @@
+---
+name: agent-evals
+description: Golden-task evaluation harness for the agent fleet. For each golden task it runs an agent persona (Azure OpenAI gpt-4o, credit-funded) to produce an answer, scores it with an LLM-as-judge against an explicit rubric, prints a scorecard, and (with --emit) sends eval_result events to the PostHog Fleet Agents project. Use to measure agent quality, gate it in CI, and catch quality regressions across roles (CTO/CFO/CLO). Part of Fleet Intelligence #1. Non-PHI ring; tasks and outputs carry no PHI/MNPI.
+---
+
 # agent-evals — golden-task eval harness for the agent fleet
 
 Measures agent quality and catches regressions. For each golden task: run the agent's persona on
