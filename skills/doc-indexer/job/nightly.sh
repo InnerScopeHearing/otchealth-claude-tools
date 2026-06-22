@@ -16,4 +16,9 @@ node "$ROOT/skills/cfo-store/store.mjs" --azure --account otchealthcommons --key
 echo "[nightly] indexing into the commons KB"
 node "$ROOT/skills/doc-indexer/indexer.mjs" index --no-ocr --profile commons --azure
 node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --azure
-echo "[nightly] done: $DATE digest indexed + cloud-searchable"
+echo "[nightly] refreshing the company-brain memory index (memory-exec)"
+# Keep the Billion Dollar Brain's agent-memory index fresh: embed any new shared exec-feed
+# entries (lessons, decisions, focus-group/shark catalog) into memory-exec. Resumable + cheap
+# when nothing is new. The dedicated brain-reindex job runs this every 6h; this is the nightly belt.
+node "$ROOT/skills/kb-memory/semantic.mjs" reindex || echo "[nightly] memory reindex non-fatal: $?"
+echo "[nightly] done: $DATE digest indexed + cloud-searchable + brain memory refreshed"

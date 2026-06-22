@@ -1,0 +1,99 @@
+# Timed AUTONOMOUS RUN — on-demand, time-boxed headless agent on the Claude Max plan.
+# Matt triggers this (from the GitHub mobile app, or asks the CTO to dispatch it) saying "run for N
+# minutes on <task>". It loops a headless `claude -p` agent for that window, opening DRAFT PRs as it
+# goes, then stops. Zero metered API spend (subscription auth). See otchealth-cto/runbooks/overnight-autonomy.md.
+#
+# SETUP (one time): Matt runs `claude setup-token` and the CTO stores it as the CLAUDE_CODE_OAUTH_TOKEN
+# secret. That is the ONLY secret this runner gets. LEAST PRIVILEGE on purpose: an unattended
+# auto-approving agent never receives the master fleet credentials; it works only in this repo with the
+# repo-scoped GITHUB_TOKEN, opening draft PRs.
+name: Autonomous Run (timed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "What the agent should work on (the goal)"
+        required: true
+      minutes:
+        description: "How long to run, in minutes (max 345)"
+        required: true
+        default: "90"
+      # The agent works in THIS workflow's repo (least privilege). To advance a specific app, deploy
+      # this workflow into that app's repo and trigger it there.
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # Hard backstop so a runaway never exceeds GitHub's 6h ceiling; the loop deadline is the real control.
+    timeout-minutes: 350
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      # LEAST PRIVILEGE (deliberate): an unattended auto-approving agent does NOT get the master fleet
+      # credentials. It runs with only Claude auth + the repo's own scoped GITHUB_TOKEN (contents +
+      # pull-requests write, this repo only). It cannot read Secret Manager or touch other repos
+      # unattended. To work on a specific app, deploy this workflow into that app's repo (its
+      # GITHUB_TOKEN then scopes to it). Do not inject broad credentials here.
+      TASK: ${{ github.event.inputs.task }}
+      MINUTES: ${{ github.event.inputs.minutes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard - require the subscription token (never metered)
+        run: |
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN not set. Run 'claude setup-token' and add the secret."
+            exit 1
+          fi
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Timed autonomous loop (subscription auth, draft PRs only)
+        run: |
+          set +e
+          unset ANTHROPIC_API_KEY   # OAuth token must win, never fall back to the metered API
+          MIN=$(printf '%s' "$MINUTES" | tr -cd '0-9'); [ -z "$MIN" ] && MIN=90; [ "$MIN" -gt 345 ] && MIN=345
+          END=$(( $(date +%s) + MIN*60 ))
+          echo "Autonomous run: ${MIN} minutes, until $(date -u -d @${END} +%H:%M:%SZ). Goal: ${TASK}"
+
+          # Hard rails handed to the agent every iteration (kept in a file so it is injection-safe).
+          cat > /tmp/rails.txt <<'RAILS'
+          You are running UNATTENDED while the operator is away (a timed autonomous run). Make steady,
+          SAFE progress and COMMIT FREQUENTLY so nothing is lost. HARD RULES:
+          1. Work ONLY on claude/* branches and open or update DRAFT pull requests. NEVER push to main.
+          2. NEVER touch PHI / MedReview data, financial writes to the INND or HearingAssist books, or
+             securities / INND investor-relations content. Stay in the non-PHI, non-financial-write lane.
+          3. STOP at any payment, KYC, account-login, or e-signature gate. Do not attempt them.
+          4. Prefer small reversible changes. Run the relevant tests/build BEFORE you commit.
+          5. Each step: make ONE self-contained improvement toward the goal, run its tests, commit on a
+             claude/* branch, update a draft PR, and briefly note what you did and what is next.
+          6. If you complete the goal, do useful adjacent cleanup (tests, docs) or stop cleanly.
+          RAILS
+          RAILS_TEXT="$(cat /tmp/rails.txt)"
+
+          CONT=""
+          n=0
+          while [ "$(date +%s)" -lt "$END" ]; do
+            n=$((n+1)); REM=$(( (END - $(date +%s)) / 60 ))
+            echo "::group::iteration ${n} (~${REM} min left)"
+            PROMPT="GOAL: ${TASK}
+          You are working in THIS repository (you have write access to it only). This is iteration ${n};
+          about ${REM} minutes remain in this autonomous run.
+          ${RAILS_TEXT}"
+            claude -p "$PROMPT" $CONT --permission-mode acceptEdits --output-format json 2>&1 | tee -a /tmp/run.jsonl
+            CONT="--continue"
+            sleep 3
+          done
+          echo "Autonomous run complete after ${n} iteration(s)."
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autonomous-run-log
+          path: /tmp/run.jsonl

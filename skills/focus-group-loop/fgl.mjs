@@ -17,7 +17,7 @@
 // Model: Azure OpenAI gpt-4o (vision-capable, credit-funded). Set FGL_MODEL to override.
 import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -32,16 +32,26 @@ const CATALOG = argv.includes("--catalog");
 function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
 async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 
-let EP, KEY, DEP;
-async function initModel() { EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.FGL_MODEL || "gpt-4o"; if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key"); }
-async function ask(system, content, maxTokens = 900) {
-  for (let a = 0; a < 5; a++) {
-    const r = await fetch(`${EP}/openai/deployments/${DEP}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": KEY, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content }], max_tokens: maxTokens, temperature: 0.5 }) });
-    if (r.status === 429) { await new Promise(s => setTimeout(s, 2000 * (a + 1))); continue; }
+let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
+async function initModel() {
+  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.FGL_MODEL || "gpt-4o";
+  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.FGL_FALLBACK_MODEL || "gpt-4.1-mini";
+  if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key");
+}
+async function callChat(ep, key, dep, system, content, maxTokens, tries) {
+  for (let a = 0; a < tries; a++) {
+    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content }], max_tokens: maxTokens, temperature: 0.5 }) });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 140));
     return (await r.json()).choices[0].message.content;
   }
-  throw new Error("chat 429 exhausted");
+  throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
+}
+async function ask(system, content, maxTokens = 1600) {
+  // primary gpt-4o (vision); fall back to the foundry gpt-4.1-mini deployment (separate quota, also
+  // vision-capable) on sustained throttle so the autonomous QA loop never stalls (Fleet Intel #5).
+  try { return await callChat(EP, KEY, DEP, system, content, maxTokens, 5); }
+  catch (e) { if (e.throttled && FB_EP && FB_KEY) return await callChat(FB_EP, FB_KEY, FB_DEP, system, content, maxTokens, 5); throw e; }
 }
 function parseJson(s) { try { return JSON.parse(s.match(/\{[\s\S]*\}/)[0]); } catch { return null; } }
 
@@ -62,16 +72,28 @@ const GROUP_SPEC = {
 
 async function reviewPersona(p, group, pitch, screens, prior) {
   const spec = GROUP_SPEC[group];
-  const sys = `You are ${p.name}. ${p.brief}\nYou are in a product focus group for the app "${APP}". Be honest, specific, and demanding, you are helping build a 10-million-dollar-feeling product, so do not be polite for its own sake. ${group === "professionals" ? "Your job is to TEACH the builders: name exact defects and the exact fix." : ""}\nReturn ONLY compact JSON: ${spec.out}. rating is 0-10 (10 = premium, ship-ready, world-class).`;
+  const sys = `You are ${p.name}. ${p.brief}\nYou are in a product focus group for the app "${APP}". Be honest, specific, and demanding, you are helping build a 10-million-dollar-feeling product, so do not be polite for its own sake. ${group === "professionals" ? "Your job is to TEACH the builders: name exact defects and the exact fix." : ""}\nReturn ONLY compact JSON: ${spec.out}. Keep every array to AT MOST 4 short items so the JSON is never truncated. rating is 0-10 (10 = premium, ship-ready, world-class).`;
   const priorNote = prior && prior[p.id] ? `\n\nLAST ROUND you rated this ${prior[p.id].rating}/10 and raised: ${(prior[p.id].issues || prior[p.id].technical_issues || prior[p.id].feedback || []).slice(0, 4).join("; ")}. Note which of those were addressed this round and reflect that in your new rating.` : "";
   const content = [{ type: "text", text: `PITCH:\n${pitch}\n\nYou are now using the app. ${screens.length ? "The screenshots below are the ACTUAL screens, judge the real visual quality (alignment, typography, spacing, contrast, wrapping/overflow, broken or cheap-looking elements)." : "(No screenshots provided; review from the pitch + described flow.)"}${priorNote}\n\nYour group's required question: ${spec.question}` }, ...screens];
-  const out = await ask(sys, content);
-  const j = parseJson(out) || { rating: 0, _parse_fail: true };
+  let out = await ask(sys, content);
+  let j = parseJson(out);
+  // A truncated/invalid JSON must NOT hard-zero the persona (that silently poisoned the 90% gate:
+  // verbose personas blew the token cap, parsed to null, scored 0, and made the gate unreachable).
+  // Retry once with a bigger budget + a minified-only instruction; if it STILL fails, mark it a parse
+  // failure with rating=null so avg() EXCLUDES it (tooling noise) instead of scoring it 0 (product signal).
+  if (!j) { out = await ask(sys + "\nReturn ONLY minified JSON on a single line, no prose, no code fence.", content, 3000); j = parseJson(out); }
+  if (!j) j = { rating: null, _parse_fail: true };
   j.id = p.id; j.name = p.name; j.group = group;
   return j;
 }
 
-function avg(arr) { return arr.length ? arr.reduce((s, r) => s + (+r.rating || 0), 0) / arr.length : 0; }
+// Average over SCORED personas only. A persona that could not produce a rating is TOOLING NOISE and is
+// EXCLUDED, never counted as 0: either the model returned unparseable JSON (_parse_fail), or the call
+// threw even after retry + fallback (an Azure OpenAI 429/throttle -> the runRound catch sets rating=null
+// + _parse_fail). A 0 would silently poison the 90% gate (throttled infra reading as "the product scored
+// 0", which is exactly what dragged PlantID's gate below 9.0 while every responding persona was 9.2+).
+function avg(arr) { const v = arr.filter(r => !r._parse_fail && r.rating != null); return v.length ? v.reduce((s, r) => s + (+r.rating || 0), 0) / v.length : 0; }
+function parseFails(arr) { return arr.filter(r => r._parse_fail).length; }
 
 async function catalog(app, round, summary, d) {
   // cross-app learning: write ALL THREE dimensions (customer + professional + investor) to the
@@ -99,7 +121,10 @@ async function runRound() {
   const results = {}; const byId = {};
   for (const [g, people] of Object.entries(groups)) {
     results[g] = [];
-    for (const p of people) { process.stderr.write(`  ${p.name}... `); let r; try { r = await reviewPersona(p, g, pitch, screens, prior); } catch (e) { r = { id: p.id, name: p.name, group: g, rating: 0, _err: e.message }; } results[g].push(r); byId[p.id] = r; process.stderr.write(`${r.rating}/10\n`); }
+    // An UNCAUGHT call failure (e.g. Azure OpenAI 429 exhausted even after the foundry fallback) is an
+    // INFRA error, not a product score. Mark it excluded (rating=null + _parse_fail) so avg() drops it,
+    // exactly like an unparseable response, instead of scoring the product 0 and poisoning the gate.
+    for (const p of people) { process.stderr.write(`  ${p.name}... `); let r; try { r = await reviewPersona(p, g, pitch, screens, prior); } catch (e) { r = { id: p.id, name: p.name, group: g, rating: null, _parse_fail: true, _err: e.message }; } results[g].push(r); byId[p.id] = r; process.stderr.write(`${r.rating == null ? `excluded (${r._err ? "infra error" : "parse"})` : `${r.rating}/10`}\n`); }
   }
   const avgs = { customers: avg(results.customers), professionals: avg(results.professionals), investors: avg(results.investors) };
   const pass = Object.values(avgs).every(a => a >= PASS);
@@ -116,11 +141,13 @@ async function runRound() {
   const payload = { app: APP, round: ROUND, ts: new Date().toISOString(), avgs, pass, wouldPay, wouldAssoc, invest: invest.map(i => ({ name: i.name, amount_usd: i.amount_usd, equity_pct: i.equity_pct, valuation_usd: i.valuation_usd, terms: i.terms })), changeList, results, _byId: byId };
   writeFileSync(join(outDir, `${APP}-round-${ROUND}.json`), JSON.stringify(payload, null, 2));
 
+  const nFail = parseFails(results.customers) + parseFails(results.professionals) + parseFails(results.investors);
   console.log(`\n================ FOCUS GROUP LOOP — ${APP} ROUND ${ROUND} ================`);
   console.log(summary);
+  if (nFail) console.log(`(note: ${nFail} persona response(s) could not be scored - unparseable output or an Azure OpenAI throttle that survived retry + fallback - and were EXCLUDED from the averages, NOT scored 0. Raise the gpt-4o TPM quota or re-run to score them.)`);
   console.log(`GATE (>=90% all groups): ${pass ? "PASSED -> ship-ready per the panel" : "NOT YET -> execute the change list and re-run"}`);
   console.log(`\nPER-PERSON:`);
-  for (const g of ["customers", "professionals", "investors"]) for (const r of results[g]) console.log(`  [${g}] ${r.name}: ${r.rating}/10  ${g === "customers" ? (r.would_pay ? "would pay" : "would NOT pay") : g === "professionals" ? (r.would_associate ? "would put name on it" : "would NOT associate") : (r.would_invest ? `INVEST $${r.amount_usd} / ${r.equity_pct}% (val $${r.valuation_usd})` : "pass")}`);
+  for (const g of ["customers", "professionals", "investors"]) for (const r of results[g]) console.log(`  [${g}] ${r.name}: ${r.rating == null ? "n/a (excluded)" : `${r.rating}/10`}  ${r.rating == null ? "" : g === "customers" ? (r.would_pay ? "would pay" : "would NOT pay") : g === "professionals" ? (r.would_associate ? "would put name on it" : "would NOT associate") : (r.would_invest ? `INVEST $${r.amount_usd} / ${r.equity_pct}% (val $${r.valuation_usd})` : "pass")}`);
   console.log(`\nPRIORITIZED CHANGE LIST (top 15, pro fixes first):`);
   changeList.slice(0, 15).forEach((c, i) => console.log(`  ${i + 1}. ${c}`));
   if (pass && invest.length) { console.log(`\nINVESTOR HEADLINE: ${invest.length}/5 offered. Best terms: ${invest.map(i => `$${i.amount_usd}/${i.equity_pct}%`).join(", ")}`); }
@@ -129,5 +156,15 @@ async function runRound() {
   process.exit(pass ? 0 : 2); // exit 2 = not yet at 90% (loop continues)
 }
 
-try { if (cmd === "round") await runRound(); else { console.error('usage: fgl.mjs round --app <name> --pitch <file> [--screens <dir>] [--round N] [--prior <json>] [--catalog]'); process.exit(2); } }
-catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+// Pure scoring helpers are exported so tests/fgl.test.mjs can assert the gate-integrity invariant
+// (a parse-failed persona is EXCLUDED from the average, never scored 0) without spinning up a real
+// 20-persona run. The CLI dispatch below is main-guarded, so importing this file is side-effect-free.
+export { avg, parseFails, parseJson };
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  (async () => {
+    try { if (cmd === "round") await runRound(); else { console.error('usage: fgl.mjs round --app <name> --pitch <file> [--screens <dir>] [--round N] [--prior <json>] [--catalog]'); process.exit(2); } }
+    catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+  })();
+}

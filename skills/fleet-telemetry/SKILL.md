@@ -1,3 +1,8 @@
+---
+name: fleet-telemetry
+description: Agent LLM observability into PostHog. Parses a Claude Code session transcript and emits per-session telemetry (cost, tokens, model, tool usage, errors, duration per agent) plus $ai_generation events to the PostHog Fleet Agents project (479484), the $50k-credit observability lane (not Datadog). Turns the agent fleet from a black box into a measurable system. Wire it as an auto Stop hook. Part of Fleet Intelligence #1. Non-PHI ring; metadata only, never prompt/response contents or PHI/MNPI.
+---
+
 # fleet-telemetry — agent LLM observability into PostHog
 
 Emits per-session agent telemetry to the **PostHog "Fleet Agents" project (479484)** , the

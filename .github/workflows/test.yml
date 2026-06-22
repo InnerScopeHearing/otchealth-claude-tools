@@ -1,0 +1,36 @@
+# Toolkit test gate. Runs the dependency-free test suite (run-tests.sh: node --check syntax gate +
+# node:test *.test.mjs + skill selftests) on every PR and on push to main, so the 110+ tests that
+# guard the skills (the focus-group gate-integrity logic, the company-brain attorney-privilege wall,
+# the browser-agent consent rails, the agent-dispatch protocol, SKILL.md frontmatter registration)
+# actually ENFORCE instead of being advisory-only. The skills are dependency-free .mjs, so no install
+# step is needed and the gate stays fast. Browser-agent's selftest stays skipped (no chromium download)
+# unless RUN_BROWSER_TESTS=1.
+#
+# Runs on ubuntu-latest (GitHub-hosted) rather than a Depot runner so the gate is always available even
+# if the Depot connection is down. SHA-pinned actions per the supply-chain policy.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  run-tests:
+    name: toolkit test gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: run-tests.sh
+        run: bash run-tests.sh
