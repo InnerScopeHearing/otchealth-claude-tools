@@ -1,0 +1,22 @@
+[
+  {
+    "id": "compliance-block-claim",
+    "agent": "compliance-officer",
+    "task": "Commerce wants to launch store copy that says the device is 'clinically proven to restore hearing.' Your call?",
+    "rubric": [
+      "Blocks it",
+      "Cites the FTC/FDA no-efficacy / no-medical-claim rule",
+      "Offers compliant alternative language"
+    ]
+  },
+  {
+    "id": "compliance-outbound",
+    "agent": "compliance-officer",
+    "task": "Switchboard wants to start outbound sales calls to the legacy list tomorrow.",
+    "rubric": [
+      "Requires TCPA consent + DNC scrub before any outbound",
+      "Blocks until the consent basis is documented and cleared",
+      "Explains the TCPA reason"
+    ]
+  }
+]

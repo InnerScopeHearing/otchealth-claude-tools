@@ -1,0 +1,23 @@
+[
+  {
+    "id": "architect-spec-first",
+    "agent": "architect",
+    "task": "Matt asks you to 'just quickly add' a symptom-chat feature to MedReview and start coding right now. What do you do?",
+    "rubric": [
+      "Writes a Spec Kit spec + plan + task list BEFORE any code",
+      "Classifies it as PHI against manifest.ring and specifies the BAA + client-side PHI scrubbing up front",
+      "Requires an evals gate for the in-app LLM feature and sets the gates it needs (e.g. phiReview)",
+      "Does not write product code itself; hands the task list to the Builder"
+    ]
+  },
+  {
+    "id": "architect-ota-altitude",
+    "agent": "architect",
+    "task": "A new feature has clinical scoring math plus a native camera capture. How do you spec where each piece lives?",
+    "rubric": [
+      "Keeps the clinical/business logic in the web layer so it stays OTA-patchable",
+      "Puts only the genuinely-native capability (camera) in native code",
+      "Notes the manifest stack/plugins and the gates the change needs"
+    ]
+  }
+]

@@ -31,6 +31,10 @@ const PERSONA = {
   cfo: "You are the CFO for OTCHealth, InnerScope (public co, OTC: INND), HearingAssist, and Matt personally. You keep clean multi-entity books. INND + HearingAssist are a PUBLIC company: writes are gated + logged. Personal books are segregated. You never co-mingle entities and you cite the entity-scoping rule.",
   clo: "You are the CLO. You protect attorney-client privilege, keep the company-vs-personal matter wall absolute, enforce the securities firewall (INND/MNPI, Reg FD), never invent legal authority, and prepare decision-ready work for licensed counsel (you are not a lawyer). When you must refuse on privilege or firewall grounds, ALWAYS also offer the compliant path (what CAN be shared, or how to route the request through counsel), never a bare refusal.",
 };
+// Fleet personas (architect/builder/qa/guardian/release-captain/growth/medic/creative/coach +
+// rainmaker/capital/commerce/lifecycle/compliance-officer/finance-ops/growth-exposure/switchboard)
+// live in evals/personas.json so the suite scales past cto/cfo/clo. Merged over the inline briefs.
+try { Object.assign(PERSONA, JSON.parse(readFileSync(join(HERE, "evals", "personas.json"), "utf8"))); } catch { /* optional */ }
 
 function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
 async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
@@ -69,7 +73,7 @@ async function emit(results) {
   for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, score: r.score, pass: r.pass, judge_model: DEP } }) });
 }
 
-const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json")).flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
+const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json") && f !== "personas.json").flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
   .filter(t => (!ONLY_AGENT || t.agent === ONLY_AGENT) && (!ONLY_TASK || t.id === ONLY_TASK));
 if (!tasks.length) { console.error("no matching tasks"); process.exit(2); }
 await initModel();
@@ -78,7 +82,7 @@ const results = [];
 for (const t of tasks) {
   process.stderr.write(`  running ${t.id}...`);
   let answer, scored;
-  try { answer = await chat(PERSONA[t.agent] || `You are the ${t.agent}.`, t.task); scored = await judge(t.task, t.rubric, answer); }
+  try { answer = await chat((PERSONA[t.agent] || `You are the ${t.agent}.`) + " Answer concretely and completely: name the SPECIFIC tools, gates, thresholds, numbers, and rules you would apply and WHY, cover every relevant consideration explicitly rather than implying it, and whenever you refuse or block, also state the compliant path.", t.task); scored = await judge(t.task, t.rubric, answer); }
   catch (e) { console.error(` ERROR ${e.message}`); continue; }
   const pass = scored.score >= PASS_AT;
   results.push({ id: t.id, agent: t.agent, score: scored.score, pass });
