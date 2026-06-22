@@ -25,6 +25,11 @@ const DRY = flag("--dry");
 // segregated, non-brain-federated store (e.g. the legal PERSONAL container) where the whole point is to
 // move ALL sensitive content faithfully and the container's own access control is the protection.
 const NOSCRUB = flag("--no-scrub");
+// --no-confidential-scrub: keep the secret-VALUE scrub, drop the confidential-MARKER quarantine. For a
+// restricted destination that IS still brain-federated internally (the legal `company` / MNPI container):
+// confidential is the norm there so do not quarantine on it, but raw secret values must never reach any
+// indexed store, even an internal one.
+const NO_CONF_SCRUB = flag("--no-confidential-scrub");
 
 // Ring -> destination. Operational goes to the shared commons (indexed into the brain). MNPI + personal
 // go to the legal store's restricted/personal containers (ring-correct; NOT the shared commons).
@@ -35,6 +40,20 @@ const DEST = {
 };
 if (!DEST[RING]) { console.error(`RING must be one of ${Object.keys(DEST).join(", ")} (PHI-HOLD/CREDENTIALS are handled separately).`); process.exit(2); }
 const D = DEST[RING];
+
+// SECURITY: scrub relaxations are GATED BY RING so a relaxation can never fail-open into a
+// brain-indexed store. --no-scrub (drops the secret-value scrub too) is allowed ONLY for the legal
+// `personal` container, which is fully segregated and never federated into the company brain.
+// --no-confidential-scrub (keeps the secret-value scrub) is allowed for restricted rings but never for
+// OPERATIONAL, which feeds the shared commons / brain.
+if (NOSCRUB && RING !== "PERSONAL-PRIVILEGED") {
+  console.error(`refusing --no-scrub for RING=${RING}: only PERSONAL-PRIVILEGED (segregated, non-brain-federated) may bypass the secret-value scrub. Use --no-confidential-scrub if you only mean to keep confidential content.`);
+  process.exit(2);
+}
+if (NO_CONF_SCRUB && RING === "OPERATIONAL") {
+  console.error(`refusing --no-confidential-scrub for OPERATIONAL: it feeds the shared commons / brain index and must keep full scrubbing.`);
+  process.exit(2);
+}
 
 // ---- Secret Manager (claude-driver SA) ----
 function saJwt(scope) {
@@ -161,9 +180,9 @@ const SECRET_PATTERNS = [
   /(client[_\s-]?secret|secret[_\s-]?key|refresh[_\s-]?token|access[_\s-]?token|api[_\s-]?key|password)["'\s:=]{1,6}[A-Za-z0-9._\/+=-]{20,}/i, // secret-word = long value
 ];
 const CONFIDENTIAL = /\b(never commit|do not (share|distribute|commit)|attorney[-\s]client privilege|privileged (and|&) confidential)\b/i;
-function scrubFind(text) {
+function scrubFind(text, confidential = true) {
   for (const re of SECRET_PATTERNS) if (re.test(text)) return "secret-value:" + (re.source.slice(0, 28));
-  if (CONFIDENTIAL.test(text)) return "confidential-marker";
+  if (confidential && CONFIDENTIAL.test(text)) return "confidential-marker";
   return null;
 }
 
@@ -204,28 +223,26 @@ async function exportDb(o) {
   const doneIds = new Set();                         // resume by unique 32-hex id, not by slug
   for (const n of done) { const m = n.match(/[0-9a-f]{32}/); if (m) doneIds.add(m[0]); }
   let okPages = 0, okDbs = 0, rowsTot = 0, skipped = 0, errs = 0, heldN = 0;
-  const held = [];
+  const held = [], bypassed = [];
+  const relaxed = NOSCRUB || NO_CONF_SCRUB;
   for (const o of items) {
     const idHex = o.id.replace(/-/g, "");
     const base = `${D.prefix}/${o.type === "database" ? "db" : "page"}-${idHex}-${slug(o.title)}`;
     if (doneIds.has(idHex)) { skipped++; continue; }
     try {
       if (DRY) { console.log(`  would export [${o.type}] ${o.title}`); continue; }
-      if (o.type === "database") {
-        const { md, jsonl, count } = await exportDb(o);
-        const hit = NOSCRUB ? null : scrubFind(`${o.title}\n${md}\n${jsonl.slice(0, 40000)}`);
-        if (hit) { held.push({ id: o.id, title: o.title, type: o.type, reason: hit }); heldN++; console.log(`  [HELD db] ${o.title} (${hit})`); continue; }
-        await bPut(`${base}.md`, md); await bPut(`${base}.rows.jsonl`, jsonl, "application/x-ndjson");
-        okDbs++; rowsTot += count; console.log(`  [db] ${o.title} (${count} rows)`);
-      } else {
-        const md = await exportPage(o);
-        const hit = NOSCRUB ? null : scrubFind(`${o.title}\n${md}`);
-        if (hit) { held.push({ id: o.id, title: o.title, type: o.type, reason: hit }); heldN++; if (heldN % 10 === 0) console.log(`  ...${heldN} held`); continue; }
-        await bPut(`${base}.md`, md); okPages++;
-        if (okPages % 100 === 0) console.log(`  ...${okPages} pages exported`);
-      }
+      let md, jsonl, count = 0;
+      if (o.type === "database") ({ md, jsonl, count } = await exportDb(o)); else md = await exportPage(o);
+      const scanText = `${o.title}\n${md}${jsonl ? "\n" + jsonl.slice(0, 40000) : ""}`;
+      const hit = NOSCRUB ? null : scrubFind(scanText, !NO_CONF_SCRUB);
+      if (hit) { held.push({ id: o.id, title: o.title, type: o.type, reason: hit }); heldN++; if (o.type === "database") console.log(`  [HELD db] ${o.title} (${hit})`); else if (heldN % 10 === 0) console.log(`  ...${heldN} held`); continue; }
+      // AUDIT: even when scrubbing is relaxed, record what the FULL scrub WOULD have caught (no content).
+      if (relaxed) { const w = scrubFind(scanText, true); if (w) bypassed.push({ id: o.id, title: o.title, type: o.type, reason: w }); }
+      if (o.type === "database") { await bPut(`${base}.md`, md); await bPut(`${base}.rows.jsonl`, jsonl, "application/x-ndjson"); okDbs++; rowsTot += count; console.log(`  [db] ${o.title} (${count} rows)`); }
+      else { await bPut(`${base}.md`, md); okPages++; if (okPages % 100 === 0) console.log(`  ...${okPages} pages exported`); }
     } catch (e) { errs++; console.error(`  ERR ${o.type} ${o.title}: ${e.message}`); }
   }
   if (held.length) await bPut(`${D.prefix}/_HELD/held-${RING.toLowerCase()}.jsonl`, held.map((h) => JSON.stringify(h)).join("\n") + "\n", "application/x-ndjson");
-  console.log(`[notion-export] DONE ring=${RING}: ${okPages} pages, ${okDbs} dbs (${rowsTot} rows), QUARANTINED ${heldN} (secret/confidential), skipped ${skipped}, errors ${errs}`);
+  if (bypassed.length) await bPut(`${D.prefix}/_HELD/scrub-bypassed-${RING.toLowerCase()}.jsonl`, bypassed.map((h) => JSON.stringify(h)).join("\n") + "\n", "application/x-ndjson");
+  console.log(`[notion-export] DONE ring=${RING}: ${okPages} pages, ${okDbs} dbs (${rowsTot} rows), QUARANTINED ${heldN}, scrub-relaxed-but-flagged ${bypassed.length}, skipped ${skipped}, errors ${errs}`);
 })().catch((e) => { console.error("FATAL", e.message); process.exit(1); });
