@@ -75,10 +75,14 @@ Matt via Outlook/calendar. The COO gives 1-3 moves, never a wall; takes results;
 - **Own mailbox:** coo@innd.com (display name "Chief Operating Officer"). Outsiders
   experience a real ops person.
 - **Heartbeat:** hourly nudge email (9-5 M-F PT) + daily calendar block. n8n
-  `KzhxslBIB12QcKuW`.
-- **Hands (n8n primitives the COO calls):** `COO: Send Email` (`shpRZibsI81XfJiJ`),
-  `COO: Create Meeting` (`ZFkox8gT5vdEKk2Z`), `COO: Read Calendar` next 7 days
-  (`xL0VYbElD15ttqKw`).
+  `PY3phgZL2adfitfE` (webhook path: `coo-heartbeat`).
+- **Hands (n8n primitives the COO calls):** use webhook paths, not workflow IDs, for
+  production calls. `COO: Send Email` — workflow `jt4RVnYHI83EsOX9`, webhook
+  `POST /webhook/coo-send-email`. `COO: Create Meeting` — workflow `28XO4EuN11LYx4yh`,
+  webhook `POST /webhook/coo-create-meeting`. `COO: Read Calendar` next 7 days — workflow
+  `PR3fEnWKJcxXyqES`, webhook `POST /webhook/coo-read-calendar`. (IDs corrected
+  2026-06-17; old IDs shpRZibsI81XfJiJ / ZFkox8gT5vdEKk2Z / xL0VYbElD15ttqKw were
+  stale from the June 9 setup and returned 404.)
 - **Task backbone:** the "COO Tasks" Notion database; every action is logged there.
 - **Calendar is two-way:** Matt adds events so the COO sees his real constraints; the COO
   reads them before planning and books focused blocks only in free slots.

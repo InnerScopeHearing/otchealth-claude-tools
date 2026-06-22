@@ -3,24 +3,29 @@
 Ranked by cash impact x speed x "only Matt can do it." The COO pulls today's 1-3 moves
 from the top of this list. Update status as items complete.
 
-## NOW (this week — first dollars)
-1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
-   today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
-3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
-   connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
-4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
-   securities firewall). Rebuild the cadence you dropped. [open]
+## NOW (this week — first dollars) — updated 2026-06-17
+0. **FUND STORAGE PAYMENTS TODAY** — Treelake (~$1,005/mo) + Security Public Storage
+   (~$146/mo) declining on empty Mercury. Lien risk on $2-3M inventory. Wire ~$1,151 to
+   Mercury before COB. [Matt-only, URGENT]
+1. **Sign 3 Amazon TReO PDFs** — docs staged in otchealth-exec/cro/amazon/signing/.
+   Upload to Amazon Apply-to-Sell. TReO is a PSAP, no FDA gate. First-dollar path. [Matt, 30 min]
+2. **Decide on Draft 141** — Shopify checkout broken (0/9 orders). Pick: fix checkout then
+   send, or redirect send to Amazon/Gumroad offer. 8 days overdue. [Matt decision]
+3. **Launch the Gumroad SOP store.** Content ready (COO-2 In Progress). Matt creates
+   Gumroad account + lists. First dollars in days. [Matt, open]
+4. **Stripe connected (confirmed 2026-06-10). FDA OTC Establishment Registration** is the
+   ONLY remaining gate on the $2-3M inventory pool. File at FDA FURLS (~$10K, <2wk). [Matt-only]
 
 ## THIS WEEK (protect + unlock)
-5. **HARD GATE - Rotate the GCP SA + PostHog all-access keys** (treat as compromised
-   until rotated). The COO must surface this as a **prerequisite that BLOCKS any
-   investor-facing or public action**, not a standing reminder. [Matt]
-6. **Verify/remove the unverified Intercom admin account** (identity in the private
-   "COO - Confidential" note). [Matt, security]
-7. **Engage securities counsel** for the INND capital chain + the Reg D + litigation
-   disclosure. Gates the raise. [Matt-only]
+5. **HARD GATE - 8 secrets found in InnerScopeHearing GitHub repos** (COO-44, 2026-06-17).
+   Rotate all exposed credentials. Blocks any investor/public action. [Matt, urgent]
+6. **HARD GATE - 28 live secrets in otchealth-ops n8n exports** (COO-28). Rotate Azure
+   AD/Graph client secret first (mailbox access, PHI-adjacent). [Matt]
+7. **HARD GATE - Rotate GCP SA + PostHog all-access keys + COO fire token** (COO-4, COO-5).
+   All three pasted in chat, treat as compromised. [Matt]
+8. **Verify/remove the unverified Intercom admin account** (COO-6). [Matt, security]
+9. **Engage securities counsel** for the INND capital chain + Reg D + litigation disclosure.
+   Gates the raise. [Matt-only]
 
 ## IN MOTION (parallel, longer)
 8. **Reg D 506(c) outreach** to accredited contacts (counsel-approved every word).
