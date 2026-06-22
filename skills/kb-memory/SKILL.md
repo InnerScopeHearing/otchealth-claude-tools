@@ -65,11 +65,19 @@ claude-driver SA, exactly like doc-indexer. The owning room's librarian also ind
 ledger is cloud-searchable.
 
 ## Session integration (hooks — see .claude/settings.json + kb-inject.sh)
-Set `KB_AGENT=<agent>` in the session/repo, then:
-- **SessionStart** injects the agent's `tail` (pitfalls + recent facts) so the session wakes holding the truth.
-- **PreCompact** fires right before the window compacts and reminds the agent to persist any unsaved facts NOW (the precise anti-truncation backstop).
+The hooks resolve WHICH agent's ledger to use per SESSION, most-specific signal wins. A single shared
+`KB_AGENT` env var CANNOT label multiple agents that share ONE cloud environment (CTO/CFO/CLO/COO all
+run in the same Claude Code environment, so one env var would mis-home all but one). Resolution order:
+  1. `~/.claude/.kb-agent`             session-local marker  -- claim per session: `mkdir -p ~/.claude && echo cfo > ~/.claude/.kb-agent`
+  2. `$CLAUDE_PROJECT_DIR/.kb-agent`   repo default          -- one app repo = one agent (commit it)
+  3. `$KB_AGENT` (env)                 shared-environment fallback (only reliable in a single-agent env)
+A marker / repo default WINS over the shared env var, and a mismatch is SURFACED (not silently honored).
+- **SessionStart** injects the resolved agent's `tail` (pitfalls + recent facts) so the session wakes holding the truth.
+- **PreCompact** reminds the agent to persist unsaved facts right before the window compacts.
 - **Stop** reminds to flush before ending.
-The hooks are fail-safe: with no `KB_AGENT` they no-op (PreCompact prints a generic reminder).
+Fail-safe: if NO agent resolves (no marker, no repo file, `KB_AGENT` unset) SessionStart warns LOUDLY
+(set `KB_MEMORY_OPTOUT=1` to silence a deliberately memory-less session). **Shared-environment rule:**
+each exec session claims its identity with the marker; per-app repos carry a committed `.kb-agent`.
 
 ## The discipline (the SOP, enforced by the hooks + each agent's CLAUDE.md)
 1. **Wake:** read `tail`, then `recall` the topic. Reconstruct, don't recall.
