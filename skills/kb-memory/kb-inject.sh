@@ -12,7 +12,22 @@ MEM="${CLAUDE_PROJECT_DIR:-.}/skills/kb-memory/mem.mjs"
 
 case "$MODE" in
   session)
-    [ -z "$AG" ] && exit 0
+    if [ -z "$AG" ]; then
+      # KB_AGENT unset => working memory is OFF (no ledger recall, no write-through). This is the
+      # silent-disable that bit the CFO: memory was off and nobody noticed for a long time. Warn LOUDLY
+      # instead of exiting quietly. A session that genuinely wants no memory sets KB_MEMORY_OPTOUT=1.
+      [ -n "${KB_MEMORY_OPTOUT:-}" ] && exit 0
+      echo "================================ WORKING MEMORY IS OFF ================================"
+      echo "KB_AGENT is not set, so this session will NOT recall from or write to any persistent ledger."
+      echo "Long sessions compact and WILL silently forget facts, decisions, and corrections."
+      echo "FIX: set KB_AGENT for this session/environment to your role (e.g. cfo, clo, cto, coo) so the"
+      echo "     SessionStart/PreCompact/Stop hooks persist + recall memory, then restart the session."
+      echo "     - Web/managed env: add KB_AGENT to the environment's variable config."
+      echo "     - Local/shell:     export KB_AGENT=<role> before launching Claude Code."
+      echo "(Intentionally running without memory? set KB_MEMORY_OPTOUT=1 to silence this notice.)"
+      echo "======================================================================================"
+      exit 0
+    fi
     echo "===== WORKING MEMORY: ${AG} ledger (SOURCE OF TRUTH - read before trusting recall) ====="
     node "$MEM" tail --agent "$AG" --n 30 2>/dev/null || { echo "(kb-memory unavailable this session)"; exit 0; }
     echo ""

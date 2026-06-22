@@ -54,6 +54,55 @@ jobs:
             --permission-mode acceptEdits \
             --output-format json | tee result.json
 
+      # SAFETY NET: persist whatever the agent left even if it never ran git itself, so an unattended
+      # overnight run can never silently discard its work. Captures uncommitted changes (and local
+      # commits) onto a claude/* branch and opens a DRAFT PR. NEVER pushes to the default branch.
+      - name: Persist agent work to a draft PR (safety net)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+          DEFAULT_BRANCH: ${{ github.ref_name }}
+          TASK: ${{ github.event.inputs.task || 'Summarize what changed in this repo in the last 24h and open a draft PR with a short report.' }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin --quiet || true
+
+          DIRTY=0; [ -n "$(git status --porcelain)" ] && DIRTY=1
+          AHEAD=$(git rev-list --count "origin/${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)
+          if [ "$DIRTY" = "0" ] && [ "$AHEAD" = "0" ]; then
+            echo "No agent work to persist (clean working tree, no new commits)."; exit 0
+          fi
+
+          PUSHED_ELSEWHERE=$(git branch -r --contains HEAD 2>/dev/null | sed 's/^[ *]*//' \
+            | grep '^origin/' | grep -v "^origin/${DEFAULT_BRANCH}$" | head -1 || true)
+          if [ "$DIRTY" = "0" ] && [ -n "$PUSHED_ELSEWHERE" ]; then
+            echo "Agent already pushed HEAD to ${PUSHED_ELSEWHERE}; safety net not needed."; exit 0
+          fi
+
+          BRANCH="claude/overnight-${RUN_ID}"
+          git checkout -B "$BRANCH"
+          if [ "$DIRTY" = "1" ]; then
+            git add -A
+            git commit -m "overnight run ${RUN_ID}: capture agent work" \
+              -m "Auto-captured at the end of the overnight run so nothing is lost. Task: ${TASK}"
+          fi
+          git push -u origin "$BRANCH"
+
+          if gh pr view "$BRANCH" >/dev/null 2>&1; then
+            echo "Draft PR already exists for ${BRANCH}."
+          else
+            gh pr create --draft --base "$DEFAULT_BRANCH" --head "$BRANCH" \
+              --title "Overnight run ${RUN_ID}: $(printf '%s' "$TASK" | head -c 60)" \
+              --body "Automated draft PR capturing the work of overnight run [\`${RUN_ID}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}).
+
+          **Task:** ${TASK}
+
+          Unattended subscription-auth run. Review before merge." || echo "PR create skipped (may already exist)."
+          fi
+
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
