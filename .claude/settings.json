@@ -56,6 +56,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "OCTOOLS_DIR=\"$CLAUDE_PROJECT_DIR\" bash \"$CLAUDE_PROJECT_DIR/setup/octools-sync.sh\""
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [

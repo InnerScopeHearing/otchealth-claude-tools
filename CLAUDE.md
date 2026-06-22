@@ -41,6 +41,20 @@ assume unless the user says otherwise.
   `recall`/`team` automatically surface the whole exec team's status + shared facts, so everyone has the
   company-wide picture. Rings hold: only explicit status/--share leaves a lane (keep non-sensitive);
   `clo-personal` is never shared. Full SOP: `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`.
+- **Staying current: the shared layer is LIVE-PULLED, not cloned-once (Matt directive 2026-06-22).** The
+  fix for fleet fragmentation ("the CTO changes something and the other agents are not connected to it"):
+  `setup/octools-sync.sh` (a **UserPromptSubmit hook**) auto-refreshes `/tmp/octools` from claude-tools
+  `main` mid-session, so when the CTO merges a change EVERY running agent picks it up on its NEXT prompt,
+  no restart and no lost context. `main` is the single source of truth; stale branches do not matter
+  because agents re-pull main continuously. The auto-reset is throttled + `/tmp`-guarded (it never resets
+  a real working checkout). Fleet-affecting changes are ANNOUNCED in `FLEET-BULLETIN.md`
+  (`node setup/bulletin.mjs add "<line>"`, then commit + push): it travels WITH the toolkit so a change
+  and its announcement propagate atomically, and every agent's octools-sync + session-start surfaces the
+  entries it has not seen (`bulletin.mjs since`). Topology stays as-is on purpose: per-app repos stay
+  SEPARATE (independent CI / secrets / release cadence / App Store identity), and the brain + the
+  live-synced toolkit are what make them coherent, NOT a monorepo and NOT an extra app-manager repo
+  (claude-tools already IS the shared manager/brain layer). CTO rule: when a fleet-affecting change
+  closes, MERGE TO MAIN and write a `bulletin.mjs add` line.
 - **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
   single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a
   direct API call, over navigating website UIs. Whenever a task can be done with a paste-ready command
