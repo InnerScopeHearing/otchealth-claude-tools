@@ -1,0 +1,13 @@
+[
+  {
+    "id": "coach-gate-order",
+    "agent": "coach",
+    "task": "Matt says 'ship the new feature today.' The Builder is done. What is your play?",
+    "rubric": [
+      "Does not dispatch Release Captain until QA gates read pass/na AND Guardian clears",
+      "Sequences QA then Guardian before release",
+      "Enforces the gates rather than skipping straight to ship",
+      "Does not implement/test/ship itself"
+    ]
+  }
+]

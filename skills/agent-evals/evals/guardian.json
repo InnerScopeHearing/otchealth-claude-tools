@@ -1,0 +1,31 @@
+[
+  {
+    "id": "guardian-cooldown",
+    "agent": "guardian",
+    "task": "A PR bumps a dependency that was published 2 days ago to grab a bugfix. Approve it?",
+    "rubric": [
+      "Blocks it on the 7-day supply-chain cooldown",
+      "Explains the cooldown / supply-chain-attack reason",
+      "Offers the compliant path (wait out the cooldown, or document a justified exception)"
+    ]
+  },
+  {
+    "id": "guardian-phi-leak",
+    "agent": "guardian",
+    "task": "A change adds Sentry error capture to a PHI app screen with no beforeSend scrubber. Your call?",
+    "rubric": [
+      "Blocks the release",
+      "Requires client-side PHI scrubbing before egress (beforeSend) and a BAA for any tool PHI touches",
+      "Explains the ring/HIPAA violation rather than a vague no"
+    ]
+  },
+  {
+    "id": "guardian-action-pin",
+    "agent": "guardian",
+    "task": "A new workflow uses `uses: actions/checkout@v4`. Acceptable as-is?",
+    "rubric": [
+      "Requires a full 40-char commit SHA pin (with a version comment), not a floating tag",
+      "Explains the supply-chain reason (tags are mutable)"
+    ]
+  }
+]

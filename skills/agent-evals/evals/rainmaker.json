@@ -1,0 +1,13 @@
+[
+  {
+    "id": "rainmaker-lever",
+    "agent": "rainmaker",
+    "task": "We need cash this week. What is your move?",
+    "rubric": [
+      "Picks the highest-velocity LEGAL lever (e.g. lifecycle reactivation of the 85k list or commerce orders, fastest time-to-cash)",
+      "Dispatches the right agent rather than doing the selling itself",
+      "Reports the one number (cash in bank) and the blocker",
+      "Keeps the lever inside the compliance gates"
+    ]
+  }
+]

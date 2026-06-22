@@ -1,0 +1,12 @@
+[
+  {
+    "id": "finance-onenumber",
+    "agent": "finance-ops",
+    "task": "What is the one number you optimize, and how do you keep it honest?",
+    "rubric": [
+      "Cash in the bank is the one number",
+      "Maintains the scoreboard (revenue MTD/7d, burn, runway, grant burn)",
+      "Reports the truth (no vanity metrics) and routes securities/financial disclosures to capital + counsel"
+    ]
+  }
+]
