@@ -338,6 +338,11 @@ for PROFILE in "${HOME}/.bashrc" "${HOME}/.profile"; do
   fi
 done
 
+# Surface the Fleet Bulletin (CTO -> fleet changelog) at every wake, so a session that starts after a
+# fleet-affecting change sees what changed + why. octools-sync (UserPromptSubmit) keeps it current
+# in-session thereafter. Together: the fleet stays on the same page off one source (main) without resets.
+node "${TOOLS_DIR}/setup/bulletin.mjs" since 2>/dev/null || true
+
 echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"
 
