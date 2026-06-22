@@ -14,8 +14,8 @@ on:
         description: "The task prompt for the headless agent"
         required: true
         default: "Summarize what changed in this repo in the last 24h and open a draft PR with a short report."
-  # schedule:
-  #   - cron: "0 9 * * *"   # 09:00 UTC ~= 02:00 PT. Arm only after CLAUDE_CODE_OAUTH_TOKEN is set.
+  schedule:
+    - cron: "0 9 * * *"   # 09:00 UTC ~= 02:00 PT. ARMED (CLAUDE_CODE_OAUTH_TOKEN is set 2026-06-22).
 
 permissions:
   contents: write
@@ -43,11 +43,14 @@ jobs:
       - name: Run the agent task (subscription auth, zero metered spend)
         env:
           # Pass the task through an env var (never interpolate ${{ }} directly into the shell = injection-safe).
-          TASK: ${{ github.event.inputs.task }}
+          # On a `schedule` trigger there are no inputs, so fall back to the default standing task.
+          TASK: ${{ github.event.inputs.task || 'Summarize what changed in this repo in the last 24h and open a draft PR with a short report.' }}
         run: |
           # ANTHROPIC_API_KEY takes precedence over the OAuth token; ensure it is unset so we stay on the Max plan.
           unset ANTHROPIC_API_KEY
-          claude -p "$TASK" \
+          # Safety rails for the unattended run (this repo is non-PHI; main is push-protected).
+          RAILS='Operating rules: work only on a claude/* branch and open DRAFT PRs; never push to main; never touch PHI (MedReview/FourVault) or INND/HearingAssist securities or financial data; if you hit a hard gate (payment, KYC, account signup, OAuth consent) stop and leave a note instead. '
+          claude -p "${RAILS}${TASK}" \
             --permission-mode acceptEdits \
             --output-format json | tee result.json
 
