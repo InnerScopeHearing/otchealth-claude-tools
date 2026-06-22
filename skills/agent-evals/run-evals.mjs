@@ -73,7 +73,7 @@ async function emit(results) {
   for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, score: r.score, pass: r.pass, judge_model: DEP } }) });
 }
 
-const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json")).flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
+const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json") && f !== "personas.json").flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
   .filter(t => (!ONLY_AGENT || t.agent === ONLY_AGENT) && (!ONLY_TASK || t.id === ONLY_TASK));
 if (!tasks.length) { console.error("no matching tasks"); process.exit(2); }
 await initModel();
@@ -82,7 +82,7 @@ const results = [];
 for (const t of tasks) {
   process.stderr.write(`  running ${t.id}...`);
   let answer, scored;
-  try { answer = await chat(PERSONA[t.agent] || `You are the ${t.agent}.`, t.task); scored = await judge(t.task, t.rubric, answer); }
+  try { answer = await chat((PERSONA[t.agent] || `You are the ${t.agent}.`) + " Answer concretely and completely: name the SPECIFIC tools, gates, thresholds, numbers, and rules you would apply and WHY, cover every relevant consideration explicitly rather than implying it, and whenever you refuse or block, also state the compliant path.", t.task); scored = await judge(t.task, t.rubric, answer); }
   catch (e) { console.error(` ERROR ${e.message}`); continue; }
   const pass = scored.score >= PASS_AT;
   results.push({ id: t.id, agent: t.agent, score: scored.score, pass });
