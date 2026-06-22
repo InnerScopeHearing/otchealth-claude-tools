@@ -21,6 +21,10 @@ const KEYFILE = arg("--key", "");
 const LIMIT = parseInt(arg("--limit", "0"), 10) || 0;
 const FORCE = flag("--force");
 const DRY = flag("--dry");
+// --no-scrub: skip the content scrubber. Use ONLY when the destination is a fully access-controlled,
+// segregated, non-brain-federated store (e.g. the legal PERSONAL container) where the whole point is to
+// move ALL sensitive content faithfully and the container's own access control is the protection.
+const NOSCRUB = flag("--no-scrub");
 
 // Ring -> destination. Operational goes to the shared commons (indexed into the brain). MNPI + personal
 // go to the legal store's restricted/personal containers (ring-correct; NOT the shared commons).
@@ -209,13 +213,13 @@ async function exportDb(o) {
       if (DRY) { console.log(`  would export [${o.type}] ${o.title}`); continue; }
       if (o.type === "database") {
         const { md, jsonl, count } = await exportDb(o);
-        const hit = scrubFind(`${o.title}\n${md}\n${jsonl.slice(0, 40000)}`);
+        const hit = NOSCRUB ? null : scrubFind(`${o.title}\n${md}\n${jsonl.slice(0, 40000)}`);
         if (hit) { held.push({ id: o.id, title: o.title, type: o.type, reason: hit }); heldN++; console.log(`  [HELD db] ${o.title} (${hit})`); continue; }
         await bPut(`${base}.md`, md); await bPut(`${base}.rows.jsonl`, jsonl, "application/x-ndjson");
         okDbs++; rowsTot += count; console.log(`  [db] ${o.title} (${count} rows)`);
       } else {
         const md = await exportPage(o);
-        const hit = scrubFind(`${o.title}\n${md}`);
+        const hit = NOSCRUB ? null : scrubFind(`${o.title}\n${md}`);
         if (hit) { held.push({ id: o.id, title: o.title, type: o.type, reason: hit }); heldN++; if (heldN % 10 === 0) console.log(`  ...${heldN} held`); continue; }
         await bPut(`${base}.md`, md); okPages++;
         if (okPages % 100 === 0) console.log(`  ...${okPages} pages exported`);

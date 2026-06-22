@@ -19,6 +19,7 @@ GCP_CLAUDE_DRIVER_SA_JSON="$(cat ~/.gcp_claude_driver_sa.json)" \
 ```
 - `RING`: `OPERATIONAL` (-> commons `company-journal/_NOTION/operational`, brain-indexed), `MNPI-INND` (-> restricted legal `company/_NOTION/innd-mnpi`), `PERSONAL-PRIVILEGED` (-> `personal/_NOTION/personal`, a CLO-lane action). `CREDENTIALS` are regenerated from Secret Manager, not run here. `PHI-HOLD` is never exported (legal wall).
 - `--dry` previews item selection + destination without fetching/uploading. `--limit N` validates on a slice. Resumable: re-runs skip already-exported objects by their 32-hex id.
+- `--no-scrub` disables the content scrubber. Use ONLY for a fully access-controlled, segregated, non-brain-federated destination (the legal `personal` container) where the goal is to move ALL sensitive content faithfully and the container's own access control is the protection. Never use it for an OPERATIONAL copy (that feeds the shared brain).
 - Notion key: `--key <file>` or, by default, Secret Manager `notion-api-key`. Paced ~3 req/s with 429 backoff.
 
 ## Guardrails
