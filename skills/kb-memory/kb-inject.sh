@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fleet working-memory session integration. FAIL-SAFE by design: it must never break or block a
 # session. Modes: session (SessionStart -> inject the agent's ledger), precompact (PreCompact ->
-# remind to persist before the window compacts), stop (Stop -> remind to flush before ending).
+# remind to persist before the window compacts), stop (Stop -> remind to flush before ending),
+# userprompt (UserPromptSubmit -> capture any correction the user gives, every turn).
 # Enable per agent by exporting KB_AGENT=cfo|clo|clo-personal|<name> in that session/repo.
 set +e
 MODE="${1:-session}"
@@ -12,7 +13,12 @@ MEM="${CLAUDE_PROJECT_DIR:-.}/skills/kb-memory/mem.mjs"
 
 case "$MODE" in
   session)
-    [ -z "$AG" ] && exit 0
+    if [ -z "$AG" ]; then
+      echo "[kb-memory] WARNING: KB_AGENT is UNSET -> working-memory hooks are DISABLED (no ledger injected, no"
+      echo "  correction capture). This is the #1 cause of 'the agent keeps forgetting'. FIX: set KB_AGENT (e.g. cfo)"
+      echo "  in .claude/settings.local.json (env: {KB_AGENT: cfo}) or the environment env-var config."
+      exit 0
+    fi
     echo "===== WORKING MEMORY: ${AG} ledger (SOURCE OF TRUTH - read before trusting recall) ====="
     node "$MEM" tail --agent "$AG" --n 30 2>/dev/null || { echo "(kb-memory unavailable this session)"; exit 0; }
     echo ""
@@ -27,6 +33,14 @@ case "$MODE" in
   stop)
     [ -z "$AG" ] && exit 0
     echo "[kb-memory] Before ending: confirm new facts/decisions/corrections are written to the $AG ledger (mem.mjs ... --agent $AG)."
+    ;;
+  userprompt)
+    # Fires on EVERY user message: enforce that any correction the user gives is captured to the ledger NOW.
+    [ -z "$AG" ] && exit 0
+    echo "[kb-memory] CORRECTION CHECK ($AG): if the user's latest message corrects, contradicts, or revises ANY"
+    echo "prior fact, number, balance, entity, account, date, or assumption, FIRST persist it, THEN respond:"
+    echo "  node \"$MEM\" correct \"<the CORRECT fact>\" --agent $AG --was \"<the wrong belief>\" --source \"user $(date +%F)\""
+    echo "Also write-through any NEW fact/decision the user states (remember/decision). The ledger is the source of truth."
     ;;
 esac
 exit 0

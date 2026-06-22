@@ -3,6 +3,17 @@
 Read this first. It is the standing context every Claude Code session should
 assume unless the user says otherwise.
 
+## CFO / INND audit reconstruction — load the project memory FIRST
+Before ANY CFO / INND / HearingAssist accounting or audit-reconstruction work, load the authoritative,
+living project memory from the (non-git, MNPI) Azure data room and treat it as the source of truth:
+`node skills/cfo-store/store.mjs --azure get "INND/_KNOWLEDGE-BASE/CFO_PROJECT_MEMORY.md" /tmp/cfo_memory.md`
+It carries the standing facts that compaction tends to drop — the entity structure (InnerScope parent =
+the iHEAR product business; HearingAssist II = a separate corporation selling HearingAssist products, both
+lines made by JingHao; Value Hearing; consolidation + the likely HearingAssist insolvency/deconsolidation),
+the audit posture (FY24+FY25 full audit, FY23 review, FY21-22 Fruci anchor), the QBO access state, and the
+phase plan. UPDATE that file at each phase boundary. Do NOT put financial figures or MNPI in git; the data
+room is the home for all CFO findings and the `_KNOWLEDGE-BASE/` working papers.
+
 ## Environment / host facts (do not suggest workflows that violate these)
 - **Operator host is a Windows PC. There is NO Mac.** Never propose a local macOS
   or local Xcode workflow.
@@ -36,11 +47,13 @@ assume unless the user says otherwise.
   WRITE-THROUGH every fact/decision/correction the instant it happens (`mem.mjs remember|decision|correct|
   pitfall --agent <a>`); RECALL before asserting any fact (the ledger wins over memory); capture the
   recurring wrong beliefs as **pitfalls** (knowing the incorrect facts matters as much as the facts).
-  Set `KB_AGENT=<agent>` to enable the SessionStart/PreCompact/Stop hooks. CONNECTED EXEC MEMORY: exec
-  agents publish `status "<what I'm working on>"` (auto-shared) and `--share` cross-team facts; `tail`/
-  `recall`/`team` automatically surface the whole exec team's status + shared facts, so everyone has the
-  company-wide picture. Rings hold: only explicit status/--share leaves a lane (keep non-sensitive);
-  `clo-personal` is never shared. Full SOP: `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`.
+  **ANY correction the user gives MUST be persisted with `mem.mjs correct "<NOW>" --agent <a> --was "<WAS>"`
+  BEFORE you respond — non-negotiable; the `UserPromptSubmit` hook reminds you every turn.** Set
+  `KB_AGENT=<agent>` to enable the SessionStart/UserPromptSubmit/PreCompact/Stop hooks. CONNECTED EXEC
+  MEMORY: exec agents publish `status "<what I'm working on>"` (auto-shared) and `--share` cross-team facts;
+  `tail`/`recall`/`team` surface the whole exec team's status + shared facts, so everyone has the company-wide
+  picture. Rings hold: only explicit status/--share leaves a lane (keep non-sensitive); `clo-personal` is
+  never shared. Full SOP: `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`. Reference users: CFO + CLO.
 - **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
   single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a
   direct API call, over navigating website UIs. Whenever a task can be done with a paste-ready command
