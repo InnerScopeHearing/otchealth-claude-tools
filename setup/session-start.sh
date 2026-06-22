@@ -338,6 +338,11 @@ for PROFILE in "${HOME}/.bashrc" "${HOME}/.profile"; do
   fi
 done
 
+# Fleet rollout of the in-session live-sync hook: install the octools-sync UserPromptSubmit hook into
+# the user-scope ~/.claude/settings.json once. Because session-start runs in every app session (and is
+# itself live-synced from main), this propagates the live-pull to the whole fleet with NO per-app edits.
+node "${TOOLS_DIR}/setup/install-octools-hook.mjs" 2>/dev/null || true
+
 # Surface the Fleet Bulletin (CTO -> fleet changelog) at every wake, so a session that starts after a
 # fleet-affecting change sees what changed + why. octools-sync (UserPromptSubmit) keeps it current
 # in-session thereafter. Together: the fleet stays on the same page off one source (main) without resets.

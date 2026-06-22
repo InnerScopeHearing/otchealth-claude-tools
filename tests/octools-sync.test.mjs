@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, mkdtempSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +32,25 @@ test("UserPromptSubmit hook is wired to octools-sync", () => {
   const ups = settings.hooks?.UserPromptSubmit ?? [];
   const cmds = ups.flatMap((b) => (b.hooks || []).map((h) => h.command || ""));
   assert.ok(cmds.some((c) => c.includes("octools-sync.sh")), "UserPromptSubmit should run octools-sync.sh");
+});
+
+test("install-octools-hook installs the live-sync hook, idempotently, without clobbering", () => {
+  const home = mkdtempSync(join(tmpdir(), "ioh-"));
+  const installer = join(ROOT, "setup/install-octools-hook.mjs");
+  const run = () => execFileSync("node", [installer], { env: { ...process.env, HOME: home }, encoding: "utf8" });
+  run();
+  const settingsPath = join(home, ".claude", "settings.json");
+  const s1 = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.ok(JSON.stringify(s1.hooks.UserPromptSubmit).includes("octools-sync.sh"), "installs the octools-sync UserPromptSubmit hook");
+  run(); // idempotent
+  const s2 = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.strictEqual(s2.hooks.UserPromptSubmit.length, 1, "second run adds no duplicate");
+  // never clobber an unparseable user settings file
+  const home2 = mkdtempSync(join(tmpdir(), "ioh2-"));
+  mkdirSync(join(home2, ".claude"), { recursive: true });
+  writeFileSync(join(home2, ".claude", "settings.json"), "NOT JSON {");
+  execFileSync("node", [installer], { env: { ...process.env, HOME: home2 }, encoding: "utf8" });
+  assert.strictEqual(readFileSync(join(home2, ".claude", "settings.json"), "utf8"), "NOT JSON {", "leaves an unparseable file untouched");
 });
 
 test("bulletin `since` shows each entry exactly once (idempotent per environment)", () => {
