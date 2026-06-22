@@ -3,10 +3,13 @@
 # session. Modes: session (SessionStart -> inject the agent's ledger), precompact (PreCompact ->
 # remind to persist before the window compacts), stop (Stop -> remind to flush before ending),
 # userprompt (UserPromptSubmit -> capture any correction the user gives, every turn).
-# Enable per agent by exporting KB_AGENT=cfo|clo|clo-personal|<name> in that session/repo.
+# Enable per agent by exporting KB_AGENT=cfo|clo|clo-personal|<name> in that session/repo,
+# OR by writing the agent name to ~/.claude/.kb-agent (a persistent per-workspace override that
+# WINS over the env var, so a shared env defaulting KB_AGENT to one agent can be overridden per workspace).
 set +e
 MODE="${1:-session}"
-AG="${KB_AGENT:-}"
+AG="$(cat "$HOME/.claude/.kb-agent" 2>/dev/null | tr -d '[:space:]')"
+[ -z "$AG" ] && AG="${KB_AGENT:-}"
 MEM="${CLAUDE_PROJECT_DIR:-.}/skills/kb-memory/mem.mjs"
 [ -f "$MEM" ] || MEM="$HOME/.claude/skills/kb-memory/mem.mjs"
 [ -f "$MEM" ] || exit 0
