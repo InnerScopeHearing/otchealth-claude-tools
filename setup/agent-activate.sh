@@ -12,6 +12,8 @@
 #   git -C /tmp/octools fetch origin main && git -C /tmp/octools reset --hard origin/main
 #   node /tmp/octools/skills/kb-memory/mem.mjs use <role>
 #   node /tmp/octools/skills/kb-memory/mem.mjs whoami --agent <role>     # look for RESULT: PASS
+# (If /tmp/octools is not populated - e.g. a session that attached the claude-tools repo - use
+#  /home/user/otchealth-claude-tools in place of /tmp/octools in those three paths.)
 # The wrapper is only a convenience for sessions that have a Bash allow-rule for /tmp/octools; the three
 # steps work everywhere.
 #
@@ -22,18 +24,24 @@ ROLE="$1"
 if [ -z "$ROLE" ]; then echo "usage: agent-activate.sh <role>   (cfo|clo|coo|cto|capital|commerce|compliance|rainmaker|growth)"; exit 2; fi
 ROLE="$(printf '%s' "$ROLE" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
 OCT=/tmp/octools
+CHECKOUT=/home/user/otchealth-claude-tools
 echo "======================== FLEET ACTIVATION: ${ROLE} ========================"
 
-# [1/4] Force the shared toolkit to the LATEST main. This is the fix for "stale branch / not on main":
-# every agent re-pulls main here, so whatever the CTO merged is present before the agent does anything.
-if [ -d "$OCT/.git" ]; then
+# [1/4] Get onto the latest shared toolkit. This is the fix for "stale branch / not on main".
+if [ -f "$OCT/skills/kb-memory/mem.mjs" ] && [ -d "$OCT/.git" ]; then
+  # /tmp/octools is the DISPOSABLE clone: safe to force to main so the CTO's latest is present.
   git -C "$OCT" fetch -q origin main 2>/dev/null && git -C "$OCT" reset -q --hard origin/main 2>/dev/null
   echo "[1/4] toolkit: $OCT @ $(git -C "$OCT" rev-parse --short HEAD 2>/dev/null) (main, $(git -C "$OCT" log -1 --format='%cd' --date=short 2>/dev/null))"
+elif [ -f "$CHECKOUT/skills/kb-memory/mem.mjs" ]; then
+  # The session attached the claude-tools repo instead of (or alongside) the /tmp clone. Use that
+  # checkout, but NEVER reset it: it is a real working tree that may hold uncommitted work.
+  OCT="$CHECKOUT"
+  echo "[1/4] toolkit: $OCT (attached claude-tools checkout; NOT force-synced, to protect your work). Keep it on a recent main for current skills."
 else
-  echo "[1/4] toolkit: NOT FOUND at $OCT. Run your SessionStart hook (it clones /tmp/octools), then re-run this. STOP here if so."
+  echo "[1/4] toolkit: NOT FOUND at /tmp/octools or $CHECKOUT. Run your SessionStart hook (it clones /tmp/octools), then re-run this. STOP here if so."
 fi
 
-# Resolve the memory engine from the freshly-synced toolkit (fall back to the installed copy).
+# Resolve the memory engine from the chosen toolkit (fall back to the installed copy).
 MEM="$OCT/skills/kb-memory/mem.mjs"
 [ -f "$MEM" ] || MEM="$HOME/.claude/skills/kb-memory/mem.mjs"
 

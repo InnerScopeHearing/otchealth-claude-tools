@@ -190,7 +190,7 @@ Matter/docket store = Azure Blob `otchealthlegalstore`, `company` + `personal` c
   attachment), `pull "<q>" <dir>` (bulk per matter). Route exports into the legal store
   `personal` area / `CLO Processed/Personal/<Matter>`, then run them through the pdf OCR + the
   `legal` matter/docket store. (One-time setup: a Google Desktop OAuth client + `gmail consent`.)
-- **Notion** - the matter vault, "COO Tasks", "Bucket Briefings", credentials vault.
+- **Notion - RETIRED, do not use.** Your matters, chronologies, dockets, and privilege logs now live in the Azure legal store `otchealthlegalstore` (company/personal) via the `legal` skill; credentials are in Secret Manager (ask the company-brain or read the brain `_VAULT/registry.md`); the old "COO Tasks" / "Bucket Briefings" are gone (the COO now publishes to the kb-memory exec feed).
 - **Microsoft_365 / m365-mail** - legal correspondence across the 126 tenant mailboxes
   (matthew@innd.com, mark@innd.com, kim@innd.com, ap@innd.com, accounting@hearingassist.com).
 - **cfo-onedrive --user mark** - Mark Moore's OneDrive: settlement + standstill/tolling
