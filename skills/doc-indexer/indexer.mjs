@@ -71,7 +71,7 @@ const TEXT_PREFIX = "_TEXT/";
 // document text anyway. Catalog them but skip extraction. Override with MAX_INDEX_MB.
 const MAX_INDEX_MB = parseInt(process.env.MAX_INDEX_MB || "200", 10);
 const MAX_INDEX_BYTES = MAX_INDEX_MB * 1024 * 1024;
-const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/"]; // our own artifacts
+const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/", "_DUPLICATES/", "_ARCHIVE/"]; // our own artifacts (incl. quarantined duplicates + archived/superseded content excluded from index/brain)
 const MAXTEXT = 400000; // chars persisted per doc
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (ext) => join(tmpdir(), `idx_${Date.now()}_${Math.random().toString(36).slice(2)}${ext || ""}`);
