@@ -79,7 +79,7 @@ Matt via Outlook/calendar. The COO gives 1-3 moves, never a wall; takes results;
 - **Hands (n8n primitives the COO calls):** `COO: Send Email` (`shpRZibsI81XfJiJ`),
   `COO: Create Meeting` (`ZFkox8gT5vdEKk2Z`), `COO: Read Calendar` next 7 days
   (`xL0VYbElD15ttqKw`).
-- **Task backbone:** the "COO Tasks" Notion database; every action is logged there.
+- **Task backbone:** the kb-memory `coo` ledger (`mem.mjs`, Azure-backed, auto-shared to the exec feed + brain); every action is logged there. The old "COO Tasks" Notion DB is retired.
 - **Calendar is two-way:** Matt adds events so the COO sees his real constraints; the COO
   reads them before planning and books focused blocks only in free slots.
 - **Autonomy policy:** autonomous internal (Matt + Mark) / directive = pre-authorization /

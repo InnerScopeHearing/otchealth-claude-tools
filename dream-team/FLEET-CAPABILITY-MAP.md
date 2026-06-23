@@ -21,7 +21,7 @@ A large first-party MCP set is connected directly in the Claude Code session now
 | Service | Access path | Status (2026-06-14) | Notes |
 |---|---|---|---|
 | GitHub | first-party MCP (+ gateway passthrough) | LIVE - get_me = GBGolfMatt | builds dispatched here (ios-depot.yml) |
-| Notion | first-party MCP (+ gateway passthrough) | LIVE - vault + Bucket Briefings searchable | source of truth for briefings/tasks |
+| Notion | first-party MCP (+ gateway passthrough) | RETIRING (cancel by Aug 2026); content migrated to the Azure brain | briefings/tasks/vault now in the commons + brain + kb-memory ledgers; Notion is a legacy mirror |
 | PostHog | first-party MCP (+ gateway mgmt module) | LIVE in Claude Code (was Hyperagent-only) | **CAUTION: MCP defaults to the MedReview PHI project 468398 - SWITCH to a non-PHI project before any work.** funnels/flags/experiments; PHI project read-only |
 | n8n (instance) | self-host native MCP | LIVE - 40 workflows / self-host (COO flows present) | **The 2026-06-13 "dead Cloud host" issue is RESOLVED**; MCP now reads automation.otchealth.app |
 | n8n (builder) | workflow-SDK MCP | LIVE - get_sdk_reference/search_nodes/create_workflow_from_code | separate toolset from the instance MCP (authoring) |

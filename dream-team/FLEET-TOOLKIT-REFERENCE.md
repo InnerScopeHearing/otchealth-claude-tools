@@ -45,7 +45,7 @@ Counts are the connected tool surface as of 2026-06-14. "R" = read-lane, "W" = w
 - PR-activity subscription: `subscribe_pr_activity`, `unsubscribe_pr_activity`.
 - Identity: `get_me`, `get_teams`, `get_team_members`, `search_users`.
 
-### Notion (16, R/W) — vault, COO Tasks, Bucket Briefings, bootstrap docs
+### Notion (16, R/W) — RETIRING (cancel by Aug 2026); content migrated to the Azure brain (vault, COO Tasks, Bucket Briefings now in the commons + kb-memory ledgers)
 `notion-search`, `notion-fetch`, `notion-create-pages`, `notion-update-page`,
 `notion-duplicate-page`, `notion-move-pages`, `notion-create-database`,
 `notion-update-data-source`, `notion-query-database-view`, `notion-create-view`,

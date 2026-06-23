@@ -173,7 +173,7 @@ documents stay in the domain data room (ring-scoped); sensitive rings never reac
 
 | Department | Agents | Produces (knowledge + docs) | Lands in (store + durable state) | Shared WITH (consumers) | Ring |
 |---|---|---|---|---|---|
-| **Operations** | COO (CcOO) | daily briefings, priorities, task dispatch, cash number, accountability log | Notion Bucket Briefings + COO Tasks + `ops` room + commons | **everyone** (the nervous system) | non-PHI |
+| **Operations** | COO (CcOO) | daily briefings, priorities, task dispatch, cash number, accountability log | kb-memory `coo` ledger (exec feed) + `coo/` files + `ops` room + commons (Notion retired) | **everyone** (the nervous system) | non-PHI |
 | **Infrastructure** | CTO + reviewers (security/schema/coppa) | runbooks, architecture, the gateway + KB, secret registry, build/release records | `otchealth-cto/runbooks` + `CLAUDE.md` + commons | all builders + execs | non-PHI |
 | **Finance** | CFO, finance-ops | books, financials, cash scoreboard, source docs, the CFO Ledger | `otchealthcfodata` + Notion CFO Ledger + commons (non-sensitive) | COO, Rainmaker, Capital (gated) | non-PHI / MNPI-aware |
 | **Legal** | CLO | matters, chronologies, discovery indexes, privilege logs, contracts, decision packets | `otchealthlegalstore` (company/personal) + `legal` matter store | **Matt + counsel only** (privileged); company-legal SUMMARIES to relevant execs | privileged / MNPI |
@@ -194,8 +194,9 @@ Four destinations, chosen by what the knowledge IS:
 2. **The domain data rooms** -> the actual documents, ring-scoped (section 4). An agent reads its own
    room directly; cross-domain access is by gateway scope (e.g., finance summaries to the COO).
 3. **Durable state files** -> the human-readable system of record: `CLAUDE.md` (what doesn't change),
-   `HANDOFF.md` (live state), `runbooks/` ledgers, `cto-bridge/`, Notion (Bucket Briefings, COO Tasks,
-   CFO Ledger, the vault). Read first, updated last, every session.
+   `HANDOFF.md` (live state), `runbooks/` ledgers, `cto-bridge/`, and the kb-memory ledgers + the commons
+   journal + the Azure vault registry (Notion is retired; it was Bucket Briefings, COO Tasks, CFO Ledger,
+   the vault). Read first, updated last, every session.
 4. **The seams (escalation + handoff)** -> structured cross-agent routing: App Lead -> CTO ("ready to
    build" + SHA); any product agent -> coach; cash agents -> Rainmaker; every department -> COO
    briefings; legal/securities/PHI -> Matt + counsel. The seams carry the ESCALATION; the commons +
@@ -220,8 +221,9 @@ Five loops run perpetually so documents AND knowledge keep compounding with no h
    runbooks / briefings), (b) acts, (c) updates durable state before stopping. This is enforced
    (Stop hooks, the "update before you stop" rule). Knowledge never lives only in a chat that vanishes.
 4. **The briefing loop.** The COO's scheduled 7am scan reads every repo + the primary signals,
-   files a Notion Bucket Briefing, and sets the day's priorities, so the whole fleet re-aligns daily;
-   4-hourly heartbeats catch drift between briefings.
+   publishes its briefing to the exec feed + the commons (`mem.mjs status --agent coo`; Notion retired),
+   and sets the day's priorities, so the whole fleet re-aligns daily; 4-hourly heartbeats catch drift
+   between briefings.
 5. **The improvement loop.** Because every domain uses ONE engine + ONE standard, an improvement
    learned anywhere - a CU schema field, a classifier rule, a retrieval pattern, an eval that catches
    a failure - is committed once and propagates to ALL domains on the next pull. Standardization is

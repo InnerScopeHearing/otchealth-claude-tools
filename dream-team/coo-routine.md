@@ -9,6 +9,14 @@ summon into an operator that runs whether or not you are at the keyboard.
 It does NOT replace the human gates. It prepares, drafts, dispatches, and tees up. Matt
 and counsel still own every regulated decision.
 
+> **STORE CHANGE (Notion retired, 2026-06).** The COO's durable state, tasks, dispatches, and
+> briefings now live in the **kb-memory `coo` ledger** (`mem.mjs`, auto-shared to the exec feed +
+> the company-brain) and the `coo/` files. The morning-brief idempotency marker is the file
+> `coo/morning-marker.md`. The old "COO Tasks" / "Bucket Briefings" Notion DBs and the
+> "COO - Confidential" page are RETIRED. NOTE: editing this playbook does NOT change the LIVE
+> automation; the running Claude Code Routine prompt + any n8n node that writes to Notion still
+> need a one-time re-paste / rewire (CTO + Matt action).
+
 ## Architecture (who does what)
 
 - **Nervous system — n8n.** Always-on triggers and the action "hands" the COO calls:
@@ -22,12 +30,13 @@ and counsel still own every regulated decision.
   and takes follow-up actions. We keep the brain as Claude (not an OpenAI node in n8n) so
   the COO is genuinely Claude.
 - **Hands — the n8n primitives + connectors.** Sending email, creating/reading calendar
-  events, writing Notion tasks, posting to Customer.io/Shopify, etc.
-- **Memory — `coo/` files + the "COO Tasks" Notion DB.** Routines are stateless per run,
-  so durable state lives in `coo/SITUATION.md`, `coo/PRIORITIES.md`, `coo/today.md`,
-  `coo/log.md`, and the Notion task DB. The routine reads them at the start of every run
-  and writes them back at the end. Sensitive specifics stay in the private
-  "COO - Confidential" Notion page, never in the repo.
+  events, posting to Customer.io/Shopify, etc.
+- **Memory — `coo/` files + the kb-memory `coo` ledger (Notion retired 2026-06).** Routines are
+  stateless per run, so durable state lives in `coo/SITUATION.md`, `coo/PRIORITIES.md`,
+  `coo/today.md`, `coo/log.md`, and the **kb-memory `coo` ledger** (`mem.mjs`, Azure-backed,
+  auto-shared to the exec feed + the company-brain). The routine reads them at the start of every
+  run and writes them back at the end. The old "COO Tasks" Notion DB and the "COO - Confidential"
+  Notion page are RETIRED; sensitive specifics live in the ledger's private `coo` lane, never in the repo.
 
 ## The three ways the COO wakes
 
@@ -47,7 +56,8 @@ and counsel still own every regulated decision.
 >
 > **1. Load the truth.** Read `coo/SITUATION.md`, `coo/PRIORITIES.md`, `coo/today.md`,
 > `coo/log.md`. Run the daily briefing (`node skills/daily-briefing/scripts/brief.mjs`).
-> Read the open rows in the "COO Tasks" Notion database. **Read Matt's calendar** by
+> Read your open items + the team picture from the kb-memory ledger
+> (`node /tmp/octools/skills/kb-memory/mem.mjs tail --agent coo` and `team`). **Read Matt's calendar** by
 > executing the `COO: Read Calendar` n8n workflow (`xL0VYbElD15ttqKw`) so you know his
 > real availability and commitments. **Determine your run mode:** if an inbound-email or
 > other event payload was passed into this run, you are in **EVENT MODE**; if none was
@@ -70,7 +80,9 @@ and counsel still own every regulated decision.
 > into a concrete next action.
 >
 > **4. Act within your authority (the autonomy policy):**
-> - **Autonomous:** create/track tasks in the COO Tasks DB; coordinate internally with
+> - **Autonomous:** create/track tasks + dispatches in the kb-memory `coo` ledger
+>   (`mem.mjs decision "DISPATCH -> <to>: <order>" --agent coo --share --tags dispatch,<to>`;
+>   approvals `--tags needs-matt`); coordinate internally with
 >   Matt and Mark (email from coo@innd.com via `COO: Send Email`); put blocks and
 >   meetings on Matt's calendar via `COO: Create Meeting`, only in slots his calendar
 >   shows free; follow up on overdue items.
@@ -84,38 +96,39 @@ and counsel still own every regulated decision.
 >   to Matt + counsel only.
 >
 > **5. Tee up Matt's day (idempotent, mode-aware).**
-> - **EVENT MODE:** handle only the item that woke you (triage it, create or update its
->   task, draft any reply for approval, ping Matt only if it is urgent and needs him). Do
+> - **EVENT MODE:** handle only the item that woke you (triage it, record or update it in the
+>   ledger via `mem.mjs decision ... --agent coo`, draft any reply for approval, ping Matt only
+>   if it is urgent and needs him). Do
 >   NOT send a morning brief and do NOT book the daily top-move block; those belong to the
 >   scheduled run. If you opened follow-on work, include this session's URL.
-> - **MORNING MODE:** the marker title is always exactly `Morning brief sent - YYYY-MM-DD`
->   (today's date in that format, e.g. `Morning brief sent - 2026-06-09`); use it
->   identically for the check and the write. First check the COO Tasks DB for a task with
->   that exact title. If it EXISTS, the brief already went out today: append a line to
->   `coo/log.md` in the file's format (`YYYY-MM-DD HH:MM | morning-guard | skipped | brief
->   already sent today`), refresh `coo/today.md`, and stop. If it does NOT exist, **claim
->   the day first** to shrink any double-run window: create the marker task
->   `Morning brief sent - YYYY-MM-DD` BEFORE sending anything. THEN write `coo/today.md`
->   (the number and the 1 to 3 moves, fit around his calendar), queue drafts as tasks marked
->   "Needs Matt", book ONE calendar block for the top move in a free slot, and send the
->   morning brief email from coo@innd.com (clean HTML, no dashes: the number, the moves,
->   what you already did, what awaits his approval, any calendar conflicts). **If any step
->   after the claim fails** (the `coo/today.md` write, the calendar booking, or the email
->   send), **delete the marker task** and log it (`YYYY-MM-DD HH:MM | morning-guard | failed
->   | <what failed>, marker removed for retry`) so the next run retries instead of silently
->   skipping. **Alert Matt over a channel that does not depend on the failed step:** always
->   create a high-priority "Needs Matt" alert task in the COO Tasks DB (Notion, independent
->   of Outlook) - that is the guaranteed channel. Also drop a `COO ALERT: brief failed`
->   event on his calendar if the calendar still works, and send the alert email only if
->   email was not the failing step.
+> - **MORNING MODE:** the idempotency marker is the file `coo/morning-marker.md`; its only
+>   content is today's date `YYYY-MM-DD` once the brief has gone out. First read it. If it
+>   ALREADY contains today's date, the brief went out today: append a line to `coo/log.md` in
+>   the file's format (`YYYY-MM-DD HH:MM | morning-guard | skipped | brief already sent today`),
+>   refresh `coo/today.md`, and stop. Otherwise, **claim the day first** to shrink any
+>   double-run window: write today's date into `coo/morning-marker.md` BEFORE sending anything.
+>   THEN write `coo/today.md` (the number and the 1 to 3 moves, fit around his calendar), record
+>   drafts that await approval in the ledger (`mem.mjs decision "<draft>" --agent coo --tags
+>   needs-matt`), book ONE calendar block for the top move in a free slot, and send the morning
+>   brief email from coo@innd.com (clean HTML, no dashes: the number, the moves, what you already
+>   did, what awaits his approval, any calendar conflicts). **If any step after the claim fails**
+>   (the `coo/today.md` write, the calendar booking, or the email send), **clear
+>   `coo/morning-marker.md`** (empty it) and log it (`YYYY-MM-DD HH:MM | morning-guard | failed |
+>   <what failed>, marker cleared for retry`) so the next run retries instead of silently
+>   skipping. **Alert Matt over a channel that does not depend on the failed step:** always write
+>   a high-priority shared ledger alert (`mem.mjs decision "NEEDS MATT: COO morning brief failed
+>   - <what>" --agent coo --share --tags needs-matt,alert`) - durable, email-independent, and
+>   surfaced to the CTO + the brain. Also drop a `COO ALERT: brief failed` event on his calendar
+>   if the calendar still works, and send the alert email only if email was not the failing step.
 >
 > **6. Close the loop.** Append everything you did and decided to `coo/log.md`, update
-> `coo/PRIORITIES.md`, and write/refresh the relevant rows in the COO Tasks DB. **If a
+> `coo/PRIORITIES.md`, and refresh your open items in the kb-memory `coo` ledger
+> (`mem.mjs status "<current priorities>" --agent coo`; record completions). **If a
 > prior run left a `Needs Matt` morning-brief failure alert and this run sent the brief
 > successfully, close that alert task** (mark it Done with a note that the brief went out)
 > so stale alerts do not accumulate. Leave the memory accurate for the next run. Never
 > commit sensitive specifics or personal calendar details to the repo; those stay in the
-> live calendar and the private Notion page.
+> live calendar and the ledger's private `coo` lane.
 >
 > Tone: warm, direct, relentless. Lead with the number. Never a 20-item list. Celebrate
 > done, follow up on not-done. You are a fiduciary: cash first, but legal always.
@@ -127,7 +140,8 @@ and counsel still own every regulated decision.
 2. **Pick the environment.** Use the environment that runs `setup/session-start.sh`
    (hydrates skills + credentials) with **Trusted** network access.
 3. **Add the connectors** the COO needs as hands: the **n8n** MCP (Send Email / Create
-   Meeting / Read Calendar and reading workflows) and **Notion** (COO Tasks DB).
+   Meeting / Read Calendar and reading workflows). Notion is no longer needed (the COO Tasks DB
+   is retired; durable state is the kb-memory `coo` ledger + the `coo/` files).
 4. **Set the schedule.** Daily at ~7:00 AM PT (before Matt starts), optional midday
    re-check at ~1:00 PM PT. Minimum interval is 1 hour.
 5. **Add the API trigger** so n8n can fire the COO on events. Copy the endpoint URL and
@@ -149,8 +163,8 @@ both use it, the better the COO sizes the day to the time Matt actually has.
 - The COO does not move money, file, or send to real customers on its own. It drafts,
   queues, and dispatches; the human approves the regulated and outbound-to-strangers
   actions.
-- Durable memory is in `coo/` and the Notion task DB; sensitive specifics and personal
-  calendar details are never committed to the repo.
+- Durable memory is in `coo/` and the kb-memory `coo` ledger (Notion retired); sensitive
+  specifics and personal calendar details are never committed to the repo.
 
 ## Live inbound loop (built and tested 2026-06-09)
 
@@ -175,5 +189,5 @@ Prerequisites (now satisfied, recorded so they are not lost):
 Concurrency guard (implemented in step 1 + step 5): runs are mode-aware. Only a scheduled
 MORNING-MODE run sends the brief and books the daily block; an inbound-fired EVENT-MODE run
 handles just its item and never briefs. As a backstop against double-scheduling, morning
-mode checks the COO Tasks DB for a "Morning brief sent - YYYY-MM-DD" marker before sending
-and writes it after, so the brief and daily block happen at most once per day.
+mode checks `coo/morning-marker.md` for today's date before sending and writes it after, so
+the brief and daily block happen at most once per day.
