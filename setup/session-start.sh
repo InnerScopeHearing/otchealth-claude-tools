@@ -160,13 +160,38 @@ PROJECT="${GOOGLE_CLOUD_PROJECT:-otchealth-shared-prod}"
 
 # ─── Write the GCP SA key from the one env secret ───────────────────
 if [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ]; then
-  printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" > "$SA_PATH"
-  chmod 600 "$SA_PATH"
-  echo "[octools] GCP SA key written to $SA_PATH"
+  # VALIDATE before trusting it. The #1 cause of "memory is off" (no kb-memory, no Vertex, no
+  # Secret Manager) is a malformed value in the environment's .env box: wrapping quotes, backslash
+  # escaped quotes, or a multi-line paste the .env parser truncated. Writing that as the SA file
+  # makes every JSON.parse downstream fail. So only write it if it actually parses as JSON.
+  if printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' 2>/dev/null; then
+    printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" > "$SA_PATH"
+    chmod 600 "$SA_PATH"
+    echo "[octools] GCP SA key written to $SA_PATH"
+  else
+    echo "==================================================================================="
+    echo "[octools] ERROR: GCP_CLAUDE_DRIVER_SA_JSON is SET but is NOT valid JSON."
+    echo "          kb-memory, Vertex AI, and Secret Manager will be OFF this session."
+    echo "          In the cloud environment's Environment variables (.env format), the value must be:"
+    echo "            * the RAW service-account JSON, starting with a brace, with NO wrapping quotes"
+    echo "            * ONE line (private_key newlines as literal backslash-n, not real line breaks)"
+    echo "            * plain double-quotes inside the JSON, not backslash-escaped quotes"
+    echo "            * named exactly GCP_CLAUDE_DRIVER_SA_JSON (leading G)"
+    echo "          Save, then start a NEW session (env changes apply to new sessions only)."
+    echo "==================================================================================="
+    [ -f "$SA_PATH" ] && echo "[octools] keeping the existing key on disk at $SA_PATH (not overwriting it with the bad value)."
+  fi
 elif [ -f "$SA_PATH" ]; then
   echo "[octools] Using existing SA key at $SA_PATH"
 else
-  echo "[octools] WARN: GCP_CLAUDE_DRIVER_SA_JSON not set and no key on disk — Vertex AI + Secret Manager unavailable."
+  echo "==================================================================================="
+  echo "[octools] WARN: GCP_CLAUDE_DRIVER_SA_JSON not set and no key on disk."
+  echo "          kb-memory, Vertex AI, and Secret Manager are OFF this session."
+  _maybe="$(env 2>/dev/null | sed -n 's/=.*//; /CLAUDE_DRIVER_SA_JSON$/p' | grep -v '^GCP_CLAUDE_DRIVER_SA_JSON$' | head -1)"
+  [ -n "$_maybe" ] && echo "          Found a variable named '$_maybe' - did you mean GCP_CLAUDE_DRIVER_SA_JSON (leading G)?"
+  echo "          Set GCP_CLAUDE_DRIVER_SA_JSON (raw JSON, one line, no quotes) in the environment's"
+  echo "          Environment variables (.env format), then start a NEW session."
+  echo "==================================================================================="
 fi
 
 # ─── Pull API keys from GCP Secret Manager (override with direct env vars) ──
