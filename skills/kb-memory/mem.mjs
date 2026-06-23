@@ -28,6 +28,8 @@
 //   team     [--agent x] [--n 60]               # the whole exec team feed: who is working on what
 //   render   --agent cfo  |  list-agents
 import crypto from "node:crypto";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 
 const SM = "otchealth-shared-prod";
 const AGENTS = {
@@ -38,7 +40,7 @@ const AGENTS = {
 };
 // The executive team: agents whose status + shared facts flow into the connected team feed. Any agent
 // can publish/read; this set is documentation + the default `team` roster.
-const EXEC = ["coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth"];
+const EXEC = ["coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth", "developer"];
 const NO_SHARE = new Set(["clo-personal"]); // privilege wall: personal-matter memory never leaves its lane
 
 // ---- args ----
@@ -57,8 +59,21 @@ const SHARE = argv.includes("--share");
 const N = parseInt(takeVal("--n", "40"), 10) || 40;
 
 // ---- Secret Manager (claude-driver SA) ----
+// Resolve the claude-driver SA from the env var OR, failing that, from disk. This closes the
+// silent-failure pitfall: a fresh shell has no env var, JSON.parse(undefined) throws an opaque
+// "undefined is not valid JSON", and every write/read vanishes -> the agent silently "forgets".
+function resolveSaJson() {
+  if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
+  // HOME-relative only: this is the canonical hydration path (session-start writes it here, vault-sync
+  // reads it here) AND it respects a test's temp HOME, so hermetic tests stay hermetic.
+  const p = `${homedir()}/.gcp_claude_driver_sa.json`;
+  try { if (existsSync(p)) return readFileSync(p, "utf8"); } catch {}
+  return null;
+}
 function saJwt(scope) {
-  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const raw = resolveSaJson();
+  if (!raw) { console.error("kb-memory: MEMORY IS OFF - no service account. Set GCP_CLAUDE_DRIVER_SA_JSON, or place ~/.gcp_claude_driver_sa.json (run /tmp/octools/setup/session-start.sh)."); process.exit(3); }
+  const sa = JSON.parse(raw);
   const now = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
@@ -172,6 +187,38 @@ function teamLines(shared) {
   if (cmd === "status") return append("status", true);
   if (cmd === "correct") { if (!WAS) console.error("(tip: pass --was \"<wrong belief>\" so the correction records what to stop believing)"); return append("correction", SHARE); }
   if (cmd === "list-agents") { for (const [k, v] of Object.entries(AGENTS)) console.log(`${k.padEnd(14)} ${v.account}/${v.container}  [${v.ring}]`); console.log(`exec team: ${EXEC.join(", ")}`); return; }
+  if (cmd === "use") {
+    const who = (positional[0] || AGENT || "").toLowerCase();
+    if (!who) { console.error("usage: mem.mjs use <role>   (cfo | clo | coo | cto | ...)"); process.exit(2); }
+    mkdirSync(`${homedir()}/.claude`, { recursive: true });
+    writeFileSync(`${homedir()}/.claude/.kb-agent`, who + "\n");
+    console.log(`identity claimed: this session's memory is homed to '${who}'. Verify: node ${process.argv[1]} whoami --agent ${who}`);
+    return;
+  }
+  if (cmd === "whoami") {
+    const read1 = (p) => { try { return existsSync(p) ? readFileSync(p, "utf8").trim().split(/\s+/)[0] : ""; } catch { return ""; } };
+    const sessMark = read1(`${homedir()}/.claude/.kb-agent`);
+    const repoMark = read1(`${process.env.CLAUDE_PROJECT_DIR || "."}/.kb-agent`);
+    const envAg = (process.env.KB_AGENT || "").trim();
+    const resolved = sessMark || repoMark || envAg;
+    const src = sessMark ? "session marker (~/.claude/.kb-agent)" : repoMark ? "repo .kb-agent" : envAg ? "env KB_AGENT" : "(none)";
+    const saOk = !!resolveSaJson();
+    console.log("# kb-memory whoami");
+    console.log(`resolved identity (the hooks use this): ${resolved || "(NONE - auto-recall OFF)"}  [via ${src}]`);
+    if (sessMark && envAg && sessMark !== envAg) console.log(`note: session marker '${sessMark}' overrides shared env KB_AGENT '${envAg}' (correct when agents share one environment).`);
+    console.log(`service-account: ${saOk ? "present" : "MISSING - writes will fail"}`);
+    if (!AGENT) { console.log(resolved ? `tip: run 'whoami --agent ${resolved}' to probe its ledger, or 'use <role>' to claim.` : "RESULT: FAIL - no identity. Run 'mem.mjs use <role>' then re-run."); return; }
+    if (resolved && resolved !== AGENT) console.log(`WARNING: this session resolves to '${resolved}', not '${AGENT}'. Claim it: mem.mjs use ${AGENT}`);
+    try {
+      await initStore();
+      const rows = await load();
+      const last = rows[rows.length - 1];
+      console.log(`ledger '${AGENT}' (${A.ring}): ${rows.length} entries; latest ${last ? `[${(last.ts || "").slice(0, 10)}] ${last.text.slice(0, 80)}` : "(empty)"}`);
+      const ok = saOk && resolved === AGENT;
+      console.log(`RESULT: ${ok ? `PASS - memory is ON and homed to '${AGENT}' (${rows.length} entries)` : `NEEDS-FIX (SA=${saOk}, resolved='${resolved || "none"}', expected '${AGENT}')`}`);
+    } catch (e) { console.log(`RESULT: FAIL - cannot reach the '${AGENT}' ledger: ${e.message}`); }
+    return;
+  }
   if (cmd === "team") {
     const shared = await readSharedAll();
     const { latestStatus } = teamLines(shared);
@@ -214,6 +261,6 @@ function teamLines(shared) {
     } catch (e) { console.log("## TEAM - (feed unavailable: " + e.message + ")"); }
     return;
   }
-  console.error("verbs: remember | decision | correct | pitfall | status | recall | tail | team | render | list-agents");
+  console.error("verbs: remember | decision | correct | pitfall | status | recall | tail | team | render | whoami | use | list-agents");
   process.exit(2);
 })().catch((e) => { console.error("ERROR: " + e.message); process.exit(1); });

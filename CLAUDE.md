@@ -78,10 +78,15 @@ assume unless the user says otherwise.
   read-only LEGACY archive, never point an agent at it. How to USE the vault:
   - **A value** lives in Secret Manager, fetch it by the row's **Secret Manager ID** via
     `node setup/get-secret.mjs <id> <outfile>`. NEVER fetch a Notion page to get a value.
-  - **To find/list credentials** (which exist, rotation status, by service), QUERY the registry DB
-    (Notion MCP `query_data_sources` SQL, or a saved view). Do not load a page.
-  - **A new/rotated secret:** store it in Secret Manager, then run the **`vault-sync`** skill so the
-    registry row reflects it. The registry is reconciled FROM Secret Manager (skill: `skills/vault-sync`).
+  - **To find/list credentials** (which exist, by service / ring / added-when): the OFF-NOTION path is
+    now canonical (Notion retires by August). Ask the **company-brain** ("what GitHub credentials do we
+    have"), or read the Azure registry `otchealthcommons/company-journal/_VAULT/registry.md` (regenerated
+    from Secret Manager nightly by `skills/vault-sync/vault-registry.mjs`, brain-indexed). The Notion
+    registry DB is the legacy mirror during the transition. Rotation flags live in the
+    ROTATE-BEFORE-LAUNCH lists (otchealth-cto/CLAUDE.md).
+  - **A new/rotated secret:** store it in Secret Manager, then run **`skills/vault-sync/vault-registry.mjs`**
+    so the Azure brain registry reflects it (and, while Notion still exists, `vault-sync.mjs` updates the
+    legacy Notion mirror). The registry is always reconciled FROM Secret Manager (skill: `skills/vault-sync`).
 - **Secret store (operator decision, 2026-06-08).** Per operator direction
   (seamless > separation), ALL app secrets, including MedReview (PHI) and FourVault
   (separate entity), are consolidated into the single `otchealth-shared-prod`

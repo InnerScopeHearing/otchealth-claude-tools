@@ -13,6 +13,8 @@ echo "[nightly] $DATE - generating digest"
 node "$ROOT/skills/daily-digest/digest.mjs" --out "/tmp/$DATE.md"
 echo "[nightly] staging to journal commons"
 node "$ROOT/skills/cfo-store/store.mjs" --azure --account otchealthcommons --key-secret azure-commons-storage-key --container company-journal put "/tmp/$DATE.md" "_DAILY/$DATE.md"
+echo "[nightly] regenerating the credential registry from Secret Manager (names+metadata, no values)"
+node "$ROOT/skills/vault-sync/vault-registry.mjs" || echo "[nightly] vault-registry non-fatal: $?"
 echo "[nightly] indexing into the commons KB"
 node "$ROOT/skills/doc-indexer/indexer.mjs" index --no-ocr --profile commons --azure
 node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --azure
