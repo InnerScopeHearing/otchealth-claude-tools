@@ -77,32 +77,35 @@ fi
 set +e
 set +o pipefail
 
-# ─── System deps: LibreOffice modules (headless document conversion) ─
-# The remote container base image ships only libreoffice-core + libreoffice-common;
-# the Writer/Calc/Impress MODULES (libswlo.so, etc.) are MISSING, so
-# `soffice --headless --convert-to` fails to load ANY document (even plain text)
-# with a misleading "source file could not be loaded". That silently breaks the
-# docx/xlsx/pptx document-skills and the doc-indexer office-doc path for every
-# agent (the CLO hit this rendering a legal template, 2026-06-23). Install the
-# modules so headless conversion works. Guarded: skip when already present, so a
-# warm container pays nothing and only a fresh container runs apt. Non-fatal, and
-# only `apt-get update`s when an install is actually needed. Needs root+network
-# (present in the web container); silently degrades where unavailable.
-if ! dpkg -s libreoffice-writer >/dev/null 2>&1; then
+# ─── System deps: document pipeline (LibreOffice modules + poppler-utils) ─
+# The remote container base image ships only libreoffice-core + libreoffice-common
+# (the Writer/Calc/Impress MODULES libswlo.so etc. are MISSING) and NO poppler-utils.
+# Without the LO modules, `soffice --headless --convert-to` fails to load ANY
+# document (even plain text) with a misleading "source file could not be loaded";
+# without poppler-utils there is no `pdftotext`, the cheap PDF text-layer extractor
+# the doc-indexer interactive path + the pdf skill rely on. Both silently degrade
+# document handling for every agent (the CLO hit the LO half rendering a legal
+# template, 2026-06-23). Install both so the document pipeline works. Guarded: skip
+# when already present, so a warm container pays nothing and only a fresh container
+# runs apt. Non-fatal, and only `apt-get update`s when an install is actually
+# needed. Needs root+network (present in the web container); degrades silently
+# where unavailable. (Heavier/rarer deps - weasyprint, tesseract, ffmpeg - stay
+# lazy-installed by the skills that use them, e.g. the pdf skill.)
+if ! dpkg -s libreoffice-writer >/dev/null 2>&1 || ! command -v pdftotext >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     APT=""
     if [ "$(id -u)" = 0 ]; then APT="apt-get"; elif command -v sudo >/dev/null 2>&1; then APT="sudo -n apt-get"; fi
     if [ -n "$APT" ]; then
-      echo "[octools] Installing LibreOffice modules (writer/calc/impress) for headless doc conversion..."
+      echo "[octools] Installing document-pipeline deps (LibreOffice writer/calc/impress + poppler-utils)..."
       if $APT update -qq >/dev/null 2>&1 \
          && DEBIAN_FRONTEND=noninteractive $APT install -y -qq \
-              libreoffice-writer libreoffice-calc libreoffice-impress >/dev/null 2>&1; then
-        echo "[octools] LibreOffice modules installed (soffice document conversion ready)."
+              libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils >/dev/null 2>&1; then
+        echo "[octools] Document-pipeline deps installed (soffice + pdftotext ready)."
       else
-        echo "[octools] WARN: LibreOffice module install failed (apt/network/permissions?) - docx/xlsx/pptx + doc-indexer office conversion may be unavailable this session."
+        echo "[octools] WARN: document-pipeline dep install failed (apt/network/permissions?) - docx/xlsx/pptx, PDF text extraction, and doc-indexer office conversion may be unavailable this session."
       fi
     else
-      echo "[octools] WARN: LibreOffice Writer module missing and no root/sudo to install - soffice document conversion unavailable this session."
+      echo "[octools] WARN: document-pipeline deps missing and no root/sudo to install - soffice conversion + pdftotext unavailable this session."
     fi
   fi
 fi
