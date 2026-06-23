@@ -54,7 +54,9 @@ cross-agent clobber):
 - **any entry written with `--share`** - a fact/decision/pitfall the whole team should know.
 Every agent's **`tail` / `recall` / `team` automatically read the whole feed**, so each exec agent sees
 its own detailed lane PLUS what every other exec agent is doing - the company-wide picture. Exec roster:
-coo, cfo, clo, cto, capital, commerce, compliance, rainmaker, growth (any agent can publish/read).
+coo, cfo, clo, cto, capital, commerce, compliance, rainmaker, growth, **developer** (the one
+master app/web developer across the whole portfolio; see `dream-team/agents/developer.md`). Any
+agent can publish/read.
 
 **Rings stay intact.** The shared feed is broadly readable, so only what you explicitly `status` /
 `--share` ever leaves your lane - keep those NON-sensitive (no MNPI specifics, no privilege). Detailed
