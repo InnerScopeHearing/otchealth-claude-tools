@@ -33,7 +33,7 @@ for st in skills/*/selftest.mjs; do
   echo "-- $st"
   # selftests that need a browser are skipped unless RUN_BROWSER_TESTS=1 (they download chromium)
   case "$st" in
-    *browser-agent*) [ "${RUN_BROWSER_TESTS:-0}" = "1" ] || { echo "   skipped (set RUN_BROWSER_TESTS=1 to run)"; continue; };;
+    *browser-agent*|*live-walkthrough*) [ "${RUN_BROWSER_TESTS:-0}" = "1" ] || { echo "   skipped (set RUN_BROWSER_TESTS=1 to run)"; continue; };;
   esac
   if node "$st"; then echo "   ok"; else echo "   FAIL"; fail=1; fi
 done
