@@ -33,8 +33,18 @@ node skills/kb-memory/mem.mjs recall   "<query>"           --agent cfo [--n 25] 
 node skills/kb-memory/mem.mjs tail     --agent cfo [--n 40]     # YOUR pitfalls/recent + the TEAM feed (company-wide)
 node skills/kb-memory/mem.mjs team     [--n 60]                # the whole exec team feed: who is working on what
 node skills/kb-memory/mem.mjs render   --agent cfo             # re-render the human ledger .md
+node skills/kb-memory/mem.mjs whoami   --agent cfo             # HEALTH CHECK: resolved identity + SA + ledger count + PASS/FAIL
+node skills/kb-memory/mem.mjs use      cfo                     # CLAIM this session's identity (writes ~/.claude/.kb-agent)
 node skills/kb-memory/mem.mjs list-agents
 ```
+
+## Activation (run every session) — the one command that prevents "I can't find that"
+`bash /tmp/octools/setup/agent-activate.sh <role>` force-syncs the toolkit to **main**, claims this
+session's identity (`use`), and runs the `whoami` self-test. Run it at the start of every session and any
+time you suspect drift. It is the single source of "am I on the latest shared code AND is my memory on?",
+so an agent never runs on a stale branch and never reports a file/skill as missing when it exists on main.
+The memory engine **self-resolves the service account from disk** (`~/.gcp_claude_driver_sa.json`) when the
+env var is absent, so a fresh shell can never silently drop writes (the old "memory off" pitfall).
 
 ## Connected executive memory (each agent has its lane; the team shares automatically)
 Every agent keeps a PRIVATE lane (ring-correct). Two things ALSO publish a copy to a shared EXEC TEAM
