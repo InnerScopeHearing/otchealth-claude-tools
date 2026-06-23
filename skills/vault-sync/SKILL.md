@@ -30,6 +30,21 @@ node skills/vault-sync/vault-sync.mjs
 VAULT_DB_ID=<db-id> node skills/vault-sync/vault-sync.mjs
 ```
 
+## Off-Notion: the Azure brain registry (vault-registry.mjs) — the canonical path as Notion retires
+As part of the Notion retirement, the registry is now ALSO (and going forward, primarily) regenerated
+from Secret Manager into the **Azure brain**, so "what credentials exist / by service / by ring / added
+when" is answerable WITHOUT Notion. Same classifier (`infer()`), same rule (names + metadata only,
+VALUES never leave Secret Manager).
+```
+node skills/vault-sync/vault-registry.mjs            # write otchealthcommons/company-journal/_VAULT/registry.{md,jsonl}
+node skills/vault-sync/vault-registry.mjs --print    # also print the table
+node skills/vault-sync/vault-registry.mjs --dry      # build but do not upload
+```
+It runs nightly (wired into `skills/doc-indexer/job/nightly.sh`), so the commons librarian indexes
+`_VAULT/registry.md` into the brain (journal room). **To find a credential off Notion: ask the
+company-brain ("what GitHub credentials do we have"), or read `_VAULT/registry.md` from the commons.**
+The Notion registry DB is the legacy mirror during the transition (cancel by August).
+
 ## How agents should USE the vault (not the old page)
 - Need a value: `node setup/get-secret.mjs <secret-id> <outfile>` (the `<secret-id>` is the row's
   "Secret Manager ID").
