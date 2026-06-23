@@ -28,7 +28,7 @@ SHARPEN = dev workflow. GATE = compliance/human gate. SKIP = wrong stack / not o
 | **Firebase** | OTCHealth Companion backend (Auth, Firestore, Storage, Functions). Direct. |
 | **Claude md management** | We maintain ~17 CLAUDE.md files across the portfolio. Audit/keep-current is a standing need. |
 | **GitHub** | Already our primary MCP (builds, PRs). Keep. |
-| **Notion** | Vault + Bucket Briefings + COO Tasks. Already core. Keep. |
+| **Notion** | RETIRING (cancel by Aug 2026). Content migrated to the Azure brain + Secret Manager + kb-memory ledgers. No longer core; do not build new flows on it. |
 
 ## Tier 2 - Anthropic role packs (map to Dream Team agents - adopt the ones with a clear owner)
 
