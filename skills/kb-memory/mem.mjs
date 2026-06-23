@@ -40,7 +40,7 @@ const AGENTS = {
 };
 // The executive team: agents whose status + shared facts flow into the connected team feed. Any agent
 // can publish/read; this set is documentation + the default `team` roster.
-const EXEC = ["coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth"];
+const EXEC = ["coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth", "developer"];
 const NO_SHARE = new Set(["clo-personal"]); // privilege wall: personal-matter memory never leaves its lane
 
 // ---- args ----
