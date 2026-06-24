@@ -63,7 +63,15 @@ async function sm(id) { const t = await gTok('https://www.googleapis.com/auth/cl
 let AKEY, SAS;
 function buildSas() { const sv = '2021-12-02', sp = 'rwlc', ss = 'b', srt = 'co'; const st = new Date(Date.now() - 3e5).toISOString().slice(0, 19) + 'Z'; const se = new Date(Date.now() + 12 * 36e5).toISOString().slice(0, 19) + 'Z'; const sts = [ACCT, sp, ss, srt, st, se, '', 'https', sv, ''].join('\n') + '\n'; const sig = crypto.createHmac('sha256', Buffer.from(AKEY, 'base64')).update(sts, 'utf8').digest('base64'); return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: 'https', sig }).toString(); }
 const enc = (n) => n.split('/').map(encodeURIComponent).join('/');
-async function getBuf(n) { const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`); if (r.status === 404) return null; if (!r.ok) throw new Error('get ' + r.status); return Buffer.from(await r.arrayBuffer()); }
+// The indexer's List-Blobs parser stored XML-escaped names (a blob literally named "(L&C).pdf" was
+// captured as "(L&amp;C).pdf"), so the catalog path 404s against the real blob. Decode on 404 so
+// source fetches (re-OCR + vision) resolve. Catalog/sidecars stay keyed by the escaped name.
+const htmlEnt = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'");
+async function getBuf(n) {
+  let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`);
+  if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(n)) { const d = htmlEnt(n); if (d !== n) r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(d)}?${SAS}`); }
+  if (r.status === 404) return null; if (!r.ok) throw new Error('get ' + r.status); return Buffer.from(await r.arrayBuffer());
+}
 async function putBuf(n, buf, ct) { const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`, { method: 'PUT', headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': ct || 'application/octet-stream' }, body: buf }); if (!r.ok) throw new Error('put ' + r.status + ' ' + (await r.text()).slice(0, 120)); }
 
 // ---------- cron-safe lock: one deep-pass execution per room at a time ----------
