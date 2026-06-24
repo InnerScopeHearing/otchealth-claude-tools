@@ -23,7 +23,12 @@ function runHook(mode, { env = {}, sessionAgent, projectDir = ROOT } = {}) {
     writeFileSync(join(HOME, ".claude", ".kb-agent"), sessionAgent + "\n");
   }
   return execFileSync("bash", [HOOK, mode], {
-    env: { ...process.env, HOME, CLAUDE_PROJECT_DIR: projectDir, KB_AGENT: "", KB_MEMORY_OPTOUT: "", ...env },
+    // Hermetic: null the agent signals AND the GCP SA, so the hook's ledger preview cannot reach the
+    // real backend. In a LIVE agent sandbox the SA is in process.env, so mem.mjs would load the real
+    // ledger whose text can contain assertion phrases (e.g. a pitfall quoting "WORKING MEMORY IS OFF"),
+    // making this test fail only in sandboxes (green on CI). These tests check the hook's agent
+    // RESOLUTION, not the ledger contents, so the backend must be cut off regardless of host env.
+    env: { ...process.env, HOME, CLAUDE_PROJECT_DIR: projectDir, KB_AGENT: "", KB_MEMORY_OPTOUT: "", GCP_CLAUDE_DRIVER_SA_JSON: "", GCP_CLAUDE_DRIVER_SA_JSON_B64: "", GOOGLE_APPLICATION_CREDENTIALS: "", ...env },
     encoding: "utf8",
   });
 }

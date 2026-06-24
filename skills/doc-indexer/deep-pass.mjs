@@ -95,6 +95,26 @@ async function chat(messages, max_tokens, json) {
   throw new Error('chat: no working endpoint');
 }
 
+// ---------- Azure Document Intelligence: AUTO RE-OCR for thin/garbled sidecars ----------
+// When the first extraction (pdftotext/office) produced too little text to trust, re-extract the
+// SOURCE with DI prebuilt-layout (handles scans + tables + multi-column) and rewrite the sidecar,
+// so a bad extraction is HEALED before summarizing instead of merely flagged. PDF + images only.
+let DI_EP, DI_KEY;
+async function docintel(buf, model) {
+  if (DI_EP === undefined) { DI_EP = (await sm('azure-docintel-endpoint') || '').replace(/\/$/, ''); DI_KEY = await sm('azure-docintel-key') || ''; }
+  if (!DI_EP || !DI_KEY) return null;
+  const url = `${DI_EP}/documentintelligence/documentModels/${model || 'prebuilt-read'}:analyze?api-version=2024-11-30`;
+  for (let a = 0; a < 4; a++) {
+    const r = await fetch(url, { method: 'POST', headers: { 'Ocp-Apim-Subscription-Key': DI_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ base64Source: buf.toString('base64') }) });
+    if (r.status === 429) { await sleep(2000 * (a + 1)); continue; }
+    if (r.status !== 202) throw new Error('DI ' + r.status + ' ' + (await r.text()).slice(0, 80));
+    const op = r.headers.get('operation-location'); if (!op) throw new Error('DI no operation-location');
+    for (let i = 0; i < 80; i++) { await sleep(1500); const g = await fetch(op, { headers: { 'Ocp-Apim-Subscription-Key': DI_KEY } }); if (!g.ok) continue; const j = await g.json(); if (j.status === 'succeeded') return j.analyzeResult?.content || ''; if (j.status === 'failed') throw new Error('DI failed'); }
+    throw new Error('DI poll timeout');
+  }
+  throw new Error('DI 429 exhausted');
+}
+
 const SUMSYS = `You are a meticulous legal+financial document analyst. Output ONLY a JSON object, no prose. Schema:
 {"summary": a faithful 5-9 sentence decision-grade summary that QUOTES exact figures, all parties, effective/execution dates, key operative terms, obligations, conditions, and default/termination triggers; "title": concise canonical title (type + counterparty + principal, e.g. "8pct Convertible Note - Odyssey Capital - 100k"); "doc_type": short type; "counterparty": main other party or ""; "principal_amount": main amount or ""; "doc_date":"YYYY-MM-DD stated date or ''"; "key_terms":[up to 6 critical terms]; "materiality":"high|medium|low"; "requires_signature": true if this kind of document is only legally effective when signed (contracts, notes, agreements, consents, certifications, declarations) else false; "category":"best taxonomy guess"; "confidence":"high|medium|low"; "flags":[reasons it needs human/Claude review, e.g. "text too thin to trust","ambiguous type","conflicting dates","missing parties","does not fit any category"]}.
 HARD RULES: Never invent a value to fill a field. If the extracted text is too thin or garbled to analyze faithfully, set confidence "low", flags ["text too thin to trust"], and leave the substantive fields empty. Flagging for review is ALWAYS better than fabricating. Do not produce a confident summary you are not sure of.`;
@@ -122,9 +142,19 @@ async function visionSig(pdfBuf) {
 
 async function analyze(r) {
   let tin = 0, tout = 0;
-  const txt = (await getBuf('_TEXT/' + r.path + '.txt'))?.toString('utf8') || '';
+  let txt = (await getBuf('_TEXT/' + r.path + '.txt'))?.toString('utf8') || '';
+  const ext = (r.ext || '').toLowerCase().replace(/^\./, '');
+  let reocr = false, reocr_tried = false;
+  // AUTO RE-OCR: heal a thin/garbled PDF/image sidecar with Document Intelligence before flagging.
+  if (alnum(txt) < 60 && ['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp'].includes(ext)) {
+    reocr_tried = true;
+    try {
+      const src = await getBuf(r.path);
+      if (src) { const di = await docintel(src, 'prebuilt-layout'); if (di && alnum(di) >= 60) { txt = di; await putBuf('_TEXT/' + r.path + '.txt', Buffer.from(di, 'utf8'), 'text/plain; charset=utf-8'); reocr = true; } }
+    } catch { /* still-thin -> flagged below */ }
+  }
   if (alnum(txt) < 60) {
-    return { tin, tout, patch: { confidence: 'low', review: 'NEEDS_CLAUDE_REVIEW', review_reasons: ['extracted text too thin/empty - re-OCR then Claude review'], summary_deep: '' } };
+    return { tin, tout, patch: { confidence: 'low', review: 'NEEDS_CLAUDE_REVIEW', review_reasons: [reocr_tried ? 'extracted text too thin/empty even after re-OCR' : 'extracted text too thin/empty (non-OCRable type)'], summary_deep: '', reocr, reocr_tried } };
   }
   const s = await chat([{ role: 'system', content: SUMSYS }, { role: 'user', content: `Path: ${r.path}\nExtracted text:\n${txt.slice(0, MAXTEXT)}` }], 750, true);
   tin += s.usage.prompt_tokens || 0; tout += s.usage.completion_tokens || 0;
@@ -136,16 +166,21 @@ async function analyze(r) {
     catch (e) { sg = { execution_status: 'CANNOT_DETERMINE', sig_confidence: 'low', err: String(e.message).slice(0, 50) }; }
     if (sg) Object.assign(patch, { has_signature: !!sg.has_signature, wet_signature: !!sg.wet_signature, digital_signature: !!sg.digital_signature, signature_method: sg.signature_method || '', signatories: sg.signatories || [], execution_date: sg.execution_date || '', execution_status: sg.execution_status || '', sig_confidence: sg.sig_confidence || '' });
   }
-  const ext = r.ext || 'pdf';
   const date = patch.execution_date || patch.doc_date || '';
-  patch.proposed_name = (date ? date + '_' : 'UNDATED_') + slug(patch.title_deep || r.title || basename(r.path)) + '.' + ext;
+  patch.proposed_name = (date ? date + '_' : 'UNDATED_') + slug(patch.title_deep || r.title || basename(r.path)) + '.' + (ext || 'pdf');
   patch.dedup_key = slug((patch.doc_type || '') + '|' + (patch.counterparty || '') + '|' + (patch.principal || '')).toLowerCase();
-  // confidence gate
+  patch.reocr = reocr; patch.reocr_tried = reocr_tried || reocr;
+  // CONFIDENCE GATE: flag only genuine outliers + materially-important findings, NOT routine docs
+  // that merely lack a perfect title or a date (that over-flagging buries the real review list).
   const reasons = [...(patch.flags || [])];
   if (patch.confidence === 'low') reasons.push('low summary confidence');
-  if (!patch.title_deep) reasons.push('no title extracted');
-  if (patch.requires_signature && (!sg || sg.sig_confidence === 'low' || sg.execution_status === 'CANNOT_DETERMINE')) reasons.push('signature could not be determined on a doc that requires one');
-  if (!date) reasons.push('no execution/doc date');
+  if (!patch.title_deep && patch.confidence !== 'high') reasons.push('no title extracted');
+  if (patch.requires_signature) {
+    if (!sg || sg.sig_confidence === 'low' || sg.execution_status === 'CANNOT_DETERMINE') reasons.push('signature undetermined on a doc that requires one');
+    else if (sg.execution_status === 'UNSIGNED_DRAFT' && patch.materiality === 'high') reasons.push('material document appears UNSIGNED');
+    else if (sg.execution_status === 'PARTIALLY_EXECUTED') reasons.push('only partially executed');
+    if (!date) reasons.push('signature-required doc with no execution date');
+  }
   if (reasons.length) { patch.review = 'NEEDS_CLAUDE_REVIEW'; patch.review_reasons = [...new Set(reasons)]; }
   return { tin, tout, patch };
 }
@@ -164,7 +199,10 @@ async function main() {
   if (!FKEY) { console.error('Missing azure-foundry-key'); process.exit(2); }
   if (!(await acquireLock())) { console.error(`[deep-pass] another execution holds a fresh lock for ${CONTAINER}; exiting 0 (cron-safe, no double-run).`); return; }
   const rows = await loadCatalog();
-  let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (REINDEX || !r.deep));
+  // Re-select previously thin-flagged docs ONCE so the new auto-re-OCR path heals them (guarded by
+  // reocr_tried so a genuinely-empty doc is not retried every cron tick forever).
+  const REOCR_RE = /thin|re-?OCR/i;
+  let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (REINDEX || !r.deep || ((r.review_reasons || []).some((x) => REOCR_RE.test(x)) && !r.reocr_tried)));
   if (PREFIX) todo = todo.filter((r) => (r.path || '').startsWith(PREFIX));
   if (LIMIT) todo = todo.slice(0, LIMIT);
   console.error(`[deep-pass] profile=${PROFILE} ${ACCT}/${CONTAINER} | ${rows.length} catalog rows | ${todo.length} to process | model=${SUMMODEL} conc=${CONC}${MAXMIN ? ` budget=${MAXMIN}m` : ''}`);
@@ -204,16 +242,18 @@ async function main() {
   // Guarded to run once per new completion (re-runs only if more docs were deep'd since last index).
   const remaining = rows.filter((r) => r.path && !r.path.startsWith('_') && !r.deep).length;
   const deepCount = rows.filter((r) => r.deep).length;
+  const reocrCount = rows.filter((r) => r.reocr).length;
+  const fp = `${deepCount}:${reocrCount}`; // re-index when EITHER more docs went deep OR more were re-OCR'd (new content)
   if (remaining === 0 && deepCount > 0) {
-    let last = -1; try { const b = await getBuf('_CATALOG/.deep-reindexed'); if (b) last = JSON.parse(b.toString('utf8')).deepCount; } catch {}
-    if (deepCount !== last) {
-      console.error(`[deep-pass] ROOM COMPLETE (${deepCount} docs deep) -> full AI Search re-index on the new summaries`);
+    let last = ''; try { const b = await getBuf('_CATALOG/.deep-reindexed'); if (b) { const j = JSON.parse(b.toString('utf8')); last = j.fp != null ? j.fp : `${j.deepCount}:0`; } } catch {}
+    if (fp !== last) {
+      console.error(`[deep-pass] ROOM COMPLETE (${deepCount} deep, ${reocrCount} re-OCR'd) -> full AI Search re-index on the new summaries`);
       try {
         execFileSync('node', [join(HERE, 'indexer.mjs'), 'push-search', '--profile', PROFILE, '--azure', '--container', CONTAINER, '--azure-account', ACCT, '--key-secret', KEYSECRET, '--reindex'], { stdio: 'inherit', env: process.env });
-        await putBuf('_CATALOG/.deep-reindexed', Buffer.from(JSON.stringify({ deepCount, ts: Date.now() }), 'utf8'), 'application/json');
+        await putBuf('_CATALOG/.deep-reindexed', Buffer.from(JSON.stringify({ fp, deepCount, reocrCount, ts: Date.now() }), 'utf8'), 'application/json');
         console.error('[deep-pass] AI Search re-indexed on the new summaries. ROOM FULLY DONE.');
       } catch (e) { console.error('[deep-pass] WARN: AI Search re-index failed (next 30-min tick retries): ' + String(e.message).slice(0, 140)); }
-    } else { console.error(`[deep-pass] room complete (${deepCount} deep); AI Search already current.`); }
+    } else { console.error(`[deep-pass] room complete (${deepCount} deep, ${reocrCount} re-OCR'd); AI Search already current.`); }
   }
   await releaseLock();
 }
