@@ -50,7 +50,7 @@ case "$MODE" in
       echo "NOTE: the shared environment's KB_AGENT='${KB_AGENT}' but THIS session is '${AG}' (the marker wins)."
       echo "      Expected when agents share one environment; the per-session marker keeps each session correct."
     fi
-    node "$MEM" tail --agent "$AG" --n 30 2>/dev/null || { echo "(kb-memory unavailable this session)"; exit 0; }
+    node "$MEM" pack --agent "$AG" 2>/dev/null || node "$MEM" tail --agent "$AG" --n 30 2>/dev/null || { echo "(kb-memory unavailable this session)"; exit 0; }
     echo ""
     echo "DISCIPLINE: write-through EVERY new fact/decision/correction with mem.mjs (--agent $AG) the moment it happens;"
     echo "recall before asserting any fact; if memory and the ledger disagree, THE LEDGER WINS."

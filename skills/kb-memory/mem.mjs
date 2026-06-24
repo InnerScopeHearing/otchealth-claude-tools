@@ -28,7 +28,7 @@
 //   team     [--agent x] [--n 60]               # the whole exec team feed: who is working on what
 //   render   --agent cfo  |  list-agents
 import crypto from "node:crypto";
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 
 const SM = "otchealth-shared-prod";
@@ -57,6 +57,7 @@ const WAS = takeVal("--was", "");
 const SUPERSEDES = takeVal("--supersedes", "");
 const SHARE = argv.includes("--share");
 const N = parseInt(takeVal("--n", "40"), 10) || 40;
+const QUERY = takeVal("--query", "");
 
 // ---- Secret Manager (claude-driver SA) ----
 // Resolve the claude-driver SA from the env var OR, failing that, from disk. This closes the
@@ -139,6 +140,28 @@ async function readSharedAll() {
   return all.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
 }
 
+// ---- local write-through cache: the per-prompt recall hook reads the ledger from a LOCAL file (fast,
+//      no network) and refreshes from Blob only on a throttle, so continuous injection never hits Azure
+//      on every prompt (the "network on every turn" cost). A mem write updates the cache immediately
+//      (write-through), so a just-stated fact is recallable on the very next prompt. Fail-open.
+const CACHE_DIR = `${homedir()}/.claude/kb-cache`;
+const cacheFile = (kb) => `${CACHE_DIR}/${kb}.jsonl`;
+const TEAM_CACHE = `${CACHE_DIR}/_team.jsonl`;
+const toNdjson = (rows) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
+const fromNdjson = (t) => t.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+function writeCacheRows(kb, rows) { try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(cacheFile(kb), toNdjson(rows)); } catch {} }
+function readCacheRows(kb) { try { return fromNdjson(readFileSync(cacheFile(kb), "utf8")); } catch { return null; } }
+function writeTeamCache(rows) { try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(TEAM_CACHE, toNdjson(rows)); } catch {} }
+function readTeamCache() { try { return fromNdjson(readFileSync(TEAM_CACHE, "utf8")); } catch { return null; } }
+function ageMs(p) { try { return Date.now() - statSync(p).mtimeMs; } catch { return Infinity; } }
+
+// ---- READ-SIDE ring wall (defense in depth): when building ONE agent's per-prompt pack, never inject
+//      another lane's sensitive content. clo-personal / NO_SHARE agents do not read the shared feed at
+//      all; and any CROSS-agent line matching MNPI (INND securities) or PHI markers is dropped even if it
+//      was shared. The agent's OWN lane is never filtered (own ring). Can only REFUSE, never widen.
+const RING_DENY = /\b(innd|inscope hearing|otcmkts|ticker|reg\s*[da]\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|materially?\s*non.?public|mnpi|reg\s*fd|dividend|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number)\b/i;
+const ringSafeCross = (r) => !RING_DENY.test(`${r.text || ""} ${(r.tags || []).join(" ")} ${r.was || ""}`);
+
 async function load() { const t = await getText(JSONL); if (!t) return []; return t.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
 function newId(rows) { const d = new Date().toISOString().slice(0, 10).replace(/-/g, ""); const n = rows.filter((r) => (r.id || "").startsWith(d)).length + 1; return `${d}-${String(n).padStart(3, "0")}`; }
 
@@ -166,6 +189,7 @@ async function append(type, share) {
   const entry = { id: newId(rows), ts: new Date().toISOString(), type, text: TEXT, tags: TAGS, source: SOURCE || undefined, was: WAS || undefined, supersedes: SUPERSEDES || undefined };
   rows.push(entry);
   await putText(JSONL, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "application/x-ndjson");
+  writeCacheRows(KEYBASE, rows); // write-through: a just-stated fact is instantly in the local recall cache
   await putText(MD, renderMd(rows), "text/markdown; charset=utf-8");
   let shared = false;
   if (share || type === "status") shared = await publishShared(AGENT, entry);
@@ -178,6 +202,82 @@ function teamLines(shared) {
   const latestStatus = {};
   for (const r of shared) { if (r.type === "status" && !latestStatus[r.agent]) latestStatus[r.agent] = r; }
   return { latestStatus };
+}
+
+// ---- pack: the per-prompt WORKING-MEMORY block. LLM-free, local-cache-first (no Azure on the hot
+//      path), ranked to the prompt, ring-correct, token-budgeted, with a health beacon. This is what
+//      the UserPromptSubmit hook injects every turn so a just-compacted agent gets its durable facts
+//      back into context with zero action. Reads the prompt from --stdin-json (UserPromptSubmit JSON;
+//      NEVER interpolated through a shell) or --query.
+async function runPack() {
+  if (!A) { process.stdout.write("<<<WORKING-MEMORY>>>\nMEMORY: OFF (no agent) -> echo <role> > ~/.claude/.kb-agent\n<<<END>>>\n"); return; }
+  const kb = A._file || AGENT;
+  const THROTTLE = (parseInt(process.env.KB_PACK_THROTTLE_S || "120", 10) || 120) * 1000;
+  // own ledger: LOCAL cache fast-path; refresh from Blob only when stale AND the SA exists (no hard exit).
+  let rows = readCacheRows(kb), refreshed = false;
+  if (!rows || ageMs(cacheFile(kb)) > THROTTLE) {
+    if (resolveSaJson()) { try { await initStore(); rows = await load(); writeCacheRows(kb, rows); refreshed = true; } catch { rows = rows || []; } }
+    else { rows = rows || []; } // no SA -> stale-local, fail-open (never the saJwt hard exit on the hot path)
+  }
+  // query terms: UserPromptSubmit stdin JSON (safe parse, no shell interpolation) or --query.
+  // Score by term-OVERLAP (not strict AND) so a long natural-language prompt still ranks; drop short
+  // words + stopwords so the signal terms drive the match.
+  const STOP = new Set("the and for that this with you your our can could should would will does how what why are was were from into about".split(" "));
+  let terms = [];
+  if (argv.includes("--stdin-json")) {
+    try { const j = JSON.parse(readFileSync(0, "utf8")); const p = `${j.prompt || j.user_prompt || j.message || ""}`; terms = p.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); } catch {}
+  } else if (QUERY) terms = QUERY.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  terms = [...new Set(terms.filter((t) => t.length >= 3 && !STOP.has(t)))].slice(0, 24);
+  const scoreq = (r, ts) => { const hay = `${r.type} ${r.text} ${r.was || ""} ${(r.tags || []).join(" ")} ${r.source || ""}`.toLowerCase(); return ts.reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0); };
+
+  const byNew = (a, b) => (b.ts || "").localeCompare(a.ts || "");
+  const active = rows.filter((r) => !rows.some((x) => x.supersedes === r.id)); // drop superseded (newest-wins)
+  const pitfalls = active.filter((r) => r.type === "pitfall").sort(byNew).slice(0, 12);
+  const decisions = active.filter((r) => r.type === "decision").sort(byNew).slice(0, 6);
+  const corrections = rows.filter((r) => r.type === "correction").sort(byNew).slice(0, 5);
+  const always = new Set([...pitfalls, ...decisions, ...corrections].map((r) => r.id));
+  const ranked = terms.length
+    ? active.filter((r) => !always.has(r.id)).map((r) => [r, scoreq(r, terms)]).filter(([, s]) => s > 0).sort((a, b) => b[1] - a[1] || byNew(a[0], b[0])).slice(0, 6).map(([r]) => r)
+    : [];
+  const rankedIds = new Set(ranked.map((r) => r.id));
+  const recent = active.filter((r) => !always.has(r.id) && !rankedIds.has(r.id)).sort(byNew).slice(0, 4);
+
+  // team awareness: latest status per OTHER exec agent, RING-DENY-filtered. Privileged lanes never read it.
+  let team = [];
+  if (!NO_SHARE.has(AGENT) && resolveSaJson()) {
+    let shared = readTeamCache();
+    if (!shared || ageMs(TEAM_CACHE) > 300 * 1000) { try { shared = await readSharedAll(); writeTeamCache(shared); } catch { shared = shared || []; } }
+    const { latestStatus } = teamLines(shared || []);
+    team = Object.keys(latestStatus).filter((a) => a !== AGENT).map((a) => latestStatus[a]).filter(ringSafeCross).slice(0, 8);
+  }
+
+  // beacon: LIVE only if the ledger is actually readable + non-empty (proves FUNCTION, not just wiring).
+  const tss = rows.map((r) => r.ts).filter(Boolean).sort();
+  const lastTs = tss[tss.length - 1] || "";
+  const ageMin = lastTs ? Math.round((Date.now() - Date.parse(lastTs)) / 60000) : -1;
+  const beacon = rows.length
+    ? `MEMORY: LIVE agent=${AGENT} | ledger=${rows.length} | last-write=${ageMin >= 0 ? ageMin + "m" : "?"}${refreshed ? " | refreshed" : " | cached"}`
+    : `MEMORY: DARK agent=${AGENT} | ledger empty/unreadable -> check ~/.claude/.kb-agent + the service account`;
+
+  // RELEVANT-to-the-prompt goes FIRST (never starved by the always-set), then current-truth, then the
+  // recurring-mistake guardrails, then context. Each line is CLIPPED to a cue (the full text is in the
+  // ledger; this block is a pointer, not the record).
+  const clip = (s, n = 200) => { s = (s || "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s; };
+  const L = (r) => `[${r.type}] [${(r.ts || "").slice(0, 10)}] ${clip(r.text)}${r.was ? `  (was: ${clip(r.was, 80)})` : ""}`;
+  const out = ["<<<WORKING-MEMORY>>>", beacon];
+  if (ranked.length) { out.push("## RELEVANT TO THIS PROMPT:"); for (const r of ranked) out.push(L(r)); }
+  if (corrections.length) { out.push("## CORRECTIONS (NOW, not the old belief):"); for (const r of corrections) out.push(`- NOW: ${clip(r.text)}${r.was ? `  (was: ${clip(r.was, 80)})` : ""}`); }
+  if (pitfalls.length) { out.push("## PITFALLS (do not repeat):"); for (const r of pitfalls) out.push(`- ${clip(r.text)}`); }
+  if (decisions.length) { out.push("## DECISIONS (current):"); for (const r of decisions) out.push(`- ${clip(r.text)}`); }
+  if (recent.length) { out.push("## RECENT:"); for (const r of recent) out.push(L(r)); }
+  if (team.length) { out.push("## TEAM (other agents, latest status):"); for (const r of team) out.push(`- [${r.agent}] ${clip(r.text, 120)}`); }
+
+  // hard char budget: keep the front (beacon + pitfalls), trim trailing sections so the block can never
+  // itself bloat the freshly-compacted window. ~4800 chars ≈ ~1200 tokens.
+  const BUDGET = parseInt(process.env.KB_PACK_BUDGET || "4800", 10) || 4800;
+  let body = out.join("\n");
+  if (body.length > BUDGET) { const cut = body.lastIndexOf("\n", BUDGET); body = body.slice(0, cut > 0 ? cut : BUDGET); }
+  process.stdout.write(body + "\n<<<END>>>\n");
 }
 
 (async () => {
@@ -219,6 +319,7 @@ function teamLines(shared) {
     } catch (e) { console.log(`RESULT: FAIL - cannot reach the '${AGENT}' ledger: ${e.message}`); }
     return;
   }
+  if (cmd === "pack") return runPack();
   if (cmd === "team") {
     const shared = await readSharedAll();
     const { latestStatus } = teamLines(shared);
