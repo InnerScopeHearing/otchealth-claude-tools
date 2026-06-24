@@ -162,7 +162,21 @@ async function analyze(r) {
     } catch { /* still-thin -> flagged below */ }
   }
   if (alnum(txt) < 60) {
-    return { tin, tout, patch: { confidence: 'low', review: 'NEEDS_CLAUDE_REVIEW', review_reasons: [reocr_tried ? 'extracted text too thin/empty even after re-OCR' : 'extracted text too thin/empty (non-OCRable type)'], summary_deep: '', reocr, reocr_tried } };
+    // NON-TEXT ASSET: audio/video/archive/photo/image-pdf with no extractable text. These are not text
+    // documents (a recording, a photo, a zip), so classify + catalog them but do NOT flag for review,
+    // which is what was burying the queue (legal-company: 504 audio + ~900 photos). Mark reocr_tried so
+    // the cron does not retry them forever. A scanned doc with real text never lands here (re-OCR heals it).
+    const KIND = { mp3: 'audio', wav: 'audio', ogg: 'audio', m4a: 'audio', aac: 'audio', flac: 'audio', wma: 'audio', aiff: 'audio',
+      mp4: 'video', mov: 'video', avi: 'video', mkv: 'video', wmv: 'video', webm: 'video', m4v: 'video',
+      zip: 'archive', rar: 'archive', '7z': 'archive', tar: 'archive', gz: 'archive', tgz: 'archive' };
+    const kind = KIND[ext] || (['png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp', 'gif', 'heic', 'heif', 'webp'].includes(ext) ? 'image' : (ext === 'pdf' ? 'image-pdf' : 'binary'));
+    return { tin, tout, patch: {
+      summary_deep: `Non-text ${kind} asset (no extractable text): ${basename(r.path)}.`,
+      title_deep: basename(r.path), doc_type: kind === 'image-pdf' ? 'image (no text)' : kind,
+      category: (kind === 'image' || kind === 'image-pdf') ? 'image/photo (no extractable text)' : `${kind} asset`,
+      materiality: 'low', confidence: 'n/a', requires_signature: false, non_text_asset: true,
+      reocr, reocr_tried: true, review: '', review_reasons: [],
+    } };
   }
   const s = await chat([{ role: 'system', content: SUMSYS }, { role: 'user', content: `Path: ${r.path}\nExtracted text:\n${txt.slice(0, MAXTEXT)}` }], 750, true);
   tin += s.usage.prompt_tokens || 0; tout += s.usage.completion_tokens || 0;
@@ -189,7 +203,10 @@ async function analyze(r) {
     else if (sg.execution_status === 'PARTIALLY_EXECUTED') reasons.push('only partially executed');
     if (!date) reasons.push('signature-required doc with no execution date');
   }
-  if (reasons.length) { patch.review = 'NEEDS_CLAUDE_REVIEW'; patch.review_reasons = [...new Set(reasons)]; }
+  // Always set review explicitly so a doc that is now clean (e.g. healed by re-OCR) loses its stale flag.
+  patch.review = reasons.length ? 'NEEDS_CLAUDE_REVIEW' : '';
+  patch.review_reasons = reasons.length ? [...new Set(reasons)] : [];
+  patch.non_text_asset = false;
   return { tin, tout, patch };
 }
 
@@ -209,8 +226,12 @@ async function main() {
   const rows = await loadCatalog();
   // Re-select previously thin-flagged docs ONCE so the new auto-re-OCR path heals them (guarded by
   // reocr_tried so a genuinely-empty doc is not retried every cron tick forever).
+  // Re-select thin-flagged docs not yet RESOLVED. Resolution is terminal: re-OCR heals a real scan
+  // (reocr=true) or it is classified a non-text asset (non_text_asset=true); either way it stops being
+  // selected, so the */30 cron self-terminates instead of retrying forever.
   const REOCR_RE = /thin|re-?OCR/i;
-  let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (REINDEX || !r.deep || ((r.review_reasons || []).some((x) => REOCR_RE.test(x)) && !r.reocr_tried)));
+  const unresolved = (r) => (r.review_reasons || []).some((x) => REOCR_RE.test(x)) && !r.non_text_asset && !r.reocr;
+  let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (REINDEX || !r.deep || unresolved(r)));
   if (PREFIX) todo = todo.filter((r) => (r.path || '').startsWith(PREFIX));
   if (LIMIT) todo = todo.slice(0, LIMIT);
   console.error(`[deep-pass] profile=${PROFILE} ${ACCT}/${CONTAINER} | ${rows.length} catalog rows | ${todo.length} to process | model=${SUMMODEL} conc=${CONC}${MAXMIN ? ` budget=${MAXMIN}m` : ''}`);
@@ -227,7 +248,7 @@ async function main() {
         if (typeof r.summary === 'string' && r.summary && r.summary_mini == null) r.summary_mini = r.summary; // preserve old mini summary for audit
         if (patch.summary_deep) r.summary = patch.summary_deep; // promote the rich summary to the read field
         Object.assign(r, patch, { deep: true, deep_engine: SUMMODEL });
-        if (r.review) flagged++;
+        if (r.review === 'NEEDS_CLAUDE_REVIEW') flagged++; else { delete r.review; delete r.review_reasons; }
       } catch (e) { r.deep_err = String(e.message).slice(0, 120); }
       n++; since++;
       if (since >= 100) { since = 0; await flush(rows); await refreshLock(); console.error(`  ...${n}/${todo.length} (flagged ${flagged}; $${(tin / 1e6 * 2 + tout / 1e6 * 8).toFixed(2)})`); }
@@ -251,7 +272,8 @@ async function main() {
   const remaining = rows.filter((r) => r.path && !r.path.startsWith('_') && !r.deep).length;
   const deepCount = rows.filter((r) => r.deep).length;
   const reocrCount = rows.filter((r) => r.reocr).length;
-  const fp = `${deepCount}:${reocrCount}`; // re-index when EITHER more docs went deep OR more were re-OCR'd (new content)
+  const nonText = rows.filter((r) => r.non_text_asset).length;
+  const fp = `${deepCount}:${reocrCount}:${nonText}`; // re-index when docs go deep, get re-OCR'd, or get (re)classified
   if (remaining === 0 && deepCount > 0) {
     let last = ''; try { const b = await getBuf('_CATALOG/.deep-reindexed'); if (b) { const j = JSON.parse(b.toString('utf8')); last = j.fp != null ? j.fp : `${j.deepCount}:0`; } } catch {}
     if (fp !== last) {
