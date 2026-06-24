@@ -49,6 +49,7 @@ const KEYSECRET_OV = takeVal("--key-secret");
 const idxOverride = takeVal("--index");
 const PREFIX = takeVal("--prefix", "");
 const LIMIT = parseInt(takeVal("--limit", "0"), 10) || 0;
+const SKIP = parseInt(takeVal("--skip", "0"), 10) || 0; // push-search: skip the first N filtered docs (targeted tail re-push after an interrupted reindex)
 const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
 const FLUSH_EVERY = parseInt(takeVal("--flush", "150"), 10) || 150;
 const CONCURRENCY = Math.max(1, parseInt(takeVal("--concurrency", process.env.CU_CONCURRENCY || "8"), 10) || 8);
@@ -441,7 +442,7 @@ async function embed(texts) {
     try { r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) }); }
     catch (e) { await sleep(2000 * (attempt + 1)); continue; } // transient network -> retry
     if (r.status === 429 || r.status === 503 || r.status === 500) { const ra = +(r.headers.get("retry-after") || 0); await sleep((ra ? ra * 1000 : 0) + 2000 * (attempt + 1) + Math.floor(Math.random() * 1000)); continue; }
-    if (!r.ok) throw new Error("embed " + r.status + " " + (await r.text()).slice(0, 120));
+    if (!r.ok) { const b = await r.text(); if (attempt < 8 && /resolve_no_records|private\/reserved IP|Host resolves|EAI_AGAIN|ENOTFOUND|temporarily/i.test(b)) { await sleep(3000 * (attempt + 1)); continue; } throw new Error("embed " + r.status + " " + b.slice(0, 120)); } // proxy DNS blip -> retry
     return (await r.json()).data.map((d) => d.embedding);
   }
   throw new Error("embed retries exhausted");
@@ -477,9 +478,12 @@ async function aisPush(batch) {
   if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 220));
 }
 async function aisPushRetry(batch) {
-  for (let a = 0; a < 6; a++) {
+  // Retry transient failures incl. the agent-proxy's SSRF guard firing on a momentary DNS blip
+  // ("push 403 ... Host resolves to a private/reserved IP: resolve_no_records"), which killed a
+  // finance reindex one batch from done. 8 tries, longer backoff so DNS has time to recover.
+  for (let a = 0; a < 8; a++) {
     try { await aisPush(batch); return; }
-    catch (e) { const m = String(e.message); if (a < 5 && /(429|503|500|408|throttl|timeout|ECONNRESET|fetch failed)/i.test(m)) { await sleep(2000 * (a + 1)); continue; } throw e; }
+    catch (e) { const m = String(e.message); if (a < 7 && /(429|503|500|408|throttl|timeout|ECONNRESET|fetch failed|resolve_no_records|private\/reserved IP|Host resolves|EAI_AGAIN|ENOTFOUND)/i.test(m)) { await sleep(3000 * (a + 1)); continue; } throw e; }
   }
 }
 async function runSearchInit() { await aisInit(); await aisCreateIndex(); console.log(`Azure AI Search index ready: ${IDXNAME} (dims ${EMB_DIMS}, vectorizer ${AOAI_DEP})`); }
@@ -502,7 +506,8 @@ async function aisExistingIds() {
 }
 async function runPushSearch() {
   await aisInit(); await aisCreateIndex();
-  const rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
   const existing = REINDEX ? new Set() : await aisExistingIds(); // --reindex forces a full re-push
   console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME}`);
   // Embed in BATCHES of 16 (the endpoint accepts an array): ~16x fewer requests than per-doc, which
