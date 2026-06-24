@@ -25,7 +25,9 @@ import crypto from 'node:crypto';
 import { readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join, basename, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const argv = process.argv.slice(2);
 const val = (n, d) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : d; };
@@ -63,6 +65,17 @@ function buildSas() { const sv = '2021-12-02', sp = 'rwlc', ss = 'b', srt = 'co'
 const enc = (n) => n.split('/').map(encodeURIComponent).join('/');
 async function getBuf(n) { const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`); if (r.status === 404) return null; if (!r.ok) throw new Error('get ' + r.status); return Buffer.from(await r.arrayBuffer()); }
 async function putBuf(n, buf, ct) { const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`, { method: 'PUT', headers: { 'x-ms-blob-type': 'BlockBlob', 'Content-Type': ct || 'application/octet-stream' }, body: buf }); if (!r.ok) throw new Error('put ' + r.status + ' ' + (await r.text()).slice(0, 120)); }
+
+// ---------- cron-safe lock: one deep-pass execution per room at a time ----------
+// A fresh lock (refreshed on every flush) makes a */30 cron self-healing: a tick whose room is
+// actively being processed no-ops; if the holder died/stalled (lock goes stale past LOCK_TTL with
+// no refresh), the next tick takes over and RESUMES; released on clean exit so the tail resumes now.
+const LOCK = '_CATALOG/.deep.lock';
+const LOCK_TTL = 15 * 60 * 1000;
+const LOCK_ID = crypto.randomBytes(6).toString('hex');
+async function acquireLock() { try { const b = await getBuf(LOCK); if (b) { const j = JSON.parse(b.toString('utf8')); if (Date.now() - (j.ts || 0) < LOCK_TTL) return false; } } catch {} try { await putBuf(LOCK, Buffer.from(JSON.stringify({ ts: Date.now(), id: LOCK_ID })), 'application/json'); } catch {} return true; }
+async function refreshLock() { try { await putBuf(LOCK, Buffer.from(JSON.stringify({ ts: Date.now(), id: LOCK_ID })), 'application/json'); } catch {} }
+async function releaseLock() { try { await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(LOCK)}?${SAS}`, { method: 'DELETE' }); } catch {} }
 
 // ---------- gpt-4.1 on the Foundry resource ----------
 let FEP, FKEY;
@@ -149,6 +162,7 @@ async function main() {
   SAS = buildSas();
   FEP = (await sm('azure-foundry-openai-endpoint') || '').replace(/\/$/, ''); FKEY = await sm('azure-foundry-key');
   if (!FKEY) { console.error('Missing azure-foundry-key'); process.exit(2); }
+  if (!(await acquireLock())) { console.error(`[deep-pass] another execution holds a fresh lock for ${CONTAINER}; exiting 0 (cron-safe, no double-run).`); return; }
   const rows = await loadCatalog();
   let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (REINDEX || !r.deep));
   if (PREFIX) todo = todo.filter((r) => (r.path || '').startsWith(PREFIX));
@@ -170,7 +184,7 @@ async function main() {
         if (r.review) flagged++;
       } catch (e) { r.deep_err = String(e.message).slice(0, 120); }
       n++; since++;
-      if (since >= 100) { since = 0; await flush(rows); console.error(`  ...${n}/${todo.length} (flagged ${flagged}; $${(tin / 1e6 * 2 + tout / 1e6 * 8).toFixed(2)})`); }
+      if (since >= 100) { since = 0; await flush(rows); await refreshLock(); console.error(`  ...${n}/${todo.length} (flagged ${flagged}; $${(tin / 1e6 * 2 + tout / 1e6 * 8).toFixed(2)})`); }
     }
   }
   await Promise.all(Array.from({ length: CONC }, worker));
@@ -185,5 +199,22 @@ async function main() {
   const cost = tin / 1e6 * 2 + tout / 1e6 * 8;
   console.error(`[deep-pass] DONE${budgetHit ? ' (time budget hit - resumable, rerun for the tail)' : ''}: processed ${n}, flagged ${flagged} for Claude review, cost $${cost.toFixed(2)} (in ${tin} out ${tout}).`);
   console.error(`[deep-pass] review queue -> ${CONTAINER}/_REVIEW/review-queue.csv (${flaggedRows.length} docs) | dedup fields -> ${CONTAINER}/_CATALOG/deep-fields.csv`);
+  // On room completion, refresh Azure AI Search so the search/brain layer serves the NEW summaries
+  // (a full --reindex; the incremental push would otherwise skip them and keep the old mini text).
+  // Guarded to run once per new completion (re-runs only if more docs were deep'd since last index).
+  const remaining = rows.filter((r) => r.path && !r.path.startsWith('_') && !r.deep).length;
+  const deepCount = rows.filter((r) => r.deep).length;
+  if (remaining === 0 && deepCount > 0) {
+    let last = -1; try { const b = await getBuf('_CATALOG/.deep-reindexed'); if (b) last = JSON.parse(b.toString('utf8')).deepCount; } catch {}
+    if (deepCount !== last) {
+      console.error(`[deep-pass] ROOM COMPLETE (${deepCount} docs deep) -> full AI Search re-index on the new summaries`);
+      try {
+        execFileSync('node', [join(HERE, 'indexer.mjs'), 'push-search', '--profile', PROFILE, '--azure', '--container', CONTAINER, '--azure-account', ACCT, '--key-secret', KEYSECRET, '--reindex'], { stdio: 'inherit', env: process.env });
+        await putBuf('_CATALOG/.deep-reindexed', Buffer.from(JSON.stringify({ deepCount, ts: Date.now() }), 'utf8'), 'application/json');
+        console.error('[deep-pass] AI Search re-indexed on the new summaries. ROOM FULLY DONE.');
+      } catch (e) { console.error('[deep-pass] WARN: AI Search re-index failed (next 30-min tick retries): ' + String(e.message).slice(0, 140)); }
+    } else { console.error(`[deep-pass] room complete (${deepCount} deep); AI Search already current.`); }
+  }
+  await releaseLock();
 }
 main().catch((e) => { console.error('[deep-pass] FATAL', e.message); process.exit(1); });

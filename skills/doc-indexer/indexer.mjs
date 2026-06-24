@@ -450,8 +450,11 @@ async function aisCreateIndex() {
       { name: "entity", type: "Edm.String", filterable: true, facetable: true, searchable: true },
       { name: "category", type: "Edm.String", filterable: true, facetable: true, searchable: true },
       { name: "title", type: "Edm.String", searchable: true },
+      { name: "summary", type: "Edm.String", searchable: true, retrievable: true },
       { name: "content", type: "Edm.String", searchable: true },
       { name: "material", type: "Edm.Boolean", filterable: true },
+      { name: "execution_status", type: "Edm.String", filterable: true, facetable: true, retrievable: true },
+      { name: "signed", type: "Edm.Boolean", filterable: true },
       { name: "contentVector", type: "Collection(Edm.Single)", searchable: true, retrievable: false, dimensions: EMB_DIMS, vectorSearchProfile: "vp" },
     ],
     vectorSearch: {
@@ -459,7 +462,7 @@ async function aisCreateIndex() {
       vectorizers: [{ name: "aoai", kind: "azureOpenAI", azureOpenAIParameters: { resourceUri: AOAI_EP, deploymentId: AOAI_DEP, apiKey: AOAI_KEY, modelName: AOAI_MODEL } }],
       profiles: [{ name: "vp", algorithm: "hnsw", vectorizer: "aoai" }],
     },
-    semantic: { configurations: [{ name: "sem", prioritizedFields: { titleField: { fieldName: "title" }, prioritizedContentFields: [{ fieldName: "content" }], prioritizedKeywordsFields: [{ fieldName: "category" }] } }] },
+    semantic: { configurations: [{ name: "sem", prioritizedFields: { titleField: { fieldName: "title" }, prioritizedContentFields: [{ fieldName: "summary" }, { fieldName: "content" }], prioritizedKeywordsFields: [{ fieldName: "category" }] } }] },
   };
   const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}?api-version=${AIS_API}`, { method: "PUT", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(schema) });
   if (!r.ok) throw new Error("create index " + r.status + " " + (await r.text()).slice(0, 220));
@@ -496,8 +499,9 @@ async function runPushSearch() {
     const id = crypto.createHash("sha1").update(r.path).digest("hex");
     if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
-    let vec; try { vec = (await embed([(r.title + "\n" + txt).slice(0, 8000)]))[0]; } catch (e) { console.error("  embed fail " + r.path.slice(-40) + ": " + e.message); continue; }
-    buf.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), content: txt.slice(0, 32000), material: !!r.material, contentVector: vec });
+    const summary = r.summary || "";
+    let vec; try { vec = (await embed([(r.title + "\n" + summary + "\n" + txt).slice(0, 8000)]))[0]; } catch (e) { console.error("  embed fail " + r.path.slice(-40) + ": " + e.message); continue; }
+    buf.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), summary: summary.slice(0, 16000), content: txt.slice(0, 32000), material: !!r.material, execution_status: r.execution_status || "", signed: !!r.has_signature, contentVector: vec });
     if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  pushed ${n} (skip ${skipped})`); }
   }
   if (buf.length) { await aisPush(buf); n += buf.length; }
