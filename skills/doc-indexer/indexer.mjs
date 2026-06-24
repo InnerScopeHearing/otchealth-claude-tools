@@ -193,9 +193,12 @@ async function listAll(prefix) {
   }
   return out;
 }
+// Decode XML entities on 404: the List-Blobs parser captures escaped names (a blob "(L&C).pdf" comes
+// back as "(L&amp;C).pdf"), so source fetches by the stored name 404. Retry with the decoded name.
+const htmlEnt = (s) => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'");
 async function getBuf(name) {
-  if (BACKEND === "gcs") { const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(name)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer()); }
-  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer());
+  if (BACKEND === "gcs") { let r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(name)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(name)) { const d = htmlEnt(name); if (d !== name) r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(d)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); } if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer()); }
+  let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`); if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(name)) { const d = htmlEnt(name); if (d !== name) r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(d)}?${AZ_SAS}`); } if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer());
 }
 async function putBuf(name, buf, ct) {
   if (BACKEND === "gcs") { const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${GBUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}`, { method: "POST", headers: { Authorization: `Bearer ${await gAuth()}`, "Content-Type": ct || "application/octet-stream" }, body: buf }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 120)); return; }
