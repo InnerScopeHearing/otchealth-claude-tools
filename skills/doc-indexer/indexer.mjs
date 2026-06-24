@@ -433,13 +433,15 @@ async function aisInit() {
   if (!AOAI_EP || !AOAI_KEY) { console.error("Missing azure-openai-endpoint / azure-openai-key (needed for embeddings)."); process.exit(2); }
 }
 async function embed(texts) {
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) });
-    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await sleep((ra ? ra * 1000 : 0) + 1500 * (attempt + 1)); continue; }
+  for (let attempt = 0; attempt < 9; attempt++) {
+    let r;
+    try { r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) }); }
+    catch (e) { await sleep(2000 * (attempt + 1)); continue; } // transient network -> retry
+    if (r.status === 429 || r.status === 503 || r.status === 500) { const ra = +(r.headers.get("retry-after") || 0); await sleep((ra ? ra * 1000 : 0) + 2000 * (attempt + 1) + Math.floor(Math.random() * 1000)); continue; }
     if (!r.ok) throw new Error("embed " + r.status + " " + (await r.text()).slice(0, 120));
     return (await r.json()).data.map((d) => d.embedding);
   }
-  throw new Error("embed 429 exhausted");
+  throw new Error("embed retries exhausted");
 }
 async function aisCreateIndex() {
   const schema = {
@@ -471,6 +473,12 @@ async function aisPush(batch) {
   const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}/docs/index?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
   if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 220));
 }
+async function aisPushRetry(batch) {
+  for (let a = 0; a < 6; a++) {
+    try { await aisPush(batch); return; }
+    catch (e) { const m = String(e.message); if (a < 5 && /(429|503|500|408|throttl|timeout|ECONNRESET|fetch failed)/i.test(m)) { await sleep(2000 * (a + 1)); continue; } throw e; }
+  }
+}
 async function runSearchInit() { await aisInit(); await aisCreateIndex(); console.log(`Azure AI Search index ready: ${IDXNAME} (dims ${EMB_DIMS}, vectorizer ${AOAI_DEP})`); }
 async function aisExistingIds() {
   // Resumability: collect ids already in the index so re-runs only push NEW docs. Without this,
@@ -494,18 +502,33 @@ async function runPushSearch() {
   const rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
   const existing = REINDEX ? new Set() : await aisExistingIds(); // --reindex forces a full re-push
   console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME}`);
-  let n = 0, skipped = 0, buf = [];
+  // Embed in BATCHES of 16 (the endpoint accepts an array): ~16x fewer requests than per-doc, which
+  // is what ends the 429-exhaustion death spiral on a 16k-doc room. Push to AI Search in 64-doc
+  // batches with retry. embErr docs are skipped (logged) so one bad doc never stalls the room.
+  const EMB_BATCH = 16, PUSH_BATCH = 64;
+  let n = 0, skipped = 0, embErr = 0, ready = [], pend = [], texts = [];
+  async function pushReady(force) {
+    while (ready.length >= PUSH_BATCH || (force && ready.length)) { const b = ready.splice(0, PUSH_BATCH); await aisPushRetry(b); n += b.length; console.error(`  pushed ${n} (skip ${skipped}${embErr ? `, embErr ${embErr}` : ""})`); }
+  }
+  async function flushEmb() {
+    if (!texts.length) return;
+    let vecs; try { vecs = await embed(texts); } catch (e) { embErr += pend.length; console.error(`  embed batch fail (${pend.length}): ${e.message}`); pend = []; texts = []; return; }
+    for (let i = 0; i < pend.length; i++) { pend[i].contentVector = vecs[i]; ready.push(pend[i]); }
+    pend = []; texts = [];
+    await pushReady(false);
+  }
   for (const r of rows) {
     const id = crypto.createHash("sha1").update(r.path).digest("hex");
     if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
     const summary = r.summary || "";
-    let vec; try { vec = (await embed([(r.title + "\n" + summary + "\n" + txt).slice(0, 8000)]))[0]; } catch (e) { console.error("  embed fail " + r.path.slice(-40) + ": " + e.message); continue; }
-    buf.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), summary: summary.slice(0, 16000), content: txt.slice(0, 32000), material: !!r.material, execution_status: r.execution_status || "", signed: !!r.has_signature, contentVector: vec });
-    if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  pushed ${n} (skip ${skipped})`); }
+    pend.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), summary: summary.slice(0, 16000), content: txt.slice(0, 32000), material: !!r.material, execution_status: r.execution_status || "", signed: !!r.has_signature });
+    texts.push(((r.title || "") + "\n" + summary + "\n" + txt).slice(0, 8000));
+    if (texts.length >= EMB_BATCH) await flushEmb();
   }
-  if (buf.length) { await aisPush(buf); n += buf.length; }
-  console.log(`pushed ${n} new docs (${skipped} already present) to Azure AI Search index ${IDXNAME}`);
+  await flushEmb();
+  await pushReady(true);
+  console.log(`pushed ${n} new docs (${skipped} already present${embErr ? `, ${embErr} embed-failed` : ""}) to Azure AI Search index ${IDXNAME}`);
 }
 async function runCloudSearch(q) {
   if (!q) { console.error('usage: cloud-search "<query>"'); process.exit(2); }
