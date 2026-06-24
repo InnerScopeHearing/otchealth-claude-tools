@@ -38,6 +38,10 @@ case "$TOOLS_DIR" in
               cp -R "$skdir" "${SKILLS_DST}/${sk}" 2>/dev/null || true
             done
           fi
+          # Re-wire user-scope hooks idempotently so a NEWLY-ADDED hook (e.g. kb-recall) reaches an
+          # already-RUNNING session on its next refresh, not only on the next fresh session. Additive,
+          # only writes when changed, always exits 0.
+          [ -f "$TOOLS_DIR/setup/install-octools-hook.mjs" ] && node "$TOOLS_DIR/setup/install-octools-hook.mjs" >/dev/null 2>&1 || true
           git -C "$TOOLS_DIR" rev-parse HEAD > "$MARKER" 2>/dev/null || true
           echo "[octools-sync] shared toolkit refreshed ${installed:0:7} -> ${remote:0:7} (live, no restart needed)."
         fi

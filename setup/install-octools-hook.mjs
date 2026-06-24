@@ -8,6 +8,8 @@
 //
 // Installs:
 //   UserPromptSubmit -> octools-sync.sh        (live toolkit refresh)
+//   UserPromptSubmit -> kb-recall.sh           (per-prompt memory injection: the read-back loop that
+//                                               survives a mid-session compaction; LLM-free, fail-open)
 //   SessionStart     -> kb-inject.sh session   (recall the agent ledger)
 //   PreCompact       -> kb-inject.sh precompact (CAPTURE journal + DISTILL to ledger before compaction)
 //   Stop             -> kb-inject.sh stop       (CAPTURE every turn + throttled distill)
@@ -26,9 +28,11 @@ const HOME = process.env.HOME || "/tmp";
 const DIR = join(HOME, ".claude");
 const F = join(DIR, "settings.json");
 const KBI = '"$HOME/.claude/skills/kb-memory/kb-inject.sh"';
+const KBR = '"$HOME/.claude/skills/kb-memory/kb-recall.sh"';
 // Each hook is guarded so a session that has not installed the skill yet just no-ops (no error).
 const HOOKS = [
   { event: "UserPromptSubmit", match: "octools-sync.sh", cmd: "[ -f /tmp/octools/setup/octools-sync.sh ] && bash /tmp/octools/setup/octools-sync.sh || true" },
+  { event: "UserPromptSubmit", match: "kb-recall.sh", cmd: `[ -f ${KBR} ] && bash ${KBR} || true` }, // per-prompt memory injection (read-back loop)
   { event: "SessionStart", match: "kb-inject.sh", cmd: `[ -f ${KBI} ] && bash ${KBI} session || true` },
   { event: "PreCompact", match: "kb-inject.sh", cmd: `[ -f ${KBI} ] && bash ${KBI} precompact || true` },
   { event: "Stop", match: "kb-inject.sh", cmd: `[ -f ${KBI} ] && bash ${KBI} stop || true` },

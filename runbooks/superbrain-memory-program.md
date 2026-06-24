@@ -1,0 +1,91 @@
+# Superbrain Working-Memory Program (the "stop forgetting" fix)
+
+> Decision brief from the 21-agent architecture panel (2026-06-24), reconciled by the CTO.
+> Living build record. Update as P0/P1/P2 land.
+
+## Diagnosis (verified in code, not assumed)
+The store works; the **read-back loop is open**. Memory is written outward correctly
+(`PreCompact`/`Stop` -> `kb-journal capture` + `reflect --commit` -> Azure Blob ledger),
+but it is read back into context **exactly once**, at `SessionStart`
+(`kb-inject.sh session` -> `mem.mjs tail --n 30`).
+
+- A mid-session **compaction never re-fires that read.** Claude Code does not raise a fresh
+  `SessionStart` on auto-compaction; `PreCompact` only captures outward and echoes one line.
+- The only **per-turn** hook, `UserPromptSubmit`, is spent entirely on `octools-sync` (toolkit
+  refresh) and touches memory zero times.
+- So recall is a **command the agent must choose to run**, and a just-compacted model has lost
+  the cue that the fact exists. **Stored != in-context.** That single open edge IS "forgets what
+  happened 20 minutes ago."
+
+Compounding (and what makes it invisible): activation is a silent 3-of-3 AND-gate (fresh
+checkout AND identity marker AND wired hooks); no glanceable "memory live?" signal; the one
+injection that fires is an unranked, unbudgeted `tail --n 30` recency dump.
+
+## North star
+Memory becomes a continuous **push, not an opt-in pull**: on every prompt (and therefore on the
+first prompt after any compaction) a small, **ranked, token-budgeted, ring-correct** slice of the
+agent's durable ledger is auto-injected, fail-open and LLM-free on the hot path, with a one-line
+health beacon, so a long-running agent cannot drift past one compaction and Matt can see at a
+glance the brain is on.
+
+## P0 (SHIP, single-session-validated first) -- `kb-recall` per-prompt auto-recall
+A second `UserPromptSubmit` hook beside `octools-sync` that injects a budgeted memory block read
+from the ledger every turn. Reuses the existing hook slot, ledger, and `matchq` rank. **The
+critic's required mitigations are folded into P0 (not deferred):**
+
+1. **`pack` verb in `mem.mjs`** -- emits `<<<WORKING-MEMORY>>> ... <<<END>>>` (replace-not-append),
+   hard-capped (~1200 tokens). Composition: (1) ALWAYS pitfalls + open decisions/corrections +
+   pinned, **but bounded with newest-wins eviction** (R4); (2) top-K (~6) `matchq`-ranked vs the
+   prompt, recency tiebreak; (3) last ~4 recency lines. Dedupe; prefer newest `--was` supersedes.
+2. **READ-SIDE RING FILTER (BLOCKER G1)** -- the inject path must hard-exclude `clo-personal` and
+   deny-by-pattern MNPI (INND, ticker, raise, Reg D/A, share price, 8-K/10-Q) and PHI markers from
+   the shared feed BEFORE injection, not just on `publishShared` (write). This is the load-bearing
+   security fix; without it, continuous injection of the shared feed is an MNPI/PHI leak.
+3. **Local-first hot path (G4/R1)** -- read a LOCAL ledger cache; refresh from Blob on a throttle.
+   No per-prompt container LIST. Network failure -> stale-local, never a stalled prompt.
+4. **Robust stdin + no shell injection (G2/G3)** -- parse the `UserPromptSubmit` JSON safely, pass
+   the prompt to `mem.mjs` via stdin/`--query-stdin` (never interpolate raw prompt text into a
+   shell command). If the prompt field is missing, degrade to recency but flag it.
+5. **`kb-recall.sh`** -- same agent-resolution precedence as `kb-inject.sh`
+   (`session marker > repo .kb-agent > KB_AGENT`). Identity self-heal is **non-persistent for
+   guesses** (G6): resolve for this invocation; only persist `~/.claude/.kb-agent` for a strict
+   exec-home-repo allowlist (otchealth-cto->cto, otchealth-ops->coo, ...); otherwise loud one-line
+   OFF. `set +e`, always `exit 0`, fail-open.
+6. **Health beacon** first line: `MEMORY: LIVE agent=cto | ledger=NN | last-write=4m | hooks=ON`
+   or `MEMORY: OFF (no agent) -> echo cto > ~/.claude/.kb-agent`.
+7. **Canary pulled into P0 (G5)** -- SessionStart writes `canary:<nonce>`; the next recall asserts
+   it is in the pack. If absent, beacon goes **DARK** (the beacon proves function, not just wiring).
+8. **PreCompact belt -- PID-namespaced (G7)** -- write the pack to `~/.claude/.kb-resume.<session>`
+   (not a shared path); prepend once on the next prompt then delete. No cross-session `$HOME` race.
+9. **Wire** as a 4th hook in `install-octools-hook.mjs` (additive; `match` guard idempotent).
+10. **Rollout (critic GO/NO-GO)** -- build on a branch, install + validate on THIS session
+    (remember -> compact -> recall with zero manual action), THEN merge to main + `bulletin.mjs add`
+    so `octools-sync` live-pulls it fleet-wide. Single-session canary BEFORE the fleet bulletin.
+
+## P1 (next)
+- Continuous-proof: canary self-repair + `tests/memory-loop.test.mjs` (remember->compact->recall)
+  in `run-tests.sh` + a `memory_beacon` PostHog event (Fleet Agents project 479484; no Log
+  Analytics so PostHog is the alert lane) + a per-agent memory-health row in the COO morning brief.
+- Semantic recall (embeddings-only, 2s timeout, local fallback) + hot-path write-through indexing
+  into `memory-exec` (freshness hours -> seconds) + `is_current`/supersedes at index time + pin
+  `reflect` distill to foundry gpt-4.1-mini (off the contended shared gpt-4o).
+
+## P2 (ceiling-raiser, only after P0/P1 proven)
+- Typed **entity/current-value** projection over the flat JSONL (`mem entity set/get`, provenance,
+  supersedes) so "what is X now?" (CFBundleVersion, bundle id, which ASC key signs which app, n8n
+  base URL) is deterministic. A thin keyed VIEW, NOT a knowledge-graph service. Alias map. Wire
+  company-brain to read current-values.
+
+## Killed (do not relitigate)
+- A standalone knowledge-graph service / new memory backend (the store works; the bug is a loop).
+- A new monorepo / app-manager repo (claude-tools IS the shared layer; per-app repos stay separate).
+- An LLM call on the per-prompt hot path (latency + shared gpt-4o contention).
+- Relying on `KB_AGENT` env to label agents (exec share one environment; identity self-claims).
+- Upgrading Azure AI Search to S1 to "fix recall" (BASIC is sufficient; the bug was the loop).
+- Any new paid infra (everything rides the existing credit stack).
+
+## Critic blockers folded into P0 above
+G1 read-side ring filter (BLOCKER), G2 stdin validation, G3 shell-quote the prompt, G5 canary so
+the beacon proves function, G6 no sticky mis-homing on guessed identity, G7 PID-namespace
+`.kb-resume`, R4 bound the never-truncated set. Critic verdict: NO-GO fleet-wide as originally
+drafted; GO on a single-session canary with these in. This brief reflects the corrected P0.
