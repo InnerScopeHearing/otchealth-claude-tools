@@ -4,12 +4,12 @@ Ranked by cash impact x speed x "only Matt can do it." The COO pulls today's 1-3
 from the top of this list. Update status as items complete.
 
 ## NOW (this week — first dollars)
-1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
-   today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
-3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
-   connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
+1. **Send the reactivation email.** Draft READY (2026-06-24, lifecycle agent). Notion
+   task queued. Matt approves + sends in Customer.io workspace 193366. 30 min. [NEEDS MATT]
+2. **Launch the Gumroad SOP store.** 10 SOPs DRAFTED (2026-06-24, digital-products agent).
+   $49-$149 each, $499 bundle. Notion task queued. Matt creates account + lists them. [NEEDS MATT]
+3. **Flip the two switches:** connect Stripe to Shopify (10 min), then file FDA OTC
+   Establishment Registration (~$10K, <2wk). Unlocks the $2-3M inventory pool. [Matt-only, blocking]
 4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
    securities firewall). Rebuild the cadence you dropped. [open]
 
