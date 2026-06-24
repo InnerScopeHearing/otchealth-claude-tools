@@ -178,7 +178,20 @@ async function analyze(r) {
       reocr, reocr_tried: true, review: '', review_reasons: [],
     } };
   }
-  const s = await chat([{ role: 'system', content: SUMSYS }, { role: 'user', content: `Path: ${r.path}\nExtracted text:\n${txt.slice(0, MAXTEXT)}` }], 750, true);
+  let s;
+  try { s = await chat([{ role: 'system', content: SUMSYS }, { role: 'user', content: `Path: ${r.path}\nExtracted text:\n${txt.slice(0, MAXTEXT)}` }], 750, true); }
+  catch (e) {
+    // Azure OpenAI's content filter (HTTP 400 "response was filtered") refuses some financial/PII docs
+    // (Ramp/VStock statements). Mark the doc DEEP + flag for MANUAL review instead of leaving it
+    // non-deep, which would re-error every cron tick AND block the room's completion reindex forever.
+    const filt = /filter|\b400\b/i.test(String(e.message));
+    return { tin, tout, patch: {
+      summary_deep: filt ? '[Automated summary blocked by the Azure OpenAI content filter; manual review required.]' : '',
+      title_deep: basename(r.path), doc_type: '', confidence: 'low', requires_signature: false, non_text_asset: false,
+      reocr, reocr_tried: reocr_tried || reocr, deep_softerr: String(e.message).slice(0, 90),
+      review: 'NEEDS_CLAUDE_REVIEW', review_reasons: [filt ? 'summary blocked by content filter (manual review)' : 'summary model error'],
+    } };
+  }
   tin += s.usage.prompt_tokens || 0; tout += s.usage.completion_tokens || 0;
   const m = J(s.text) || { flags: ['summary JSON parse failed'], confidence: 'low' };
   const patch = { summary_deep: m.summary || '', title_deep: m.title || '', doc_type: m.doc_type || '', counterparty: m.counterparty || '', principal: m.principal_amount || '', doc_date: m.doc_date || '', materiality: m.materiality || '', requires_signature: !!m.requires_signature, confidence: m.confidence || 'low', flags: m.flags || [] };
@@ -274,7 +287,11 @@ async function main() {
   const reocrCount = rows.filter((r) => r.reocr).length;
   const nonText = rows.filter((r) => r.non_text_asset).length;
   const fp = `${deepCount}:${reocrCount}:${nonText}`; // re-index when docs go deep, get re-OCR'd, or get (re)classified
-  if (remaining === 0 && deepCount > 0) {
+  // Fire the reindex when this pass DRAINED its todo within budget (!budgetHit), NOT only when every
+  // doc is deep: a handful of docs can be permanently un-deep-able (Azure content filter), and requiring
+  // remaining===0 would block the room's reindex forever. The fp guard still prevents redundant reindexes.
+  if (!budgetHit && deepCount > 0) {
+    if (remaining) console.error(`[deep-pass] note: ${remaining} docs still non-deep (persistent errors); reindexing the rest anyway`);
     let last = ''; try { const b = await getBuf('_CATALOG/.deep-reindexed'); if (b) { const j = JSON.parse(b.toString('utf8')); last = j.fp != null ? j.fp : `${j.deepCount}:0`; } } catch {}
     if (fp !== last) {
       console.error(`[deep-pass] ROOM COMPLETE (${deepCount} deep, ${reocrCount} re-OCR'd) -> full AI Search re-index on the new summaries`);
