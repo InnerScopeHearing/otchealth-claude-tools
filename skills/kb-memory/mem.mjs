@@ -228,7 +228,7 @@ async function runPack() {
     try { const j = JSON.parse(readFileSync(0, "utf8")); const p = `${j.prompt || j.user_prompt || j.message || ""}`; terms = p.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); } catch {}
   } else if (QUERY) terms = QUERY.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   terms = [...new Set(terms.filter((t) => t.length >= 3 && !STOP.has(t)))].slice(0, 24);
-  const scoreq = (r, ts) => { const hay = `${r.type} ${r.text} ${r.was || ""} ${(r.tags || []).join(" ")} ${r.source || ""}`.toLowerCase(); return ts.reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0); };
+  const scoreq = (r, ts) => { const hay = `${r.text} ${r.was || ""} ${(r.tags || []).join(" ")} ${r.source || ""}`.toLowerCase(); return ts.reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0); }; // NB: exclude r.type so a query word like "status"/"fact" does not inflate every row of that type
 
   const byNew = (a, b) => (b.ts || "").localeCompare(a.ts || "");
   const active = rows.filter((r) => !rows.some((x) => x.supersedes === r.id)); // drop superseded (newest-wins)
