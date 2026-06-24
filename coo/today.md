@@ -1,43 +1,37 @@
 # TODAY — the COO's directive (regenerate each morning; mark results through the day)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-24. Operating window 9am-5pm PT.
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in bank: $0. Burn ~$50K/mo. Runway: 0 months. North star: first dollars this week.
 
 ## Today's 3 moves (do these, in order)
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
+### Move 1 (OVERDUE — ~30 min) — Approve and send the reactivation email to 85K
+Draft is queued in Notion: "NEEDS MATT: Approve and send reactivation email to 85K — 2026-06-24"
+The campaign is weeks late. Open Customer.io, review the draft, hit send on segment 1.
 - Report back: sent? to how many?
-Status: [ ] not started
+Status: [ ] awaiting Matt's approval
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
-Status: [ ] not started
+### Move 2 (cash in days — ~1 hr) — Create Gumroad account + publish SOPs
+Draft is queued in Notion: "NEEDS MATT: Create Gumroad account + publish 10 SOP products — 2026-06-24"
+Go to Gumroad, create the account, upload the 10 SOP products at $49-149, enable instant delivery.
+- Report back: live link?
+Status: [ ] awaiting Matt
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
+### Move 3 (unlock the $2-3M pool — ~1-2 hrs) — Flip one switch
+Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe.
+Both are required to sell the 10,298 units. Doing one today moves the big pool closer.
 - Report back: which one, started/done?
 Status: [ ] not started
 
 ## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+Any new tool, any new build, any new research. The system is done. Building is avoidance.
+If you feel the urge, come back to Move 1.
 
-## Yesterday's results
-(none logged yet)
+## Awaiting Matt's approval (queued tasks in Notion)
+- NEEDS MATT: Approve and send reactivation email to 85K — 2026-06-24
+- NEEDS MATT: Create Gumroad account + publish 10 SOP products — 2026-06-24
 
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+## Guard status
+Morning brief: SENT (2026-06-24, earlier run). This refresh is from a duplicate run at 14:03 UTC.
