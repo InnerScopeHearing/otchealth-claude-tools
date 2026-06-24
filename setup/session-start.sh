@@ -77,6 +77,43 @@ fi
 set +e
 set +o pipefail
 
+# ─── System deps: document pipeline (LibreOffice + poppler-utils + weasyprint) ─
+# The remote container base image ships only libreoffice-core + libreoffice-common
+# (the Writer/Calc/Impress MODULES libswlo.so etc. are MISSING), NO poppler-utils,
+# and NO weasyprint. The effects are silent and break real work for every agent:
+#   * no LO modules -> `soffice --convert-to` fails to load ANY document, with the
+#     misleading error "source file could not be loaded" (breaks docx/xlsx/pptx +
+#     the doc-indexer office path). Surfaced by the CLO rendering a legal template.
+#   * no poppler -> no `pdftotext`, the cheap PDF text-layer extractor the
+#     doc-indexer interactive path + the pdf skill rely on.
+#   * no weasyprint -> no HTML/Markdown -> PDF RENDERING (the pdf skill's CREATE
+#     path: legal docs, financial reports, memos, build-review PDFs). Surfaced by
+#     the Developer agent ("PDF rendering tooling isn't installed here").
+# These are the document ESSENTIALS an agent needs to actually run the company, so
+# they are installed always (when missing). Guarded: skip when present, so a warm
+# container pays nothing; non-fatal; only `apt-get update`s when an install is
+# needed; root-or-sudo aware. Heavier/rarer deps stay LAZY-installed by the skills
+# that use them (tesseract OCR - cloud Document Intelligence covers it; ffmpeg -
+# video only). Premium essentials always-on, not the kitchen sink.
+if ! dpkg -s libreoffice-writer >/dev/null 2>&1 || ! command -v pdftotext >/dev/null 2>&1 || ! command -v weasyprint >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    APT=""
+    if [ "$(id -u)" = 0 ]; then APT="apt-get"; elif command -v sudo >/dev/null 2>&1; then APT="sudo -n apt-get"; fi
+    if [ -n "$APT" ]; then
+      echo "[octools] Installing document-pipeline deps (LibreOffice writer/calc/impress + poppler-utils + weasyprint)..."
+      if $APT update -qq >/dev/null 2>&1 \
+         && DEBIAN_FRONTEND=noninteractive $APT install -y -qq \
+              libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils weasyprint >/dev/null 2>&1; then
+        echo "[octools] Document-pipeline deps installed (soffice + pdftotext + weasyprint ready)."
+      else
+        echo "[octools] WARN: document-pipeline dep install failed (apt/network/permissions?) - Office conversion, PDF text extraction, and HTML/MD->PDF rendering may be unavailable this session."
+      fi
+    else
+      echo "[octools] WARN: document-pipeline deps missing and no root/sudo to install - soffice/pdftotext/weasyprint unavailable this session."
+    fi
+  fi
+fi
+
 # ─── Install fleet Claude Code plugins (official marketplace) ────────
 # Belt-and-suspenders for web sessions: .claude/settings.json declares the
 # marketplace + enabledPlugins, but the web "trust folder" gate can skip silent
