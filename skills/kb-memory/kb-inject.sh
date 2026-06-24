@@ -26,6 +26,7 @@ fi
 MEM="${CLAUDE_PROJECT_DIR:-.}/skills/kb-memory/mem.mjs"
 [ -f "$MEM" ] || MEM="$HOME/.claude/skills/kb-memory/mem.mjs"
 [ -f "$MEM" ] || exit 0
+DIR="$(dirname "$MEM")"   # kb-journal.mjs + reflect.mjs live alongside mem.mjs
 
 case "$MODE" in
   session)
@@ -55,13 +56,30 @@ case "$MODE" in
     echo "recall before asserting any fact; if memory and the ledger disagree, THE LEDGER WINS."
     ;;
   precompact)
-    echo "[kb-memory] CONTEXT IS ABOUT TO COMPACT (older turns get summarized; exact facts can be lost)."
-    echo "Persist anything not yet in the ledger NOW so it survives:"
-    echo "  node \"$MEM\" remember|decision|correct|pitfall \"...\" --agent ${AG:-<agent>}"
+    # THE critical anti-forgetting moment: capture the full journal + distill durable facts to the
+    # ledger BEFORE the window compacts. Automatic now (was just a reminder). Fail-open.
+    INPUT="$(timeout 5 cat 2>/dev/null)"
+    if [ -n "$AG" ]; then
+      printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/kb-journal.mjs" capture --agent "$AG" >/dev/null 2>&1 || true
+      printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit --min-tools 4 >/dev/null 2>&1 || true
+      echo "[kb-memory] PreCompact: journal captured + durable facts distilled to the $AG ledger before compaction."
+    else
+      echo "[kb-memory] CONTEXT IS ABOUT TO COMPACT and NO agent is set, so nothing is being captured. Set ~/.claude/.kb-agent (cto|cfo|clo|coo) to enable auto-capture."
+    fi
     ;;
   stop)
     [ -z "$AG" ] && exit 0
-    echo "[kb-memory] Before ending: confirm new facts/decisions/corrections are written to the $AG ledger (mem.mjs ... --agent $AG)."
+    INPUT="$(timeout 5 cat 2>/dev/null)"
+    # Tier-1: capture every input+output this turn (cheap, no LLM, always).
+    printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/kb-journal.mjs" capture --agent "$AG" >/dev/null 2>&1 || true
+    # Tier-2: distill to the ledger, THROTTLED to ~15 min (reflect spawns an LLM call; Stop fires every
+    # turn). PreCompact + the nightly memory-librarian backstop anything a throttled window skips.
+    THROT="$HOME/.claude/kb-journal/.last-reflect"
+    NOW="$(date +%s 2>/dev/null || echo 0)"; LAST="$(stat -c %Y "$THROT" 2>/dev/null || echo 0)"
+    if [ "$((NOW - LAST))" -gt 900 ]; then
+      mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null
+      printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit >/dev/null 2>&1 && touch "$THROT" || true
+    fi
     ;;
 esac
 exit 0
