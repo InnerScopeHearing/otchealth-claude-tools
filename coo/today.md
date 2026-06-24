@@ -1,43 +1,35 @@
-# TODAY — the COO's directive (regenerate each morning; mark results through the day)
+# TODAY — the COO's directive (2026-06-23)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-23 (Monday). Operating window 9am-5pm PT.
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in Mercury: $1.41. Burn ~$50K/mo. Runway: 0. Every day costs $1,650.
 
-## Today's 3 moves (do these, in order)
+## INFRASTRUCTURE ALERT (fix in passing, 5 min)
+Both core n8n COO workflows are inactive (404):
+- COO: Send Email (shpRZibsI81XfJiJ)
+- COO: Read Calendar (xL0VYbElD15ttqKw)
+Go to https://automation.otchealth.app and activate both. Also check the heartbeat (KzhxslBIB12QcKuW).
+Do NOT spend the morning on this — do Move 1 first, then activate them in passing.
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
-- Report back: sent? to how many?
-Status: [ ] not started
+## Move 1 (TODAY, 20 min) — Publish the Gumroad SOP store
+SOPs are written. PDFs are ready. The runbook is in otchealth-exec/coo/gumroad-launch/.
+Go to gumroad.com, create account, list them at $49-149, instant delivery on.
+Cash possible today.
+Status: OPEN
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
-Status: [ ] not started
+## Move 2 (30 min) — Send Draft 141 to 6,800 people
+The email is written. The segment is built. Open Customer.io, review Draft 141, send it.
+Status: OPEN — 7+ days overdue
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
-Status: [ ] not started
+## Move 3 (this week) — File FDA OTC Establishment Registration
+$10K, less than 2 weeks. Unlocks the $2-3M inventory pool. Matt-only.
+Status: OPEN
 
-## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+## Shopify note
+60 sessions/day landing, 0 of 9 checkouts completing (COO-35). US shipping fix + Stripe
+live-mode confirmation needed. Do not let this be Move 1 today — Gumroad first.
 
-## Yesterday's results
-(none logged yet)
-
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+## Do NOT do today
+Build more tools. Fix infrastructure before any cash move. Add features to Helen.
+The system is done. Execute Move 1, Move 2, Move 3 — in that order.
