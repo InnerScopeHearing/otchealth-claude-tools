@@ -87,6 +87,9 @@ case "$MODE" in
       mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null
       printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit >/dev/null 2>&1 && touch "$THROT" || true
     fi
+    # Emit the memory-health beacon to PostHog (self-throttled ~10min, BACKGROUNDED so it never blocks
+    # the Stop hook). This is the real-time signal source for the operator dashboard + the auto-medic.
+    [ -f "$DIR/beacon.mjs" ] && (node "$DIR/beacon.mjs" --agent "$AG" >/dev/null 2>&1 &) || true
     ;;
 esac
 exit 0
