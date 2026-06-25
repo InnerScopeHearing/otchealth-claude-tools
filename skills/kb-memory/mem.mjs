@@ -114,8 +114,23 @@ async function initStore() {
   JSONL = `_MEMORY/${KEYBASE}.jsonl`; MD = `_MEMORY/${KEYBASE}.md`;
 }
 const url = (name) => `https://${ACCT}.blob.core.windows.net/${A.container}/${encPath(name)}?${AZ_SAS}`;
-async function getText(name) { const r = await fetch(url(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return await r.text(); }
-async function putText(name, body, ct) { const r = await fetch(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160)); }
+// Transient-fault retry for the blob ops. A memory WRITE must not be lost to a transient proxy/SAS 403,
+// a 429, or a 5xx: those used to throw straight out, so a `mem.mjs remember` silently failed = the exact
+// forgetting this whole program fights (seen live 2026-06-25: "ERROR: get 403", fine on a plain retry).
+// Bounded short backoff (~300/600/1200ms); a REAL 403 (bad key) just exhausts the few tries then surfaces.
+// 404 is NOT retried - for the GETs it is a valid "absent" answer, not a fault.
+const RETRYABLE = new Set([403, 408, 429, 500, 502, 503, 504]);
+async function fetchRetry(u, opts, tries = 4) {
+  let last;
+  for (let a = 0; a < tries; a++) {
+    try { const r = await fetch(u, opts); if (r.status === 404 || r.ok || !RETRYABLE.has(r.status) || a === tries - 1) return r; last = r; }
+    catch (e) { last = e; if (a === tries - 1) throw e; }
+    await new Promise((s) => setTimeout(s, 300 * Math.pow(2, a)));
+  }
+  return last;
+}
+async function getText(name) { const r = await fetchRetry(url(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return await r.text(); }
+async function putText(name, body, ct) { const r = await fetchRetry(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160)); }
 
 // --- the shared EXEC team feed (commons; one file per agent => no cross-agent clobber) ---
 const C = AGENTS.commons;
@@ -123,8 +138,8 @@ const SHARED_PREFIX = "_MEMORY/_exec/";
 let C_ACCT, C_SAS;
 async function commonsInit() { if (C_ACCT) return; C_ACCT = process.env.KB_COMMONS_ACCOUNT || C.account || (await sm(C.accountSecret)); const k = await sm(C.keySecret); if (!C_ACCT || !k) throw new Error("commons creds missing"); C_SAS = buildSas(C_ACCT, k); }
 const cUrl = (name) => `https://${C_ACCT}.blob.core.windows.net/${C.container}/${encPath(name)}?${C_SAS}`;
-async function cGet(name) { const r = await fetch(cUrl(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("cget " + r.status); return await r.text(); }
-async function cPut(name, body) { const r = await fetch(cUrl(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/x-ndjson" }, body }); if (!r.ok) throw new Error("cput " + r.status + " " + (await r.text()).slice(0, 160)); }
+async function cGet(name) { const r = await fetchRetry(cUrl(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("cget " + r.status); return await r.text(); }
+async function cPut(name, body) { const r = await fetchRetry(cUrl(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/x-ndjson" }, body }); if (!r.ok) throw new Error("cput " + r.status + " " + (await r.text()).slice(0, 160)); }
 async function cList(prefix) { const out = []; let marker = ""; do { let u = `https://${C_ACCT}.blob.core.windows.net/${C.container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${C_SAS}`; if (marker) u += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(u); if (!r.ok) break; const xml = await r.text(); for (const m of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(m[1]); marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker); return out; }
 const sharedKey = (agent) => `${SHARED_PREFIX}${agent}.jsonl`;
 async function publishShared(agent, entry) {
