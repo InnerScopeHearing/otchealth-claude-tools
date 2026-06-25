@@ -320,6 +320,30 @@ async function runPack() {
     return;
   }
   if (cmd === "pack") return runPack();
+  if (cmd === "team-health") {
+    // Operator-visible cross-agent memory health: per exec agent, how long since they last shared
+    // anything (a proxy for "is this agent's memory live + active"). Feeds the COO daily brief so Matt
+    // sees a green/red line per agent. --json for machine consumption (the brief / a PostHog emit).
+    let shared = [];
+    try { shared = await readSharedAll(); } catch (e) { console.log("team-health: shared feed unavailable (" + e.message + ")"); return; }
+    const now = Date.now();
+    const lastBy = {}, statusBy = {};
+    for (const r of shared) {
+      if (!lastBy[r.agent] || (r.ts || "") > lastBy[r.agent]) lastBy[r.agent] = r.ts || "";
+      if (r.type === "status" && (!statusBy[r.agent] || (r.ts || "") > (statusBy[r.agent].ts || ""))) statusBy[r.agent] = r;
+    }
+    const STALE = parseInt(process.env.KB_HEALTH_STALE_MIN || "1440", 10) || 1440; // LIVE if shared within 24h
+    const rows = EXEC.map((a) => {
+      const ts = lastBy[a];
+      const ageMin = ts ? Math.round((now - Date.parse(ts)) / 60000) : null;
+      return { agent: a, status: ageMin === null ? "NO-DATA" : ageMin <= STALE ? "LIVE" : "STALE", last_shared_age_min: ageMin, working_on: (statusBy[a]?.text || "").replace(/\s+/g, " ").slice(0, 90) || null };
+    });
+    if (argv.includes("--json")) { console.log(JSON.stringify(rows)); return; }
+    const age = (m) => m === null ? "no shared activity" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+    console.log(`# EXEC MEMORY HEALTH (last shared activity per agent; LIVE = within ${Math.round(STALE / 60)}h)`);
+    for (const r of rows) console.log(`[${(r.status === "LIVE" ? "LIVE " : r.status === "STALE" ? "STALE" : "  -  ")}] ${r.agent.padEnd(11)} ${age(r.last_shared_age_min).padEnd(18)}${r.working_on ? "  " + r.working_on : ""}`);
+    return;
+  }
   if (cmd === "team") {
     const shared = await readSharedAll();
     const { latestStatus } = teamLines(shared);
