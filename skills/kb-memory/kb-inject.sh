@@ -61,6 +61,11 @@ case "$MODE" in
     echo ""
     echo "DISCIPLINE: write-through EVERY new fact/decision/correction with mem.mjs (--agent $AG) the moment it happens;"
     echo "recall before asserting any fact; if memory and the ledger disagree, THE LEDGER WINS."
+    # Surface any pending fleet-medic SELF-HEAL directive for this agent (auto-dispatched when the medic
+    # saw this agent's memory go dark). Shows once at session start, then auto-clears. Off the hot path,
+    # fail-open. THIS is how the auto-dispatched fix reaches the agent.
+    MEDIC="$DIR/../fleet-medic/medic.mjs"
+    [ -f "$MEDIC" ] && timeout 12 node "$MEDIC" check --agent "$AG" 2>/dev/null || true
     ;;
   precompact)
     # THE critical anti-forgetting moment: capture the full journal + distill durable facts to the
