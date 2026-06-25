@@ -66,6 +66,9 @@ case "$MODE" in
     # fail-open. THIS is how the auto-dispatched fix reaches the agent.
     MEDIC="$DIR/../fleet-medic/medic.mjs"
     [ -f "$MEDIC" ] && timeout 12 node "$MEDIC" check --agent "$AG" 2>/dev/null || true
+    # Warm the hot-path semantic cred-cache (read-only query key) in the background, so the per-prompt
+    # semantic tier is ready without ever resolving Secret Manager inline on the prompt path. Fail-open.
+    (node "$MEM" sem-refresh >/dev/null 2>&1 &) || true
     ;;
   precompact)
     # THE critical anti-forgetting moment: capture the full journal + distill durable facts to the

@@ -150,4 +150,20 @@ drafted; GO on a single-session canary with these in. This brief reflects the co
   been LIVE since 2026-06-23 (SM `claude-code-oauth-token` v2 + the GH Actions secret on claude-tools),
   so the Tier-2 spawn is a CHOICE, not a gate, and Matt declined it (it would draw the shared Max weekly
   limit). Do NOT wire medic escalation -> autonomous-run.yml in a future session.
-- Only remaining option: task #19 (hot-path semantic-in-pack, needs a read-only AIS query key first).
+- **2026-06-25 -- hot-path SEMANTIC tier in pack SHIPPED (task #19 DONE, the program is now 100%).**
+  When an agent's LOCAL keyword pack is THIN (`ranked < 3`), `pack` reaches into the shared exec brain
+  (memory-exec) BY MEANING and injects up to 3 novel, ring-safe hits as a `RELATED (shared brain, by
+  meaning)` section. Key design: it uses Azure AI Search's server-side SEMANTIC RANKER (not a client
+  embed), so the hot path needs ONLY a READ-ONLY query key + the search endpoint -- NO admin key, NO
+  AOAI key, NO embed call on the prompt path. Provisioned a dedicated read-only query key
+  `memory-hotpath-ro` on `otchealth-dataroom-search` -> SM `azure-search-query-key` (verified: reads
+  200, writes 403). Guards: thin-triggered, 60s throttle, ONE 2s-bounded call, fail-open to local,
+  RING_DENY wall on cross-agent hits, dedup against the local pack. Creds live in a local cache
+  (`~/.claude/kb-cache/.sem-creds.json`, 0600) warmed off the hot path by a `sem-refresh` verb (run at
+  SessionStart + lazily on cache miss), so Secret Manager is never resolved inline per-prompt. The note
+  that "this needs the SA off disk" was over-cautious: the claude-driver SA is ALREADY on every agent's
+  disk and can fetch any key, so a read-only query-key cache is no new exposure -- the real hot-path
+  constraints were LATENCY + ring-safety, both handled. Proven live (an off-vocabulary prompt surfaced a
+  ring-safe cross-agent concept the keyword pack missed). Gate 163/163 (+2 hermetic gating tests).
+- **THE SUPERBRAIN MEMORY PROGRAM IS COMPLETE (P0 + P1 + P2 + auto-medic + write-through + hot-path
+  semantic).** No open build items. (Wave-4 Tier-2 medic-session auto-spawn is DECIDED-AGAINST, alert-only.)

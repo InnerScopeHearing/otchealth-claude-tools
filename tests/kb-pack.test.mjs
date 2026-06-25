@@ -77,3 +77,22 @@ test("pack with no agent marker yields a one-line OFF beacon, never throws", () 
   const out = execFileSync("node", [MEM, "pack"], { env: { ...process.env, HOME: mkdtempSync(join(tmpdir(), "pack-")), GCP_CLAUDE_DRIVER_SA_JSON: "" }, encoding: "utf8" });
   assert.match(out, /MEMORY: OFF \(no agent\)/);
 });
+
+// --- hot-path SEMANTIC tier gating (Wave 2b follow-on). Safety-critical property: it must NEVER fire
+// without a read-only query-key cred-cache, and never reach the network on a credless box.
+test("semantic tier stays OFF without a cred-cache (thin pack reaches the gate, still no RELATED, no hang)", () => {
+  // the query matches nothing in the seeded ledger -> the local pack is THIN -> the semantic gate is
+  // REACHED -> with no ~/.claude/kb-cache/.sem-creds.json and no SA it must no-op (no fetch, no section).
+  const out = pack(home([
+    { id: "2026-01-01", ts: "2026-01-01T00:00:00Z", type: "fact", text: "the office plant is watered on tuesdays" },
+  ]), ["--query", "quantum chromodynamics lattice gauge theory"]);
+  assert.doesNotMatch(out, /RELATED \(shared brain/, "must not fire without the read-only query-key cred-cache");
+  assert.match(out, /<<<END>>>/, "block still closes");
+});
+
+test("KB_SEM_DISABLE hard-disables the semantic tier", () => {
+  const out = pack(home([
+    { id: "2026-01-01", ts: "2026-01-01T00:00:00Z", type: "fact", text: "unrelated filler fact" },
+  ]), ["--query", "a totally different off topic subject"], { KB_SEM_DISABLE: "1" });
+  assert.doesNotMatch(out, /RELATED \(shared brain/);
+});
