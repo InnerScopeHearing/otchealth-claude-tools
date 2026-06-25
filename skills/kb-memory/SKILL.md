@@ -124,3 +124,10 @@ Indexes ONLY the shared exec feed (`_MEMORY/_exec/*`), never a private or clo-pe
 
 - `node skills/kb-memory/semantic.mjs reindex` - (re)build the `memory-exec` index (resumable; skips already-indexed). Run after a batch of new entries (or wire into the daily-digest job).
 - `node skills/kb-memory/semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall]` - vector + keyword (hybrid) recall across the whole exec team's memory.
+
+**Always fresh (Wave 2b):** a SHARED entry is embedded into `memory-exec` the INSTANT it is written
+(detached `index-one.mjs`), so semantic recall and the company-brain see it within the minute, not after
+the next reindex. **Per-prompt (Wave 2b follow-on):** when an agent's local keyword pack is THIN, `pack`
+auto-injects up to 3 ring-safe `RELATED (shared brain, by meaning)` hits from `memory-exec` using the
+server-side SEMANTIC RANKER + a READ-ONLY query key (`azure-search-query-key`; no admin/embedding key on
+the hot path). Thin-triggered + 60s-throttled + 2s-bounded + fail-open; `KB_SEM_DISABLE=1` turns it off.

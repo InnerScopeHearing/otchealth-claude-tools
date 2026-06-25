@@ -30,7 +30,7 @@
 //   team     [--agent x] [--n 60]               # the whole exec team feed: who is working on what
 //   render   --agent cfo  |  list-agents
 import crypto from "node:crypto";
-import { readFileSync, existsSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -183,6 +183,35 @@ function ageMs(p) { try { return Date.now() - statSync(p).mtimeMs; } catch { ret
 const RING_DENY = /\b(innd|inscope hearing|otcmkts|ticker|reg\s*[da]\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|materially?\s*non.?public|mnpi|reg\s*fd|dividend|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number)\b/i;
 const ringSafeCross = (r) => !RING_DENY.test(`${r.text || ""} ${(r.tags || []).join(" ")} ${r.was || ""}`);
 
+// ---- hot-path SEMANTIC tier: when an agent's LOCAL keyword pack is thin, reach into the shared exec
+//      brain (the memory-exec AI Search index) BY MEANING and pull a couple of related entries. Uses
+//      ONLY a READ-ONLY query key + the search endpoint (cached locally; refreshed off the hot path) and
+//      the server-side SEMANTIC RANKER, so there is NO admin key and NO embedding key on the hot path
+//      and NO client-side embed call. ONE bounded call (AbortController), thin-triggered + throttled +
+//      ring-filtered + fail-open. The query key only ever reads; the code only ever queries memory-exec
+//      (the already-ring-safe shared feed), and cross-agent hits still pass the RING_DENY wall.
+const SEM_CRED_FILE = `${CACHE_DIR}/.sem-creds.json`;
+const SEM_STAMP = `${CACHE_DIR}/.last-sem`;
+function readSemCredsCache() { try { const c = JSON.parse(readFileSync(SEM_CRED_FILE, "utf8")); if (c.searchEp && c.queryKey && Date.now() - (c.ts || 0) < 6 * 3600 * 1000) return c; } catch {} return null; }
+function spawnSemRefresh() { try { spawn(process.execPath, [join(HERE, "mem.mjs"), "sem-refresh"], { detached: true, stdio: "ignore" }).unref(); } catch {} }
+async function semanticHits(prompt, creds, excludePrefixes) {
+  const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 2000);
+  try {
+    const r = await fetch(`${creds.searchEp}/indexes/memory-exec/docs/search?api-version=2023-11-01`, { method: "POST", signal: ac.signal, headers: { "api-key": creds.queryKey, "Content-Type": "application/json" }, body: JSON.stringify({ search: String(prompt).slice(0, 400), queryType: "semantic", semanticConfiguration: "sem", top: 6, select: "agent,type,ts,text,tags" }) });
+    if (!r.ok) return [];
+    const out = [];
+    for (const h of (await r.json()).value || []) {
+      const text = (h.text || "").trim(); if (!text) continue;
+      if (excludePrefixes.has(text.slice(0, 40).toLowerCase())) continue;                  // already in the local pack
+      if (h.agent !== AGENT && !ringSafeCross({ text, tags: (h.tags || "").split(", ") })) continue; // cross-agent ring wall
+      out.push({ agent: h.agent, type: h.type, text });
+      if (out.length >= 3) break;
+    }
+    return out;
+  } catch { return []; }                                                                   // timeout / error -> fail-open
+  finally { clearTimeout(to); }
+}
+
 async function load() { const t = await getText(JSONL); if (!t) return []; return t.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
 function newId(rows) { const d = new Date().toISOString().slice(0, 10).replace(/-/g, ""); const n = rows.filter((r) => (r.id || "").startsWith(d)).length + 1; return `${d}-${String(n).padStart(3, "0")}`; }
 
@@ -327,10 +356,10 @@ async function runPack() {
   // Score by term-OVERLAP (not strict AND) so a long natural-language prompt still ranks; drop short
   // words + stopwords so the signal terms drive the match.
   const STOP = new Set("the and for that this with you your our can could should would will does how what why are was were from into about".split(" "));
-  let terms = [];
+  let terms = [], rawPrompt = "";
   if (argv.includes("--stdin-json")) {
-    try { const j = JSON.parse(readFileSync(0, "utf8")); const p = `${j.prompt || j.user_prompt || j.message || ""}`; terms = p.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); } catch {}
-  } else if (QUERY) terms = QUERY.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    try { const j = JSON.parse(readFileSync(0, "utf8")); rawPrompt = `${j.prompt || j.user_prompt || j.message || ""}`; terms = rawPrompt.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); } catch {}
+  } else if (QUERY) { rawPrompt = QUERY; terms = QUERY.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
   terms = [...new Set(terms.filter((t) => t.length >= 3 && !STOP.has(t)))].slice(0, 24);
   const scoreq = (r, ts) => { const hay = `${r.text} ${r.was || ""} ${(r.tags || []).join(" ")} ${r.source || ""}`.toLowerCase(); return ts.reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0); }; // NB: exclude r.type so a query word like "status"/"fact" does not inflate every row of that type
 
@@ -356,6 +385,21 @@ async function runPack() {
     team = Object.keys(latestStatus).filter((a) => a !== AGENT).map((a) => latestStatus[a]).filter(ringSafeCross).slice(0, 8);
   }
 
+  // hot-path SEMANTIC tier: only when the local keyword pack came up THIN (the agent's own ledger did
+  // not match the prompt well), reach into the shared exec brain BY MEANING. Thin-triggered + throttled
+  // so MOST prompts skip it entirely; ONE bounded read-only call; fail-open to the local pack.
+  let semantic = [];
+  const SEM_MIN = parseInt(process.env.KB_SEM_MIN || "3", 10) || 3;
+  const SEM_THROTTLE = (parseInt(process.env.KB_SEM_THROTTLE_S || "60", 10) || 60) * 1000;
+  if (!process.env.KB_SEM_DISABLE && rawPrompt && terms.length >= 2 && ranked.length < SEM_MIN && !NO_SHARE.has(AGENT) && ageMs(SEM_STAMP) > SEM_THROTTLE) {
+    const creds = readSemCredsCache();
+    if (creds) {
+      try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(SEM_STAMP, String(Date.now())); } catch {} // stamp EARLY so a slow/failed call still respects the window
+      const excl = new Set([...ranked, ...recent, ...pitfalls, ...decisions, ...corrections, ...entities].map((r) => (r.text || "").slice(0, 40).toLowerCase()));
+      semantic = await semanticHits(rawPrompt, creds, excl);
+    } else if (resolveSaJson()) spawnSemRefresh(); // not cached -> warm it off the hot path for next time; skip this turn
+  }
+
   // beacon: LIVE only if the ledger is actually readable + non-empty (proves FUNCTION, not just wiring).
   const tss = rows.map((r) => r.ts).filter(Boolean).sort();
   const lastTs = tss[tss.length - 1] || "";
@@ -376,6 +420,7 @@ async function runPack() {
   if (pitfalls.length) { out.push("## PITFALLS (do not repeat):"); for (const r of pitfalls) out.push(`- ${clip(r.text)}`); }
   if (decisions.length) { out.push("## DECISIONS (current):"); for (const r of decisions) out.push(`- ${clip(r.text)}`); }
   if (recent.length) { out.push("## RECENT:"); for (const r of recent) out.push(L(r)); }
+  if (semantic.length) { out.push("## RELATED (shared brain, by meaning):"); for (const r of semantic) out.push(`- [${r.agent}/${r.type}] ${clip(r.text, 140)}`); }
   if (team.length) { out.push("## TEAM (other agents, latest status):"); for (const r of team) out.push(`- [${r.agent}] ${clip(r.text, 120)}`); }
 
   // hard char budget: keep the front (beacon + pitfalls), trim trailing sections so the block can never
@@ -427,6 +472,16 @@ async function runPack() {
     return;
   }
   if (cmd === "pack") return runPack();
+  if (cmd === "sem-refresh") {
+    // warm the hot-path semantic cred-cache (read-only query key + search endpoint) OFF the prompt path,
+    // so the per-prompt semantic tier never resolves Secret Manager inline. Fail-open, mode 0600.
+    try {
+      const ep = (await sm("azure-search-endpoint") || "").replace(/\/$/, "");
+      const qk = await sm("azure-search-query-key");
+      if (ep && qk) { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(SEM_CRED_FILE, JSON.stringify({ searchEp: ep, queryKey: qk, ts: Date.now() })); try { chmodSync(SEM_CRED_FILE, 0o600); } catch {} console.error("[kb-memory] semantic cred-cache refreshed"); }
+    } catch {}
+    return;
+  }
   if (cmd === "team-health") {
     // Operator-visible cross-agent memory health: per exec agent, how long since they last shared
     // anything (a proxy for "is this agent's memory live + active"). Feeds the COO daily brief so Matt
