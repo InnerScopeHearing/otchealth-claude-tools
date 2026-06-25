@@ -68,7 +68,7 @@ case "$MODE" in
     INPUT="$(timeout 5 cat 2>/dev/null)"
     if [ -n "$AG" ]; then
       printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/kb-journal.mjs" capture --agent "$AG" >/dev/null 2>&1 || true
-      printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit --min-tools 4 >/dev/null 2>&1 || true
+      printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit --min-tools 4 --prefer-fallback >/dev/null 2>&1 || true
       echo "[kb-memory] PreCompact: journal captured + durable facts distilled to the $AG ledger before compaction."
     else
       echo "[kb-memory] CONTEXT IS ABOUT TO COMPACT and NO agent is set, so nothing is being captured. Set ~/.claude/.kb-agent (cto|cfo|clo|coo) to enable auto-capture."

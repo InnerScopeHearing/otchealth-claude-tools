@@ -19,6 +19,9 @@ const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] 
 const COMMIT = argv.includes("--commit");
 const MIN_TOOLS = parseInt(val("--min-tools", "12"), 10) || 12;
 const AGENT = (process.env.KB_AGENT || val("--agent", "") || "").toLowerCase();
+// PreCompact (the highest-stakes distill) passes --prefer-fallback: use the uncontended foundry
+// gpt-4.1-mini as PRIMARY so the capture never blocks on the contended shared gpt-4o deployment.
+const PREFER_FB = argv.includes("--prefer-fallback") || !!process.env.REFLECT_PREFER_FALLBACK;
 
 function loadSA() { if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) { try { return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); } catch {} } for (const p of [process.env.HOME + "/.gcp_claude_driver_sa.json", "/root/.gcp_claude_driver_sa.json"]) { try { return JSON.parse(readFileSync(p, "utf8")); } catch {} } return null; }
 const _SA = loadSA(); // env var OR the file, so reflect does not silently no-op on a fresh shell
@@ -38,9 +41,35 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   throw Object.assign(new Error("429"), { throttled: true });
 }
 async function ask(system, user, maxTokens = 700) {
-  // primary gpt-4o; fall back to the foundry deployment (separate quota) on sustained throttle (Fleet Intel #5)
-  try { return await callChat(EP, KEY, DEP, system, user, maxTokens, 4); }
-  catch (e) { if (e.throttled && FB_EP && FB_KEY) return await callChat(FB_EP, FB_KEY, FB_DEP, system, user, maxTokens, 5); throw e; }
+  const primary = () => callChat(EP, KEY, DEP, system, user, maxTokens, 4);
+  const hasFB = FB_EP && FB_KEY;
+  const fallback = () => hasFB ? callChat(FB_EP, FB_KEY, FB_DEP, system, user, maxTokens, 5) : Promise.reject(Object.assign(new Error("no fallback"), { throttled: true }));
+  // --prefer-fallback (PreCompact): use the uncontended foundry mini FIRST, gpt-4o only as backup.
+  if (PREFER_FB && hasFB) { try { return await fallback(); } catch { return await primary(); } }
+  // default: primary gpt-4o, fall back to the foundry deployment (separate quota) on sustained throttle.
+  try { return await primary(); }
+  catch (e) { if (e.throttled && hasFB) return await fallback(); throw e; }
+}
+
+// DETERMINISTIC safety net: when the LLM is fully unavailable (sustained 429 / error), do not lose the
+// session's key facts. Pull the highest-signal verbatim statements from the condensed body so they land
+// in the recall-able ledger immediately (the journal also has the raw turns; this is the recall layer).
+function extractDurable(body) {
+  const SIG = /\b(merged to main|SHIPPED|stored .{0,40}Secret Manager|CORRECTION|CFBundleVersion \d+|build \d+\b|bundle id|App Store Connect|DONE:|DECISION|decided to|the (?:current |correct |right )?value is)\b/i;
+  const out = [], seen = new Set();
+  for (const ln of body.split("\n")) {
+    if (!ln.startsWith("ASSISTANT:")) continue;
+    for (const sent of ln.replace(/^ASSISTANT:\s*/, "").split(/(?<=[.!?])\s+/)) {
+      const s = sent.trim();
+      if (s.length >= 30 && s.length <= 280 && SIG.test(s)) {
+        const k = s.slice(0, 64).toLowerCase();
+        if (!seen.has(k)) { seen.add(k); out.push(s); }
+        break;
+      }
+    }
+    if (out.length >= 3) break;
+  }
+  return out;
 }
 
 // condense the transcript to the SIGNAL: user asks + assistant conclusions, tool noise dropped, capped
@@ -72,13 +101,20 @@ async function main() {
   const known = recentMemory();
   const sys = `You are the memory-reflection step for agent "${AGENT}". From the session below, extract ONLY genuinely DURABLE, REUSABLE lessons that are NOT already in the agent's recent memory. Prefer: pitfalls (a wrong belief or trap + the fix), decisions (a standing choice + why), or facts (a stable identifier/config). Be strict: 0-3 items, each one sentence, specific and self-contained. If nothing new and durable, return []. Mark share=true ONLY if it is non-sensitive and useful cross-team (no MNPI/PHI/privileged). Return ONLY a JSON array: [{"type":"pitfall|decision|remember","text":"..","share":bool}].`;
   const user = `AGENT RECENT MEMORY (do NOT duplicate these):\n${known}\n\n===== SESSION SIGNAL (${c.tools} tool calls) =====\n${c.body}`;
-  let items; try { items = JSON.parse((await ask(sys, user)).match(/\[[\s\S]*\]/)[0]); } catch { items = []; }
+  let items;
+  try { items = JSON.parse((await ask(sys, user)).match(/\[[\s\S]*\]/)[0]); }
+  catch (e) {
+    // LLM unavailable (sustained 429 / error) -> deterministic safety net so a 429 never costs a fact.
+    const verbatim = extractDurable(c.body);
+    items = verbatim.map((t) => ({ type: "remember", text: t, share: false, _fallback: true }));
+    if (items.length) console.error(`reflect: LLM unavailable (${e.message}); deterministic extract saved ${items.length} fact(s).`);
+  }
   items = (Array.isArray(items) ? items : []).filter(x => x && x.text && /^(pitfall|decision|remember)$/.test(x.type)).slice(0, 3);
   if (!items.length) { console.log("reflect: no new durable lessons."); process.exit(0); }
   console.log(`reflect: ${items.length} candidate lesson(s)${COMMIT ? " (committing)" : " (dry-run; pass --commit to write)"}:`);
   for (const it of items) {
     console.log(`  [${it.type}${it.share ? ",share" : ""}] ${it.text}`);
-    if (COMMIT) { try { const a = [join(HERE, "mem.mjs"), it.type, it.text, "--agent", AGENT, "--tags", "auto-reflect"]; if (it.share) a.push("--share"); execFileSync("node", a, { stdio: "ignore" }); } catch (e) { console.error("  write failed: " + e.message); } }
+    if (COMMIT) { try { const a = [join(HERE, "mem.mjs"), it.type, it.text, "--agent", AGENT, "--tags", it._fallback ? "auto-extract-fallback" : "auto-reflect"]; if (it.share) a.push("--share"); execFileSync("node", a, { stdio: "ignore" }); } catch (e) { console.error("  write failed: " + e.message); } }
   }
   process.exit(0);
 }
