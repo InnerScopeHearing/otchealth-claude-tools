@@ -29,6 +29,10 @@ node skills/kb-memory/mem.mjs decision "<decision + why>"  --agent cfo [...] [--
 node skills/kb-memory/mem.mjs correct  "<the CORRECT fact>" --agent cfo --was "<the wrong belief>" [--supersedes <id>] [--share]
 node skills/kb-memory/mem.mjs pitfall  "<recurring mistake + truth + rule>" --agent cfo [--share]
 node skills/kb-memory/mem.mjs status   "<what I'm working on / project status>" --agent cfo   # ALWAYS shared to the exec team
+node skills/kb-memory/mem.mjs entity set <key> "<value>"   --agent cfo [--source "..."] [--share]  # deterministic "what is X now" (latest wins per key)
+node skills/kb-memory/mem.mjs entity get <key>             --agent cfo            # the CURRENT value + provenance (resolves aliases)
+node skills/kb-memory/mem.mjs entity list                  --agent cfo            # all current-values + aliases
+node skills/kb-memory/mem.mjs entity alias "<phrasing>" <canonical-key> --agent cfo  # point many phrasings at one key
 node skills/kb-memory/mem.mjs recall   "<query>"           --agent cfo [--n 25]    # searches YOUR lane + the TEAM feed
 node skills/kb-memory/mem.mjs tail     --agent cfo [--n 40]     # YOUR pitfalls/recent + the TEAM feed (company-wide)
 node skills/kb-memory/mem.mjs team     [--n 60]                # the whole exec team feed: who is working on what

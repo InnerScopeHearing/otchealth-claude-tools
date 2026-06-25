@@ -23,6 +23,8 @@
 //   correct  "<right>"  --agent cfo --was "<wrong>" [--supersedes id] [--share]
 //   pitfall  "<lesson>" --agent cfo [--share]
 //   status   "<what I'm working on / project status>" --agent cfo    # ALWAYS shared to the exec team
+//   entity   set <key> "<value>" --agent cfo [--source ..] [--share]  # deterministic current-value ("what is X now")
+//   entity   get <key> --agent cfo | list | alias "<from>" <to>       # latest-wins per key; alias many phrasings -> 1 key
 //   recall   "<query>"  --agent cfo [--n 25]    # searches YOUR lane + the shared TEAM feed
 //   tail     --agent cfo [--n 40]               # YOUR pitfalls/recent + the TEAM feed (company-wide)
 //   team     [--agent x] [--n 60]               # the whole exec team feed: who is working on what
@@ -190,10 +192,12 @@ function renderMd(rows) {
   const sortNew = (a, b) => (b.ts || "").localeCompare(a.ts || "");
   const sec = (t) => active.filter((r) => r.type === t).sort(sortNew);
   const pit = sec("pitfall"), dec = sec("decision"), fac = sec("fact"), sta = sec("status"), cor = rows.filter((r) => r.type === "correction").sort(sortNew);
+  const ent = active.filter((r) => r.type === "entity").sort((a, b) => (a.ekey || "").localeCompare(b.ekey || "")); // current value per key (superseded dropped)
   let md = `# ${KEYBASE.toUpperCase()} Memory Ledger\n\n`;
   md += `> SOURCE OF TRUTH. Read this; do not trust in-session recall. Append-only, dated, newest-wins.\n`;
-  md += `> Updated ${new Date().toISOString()} - ${rows.length} entries (${pit.length} pitfalls, ${dec.length} decisions, ${fac.length} facts, ${sta.length} status, ${cor.length} corrections).\n\n`;
+  md += `> Updated ${new Date().toISOString()} - ${rows.length} entries (${pit.length} pitfalls, ${dec.length} decisions, ${fac.length} facts, ${ent.length} current-values, ${sta.length} status, ${cor.length} corrections).\n\n`;
   md += `## PITFALLS - common mistakes / incorrect beliefs the AI keeps forming. DO NOT REPEAT.\n` + (pit.length ? pit.map(fmt).join("\n") : "- (none yet)") + "\n\n";
+  md += `## CURRENT VALUES (entities - latest wins per key; the deterministic "what is X now")\n` + (ent.length ? ent.map((r) => `- \`${r.ekey}\` = ${r.evalue}${r.source ? `  (src: ${r.source})` : ""}  \`${r.id}\``).join("\n") : "- (none yet)") + "\n\n";
   md += `## STATUS - current projects / what I am working on (shared to the exec team)\n` + (sta.length ? sta.map(fmt).join("\n") : "- (none yet)") + "\n\n";
   md += `## DECISIONS (what we decided, and why)\n` + (dec.length ? dec.map(fmt).join("\n") : "- (none yet)") + "\n\n";
   md += `## FACTS (established, current)\n` + (fac.length ? fac.map(fmt).join("\n") : "- (none yet)") + "\n\n";
@@ -212,15 +216,88 @@ async function append(type, share) {
   await putText(MD, renderMd(rows), "text/markdown; charset=utf-8");
   let shared = false;
   if (share || type === "status") shared = await publishShared(AGENT, entry);
-  // write-through SEMANTIC index: if the entry actually reached the shared exec feed, embed + upsert it
-  // into the memory-exec AI Search index NOW (detached, fire-and-forget) so it is recallable BY MEANING
-  // this minute, not only after the next 6h/nightly reindex. RING-SAFE: gated on `shared` being true, so
-  // it only ever indexes content publishShared() let through (never a private / clo-personal lane). Never
-  // blocks the write (unref'd); index-one.mjs is fail-open and self-throttles nothing the caller waits on.
-  if (shared) {
-    try { spawn(process.execPath, [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)], { detached: true, stdio: "ignore" }).unref(); } catch {}
-  }
+  maybeIndex(entry, shared);
   console.log(`[kb-memory] ${type} -> ${AGENT} (${A.ring}) id=${entry.id}. Private ledger ${rows.length} entries${shared ? "; PUBLISHED to exec team feed" : ""}.`);
+}
+
+// write-through SEMANTIC index for a SHARED entry: embed + upsert it into the memory-exec AI Search
+// index NOW (detached, fire-and-forget) so it is recallable BY MEANING this minute, not only after the
+// next 6h/nightly reindex. RING-SAFE: gated on `shared` being true, so it only ever indexes content
+// publishShared() let through (never a private / clo-personal lane). Never blocks the write (unref'd);
+// index-one.mjs is fail-open. Shared by append() + entity set.
+function maybeIndex(entry, shared) {
+  if (!shared) return;
+  try { spawn(process.execPath, [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)], { detached: true, stdio: "ignore" }).unref(); } catch {}
+}
+
+// ---- typed ENTITY / current-value layer (Wave 3): answer "what is X NOW?" deterministically. An
+//      entity is a normal ledger row (type "entity", {ekey, evalue}), so it rides the SAME write-through
+//      cache + share + semantic-index plumbing as every other entry; latest row per key WINS (history is
+//      retained via supersedes). normKey collapses casing/punctuation so "iHEARtest Build" == "iheartest
+//      _build". An optional alias map (type "alias") points many phrasings at one canonical key. This is
+//      a thin keyed VIEW over the flat ledger, NOT a knowledge-graph service.
+const normKey = (s) => (s || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+function resolveAlias(rows, key) {
+  let k = normKey(key); const seen = new Set();
+  for (let i = 0; i < 8 && !seen.has(k); i++) {
+    seen.add(k);
+    const a = rows.filter((r) => r.type === "alias" && r.ekey === k).sort((x, y) => (y.ts || "").localeCompare(x.ts || ""))[0];
+    if (!a || !a.evalue || a.evalue === k) break;
+    k = a.evalue;
+  }
+  return k;
+}
+const currentEntity = (rows, k) => rows.filter((r) => r.type === "entity" && r.ekey === k).sort((x, y) => (y.ts || "").localeCompare(x.ts || ""))[0] || null;
+
+async function entityCmd() {
+  const sub = (positional[0] || "").toLowerCase();
+  await initStore();
+  const rows = await load();
+  if (sub === "get") {
+    const k = resolveAlias(rows, positional[1] || "");
+    if (!k) { console.error('usage: mem.mjs entity get <key> --agent <a>'); process.exit(2); }
+    const cur = currentEntity(rows, k);
+    if (!cur) { console.log(`(no current value for '${k}' in the ${AGENT} ledger)`); process.exit(0); }
+    console.log(`${k} = ${cur.evalue}`);
+    console.error(`  [recorded ${(cur.ts || "").slice(0, 10)} id=${cur.id}${cur.source ? ` src=${cur.source}` : ""}${cur.was ? ` was=${cur.was}` : ""}] NB: this is the last RECORDED value; verify against the live source for authoritative state.`);
+    return;
+  }
+  if (sub === "list") {
+    const keys = [...new Set(rows.filter((r) => r.type === "entity").map((r) => r.ekey))].sort();
+    console.log(`# CURRENT VALUES (${AGENT} ledger) - ${keys.length} entities`);
+    for (const k of keys) { const c = currentEntity(rows, k); if (c) console.log(`${k} = ${c.evalue}   [${(c.ts || "").slice(0, 10)} ${c.id}]`); }
+    const aliases = rows.filter((r) => r.type === "alias").sort((x, y) => (y.ts || "").localeCompare(x.ts || ""));
+    if (aliases.length) { console.log("## aliases"); const seen = new Set(); for (const a of aliases) { if (seen.has(a.ekey)) continue; seen.add(a.ekey); console.log(`${a.ekey} -> ${a.evalue}`); } }
+    return;
+  }
+  if (sub === "alias") {
+    const from = normKey(positional[1] || ""), to = normKey(positional[2] || "");
+    if (!from || !to) { console.error('usage: mem.mjs entity alias "<from-phrasing>" <to-canonical-key> --agent <a>'); process.exit(2); }
+    const entry = { id: newId(rows), ts: new Date().toISOString(), type: "alias", ekey: from, evalue: to, text: `alias ${from} -> ${to}`, tags: TAGS };
+    rows.push(entry);
+    await putText(JSONL, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "application/x-ndjson");
+    writeCacheRows(KEYBASE, rows);
+    console.log(`[kb-memory] alias ${from} -> ${to} -> ${AGENT} id=${entry.id}.`);
+    return;
+  }
+  if (sub === "set") {
+    const k = resolveAlias(rows, positional[1] || "");
+    const value = positional.slice(2).join(" ").trim();
+    if (!k || !value) { console.error('usage: mem.mjs entity set <key> "<value>" --agent <a> [--source "..."] [--share]'); process.exit(2); }
+    const prev = currentEntity(rows, k);
+    const entry = { id: newId(rows), ts: new Date().toISOString(), type: "entity", ekey: k, evalue: value, text: `${k} = ${value}`, tags: TAGS, source: SOURCE || undefined, was: prev ? prev.evalue : undefined, supersedes: prev ? prev.id : undefined };
+    rows.push(entry);
+    await putText(JSONL, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "application/x-ndjson");
+    writeCacheRows(KEYBASE, rows);
+    await putText(MD, renderMd(rows), "text/markdown; charset=utf-8");
+    let shared = false;
+    if (SHARE) shared = await publishShared(AGENT, entry);
+    maybeIndex(entry, shared);
+    console.log(`[kb-memory] entity ${k} = ${value} -> ${AGENT} id=${entry.id}${prev ? ` (was: ${prev.evalue})` : ""}${shared ? "; shared+indexed" : ""}.`);
+    return;
+  }
+  console.error('usage: mem.mjs entity set <key> "<value>" | get <key> | list | alias "<from>" <to>   --agent <a> [--share]');
+  process.exit(2);
 }
 
 function matchq(r, terms) { const hay = `${r.type} ${r.text} ${r.was || ""} ${(r.tags || []).join(" ")} ${r.source || ""} ${r.agent || ""}`.toLowerCase(); return terms.every((t) => hay.includes(t)); }
@@ -262,7 +339,8 @@ async function runPack() {
   const pitfalls = active.filter((r) => r.type === "pitfall").sort(byNew).slice(0, 12);
   const decisions = active.filter((r) => r.type === "decision").sort(byNew).slice(0, 6);
   const corrections = rows.filter((r) => r.type === "correction").sort(byNew).slice(0, 5);
-  const always = new Set([...pitfalls, ...decisions, ...corrections].map((r) => r.id));
+  const entities = active.filter((r) => r.type === "entity").sort(byNew).slice(0, 8); // current-values, most-recently-set first
+  const always = new Set([...pitfalls, ...decisions, ...corrections, ...entities].map((r) => r.id));
   const ranked = terms.length
     ? active.filter((r) => !always.has(r.id)).map((r) => [r, scoreq(r, terms)]).filter(([, s]) => s > 0).sort((a, b) => b[1] - a[1] || byNew(a[0], b[0])).slice(0, 6).map(([r]) => r)
     : [];
@@ -293,6 +371,7 @@ async function runPack() {
   const L = (r) => `[${r.type}] [${(r.ts || "").slice(0, 10)}] ${clip(r.text)}${r.was ? `  (was: ${clip(r.was, 80)})` : ""}`;
   const out = ["<<<WORKING-MEMORY>>>", beacon];
   if (ranked.length) { out.push("## RELEVANT TO THIS PROMPT:"); for (const r of ranked) out.push(L(r)); }
+  if (entities.length) { out.push("## CURRENT VALUES (latest wins; deterministic):"); for (const r of entities) out.push(`- ${r.ekey} = ${clip(r.evalue, 120)}`); }
   if (corrections.length) { out.push("## CORRECTIONS (NOW, not the old belief):"); for (const r of corrections) out.push(`- NOW: ${clip(r.text)}${r.was ? `  (was: ${clip(r.was, 80)})` : ""}`); }
   if (pitfalls.length) { out.push("## PITFALLS (do not repeat):"); for (const r of pitfalls) out.push(`- ${clip(r.text)}`); }
   if (decisions.length) { out.push("## DECISIONS (current):"); for (const r of decisions) out.push(`- ${clip(r.text)}`); }
@@ -313,6 +392,7 @@ async function runPack() {
   if (cmd === "pitfall") return append("pitfall", SHARE);
   if (cmd === "status") return append("status", true);
   if (cmd === "correct") { if (!WAS) console.error("(tip: pass --was \"<wrong belief>\" so the correction records what to stop believing)"); return append("correction", SHARE); }
+  if (cmd === "entity") return entityCmd();
   if (cmd === "list-agents") { for (const [k, v] of Object.entries(AGENTS)) console.log(`${k.padEnd(14)} ${v.account}/${v.container}  [${v.ring}]`); console.log(`exec team: ${EXEC.join(", ")}`); return; }
   if (cmd === "use") {
     const who = (positional[0] || AGENT || "").toLowerCase();
@@ -413,6 +493,6 @@ async function runPack() {
     } catch (e) { console.log("## TEAM - (feed unavailable: " + e.message + ")"); }
     return;
   }
-  console.error("verbs: remember | decision | correct | pitfall | status | recall | tail | team | render | whoami | use | list-agents");
+  console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | render | whoami | use | list-agents");
   process.exit(2);
 })().catch((e) => { console.error("ERROR: " + e.message); process.exit(1); });
