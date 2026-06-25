@@ -123,5 +123,22 @@ drafted; GO on a single-session canary with these in. This brief reflects the co
   surfaced, superseded-value-gone, always-on). Gate 152/152. Verified live (n8n_base_url, asc_team_id,
   asc_consumer_signing_key_id set + aliased + recalled). DEFERRED here: a typed `entity` FIELD in the
   memory-exec index (needs an additive schema change + reindex) so the brain can cite `entity=<key>`.
-- NEXT: Wave 4 real-time Team Medic auto-dispatch (PostHog memory_beacon -> dispatch medic when an agent
-  goes DARK). Then task #19 (hot-path semantic-in-pack, needs a read-only AIS query key first).
+- **2026-06-25 -- Wave 4 the auto-dispatch FLEET MEDIC (the feature Matt asked for) SHIPPED (code).**
+  `skills/fleet-medic/medic.mjs`: a standing monitor that classifies every exec agent's memory health
+  from TWO signals -- the deterministic `team-health` shared-feed spine (all agents; catches
+  NO-MEMORY/never-initialized) + the sharp PostHog `memory_beacon` (a FRESH beacon with
+  DARK/hooks=false/ledger=0 = active-but-broken = the real fire). Staleness alone is only WATCH (never
+  cries wolf on an idle agent). On `--dispatch` it writes a targeted self-heal directive to commons
+  `_MEDIC/<agent>.md` + emits a `medic_dispatch` PostHog event + maintains per-agent cooldown +
+  escalates persistent DARK to `_MEDIC/_ESCALATIONS.md`. The agent self-heals on wake: `kb-inject.sh`
+  session mode runs `medic.mjs check --agent <self>`, which surfaces the directive ONCE then deletes it
+  (needs SAS 'd' perm -- a bug found + fixed in test). Cron entrypoint
+  `skills/doc-indexer/job/fleet-medic.sh` (Tier-1, zero Max draw). `tests/fleet-medic.test.mjs` (8
+  hermetic classifier cases: active-broken dispatches, idle does NOT, cooldown, escalation). Gate
+  161/161. Live dry-run found 4 NO-MEMORY agents (capital/compliance/growth/rainmaker) + 3 idle WATCH +
+  3 healthy -- correct triage. STAGED follow-on (token-gated): auto-spawning an actual medic CLAUDE
+  SESSION (Tier-2 `claude -p`) on escalation, blocked on `CLAUDE_CODE_OAUTH_TOKEN` like the other Tier-2
+  runners. DEPLOY (post-merge): rebuild doc-indexer image (now has fleet-medic.sh) + create the
+  `fleet-medic` Container Apps Job (cron */30) via ARM.
+- Memory program P0-P2 + the auto-medic are now all SHIPPED. Remaining: task #19 (hot-path
+  semantic-in-pack, needs a read-only AIS query key) + the Wave-4 Tier-2 medic-session spawn (token).
