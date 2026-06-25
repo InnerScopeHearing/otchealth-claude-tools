@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>We have been thinking about you</title>
+  <style>
+    /* Reset */
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }
+
+    /* Base */
+    body {
+      margin: 0 !important;
+      padding: 0 !important;
+      background-color: #f4f4f4;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #222222;
+    }
+
+    /* Wrapper */
+    .email-wrapper {
+      width: 100%;
+      background-color: #f4f4f4;
+    }
+
+    /* Container */
+    .email-container {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+    }
+
+    /* Header */
+    .header {
+      background-color: #1a3c5e;
+      padding: 28px 40px;
+      text-align: center;
+    }
+    .header-logo {
+      color: #ffffff;
+      font-size: 22px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      text-decoration: none;
+    }
+
+    /* Hero */
+    .hero {
+      background-color: #1a3c5e;
+      padding: 0 40px 36px 40px;
+      text-align: center;
+    }
+    .hero h1 {
+      color: #ffffff;
+      font-size: 28px;
+      font-weight: bold;
+      margin: 0 0 12px 0;
+      line-height: 1.3;
+    }
+    .hero p {
+      color: #b8d4ec;
+      font-size: 16px;
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    /* Body */
+    .body-section {
+      padding: 36px 40px;
+    }
+    .body-section p {
+      font-size: 16px;
+      line-height: 1.7;
+      color: #444444;
+      margin: 0 0 18px 0;
+    }
+    .body-section p.lead {
+      font-size: 18px;
+      color: #222222;
+      font-weight: normal;
+    }
+
+    /* Product card */
+    .product-card {
+      background-color: #f0f6fc;
+      border-left: 4px solid #1a3c5e;
+      border-radius: 4px;
+      padding: 24px 28px;
+      margin: 24px 0;
+    }
+    .product-card h2 {
+      font-size: 20px;
+      color: #1a3c5e;
+      margin: 0 0 10px 0;
+    }
+    .product-card p {
+      font-size: 15px;
+      color: #444444;
+      line-height: 1.6;
+      margin: 0 0 14px 0;
+    }
+    .product-card ul {
+      margin: 0 0 14px 0;
+      padding-left: 20px;
+    }
+    .product-card ul li {
+      font-size: 15px;
+      color: #444444;
+      line-height: 1.7;
+    }
+
+    /* CTA button */
+    .cta-container {
+      text-align: center;
+      padding: 8px 0 24px 0;
+    }
+    .cta-button {
+      display: inline-block;
+      background-color: #e85d26;
+      color: #ffffff !important;
+      font-size: 17px;
+      font-weight: bold;
+      text-decoration: none;
+      padding: 16px 40px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+    }
+    .cta-button:hover {
+      background-color: #c94e1c;
+    }
+
+    /* Teaser banner */
+    .teaser-banner {
+      background-color: #fff8e6;
+      border: 1px solid #f5c842;
+      border-radius: 4px;
+      padding: 20px 28px;
+      margin: 8px 0 24px 0;
+      text-align: center;
+    }
+    .teaser-banner p {
+      font-size: 15px;
+      color: #7a5c00;
+      margin: 0;
+      line-height: 1.6;
+    }
+    .teaser-banner strong {
+      color: #5a4200;
+    }
+
+    /* Divider */
+    .divider {
+      border: none;
+      border-top: 1px solid #e8e8e8;
+      margin: 0;
+    }
+
+    /* Footer */
+    .footer {
+      background-color: #f4f4f4;
+      padding: 28px 40px;
+      text-align: center;
+    }
+    .footer p {
+      font-size: 12px;
+      color: #888888;
+      line-height: 1.6;
+      margin: 0 0 6px 0;
+    }
+    .footer a {
+      color: #1a3c5e;
+      text-decoration: underline;
+    }
+
+    /* Mobile */
+    @media screen and (max-width: 600px) {
+      .email-container { width: 100% !important; }
+      .header, .hero, .body-section, .footer { padding-left: 20px !important; padding-right: 20px !important; }
+      .hero h1 { font-size: 22px !important; }
+      .cta-button { padding: 14px 28px !important; font-size: 16px !important; }
+      .product-card { padding: 18px 18px !important; }
+    }
+  </style>
+</head>
+<body>
+<div class="email-wrapper">
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+    <tr>
+      <td>
+        <table role="presentation" class="email-container" cellspacing="0" cellpadding="0" border="0" align="center" width="600">
+
+          <!-- HEADER -->
+          <tr>
+            <td class="header">
+              <span class="header-logo">OTCHealth</span>
+            </td>
+          </tr>
+
+          <!-- HERO -->
+          <tr>
+            <td class="hero">
+              <h1>It has been a while. Here is something worth opening.</h1>
+              <p>Affordable hearing health, no prescription, no appointment.</p>
+            </td>
+          </tr>
+
+          <!-- BODY -->
+          <tr>
+            <td class="body-section">
+
+              <p class="lead">Hi {{customer.first_name | default: "Friend"}},</p>
+
+              <p>
+                You signed up because you care about hearing health, for yourself
+                or someone you love. We have not forgotten that, and we wanted to
+                reach out with something real.
+              </p>
+
+              <p>
+                Hearing help should not require a doctor's visit, a multi-thousand-dollar
+                device, or a waiting room. That is exactly why we built TReO.
+              </p>
+
+              <!-- PRODUCT CARD -->
+              <div class="product-card">
+                <h2>TReO Personal Sound Amplifier</h2>
+                <p>
+                  TReO is a personal sound amplification product (PSAP). It amplifies
+                  the sounds around you, so conversations, TV, and everyday life
+                  feel clearer, without a prescription and without the hearing-clinic price tag.
+                </p>
+                <ul>
+                  <li>Rechargeable. Comfortable. Discreet.</li>
+                  <li>Ready to use out of the box</li>
+                  <li>Fraction of the cost of traditional options</li>
+                  <li>Ships directly to your door</li>
+                </ul>
+                <p>
+                  No appointments. No insurance hoops. Just clearer sound, starting today.
+                </p>
+              </div>
+
+              <div class="cta-container">
+                <a href="{{SHOP_NOW_URL}}" class="cta-button">Shop TReO Now</a>
+              </div>
+
+              <!-- TEASER -->
+              <div class="teaser-banner">
+                <p>
+                  <strong>Something big is coming for our customers.</strong>
+                  We are preparing a major clearance event on premium hearing products
+                  at prices that have never been offered before. Current customers get
+                  first access. Stay subscribed so you do not miss it.
+                </p>
+              </div>
+
+              <p>
+                Questions? Just reply to this email. A real person reads every response.
+              </p>
+
+              <p>
+                Thank you for being part of the OTCHealth community. We are glad you
+                are here.
+              </p>
+
+              <p>
+                Warm regards,<br />
+                The OTCHealth Team
+              </p>
+
+            </td>
+          </tr>
+
+          <tr><td><hr class="divider" /></td></tr>
+
+          <!-- FOOTER (CAN-SPAM compliant) -->
+          <tr>
+            <td class="footer">
+              <p>
+                OTCHealth Inc.<br />
+                [PHYSICAL MAILING ADDRESS PLACEHOLDER]<br />
+                [City, State, ZIP]
+              </p>
+              <p>
+                You are receiving this email because you are a subscriber of OTCHealth.
+              </p>
+              <p>
+                <a href="{{unsubscribe_url}}">Unsubscribe</a> |
+                <a href="{{preferences_url}}">Update Preferences</a>
+              </p>
+              <p>
+                &copy; 2026 OTCHealth Inc. All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</div>
+</body>
+</html>

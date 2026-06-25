@@ -1,0 +1,63 @@
+Subject: We have been thinking about you
+Preview text: Affordable hearing health, no prescription, no appointment. Shop TReO.
+
+------------------------------------------------------------
+OTCHealth
+------------------------------------------------------------
+
+It has been a while. Here is something worth opening.
+
+------------------------------------------------------------
+
+Hi {{customer.first_name | default: "Friend"}},
+
+You signed up because you care about hearing health, for yourself or someone
+you love. We have not forgotten that, and we wanted to reach out with
+something real.
+
+Hearing help should not require a doctor's visit, a multi-thousand-dollar
+device, or a waiting room. That is exactly why we built TReO.
+
+
+TREO PERSONAL SOUND AMPLIFIER
+------------------------------
+TReO is a personal sound amplification product (PSAP). It amplifies the
+sounds around you, so conversations, TV, and everyday life feel clearer,
+without a prescription and without the hearing-clinic price tag.
+
+- Rechargeable. Comfortable. Discreet.
+- Ready to use out of the box
+- Fraction of the cost of traditional options
+- Ships directly to your door
+
+No appointments. No insurance hoops. Just clearer sound, starting today.
+
+>> Shop TReO Now: {{SHOP_NOW_URL}}
+
+
+SOMETHING BIG IS COMING FOR OUR CUSTOMERS
+------------------------------------------
+We are preparing a major clearance event on premium hearing products at
+prices that have never been offered before. Current customers get first
+access. Stay subscribed so you do not miss it.
+
+
+Questions? Just reply to this email. A real person reads every response.
+
+Thank you for being part of the OTCHealth community. We are glad you are here.
+
+Warm regards,
+The OTCHealth Team
+
+------------------------------------------------------------
+OTCHealth Inc.
+[PHYSICAL MAILING ADDRESS PLACEHOLDER]
+[City, State, ZIP]
+
+You are receiving this email because you are a subscriber of OTCHealth.
+
+Unsubscribe: {{unsubscribe_url}}
+Update Preferences: {{preferences_url}}
+
+(c) 2026 OTCHealth Inc. All rights reserved.
+------------------------------------------------------------
