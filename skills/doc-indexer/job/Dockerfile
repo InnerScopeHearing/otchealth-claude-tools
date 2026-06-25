@@ -23,4 +23,7 @@ COPY skills/github-app/ /app/skills/github-app/
 # kb-memory: the brain-reindex job runs semantic.mjs reindex from this image to keep the
 # memory-exec AI Search index fresh (agent lessons/decisions + focus-group/shark catalog feed it).
 COPY skills/kb-memory/ /app/skills/kb-memory/
+# fleet-medic: the auto-dispatch memory medic job (fleet-medic.sh -> medic.mjs scan --dispatch).
+# medic.mjs execs kb-memory/mem.mjs team-health (copied above) for its deterministic health spine.
+COPY skills/fleet-medic/ /app/skills/fleet-medic/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]
