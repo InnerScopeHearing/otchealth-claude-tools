@@ -14,13 +14,19 @@
 set +e
 MODE="${1:-session}"
 
-SESS_MARK="$HOME/.claude/.kb-agent"
-REPO_MARK="${CLAUDE_PROJECT_DIR:-.}/.kb-agent"
-read1() { head -n1 "$1" 2>/dev/null | tr -d '[:space:]'; }
-AG=""; SRC=""; FROM_MARKER=0
-if [ -s "$SESS_MARK" ]; then AG="$(read1 "$SESS_MARK")"; SRC="session marker (~/.claude/.kb-agent)"; FROM_MARKER=1
-elif [ -s "$REPO_MARK" ]; then AG="$(read1 "$REPO_MARK")"; SRC="repo .kb-agent"; FROM_MARKER=1
-elif [ -n "${KB_AGENT:-}" ]; then AG="${KB_AGENT}"; SRC="env KB_AGENT"
+# Agent resolution via the shared resolver (session marker > repo .kb-agent > KB_AGENT > repo auto-claim).
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+if [ -f "$SELF_DIR/agent-id.sh" ]; then
+  . "$SELF_DIR/agent-id.sh"
+else
+  # back-compat fallback for installs predating agent-id.sh (no auto-claim).
+  SESS_MARK="$HOME/.claude/.kb-agent"; REPO_MARK="${CLAUDE_PROJECT_DIR:-.}/.kb-agent"
+  read1() { head -n1 "$1" 2>/dev/null | tr -d '[:space:]'; }
+  AG=""; SRC=""; FROM_MARKER=0; AUTOCLAIMED=0
+  if [ -s "$SESS_MARK" ]; then AG="$(read1 "$SESS_MARK")"; SRC="session marker (~/.claude/.kb-agent)"; FROM_MARKER=1
+  elif [ -s "$REPO_MARK" ]; then AG="$(read1 "$REPO_MARK")"; SRC="repo .kb-agent"; FROM_MARKER=1
+  elif [ -n "${KB_AGENT:-}" ]; then AG="${KB_AGENT}"; SRC="env KB_AGENT"
+  fi
 fi
 
 MEM="${CLAUDE_PROJECT_DIR:-.}/skills/kb-memory/mem.mjs"
@@ -46,6 +52,7 @@ case "$MODE" in
       exit 0
     fi
     echo "===== WORKING MEMORY: ${AG} ledger  [via ${SRC}]  (SOURCE OF TRUTH - read before trusting recall) ====="
+    [ "${AUTOCLAIMED:-0}" = "1" ] && echo "NOTE: identity '${AG}' was auto-claimed from the repo name (no marker was set). If this session is a different agent, run: echo <role> > ~/.claude/.kb-agent"
     if [ "$FROM_MARKER" = "1" ] && [ -n "${KB_AGENT:-}" ] && [ "$AG" != "${KB_AGENT}" ]; then
       echo "NOTE: the shared environment's KB_AGENT='${KB_AGENT}' but THIS session is '${AG}' (the marker wins)."
       echo "      Expected when agents share one environment; the per-session marker keeps each session correct."
