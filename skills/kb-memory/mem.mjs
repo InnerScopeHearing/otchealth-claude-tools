@@ -30,6 +30,10 @@
 import crypto from "node:crypto";
 import { readFileSync, existsSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
 
 const SM = "otchealth-shared-prod";
 const AGENTS = {
@@ -193,6 +197,14 @@ async function append(type, share) {
   await putText(MD, renderMd(rows), "text/markdown; charset=utf-8");
   let shared = false;
   if (share || type === "status") shared = await publishShared(AGENT, entry);
+  // write-through SEMANTIC index: if the entry actually reached the shared exec feed, embed + upsert it
+  // into the memory-exec AI Search index NOW (detached, fire-and-forget) so it is recallable BY MEANING
+  // this minute, not only after the next 6h/nightly reindex. RING-SAFE: gated on `shared` being true, so
+  // it only ever indexes content publishShared() let through (never a private / clo-personal lane). Never
+  // blocks the write (unref'd); index-one.mjs is fail-open and self-throttles nothing the caller waits on.
+  if (shared) {
+    try { spawn(process.execPath, [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)], { detached: true, stdio: "ignore" }).unref(); } catch {}
+  }
   console.log(`[kb-memory] ${type} -> ${AGENT} (${A.ring}) id=${entry.id}. Private ledger ${rows.length} entries${shared ? "; PUBLISHED to exec team feed" : ""}.`);
 }
 
