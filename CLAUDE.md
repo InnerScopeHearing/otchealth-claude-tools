@@ -55,6 +55,17 @@ assume unless the user says otherwise.
   live-synced toolkit are what make them coherent, NOT a monorepo and NOT an extra app-manager repo
   (claude-tools already IS the shared manager/brain layer). CTO rule: when a fleet-affecting change
   closes, MERGE TO MAIN and write a `bulletin.mjs add` line.
+- **App-repo freshness + adding a repo (Matt directive 2026-06-25).** Two companions to the toolkit
+  live-sync, for the agent's OWN repo (not the toolkit): (1) **`setup/repo-freshen.sh`** runs at every
+  SessionStart (wired as a SessionStart hook + called from session-start.sh) and SAFELY catches the
+  working repo up to `origin/main`: it fast-forwards a pristine stale session branch (the "my branch is
+  50 commits behind main" complaint), but NEVER touches a branch that has local commits or a dirty tree
+  (it prints the exact catch-up command instead). `OCTOOLS_NO_REPO_FRESHEN=1` disables it. (2)
+  **`setup/add-repo.sh <repo> [branch]`** clones any InnerScopeHearing org repo into the sandbox ON
+  DEMAND via the org GitHub-App token (gh-app skill) - the always-works fallback when the `add_repo`
+  session tool is not exposed. It yields a working tree + authenticated push; WIDENING the GitHub-MCP
+  repo SCOPE (so `mcp__github__*` tools can target a new repo) is still the `add_repo` session tool when
+  present, or the cloud Environment's repo list.
 - **Operator preference: copy-paste over UI (Matt directive 2026-06-17).** Matt strongly prefers a
   single copy-paste block, PowerShell, gcloud / Google Cloud Shell, Azure Cloud Shell, bash, or a
   direct API call, over navigating website UIs. Whenever a task can be done with a paste-ready command

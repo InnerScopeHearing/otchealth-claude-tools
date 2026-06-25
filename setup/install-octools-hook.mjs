@@ -11,6 +11,8 @@
 //   UserPromptSubmit -> kb-recall.sh           (per-prompt memory injection: the read-back loop that
 //                                               survives a mid-session compaction; LLM-free, fail-open)
 //   SessionStart     -> kb-inject.sh session   (recall the agent ledger)
+//   SessionStart     -> repo-freshen.sh         (safely fast-forward the agent's OWN repo to origin/main;
+//                                               never resets a branch with local work, just warns)
 //   PreCompact       -> kb-inject.sh precompact (CAPTURE journal + DISTILL to ledger before compaction)
 //   Stop             -> kb-inject.sh stop       (CAPTURE every turn + throttled distill)
 // The kb-inject hooks point at the INSTALLED skill path ($HOME/.claude/skills/kb-memory/kb-inject.sh),
@@ -34,6 +36,7 @@ const HOOKS = [
   { event: "UserPromptSubmit", match: "octools-sync.sh", cmd: "[ -f /tmp/octools/setup/octools-sync.sh ] && bash /tmp/octools/setup/octools-sync.sh || true" },
   { event: "UserPromptSubmit", match: "kb-recall.sh", cmd: `[ -f ${KBR} ] && bash ${KBR} || true` }, // per-prompt memory injection (read-back loop)
   { event: "SessionStart", match: "kb-inject.sh", cmd: `[ -f ${KBI} ] && bash ${KBI} session || true` },
+  { event: "SessionStart", match: "repo-freshen.sh", cmd: "[ -f /tmp/octools/setup/repo-freshen.sh ] && bash /tmp/octools/setup/repo-freshen.sh || true" }, // keep the agent's own repo current with main, safely
   { event: "PreCompact", match: "kb-inject.sh", cmd: `[ -f ${KBI} ] && bash ${KBI} precompact || true` },
   { event: "Stop", match: "kb-inject.sh", cmd: `[ -f ${KBI} ] && bash ${KBI} stop || true` },
 ];

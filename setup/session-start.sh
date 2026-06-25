@@ -410,6 +410,11 @@ node "${TOOLS_DIR}/setup/install-octools-hook.mjs" 2>/dev/null || true
 # in-session thereafter. Together: the fleet stays on the same page off one source (main) without resets.
 node "${TOOLS_DIR}/setup/bulletin.mjs" since 2>/dev/null || true
 
+# Keep the agent's OWN app/web repo current with origin/main, SAFELY (fast-forward a pristine stale
+# branch; never touch a branch that has local commits - just warn). Belt-and-suspenders alongside the
+# SessionStart hook, so even the very first session in a fresh container starts on the latest base.
+[ -n "${CLAUDE_PROJECT_DIR:-}" ] && bash "${TOOLS_DIR}/setup/repo-freshen.sh" "${CLAUDE_PROJECT_DIR}" 2>/dev/null || true
+
 echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"
 
