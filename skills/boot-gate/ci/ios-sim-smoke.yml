@@ -1,0 +1,135 @@
+# ios-sim-smoke.yml — REUSABLE workflow: boot the built app in the real iOS
+# Simulator on a Depot macOS runner and smoke it. Catches the NATIVE layer that
+# WebKit-in-Linux (the boot-gate Playwright spec) cannot: a native splash that
+# never hides (likely PlantID's real cause), plugin crashes on launch, App
+# Group/entitlement failures, real WKWebView quirks. No code signing is needed for
+# a Simulator build, so this is cheap (one macOS job) and needs no certs.
+#
+# Drop this into an app repo as .github/workflows/ios-sim-smoke.yml and call it
+# from the app's PR workflow, e.g.:
+#
+#   jobs:
+#     ios-smoke:
+#       uses: ./.github/workflows/ios-sim-smoke.yml
+#       with:
+#         scheme: App
+#         bundle_id: com.innerscope.plantid
+#         ios_dir: ios/App
+#         web_build_cmd: "pnpm --filter @app/mobile build && npx cap sync ios"
+#       secrets: inherit   # so VITE_* build secrets reach the web build
+#
+# It would have caught PlantID build 1: the app boots, paints the green splash,
+# never mounts -> the screenshot is ~99% one flat color -> this FAILS.
+
+on:
+  workflow_call:
+    inputs:
+      scheme:
+        description: "Xcode scheme (Capacitor default is 'App')"
+        type: string
+        default: "App"
+      bundle_id:
+        description: "App bundle identifier"
+        type: string
+        required: true
+      ios_dir:
+        description: "Dir containing App.xcworkspace / App.xcodeproj"
+        type: string
+        default: "ios/App"
+      web_build_cmd:
+        description: "Build the web bundle + cap sync ios"
+        type: string
+        default: "npm run build && npx cap sync ios"
+      sim_device:
+        description: "Simulator device to boot"
+        type: string
+        default: "iPhone 16 Pro"
+      boot_wait_s:
+        description: "Seconds to wait after launch before the screenshot"
+        type: string
+        default: "8"
+
+jobs:
+  ios-sim-smoke:
+    name: iOS Simulator smoke
+    runs-on: depot-macos-26 # macOS 26 / Xcode 26 (the SDK-mandate runner)
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # pnpm/npm install is app-specific; most fleet apps use pnpm.
+      - name: Install deps
+        run: |
+          corepack enable || true
+          if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else npm ci; fi
+
+      # Build the web bundle + sync native. VITE_* come from repo secrets via
+      # `secrets: inherit`. If a required VITE_* is empty, the app's prebuild
+      # (check-build-env.mjs) fails here — before we ever boot the sim.
+      - name: Build web + cap sync
+        run: ${{ inputs.web_build_cmd }}
+
+      # Build the app for the SIMULATOR (no signing). A native/plugin/config error
+      # fails the build here — already a stronger gate than anything WebKit can do.
+      - name: Build app for simulator
+        working-directory: ${{ inputs.ios_dir }}
+        run: |
+          set -o pipefail
+          WS="App.xcworkspace"; FLAG="-workspace"
+          if [ ! -d "$WS" ]; then WS="App.xcodeproj"; FLAG="-project"; fi
+          xcodebuild $FLAG "$WS" \
+            -scheme "${{ inputs.scheme }}" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build | xcpretty || xcodebuild $FLAG "$WS" -scheme "${{ inputs.scheme }}" -configuration Debug -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+
+      - name: Boot simulator
+        run: |
+          xcrun simctl boot "${{ inputs.sim_device }}" || true
+          xcrun simctl bootstatus "${{ inputs.sim_device }}" -b
+
+      - name: Install + launch + screenshot
+        working-directory: ${{ inputs.ios_dir }}
+        run: |
+          set -e
+          APP_PATH="$(find build/Build/Products -maxdepth 2 -name '*.app' -type d | head -1)"
+          echo "APP_PATH=$APP_PATH"
+          test -n "$APP_PATH"
+          xcrun simctl install booted "$APP_PATH"
+          # Launch; capture the log so a crash is visible.
+          xcrun simctl launch booted "${{ inputs.bundle_id }}" || (echo "LAUNCH FAILED" && exit 1)
+          sleep "${{ inputs.boot_wait_s }}"
+          xcrun simctl io booted screenshot "$GITHUB_WORKSPACE/sim-boot.png"
+          # Dump recent app logs for the crash check (best-effort).
+          xcrun simctl spawn booted log show --style compact --last 30s 2>/dev/null \
+            | grep -iE "${{ inputs.bundle_id }}|crash|fatal|exception|signal" > "$GITHUB_WORKSPACE/sim-log.txt" || true
+
+      - name: Smoke assertions (screenshot not blank/stuck + no crash)
+        run: |
+          # pngjs powers the flat-color gate (the PlantID green-screen catch).
+          # Install it transiently so the heuristic runs, not the size fallback.
+          npm i -D pngjs >/dev/null 2>&1 || true
+          node skills-boot-gate/sim-smoke.mjs "$GITHUB_WORKSPACE/sim-boot.png" "$GITHUB_WORKSPACE/sim-log.txt"
+        # NOTE: vendor skills/boot-gate/ci/sim-smoke.mjs into the app repo (e.g. at
+        # ./skills-boot-gate/sim-smoke.mjs) when you adopt this workflow, or point
+        # this at /tmp/octools/skills/boot-gate/ci/sim-smoke.mjs in the sandbox.
+
+      - name: Upload boot screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-sim-boot-screenshot
+          path: |
+            sim-boot.png
+            sim-log.txt
+          if-no-files-found: warn
