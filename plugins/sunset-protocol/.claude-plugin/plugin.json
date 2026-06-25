@@ -1,0 +1,7 @@
+{
+  "name": "sunset-protocol",
+  "version": "1.0.0",
+  "description": "Sunset / Sunrise Transfer Protocol: spin an agent down on one engine (flush + ring-safe handoff + 'Goodnight friend') and up on another (attach + self-update + 'I am fully updated and ready to go, Sir.' + last-3 + ask). Cross-engine consciousness transfer for the OTCHealth/InnerScope fleet. Wraps skills/sunset-protocol.",
+  "author": "OTCHealth CTO",
+  "commands": "./commands"
+}
