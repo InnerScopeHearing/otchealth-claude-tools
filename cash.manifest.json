@@ -1,0 +1,73 @@
+{
+  "updated": "2026-06-25",
+  "levers": [
+    {
+      "id": "lifecycle-reactivation-01",
+      "name": "Reactivation Email 01 — TReO PSAP + Clearance Tease",
+      "channel": "email",
+      "list_size": 85000,
+      "platform": "Customer.io workspace 193366",
+      "status": "DRAFT_READY — awaiting Matt approval + send",
+      "overdue_since": "2026-06-20",
+      "files": {
+        "html": "coo/campaigns/reactivation-01-2026-06-25.html",
+        "plain_text": "coo/campaigns/reactivation-01-2026-06-25.txt"
+      },
+      "subject_line": "We have been thinking about you",
+      "preview_text": "Affordable hearing health, no prescription, no appointment. Shop TReO.",
+      "offer": "TReO PSAP — shop now. Light tease of upcoming clearance event.",
+      "gates": {
+        "can_sell_treo_psap": true,
+        "can_sell_hearing_aids": false,
+        "hearing_aid_gate": "FDA OTC Establishment Registration (~$10K, pending)",
+        "stripe_connected": false,
+        "stripe_gate": "Matt must connect Stripe to collect payment"
+      },
+      "compliance": {
+        "can_spam": {
+          "physical_address": "PLACEHOLDER — Matt must insert real address before send",
+          "one_click_unsubscribe": true,
+          "unsubscribe_mechanism": "{{unsubscribe_url}} liquid tag (Customer.io native)"
+        },
+        "sms_tcpa": "NOT used in this campaign. SMS waits on consent pass.",
+        "medical_claims": "None. TReO positioned as PSAP only. No hearing-aid, hearing-loss, or FDA-cleared language.",
+        "phi": "None.",
+        "securities_firewall": "No INND, stock, or raise language.",
+        "em_en_dashes": "None. Reviewed."
+      },
+      "placeholders_to_resolve_before_send": [
+        "PHYSICAL MAILING ADDRESS PLACEHOLDER — insert real OTCHealth Inc. street address",
+        "{{SHOP_NOW_URL}} — insert Shopify TReO product page URL",
+        "Confirm {{unsubscribe_url}} and {{preferences_url}} are active Customer.io liquid tags"
+      ],
+      "revenue_target": "First 30-day orders from the 85K list",
+      "measurement": "Open rate -> click rate -> order -> $ (Customer.io -> Shopify)"
+    }
+  ],
+  "always_on_flows": [
+    {
+      "id": "flow-welcome",
+      "name": "Welcome Series",
+      "status": "not built",
+      "trigger": "Shopify new customer event via n8n"
+    },
+    {
+      "id": "flow-abandoned-cart",
+      "name": "Abandoned Cart",
+      "status": "not built",
+      "trigger": "Shopify cart abandonment event via n8n"
+    },
+    {
+      "id": "flow-post-purchase",
+      "name": "Post-Purchase + Review Request",
+      "status": "not built",
+      "trigger": "Shopify order fulfilled event via n8n"
+    },
+    {
+      "id": "flow-winback",
+      "name": "Winback (90-day inactive buyers)",
+      "status": "not built",
+      "trigger": "Customer.io segment: last order > 90 days"
+    }
+  ]
+}
