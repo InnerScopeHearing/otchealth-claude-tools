@@ -89,3 +89,39 @@ G1 read-side ring filter (BLOCKER), G2 stdin validation, G3 shell-quote the prom
 the beacon proves function, G6 no sticky mis-homing on guessed identity, G7 PID-namespace
 `.kb-resume`, R4 bound the never-truncated set. Critic verdict: NO-GO fleet-wide as originally
 drafted; GO on a single-session canary with these in. This brief reflects the corrected P0.
+
+## Execution log (newest first)
+- **2026-06-25 -- Wave 2b shipped + memory write-durability hardening.**
+  - **Wave 2b (PR #219, squash 906d5523):** write-through SEMANTIC indexing. `mem.mjs append()`
+    spawns `index-one.mjs` DETACHED + unref'd after a SHARED publish; it embeds that one entry and
+    upserts into the `memory-exec` AI Search index immediately (same `docId(agent,id)` as
+    `semantic.mjs` -> `mergeOrUpload`, never a dup). So a fact stated this minute is recallable BY
+    MEANING this minute, not after the 6h reindex. RING-SAFE: gated on `publishShared()` returning
+    true (private / clo-personal never reach the shared brain). Fail-open. Proven live: a `--share`
+    decision landed in `memory-exec` in seconds and ranked #1 on a meaning-only query.
+    `tests/index-one.test.mjs` (hermetic: fail-open guards + doc-key parity with semantic.mjs).
+  - **HOT-PATH semantic-in-pack: DEFERRED on purpose (task #19), not dropped.** Critic flagged
+    per-prompt network; the write-through half already gives fresh `semantic.mjs recall` +
+    company-brain, and `pack` already keyword-ranks the full local ledger. Prereq before building:
+    a READ-ONLY Azure AI Search QUERY key (do NOT cache the admin key to every agent sandbox) +
+    a hard latency budget (cred-cache + ~1.5s AbortController + ~60s throttle + local fallback).
+  - **Write-durability fix (PR #220, squash 6851505a):** `mem.mjs` blob ops (`getText`/`putText` +
+    commons `cGet`/`cPut`) now `fetchRetry` transient `{403,408,429,5xx}` with bounded backoff. They
+    used to throw straight out, so a transient proxy/SAS 403 made a `mem.mjs remember` silently DROP
+    the fact (hit live this session). 404 still = absent (not retried). A real 403 surfaces after the
+    few tries. Gate 149/149.
+- Gate was 149/149 here (added `index-one.test.mjs`). Prior P0/P1: identity auto-claim (#214),
+  team-health + memory-loop CI (#215), PostHog beacon (#217), distill durability off gpt-4o (#218).
+- **2026-06-25 -- Wave 3 (P2) typed entity/current-value layer SHIPPED.** `mem.mjs entity
+  set/get/list/alias`: the deterministic "what is X NOW?" projection over the flat ledger (an entity is
+  a normal row `type:"entity" {ekey,evalue}`, latest-per-key wins via supersedes, so it rides the same
+  cache + share + write-through-index plumbing for free). `normKey` collapses casing/punctuation;
+  `alias` points many phrasings at one canonical key; `get` prints the value + provenance + a "verify
+  the live source" caveat. The pack now injects a `CURRENT VALUES (latest wins; deterministic)` section
+  every prompt, and `renderMd` shows a CURRENT VALUES block. company-brain needs NO change: SHARED
+  entities flow into `memory-exec` and are already brain-answerable. `tests/entity.test.mjs` (hermetic:
+  surfaced, superseded-value-gone, always-on). Gate 152/152. Verified live (n8n_base_url, asc_team_id,
+  asc_consumer_signing_key_id set + aliased + recalled). DEFERRED here: a typed `entity` FIELD in the
+  memory-exec index (needs an additive schema change + reindex) so the brain can cite `entity=<key>`.
+- NEXT: Wave 4 real-time Team Medic auto-dispatch (PostHog memory_beacon -> dispatch medic when an agent
+  goes DARK). Then task #19 (hot-path semantic-in-pack, needs a read-only AIS query key first).
