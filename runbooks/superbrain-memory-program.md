@@ -138,7 +138,12 @@ drafted; GO on a single-session canary with these in. This brief reflects the co
   161/161. Live dry-run found 4 NO-MEMORY agents (capital/compliance/growth/rainmaker) + 3 idle WATCH +
   3 healthy -- correct triage. STAGED follow-on (token-gated): auto-spawning an actual medic CLAUDE
   SESSION (Tier-2 `claude -p`) on escalation, blocked on `CLAUDE_CODE_OAUTH_TOKEN` like the other Tier-2
-  runners. DEPLOY (post-merge): rebuild doc-indexer image (now has fleet-medic.sh) + create the
-  `fleet-medic` Container Apps Job (cron */30) via ARM.
-- Memory program P0-P2 + the auto-medic are now all SHIPPED. Remaining: task #19 (hot-path
-  semantic-in-pack, needs a read-only AIS query key) + the Wave-4 Tier-2 medic-session spawn (token).
+  runners. **DEPLOYED 2026-06-25 (headless ARM):** rebuilt the doc-indexer image (ACR run, now ships
+  `skills/fleet-medic/` + `fleet-medic.sh` -- a Dockerfile COPY was missing, fixed in #223), then
+  created the `fleet-medic` Container Apps Job on `otchealth-automation-rg` (image doc-indexer:latest,
+  cron `*/30`, replicaTimeout 600, sab64 + ACR secrets cloned from brain-reindex). Manual run
+  `fleet-medic-2tyuq61` Succeeded IN-CONTAINER (proves the image + entrypoint + SA-secret auth work).
+  So the auto-medic is now LIVE on cron, not just merged.
+- **The whole superbrain memory program (P0-P2 + the auto-medic) is SHIPPED + DEPLOYED.** Remaining
+  options: task #19 (hot-path semantic-in-pack, needs a read-only AIS query key) + the Wave-4 Tier-2
+  medic-session spawn (auto-spawn a real `claude -p` medic on escalation; needs CLAUDE_CODE_OAUTH_TOKEN).
