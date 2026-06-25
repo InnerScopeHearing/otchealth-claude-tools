@@ -144,6 +144,10 @@ drafted; GO on a single-session canary with these in. This brief reflects the co
   cron `*/30`, replicaTimeout 600, sab64 + ACR secrets cloned from brain-reindex). Manual run
   `fleet-medic-2tyuq61` Succeeded IN-CONTAINER (proves the image + entrypoint + SA-secret auth work).
   So the auto-medic is now LIVE on cron, not just merged.
-- **The whole superbrain memory program (P0-P2 + the auto-medic) is SHIPPED + DEPLOYED.** Remaining
-  options: task #19 (hot-path semantic-in-pack, needs a read-only AIS query key) + the Wave-4 Tier-2
-  medic-session spawn (auto-spawn a real `claude -p` medic on escalation; needs CLAUDE_CODE_OAUTH_TOKEN).
+- **The whole superbrain memory program (P0-P2 + the auto-medic) is SHIPPED + DEPLOYED.**
+- **Escalation posture DECIDED (Matt 2026-06-25): the medic stays ALERT-ONLY.** It leaves the self-heal
+  directive + alerts; it does NOT auto-spawn a `claude -p` medic session. CLAUDE_CODE_OAUTH_TOKEN has
+  been LIVE since 2026-06-23 (SM `claude-code-oauth-token` v2 + the GH Actions secret on claude-tools),
+  so the Tier-2 spawn is a CHOICE, not a gate, and Matt declined it (it would draw the shared Max weekly
+  limit). Do NOT wire medic escalation -> autonomous-run.yml in a future session.
+- Only remaining option: task #19 (hot-path semantic-in-pack, needs a read-only AIS query key first).

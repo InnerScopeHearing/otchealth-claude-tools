@@ -48,11 +48,13 @@ node skills/fleet-medic/medic.mjs clear --agent <a>            # manually clear 
 (10080 = 7d) below this, silence is just "idle"; `MEDIC_COOLDOWN_MIN` (360) no re-dispatch within;
 `MEDIC_ESCALATE_AFTER` (3) consecutive DARK dispatches before escalating to the human.
 
-## Staged follow-on (token-gated)
-The fully-autonomous escalation, auto-spawning an actual medic CLAUDE SESSION (Tier-2 `claude -p`) to
-investigate + fix a structurally-broken agent, is gated on `CLAUDE_CODE_OAUTH_TOKEN` (the same Max-plan
-token blocker as the other Tier-2 runners). Until then the medic leaves the self-heal directive + alerts;
-when the token lands, wire `scan` to trigger `autonomous-run.yml` on escalation.
+## Escalation posture: ALERT-ONLY (Matt decision 2026-06-25)
+On escalation the medic leaves the self-heal directive + emits the `medic_dispatch` / `_ESCALATIONS`
+alert. It DELIBERATELY does NOT auto-spawn a Claude (`claude -p`) session. The `CLAUDE_CODE_OAUTH_TOKEN`
+is live (so a Tier-2 medic-session spawn is technically possible), but Matt chose alert-only because
+auto-spawning would draw the shared Max WEEKLY limit unpredictably. DO NOT wire `scan` escalation ->
+`autonomous-run.yml` dispatch; that contradicts the standing decision. A human triggers a medic-session
+run on demand if a persistent escalation warrants it.
 
 ## Guardrails
 Non-PHI ring. Reads only health METADATA (agent id, status, age, hook/ledger counts) + the shared feed,
