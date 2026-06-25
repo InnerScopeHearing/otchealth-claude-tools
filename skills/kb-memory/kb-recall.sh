@@ -20,14 +20,16 @@
 set +e
 [ -n "${KB_MEMORY_OPTOUT:-}" ] && exit 0
 
-# --- agent resolution: most-specific signal wins (identical precedence to kb-inject.sh) ---
-SESS_MARK="$HOME/.claude/.kb-agent"
-REPO_MARK="${CLAUDE_PROJECT_DIR:-.}/.kb-agent"
-read1() { head -n1 "$1" 2>/dev/null | tr -d '[:space:]'; }
-AG=""
-if [ -s "$SESS_MARK" ]; then AG="$(read1 "$SESS_MARK")"
-elif [ -s "$REPO_MARK" ]; then AG="$(read1 "$REPO_MARK")"
-elif [ -n "${KB_AGENT:-}" ]; then AG="${KB_AGENT}"
+# --- agent resolution: shared resolver (session marker > repo .kb-agent > KB_AGENT > repo auto-claim) ---
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+if [ -f "$SELF_DIR/agent-id.sh" ]; then
+  . "$SELF_DIR/agent-id.sh"
+else
+  # back-compat fallback for installs predating agent-id.sh (no auto-claim).
+  SESS_MARK="$HOME/.claude/.kb-agent"; REPO_MARK="${CLAUDE_PROJECT_DIR:-.}/.kb-agent"; AG=""; AUTOCLAIMED=0
+  [ -s "$SESS_MARK" ] && AG="$(head -n1 "$SESS_MARK" 2>/dev/null | tr -d '[:space:]')"
+  [ -z "$AG" ] && [ -s "$REPO_MARK" ] && AG="$(head -n1 "$REPO_MARK" 2>/dev/null | tr -d '[:space:]')"
+  [ -z "$AG" ] && AG="${KB_AGENT:-}"
 fi
 
 # No agent -> one-line beacon so it is VISIBLE (not a silent off, not a multi-line nag every turn).
@@ -35,6 +37,9 @@ if [ -z "$AG" ]; then
   echo "MEMORY: OFF (no agent this session) -> claim it once: mkdir -p ~/.claude && echo <role> > ~/.claude/.kb-agent   (cto|cfo|clo|coo|developer)"
   exit 0
 fi
+# If we just auto-claimed from the repo name, say so once (correctable). Prints only the turn it claims;
+# next turn the marker exists, so it resolves silently via the marker.
+[ "${AUTOCLAIMED:-0}" = "1" ] && echo "MEMORY: auto-claimed agent='$AG' from this repo's name (no marker was set). If that is wrong: echo <role> > ~/.claude/.kb-agent"
 
 MEM="${CLAUDE_PROJECT_DIR:-.}/skills/kb-memory/mem.mjs"
 [ -f "$MEM" ] || MEM="$HOME/.claude/skills/kb-memory/mem.mjs"
