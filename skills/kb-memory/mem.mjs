@@ -254,26 +254,48 @@ async function append(type, share) {
 // next 6h/nightly reindex. RING-SAFE: gated on `shared` being true, so it only ever indexes content
 // publishShared() let through (never a private / clo-personal lane). Never blocks the write (unref'd);
 // index-one.mjs is fail-open. Shared by append() + entity set.
+// Index-retry queue (#1+#2): when a synchronous index attempt fails (timeout / non-zero exit) the entry
+// is queued here and DRAINED (idempotent upsert-by-id) on the next shared write + by the `index-catchup`
+// verb (wired into the daily memory-sweep). Self-heals any miss between the sync write and the 6h reindex.
+// RING-SAFE: only ever holds already-`shared` entries. FAIL-OPEN throughout (never blocks the ledger write).
+const INDEX_RETRY_FILE = `${CACHE_DIR}/.index-retry.jsonl`;
+function indexOne(entry) {
+  try { const r = spawnSync(process.execPath, [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)], { stdio: "ignore", timeout: 25000 }); return !r.error && r.status === 0; } catch { return false; }
+}
+function queueIndexFailure(entry) {
+  try { mkdirSync(CACHE_DIR, { recursive: true }); const prev = existsSync(INDEX_RETRY_FILE) ? readFileSync(INDEX_RETRY_FILE, "utf8") : ""; writeFileSync(INDEX_RETRY_FILE, prev + JSON.stringify({ agent: AGENT, entry }) + "\n"); } catch {}
+}
+function drainIndexRetry(max = 25) {
+  try {
+    if (!existsSync(INDEX_RETRY_FILE)) return;
+    const lines = readFileSync(INDEX_RETRY_FILE, "utf8").split("\n").filter(Boolean);
+    if (!lines.length) return;
+    const keep = []; let done = 0;
+    for (const ln of lines) {
+      if (done >= max) { keep.push(ln); continue; }
+      let row; try { row = JSON.parse(ln); } catch { continue; }
+      done++; if (!indexOne(row.entry)) keep.push(ln); // still failing -> requeue
+    }
+    writeFileSync(INDEX_RETRY_FILE, keep.length ? keep.join("\n") + "\n" : "");
+  } catch {}
+}
+
 function maybeIndex(entry, shared) {
   if (!shared) return;
-  const args = [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)];
-  // HYPERAGENT FIX (2026-06-26): on the Hyperagent runtime mem.mjs runs under RunWithCredentials;
-  // when that tool-call process returns, a detached/unref'd child is KILLED before it finishes the
-  // embed+upsert -> fresh SHARED facts land in the durable ledger but miss the memory-exec AI Search
-  // index until the 6h reindex (invisible to semantic recall / the per-prompt pack / company-brain /
-  // MCP clients for up to 6h). So on that runtime index SYNCHRONOUSLY (bounded + fail-open). On Claude
-  // Code (long-lived session) keep the non-blocking detached spawn so the write stays off the hot path.
-  // RING-SAFE: still gated on `shared`. FAIL-OPEN: any error is swallowed; the ledger write already happened.
+  // HYPERAGENT FIX (2026-06-26): under RunWithCredentials a detached/unref'd child is KILLED on return,
+  // so fire-and-forget never finishes -> shared facts miss memory-exec until the 6h reindex (invisible
+  // to semantic recall / per-prompt pack / company-brain / MCP for up to 6h). On that runtime index
+  // SYNCHRONOUSLY (bounded, fail-open) AND drain the retry queue (catch-up). Claude Code (long-lived)
+  // keeps the non-blocking detached spawn. RING-SAFE: gated on `shared`.
   const syncIndex = process.env.KB_SYNC_INDEX === "1"
     || process.env.NODE_USE_ENV_PROXY === "1"
     || (process.env.HOME || "").startsWith("/agent");
-  try {
-    if (syncIndex) {
-      spawnSync(process.execPath, args, { stdio: "ignore", timeout: 25000 });
-    } else {
-      spawn(process.execPath, args, { detached: true, stdio: "ignore" }).unref();
-    }
-  } catch {}
+  if (syncIndex) {
+    if (!indexOne(entry)) queueIndexFailure(entry); // #2: queue on failure
+    drainIndexRetry();                              // #1: catch-up previously-missed shared entries
+  } else {
+    try { spawn(process.execPath, [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)], { detached: true, stdio: "ignore" }).unref(); } catch {}
+  }
 }
 
 // ---- typed ENTITY / current-value layer (Wave 3): answer "what is X NOW?" deterministically. An
@@ -454,6 +476,7 @@ async function runPack() {
   if (cmd === "pitfall") return append("pitfall", SHARE);
   if (cmd === "status") return append("status", true);
   if (cmd === "correct") { if (!WAS) console.error("(tip: pass --was \"<wrong belief>\" so the correction records what to stop believing)"); return append("correction", SHARE); }
+  if (cmd === "index-catchup") { drainIndexRetry(200); console.log("[kb-memory] index-catchup: drained the write-through index retry queue"); return; }
   if (cmd === "entity") return entityCmd();
   if (cmd === "list-agents") { for (const [k, v] of Object.entries(AGENTS)) console.log(`${k.padEnd(14)} ${v.account}/${v.container}  [${v.ring}]`); console.log(`exec team: ${EXEC.join(", ")}`); return; }
   if (cmd === "use") {
