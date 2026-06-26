@@ -226,3 +226,12 @@ All capabilities below are LIVE on the governed gateway (https://mcp.otchealth.a
 **AGENT ORG defined:** CTO builds; CRO=growth/funnel/ads, COO=VoiceRAG+ops, CFO=daily P&L/$25K tracker, CPO=clinical gate.
 
 **QUEUED:** daily P&L+$25K cron; real TReO content into VoiceRAG cs-knowledge; Customer.io reactivation+drip drafts (sends Matt-gated); affiliate claims-gate; screenshot focus-group round to 90%; CRO/COO/CFO agent configs. **GATED-MATT:** ad spend, list sends, pricing, OTC/FDA. Full plan = Hyperagent global doc 'OTCHealth Cash Playbook'.
+
+
+## 2026-06-26 — FLEET MEMORY-FLUSH PROTOCOL (mandatory, all agents/all engines)
+ZERO CONTEXT LOSS is the goal. The shared brain is WRITE-THROUGH (holds only what is explicitly flushed). Claude Code auto-hydrates/flushes via SessionStart/End hooks; the HYPERAGENT runtime has NO such hook, so Hyperagent agents MUST self-flush every turn. RULES every agent follows:
+1. RECALL-FIRST — before claiming anything missing/unknown, query the gateway memory_recall tool (agentic-hybrid) or company-brain ask. NEVER use the deprecated local mem.mjs recall CLI; never read its 0-hit as loss.
+2. FLUSH-EVERY-TURN — end each turn with a concise ledger write (mem.mjs status|remember|decision|correct --agent <self> --share, or gateway memory_remember): the request, what was done/decided, key facts+IDs, next action.
+3. MILESTONE FLUSH — deploys/builds/decisions/corrections flushed immediately.
+4. CLOSE EVERY RUN with a status entry; ledger is the cross-thread/cross-engine source of truth.
+Bake this block into EVERY agent system prompt + the App Lead reusable template; new agents inherit it. Backstop: a scheduled per-agent ledger-sweep. Ref: kb-memory ledger decision 20260626-048.
