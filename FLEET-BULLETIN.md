@@ -116,3 +116,14 @@ All capabilities below are LIVE on the governed gateway (https://mcp.otchealth.a
 **SCOPED NEXT:** daily P&L + $25K-tracker cron (needs delivery-target decision); real iHEARtrio/Shopify content into VoiceRAG cs-knowledge; Customer.io drip + reactivation DRAFTS (sends Matt-gated, TCPA); consumables subscription + reviews + SEO hub + Amazon + white-label SaaS scope.
 
 **GATED-TO-MATT (untouched):** real ad spend, list sends, DNS, pricing, treatment claims, OTC/FDA line, B2B contracts. Prior context: VoiceRAG CS agent went live earlier same day (gap #1).
+
+
+## 2026-06-26 (session 3) — CTO: OTCHealth OS built + product truth corrected
+
+**CANONICAL PRODUCT (pulled live from Shopify, was wrong before):** iHEAR TReO (NEVER 'iHEARtrio') — a PSAP by iHEAR Medical. $99/side (was $299); Complete Pair $99 w/ code PAIR99 (reg $149; $598 CVS retail); free shipping; 60-day guarantee; phone 1-800-864-4337. Public store = otchealthmart.com. Recurring engine already a product: OTCHealth CareNow membership ($9.99-19.99/mo for life). OTC aids: iHEAR Matrix $349 (live), Axis $329 / Linx $239 (Q4 2026). Use the Shopify Admin API skill for product truth; gateway shopify_* is NOT configured (SHOPIFY_* env unset on gateway — wire later).
+
+**SHIPPED:** (1) iHEAR TReO advertorial+quiz funnel rebuilt with REAL product/images/pricing + live checkout to otchealthmart.com (Hyperagent webpage preview). (2) Ran skills/focus-group-loop on it (20 personas, gpt-4o on octhealth-aoai-4701 cap10; azure-openai-endpoint/key already point there): R1 customers 6.4/pros 6.0/investors 7.0 -> executed fixes (one-price $99 hero, emotional headline, quiz transparency, spacing) -> R2 climbed to ~7 / 7-8 / 7-8. (3) Silver-platter SYSTEM MAP webpage (9-stage loop + product ladder + 5-agent fleet + live/queued/gated). (4) Application Insights deployed + wired into gateway+voicerag + restart alerts emailing Matt (microsoft.insights provider registered; new LA workspace law-otchealth-apps).
+
+**AGENT ORG defined:** CTO builds; CRO=growth/funnel/ads, COO=VoiceRAG+ops, CFO=daily P&L/$25K tracker, CPO=clinical gate.
+
+**QUEUED:** daily P&L+$25K cron; real TReO content into VoiceRAG cs-knowledge; Customer.io reactivation+drip drafts (sends Matt-gated); affiliate claims-gate; screenshot focus-group round to 90%; CRO/COO/CFO agent configs. **GATED-MATT:** ad spend, list sends, pricing, OTC/FDA. Full plan = Hyperagent global doc 'OTCHealth Cash Playbook'.
