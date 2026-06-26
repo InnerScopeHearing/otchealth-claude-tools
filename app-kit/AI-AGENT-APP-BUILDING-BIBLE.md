@@ -53,7 +53,9 @@ Code best practices.)
    code against an unread codebase or an unapproved plan. A good spec names the files
    and interfaces, states what is out of scope, and ends with an *end-to-end
    verification step that proves the feature works*. Skip the plan only when you
-   could describe the diff in one sentence. (Spec-driven development: GitHub Spec
+   could describe the diff in one sentence. **Use `app-kit/SPEC-TEMPLATE.md`** (it
+   bakes in the golden-task acceptance check and the boot/render verification, so the
+   spec is eval-first by construction). (Spec-driven development: GitHub Spec
    Kit `/specify -> /plan -> /tasks`; Anthropic "let Claude interview you, write
    SPEC.md, execute in a fresh session.")
 

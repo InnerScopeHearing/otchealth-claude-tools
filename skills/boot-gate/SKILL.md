@@ -27,6 +27,18 @@ looked at. This skill is that gate. Full rationale: `app-kit/AI-AGENT-APP-BUILDI
 | `check-build-env.mjs` | app `scripts/` | `prebuild` step: FAILS the build if any required `VITE_*` is empty/missing/malformed. |
 | `ErrorBoundary.tsx` | app `src/boot/` | Top-level boundary that renders a VISIBLE fallback (never a silent color) and reports to Sentry. |
 | `main-boot.tsx` | reference for app `src/main.tsx` | The boot pattern: ErrorBoundary wrap, `SplashScreen.hide()` in `finally`, global error handlers, `[data-boot-ready]` marker. |
+| `ci/ios-sim-smoke.yml` | app `.github/workflows/` | **The NATIVE-layer gate.** Reusable workflow: on the Depot macOS runner, build the app for the iOS Simulator (no signing), boot it, install + launch, screenshot, and FAIL if the app crashed or the boot screen is a flat color (stuck splash). Catches what WebKit-in-Linux can't: a native splash that never hides, plugin crashes, App Group/entitlement failures. |
+| `ci/sim-smoke.mjs` | vendored next to the workflow | Pass/fail the simulator boot from the screenshot (flat-color heuristic, 0.92 threshold — a green/white stuck screen scores ~0.95) + a crash-log check. Proven: realistic green screen 0.95 FAIL, real splash 0.13 PASS. |
+
+### The two-layer boot gate
+- **WebKit-in-Linux** (`boot-smoke.spec.ts`, `visual-walkthrough.spec.ts`): fast, runs
+  on every PR, catches the JS/render class (the FourVault headless splash, console
+  errors, stuck JS mount). This is the everyday gate.
+- **iOS Simulator on Depot macOS** (`ci/ios-sim-smoke.yml`): higher fidelity, catches
+  the NATIVE class (the PlantID green screen if it is native-splash-driven, plugin/
+  entitlement crashes). Costs macOS minutes (~10x Linux) so run it on the release/
+  ready-to-build path, not necessarily every push. This is the highest-fidelity
+  automated gate short of the physical phone.
 
 ## How to adopt (any Capacitor + React + Vite app)
 
