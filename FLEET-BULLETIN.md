@@ -127,3 +127,102 @@ All capabilities below are LIVE on the governed gateway (https://mcp.otchealth.a
 **AGENT ORG defined:** CTO builds; CRO=growth/funnel/ads, COO=VoiceRAG+ops, CFO=daily P&L/$25K tracker, CPO=clinical gate.
 
 **QUEUED:** daily P&L+$25K cron; real TReO content into VoiceRAG cs-knowledge; Customer.io reactivation+drip drafts (sends Matt-gated); affiliate claims-gate; screenshot focus-group round to 90%; CRO/COO/CFO agent configs. **GATED-MATT:** ad spend, list sends, pricing, OTC/FDA. Full plan = Hyperagent global doc 'OTCHealth Cash Playbook'.
+- 2026-06-25T03:43Z | App-Building Bible + boot-gate shipped (app-kit/AI-AGENT-APP-BUILDING-BIBLE.md, skills/boot-gate). NEW LAW: 'compiles + unit-green' is NOT 'ready'. Before any 'ready to build', run the boot-gate: load the BUILT bundle in WebKit @ iPhone 16 Pro (402x874), prove it reaches an interactive screen with ZERO console errors, screenshot every route (flat-color + art-director judge), and gate check-build-env.mjs (empty VITE_* fails the build - the PlantID green-screen cause). Every app needs a top-level ErrorBoundary + SplashScreen.hide() in finally. Port boot-gate into iHEARtest/AWARE/Companion (no render gate today).
+- 2026-06-25T03:49Z | Memory health now streams to PostHog in REAL TIME: a new memory_beacon event (agent, status LIVE/DARK, ledger_size, last_write_age, hooks_wired) emits to the Fleet Agents project (479484) from the Stop hook, self-throttled ~10min + backgrounded (never on the prompt hot path). This is the operator-dashboard signal AND the foundation for the coming auto-medic (a standing process that watches this stream and auto-dispatches the medic when an agent goes DARK / off-the-rails).
+- 2026-06-25T03:54Z | Distillation durability (Wave 2a): PreCompact reflect now uses the uncontended foundry gpt-4.1-mini lane FIRST (--prefer-fallback) so the highest-stakes capture never blocks on the contended shared gpt-4o. Plus a DETERMINISTIC safety net: if the LLM is fully unavailable (sustained 429/error), reflect extracts the session's key verbatim facts (SHIPPED/merged/DECISION/identifiers) straight into the ledger, so a 429 can never cost a fact (the journal already holds the raw turns; this puts the key facts in the recall layer).
+- 2026-06-25T04:06Z | memory: Wave 2b write-through SEMANTIC indexing - a shared mem.mjs entry is embedded into the memory-exec AI Search index the instant it is written (detached index-one.mjs), so it is recallable BY MEANING within the minute, not after the 6h reindex. Ring-safe (shared-feed only). semantic.mjs recall is now always fresh.
+- 2026-06-25T04:12Z | memory: mem.mjs blob GET/PUT now retry transient proxy/SAS 403/429/5xx (bounded backoff) - a 'mem.mjs remember' is no longer lost to a transient blip. 404 still means absent. Closes a real data-loss gap seen live.
+- 2026-06-25T04:21Z | memory: Wave 3 typed ENTITY/current-value layer - 'mem.mjs entity set/get/list/alias' answers 'what is X NOW?' deterministically (latest wins per key, e.g. iheartest_cfbundleversion, n8n_base_url, asc_team_id). The per-prompt pack now injects a CURRENT VALUES section. Use it for any value that drifts over time instead of a fuzzy fact search.
+- 2026-06-25T04:33Z | memory: Wave 4 the AUTO-DISPATCH FLEET MEDIC is live (code). A monitor scans every agent's memory health (team-health + PostHog beacon) and, when an agent runs with memory OFF, auto-leaves a self-heal directive it picks up on its next prompt (surfaced by kb-inject at SessionStart) + alerts. Never nags an idle agent. If you ever see a 'FLEET MEDIC: PENDING SELF-HEAL' block at session start, run the 3 steps it gives you.
+- 2026-06-25T05:15Z | memory: per-prompt SEMANTIC tier is live. When your local keyword pack is thin, pack now injects a 'RELATED (shared brain, by meaning)' section pulled from the whole exec team's memory by MEANING (Azure AI Search semantic ranker + a read-only query key; no admin/embedding key on the hot path). Thin-triggered + throttled + 2s-bounded + fail-open + ring-filtered. KB_SEM_DISABLE=1 to turn off. This closes the superbrain memory program (P0+P1+P2+auto-medic+write-through+hot-path semantic ALL shipped).
+- 2026-06-25T05:54Z | fleet-dispatch is LIVE: directed agent-to-agent hand-off so a human never relays between agents. 'node skills/fleet-dispatch/dispatch.mjs send <to> "<msg/task>"' queues it in the target agent's inbox; it auto-surfaces at that agent's NEXT SessionStart (then acks). ASYNC by default (zero Max draw); --spawn (opt-in) also spins up a headless target session via the Max-token runner. Non-PHI coordination only. If you see a 'FLEET DISPATCH' block at session start, another agent handed you something.
+- 2026-06-25T08:13Z | FLEET -> HYPERAGENT TRANSFER (Matt directive 2026-06-25): Claude Code is in a ~96h usage blackout; the fleet is moving to the Hyperagent engine (also Claude Code). Your brain is DURABLE + engine-agnostic (Azure ledgers + memory-exec), so this is an ATTACH not a migration, and the Tier-1 cron jobs keep it fresh meanwhile. ON YOUR NEXT WAKE, before normal work: (1) FLUSH everything in flight to memory now -- mem.mjs remember|decision|correct|pitfall --agent <role> -- so nothing is lost; (2) read otchealth-cto/HYPERAGENT-CTO-HANDOFF.md (branch claude/admiring-hamilton-x2f1vp) = the attach procedure + custom-gateway connect recipe + the template; (3) write your own HYPERAGENT-<role>-HANDOFF.md in your home repo honoring your RING (cfo=MNPI/internal, clo=privileged+personal-NEVER-shared, coo/developer/commerce=non-PHI; never put MNPI/PHI/privileged content in the doc), commit on a claude/* branch + draft PR; (4) confirm attach: mem.mjs whoami --agent <role> = PASS + a company-brain ask. On Hyperagent the keystone is the claude-driver SA (GCP_CLAUDE_DRIVER_SA_JSON) + toolkit clone + 'echo <role> > ~/.claude/.kb-agent'; connect the gateway at https://mcp.otchealth.app/mcp with Authorization: Bearer <SM gateway-connector-token>. CTO recreates the agent roster as Hyperagent cards from dream-team/agents/*.md; the developer spins off the per-app build agents.
+- 2026-06-25T08:34Z | SUNSET / SUNRISE TRANSFER PROTOCOL is LIVE fleet-wide (skill sunset-protocol + plugin /sunset /sunrise). Say 'Sunset Transfer Protocol' to spin DOWN for a cross-engine move: flush live state to memory, write a PORTABLE RING-SAFE handoff to commons _HANDOFF/<role>.md, then sign off 'Goodnight friend'. Say 'Sunrise Transfer Protocol' on the new engine to spin UP: attach (whoami PASS + brain), self-update, greet 'I am fully updated and ready to go, Sir.', list the last 3 workstreams, ask which to work on. The brain is durable+engine-agnostic so this is FLUSH-then-ATTACH, not a migration. RING-SAFE: the commons doc is procedure+counts+pointers only; cfo/clo/capital ledgers embed NO text; last3 shows only in-session. FLEET sunset needs NO session-opening: node skills/sunset-protocol/protocol.mjs sunset-fleet writes every agent's handoff from its durable ledger (zero Max draw); job/sunset-fleet.sh is the Tier-1 entrypoint. Verbs: sunset|sunrise|sunset-fleet|last3 --agent <role>.
+- 2026-06-25T21:43Z | OPERATING DIRECTIVE (Matt 2026-06-25): speed-over-friction for a solo operator. Eliminate internal roadblocks that slow development/cash; CTO+Matt share tokens/keys freely in chat so Matt never wastes hours. Matt may work with ANY fleet agent (incl CLO, MedReview, Capital) and their ledgers via the TRUSTED engines we control (Claude Code / Claude.ai / Hyperagent) with NO internal gatekeeping. ONE hard line (legal, and it PROTECTS cash, not bureaucracy): never pipe PHI (MedReview), MNPI/securities (Capital/INND), or attorney-privileged (CLO-personal) data/tools/ledgers to EXTERNAL third-party AI clients (ChatGPT/Perplexity/Copilot-consumer / any non-BAA processor) - that is HIPAA/Reg FD/privilege-waiver exposure. External MCP surface stays ring-safe (non-PHI/non-MNPI/non-privileged); widen external access legitimately via provider BAAs/enterprise agreements. Bake this into every new process and architecture.
+
+
+## 2026-06-26 — CTO Bulletin: Fleet Connectivity Priority + Wave A/A+ shipped
+
+**CONNECTIVITY PRIORITY ORDER (CEO directive — every agent, every engine):** to reach any service, try in order: (1) **Custom MCP server FIRST** — mcp.otchealth.app (governed, ring-safe, audited); (2) **Direct/native MCP** (platform github__/notion__/etc.) if it exists; (3) **Direct API as LAST RESORT** — CTO Direct Token API (token from Notion vault or GCP Secret Manager; never commit secret values; never PHI/BAA on non-BAA runtime). Standing CTO duty: keep the custom gateway's tool coverage ahead of fleet needs. Near-term fix: add GitHub WRITE tools (push/PR/merge) to the custom gateway (read-only there today; native GitHub MCP proved flaky this session, forcing the direct-API fallback).
+
+**Gateway Wave A/A+ shipped (prod image p12, PR #14 merged):** agentic-hybrid recall (sem + contentVector); kb_search (commons/memory-exec open); kb_search_privileged (finance->cfo, legal-company->clo, legal-personal->clo-personal; cto/default REFUSED — ring verified); Content Safety (shield_check/groundedness_check); Document Intelligence (invoice/contract); llm_azure cost path (gpt-5.1 standard / gpt-5.4 high, cap 100); nightly eval Job (debug pending). FLEET COST PROTOCOL: route commodity LLM work to credit-funded Azure (llm_azure), keep hard reasoning on Claude. Full Azure/MS coverage gap analysis + adopt roadmap in kb-memory ledger 20260626-008.
+
+## 2026-06-26 — FLEET CAPABILITIES & SOPs (major update; every agent, every engine)
+
+All capabilities below are LIVE on the governed gateway (https://mcp.otchealth.app, prod image p14) and inherited by every agent on every platform. The gateway is self-describing: call `catalog_master` to see every tool + its governance RULE, and `catalog_skill(name)` for how-tos. CONNECTIVITY PRIORITY (always): custom MCP gateway FIRST -> native platform MCP -> direct API (vault/Secret Manager token) last.
+
+### Memory & knowledge (all agents)
+- `memory_recall` — now AGENTIC-HYBRID (query-planning + vector + 'sem' semantic ranker + RRF) over memory-exec. Use BEFORE asserting any cross-team fact.
+- `kb_search` — hybrid search over OPEN indexes: `commons-company-journal`, `memory-exec`.
+- `kb_search_privileged` — RING-GATED: `finance-cfo-source-docs`/`finance-otchealth-cfo-source-docs` (lane=cfo), `legal-company` (clo), `legal-personal` (clo-personal). Requires the matching trusted OAuth lane; cto/default/external are REFUSED.
+
+### Cost protocol (every agent) — FLEET COST PROTOCOL
+- Route COMMODITY LLM work (summarize/classify/extract/synthesize) to `llm_azure` (credit-funded Azure gpt-5.1 standard / gpt-5.4 high) instead of metered Claude tokens. Keep hard reasoning on Claude. Tiers: tier:'standard'|'high'.
+- gpt-4.1-mini is BANNED for quality work. gpt-5.5 pending quota.
+
+### Guardrails (gateway-level, inherited)
+- `shield_check` (Prompt Shields — injection/jailbreak), `groundedness_check` (hallucination flagging). Content Safety resource cs-otchealth.
+
+### Document AI (CFO/CLO)
+- `docintel_analyze_invoice` (CFO/Xero), `docintel_analyze_contract` (CLO). Read/analyze only, NON-PHI. Never send MedReview/PHI docs.
+
+### GitHub (CTO-gated writes; all agents read)
+- Reads (all): `github_list_pull_requests`, `github_list_workflow_runs`, `github_get_file_contents`.
+- Writes (CTO lane only): `github_push_files`, `github_create_pull_request`, `github_merge_pull_request`. Dry-run by default (pass dry_run:false to execute).
+
+### Trusted per-agent OAuth lanes (NEW)
+- Machine identities via client_credentials at /oauth/token: lanes cfo/clo/clo-personal (creds in SM: oauth-lane-<agent>-id/secret). These gate kb_search_privileged. NEVER hand lane creds to an external AI platform.
+
+### GitHub autonomous coding agents (NEW)
+- Assign a GitHub issue to `openai-code-agent` (Codex — WORKING) -> it opens a PR autonomously. `anthropic-code-agent` (Claude) currently failing to start (GitHub preview bug; Support ticket filed).
+- Org-wide Copilot instructions live in InnerScopeHearing/.github; reusable app starter in InnerScopeHearing/app-template (paused, Developer agent owns app-creation research).
+- BYOK 'Azure_Foundry' custom model (gpt-5.4/gpt-5.1) lets Copilot run on our Azure credits.
+
+### Security & governance
+- GitHub Advanced Security (secret scanning + push protection + Dependabot) ON across 18 repos (medreview excluded - PHI).
+- Azure: Microsoft Purview (governance), Defender for Cloud CSPM Standard.
+
+### Hard rules (unchanged, non-negotiable)
+- Ring safety: never expose PHI (MedReview) / MNPI (Capital/INND) / attorney-privileged (CLO) to external AI clients. Never use PHI/BAA creds on the non-BAA Hyperagent runtime. Never commit secret VALUES (names ok). iOS builds + TestFlight = CTO-only.
+
+
+## 2026-06-26 — CTO Bulletin: VoiceRAG customer-service agent LIVE (Medvi gap #1 closed)
+
+**WHY:** Medvi gap analysis (one-person $1.8B telehealth co) showed our $ gap is the REVENUE-facing L1 (growth/creative/CS/analytics), not more engineering plumbing. Medvi ran CS on ElevenLabs voice; we now have the Azure-native equivalent.
+
+**SHIPPED (verified end-to-end this run):** otchealth-voicerag Container App in rg-otchealth-apps-prod (env cae-otchealth-apps, eastus2). Image acrotc55c84f6bef.azurecr.io/otchealth-voicerag:v1 (ACR remote build). Real-time voice+chat via Azure OpenAI gpt-realtime (deployment gpt-rt-test on octhealth-aoai-4701, api-version 2025-04-01-preview) grounded by AI Search index 'cs-knowledge' (NEW: Azure-OpenAI vectorizer + text-embedding-3-large + 'sem' semantic config; 12 non-PHI seed docs). FQDN otchealth-voicerag.wonderfulpond-a1ddc412.eastus2.azurecontainerapps.io. Ingress transport=auto, stickySessions=sticky, minReplicas=1, system-assigned MI. Search uses least-priv QUERY key.
+
+**SECURITY:** pre-shared token gate (SM: voicerag-access-token; value NEVER in repo). /health open; all else 401 without token. PHI guardrail baked into system prompt: general info only, FORCED handoff on any individual hearing-result/medical/diagnosis question; refunds/order-changes collect order# + human follow-up only. Non-BAA runtime — cs-knowledge contains zero PHI by construction; MedReview excluded entirely.
+
+**VERIFIED:** health 200; auth gate 401/200; client WS /realtime -> 101; upstream gpt-realtime -> 101 with key+2025-04-01-preview+gpt-rt-test. Full audio loop = Matt browser go/no-go (Phase 1).
+
+**ROLLOUT (per Vera brief):** Phase 1 otchealthmart Shopify (zero PHI) -> Phase 2 iHEARtest CHAT-ONLY first -> Phase 3 companion/InnerEase -> Phase 4 AWARE (legal review) + telephony (ACS Call Automation). NEVER MedReview.
+
+**NEXT (open):** replace seed docs with real Shopify/Intercom content sync (per-app scoped indexes idx-<app>); App Insights + transcript PHI-scrub + nightly voice eval (golden set + groundedness); ACS PSTN bridge; harden auth to Entra Easy Auth; swap key auth -> managed identity (Cognitive Services User + Search Index Data Reader RBAC). Research briefs (voice arch / biz integration / ops playbook) captured in Hyperagent thread cmqtwvk5t00sq06addf0i4wws.
+
+
+## 2026-06-26 — CTO Bulletin: OTCHealth Cash Playbook (the Medvi Mirror) — engine pieces SHIPPED
+
+**STRATEGY (CEO-directed):** Copy Medvi's one-person model. Wedge = iHEARtrio PSAP (sellable TODAY). iHEARtest (LIVE) = the free high-intent acquisition magnet. AWARE = retention/LTV. OTC hearing-aid line GATED until $25K cumulative revenue (PSAP sales / capital / loans). Focus apps = iHEARtest + AWARE only. Cost-neutral: Azure $25K + GitHub $10K + ElevenLabs 33M-char grant + PostHog $50K. Full plan = Hyperagent global doc 'OTCHealth Cash Playbook — The Medvi Mirror'.
+
+**SHIPPED tonight (CTO autonomous, $0 incremental, nothing sent/charged):**
+1. CLAIMS-COMPLIANCE GATE (the Medvi moat, LIVE): new gateway MCP tool **claims_check** (image **p21**, deployed + verified). Channel-aware (ads/advertorials hardest), PSAP/FTC-FDA ruleset, runs on credit-funded Foundry gpt-5.4. Verified: non-compliant PSAP ad -> BLOCK risk 100 w/ fixes; compliant -> PASS risk 4 + rewrite. SOP-1 enforced in code. Every agent/engine can call it. (Source PR to otchealth-mcp-server: claims-check.ts + tools/index.ts.)
+2. FUNNEL (staged): iHEARtrio advertorial + self-qualifying quiz + offer + AWARE bundle + PSAP disclaimer (Hyperagent webpage, staging-banner; pricing/claims/links = PLACEHOLDER). Mirrors Medvi advertorial->quiz->offer.
+3. CREATIVE v1: 5 compliant ad/advertorial/SMS hooks gate-validated (3 PASS, 2 REVISE) — create->screen->ship loop proven.
+4. VOICE ECON decided: ElevenLabs 33M-char grant (~611 hrs) = PRE-RENDERED ad VO + AWARE coaching; Azure realtime (credits, ~10-18x cheaper/min) = ALL live CS/IVR/outbound. SOP-5.
+5. 8 SOPs written (claims, funnel-experiment, CS-sync, list/lifecycle, voice, daily-money, $25K-gate, reviews).
+
+**SCOPED NEXT:** daily P&L + $25K-tracker cron (needs delivery-target decision); real iHEARtrio/Shopify content into VoiceRAG cs-knowledge; Customer.io drip + reactivation DRAFTS (sends Matt-gated, TCPA); consumables subscription + reviews + SEO hub + Amazon + white-label SaaS scope.
+
+**GATED-TO-MATT (untouched):** real ad spend, list sends, DNS, pricing, treatment claims, OTC/FDA line, B2B contracts. Prior context: VoiceRAG CS agent went live earlier same day (gap #1).
+
+
+## 2026-06-26 (session 3) — CTO: OTCHealth OS built + product truth corrected
+
+**CANONICAL PRODUCT (pulled live from Shopify, was wrong before):** iHEAR TReO (NEVER 'iHEARtrio') — a PSAP by iHEAR Medical. $99/side (was $299); Complete Pair $99 w/ code PAIR99 (reg $149; $598 CVS retail); free shipping; 60-day guarantee; phone 1-800-864-4337. Public store = otchealthmart.com. Recurring engine already a product: OTCHealth CareNow membership ($9.99-19.99/mo for life). OTC aids: iHEAR Matrix $349 (live), Axis $329 / Linx $239 (Q4 2026). Use the Shopify Admin API skill for product truth; gateway shopify_* is NOT configured (SHOPIFY_* env unset on gateway — wire later).
+
+**SHIPPED:** (1) iHEAR TReO advertorial+quiz funnel rebuilt with REAL product/images/pricing + live checkout to otchealthmart.com (Hyperagent webpage preview). (2) Ran skills/focus-group-loop on it (20 personas, gpt-4o on octhealth-aoai-4701 cap10; azure-openai-endpoint/key already point there): R1 customers 6.4/pros 6.0/investors 7.0 -> executed fixes (one-price $99 hero, emotional headline, quiz transparency, spacing) -> R2 climbed to ~7 / 7-8 / 7-8. (3) Silver-platter SYSTEM MAP webpage (9-stage loop + product ladder + 5-agent fleet + live/queued/gated). (4) Application Insights deployed + wired into gateway+voicerag + restart alerts emailing Matt (microsoft.insights provider registered; new LA workspace law-otchealth-apps).
+
+**AGENT ORG defined:** CTO builds; CRO=growth/funnel/ads, COO=VoiceRAG+ops, CFO=daily P&L/$25K tracker, CPO=clinical gate.
+
+**QUEUED:** daily P&L+$25K cron; real TReO content into VoiceRAG cs-knowledge; Customer.io reactivation+drip drafts (sends Matt-gated); affiliate claims-gate; screenshot focus-group round to 90%; CRO/COO/CFO agent configs. **GATED-MATT:** ad spend, list sends, pricing, OTC/FDA. Full plan = Hyperagent global doc 'OTCHealth Cash Playbook'.
