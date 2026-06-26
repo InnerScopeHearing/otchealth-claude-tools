@@ -100,3 +100,19 @@ All capabilities below are LIVE on the governed gateway (https://mcp.otchealth.a
 **ROLLOUT (per Vera brief):** Phase 1 otchealthmart Shopify (zero PHI) -> Phase 2 iHEARtest CHAT-ONLY first -> Phase 3 companion/InnerEase -> Phase 4 AWARE (legal review) + telephony (ACS Call Automation). NEVER MedReview.
 
 **NEXT (open):** replace seed docs with real Shopify/Intercom content sync (per-app scoped indexes idx-<app>); App Insights + transcript PHI-scrub + nightly voice eval (golden set + groundedness); ACS PSTN bridge; harden auth to Entra Easy Auth; swap key auth -> managed identity (Cognitive Services User + Search Index Data Reader RBAC). Research briefs (voice arch / biz integration / ops playbook) captured in Hyperagent thread cmqtwvk5t00sq06addf0i4wws.
+
+
+## 2026-06-26 — CTO Bulletin: OTCHealth Cash Playbook (the Medvi Mirror) — engine pieces SHIPPED
+
+**STRATEGY (CEO-directed):** Copy Medvi's one-person model. Wedge = iHEARtrio PSAP (sellable TODAY). iHEARtest (LIVE) = the free high-intent acquisition magnet. AWARE = retention/LTV. OTC hearing-aid line GATED until $25K cumulative revenue (PSAP sales / capital / loans). Focus apps = iHEARtest + AWARE only. Cost-neutral: Azure $25K + GitHub $10K + ElevenLabs 33M-char grant + PostHog $50K. Full plan = Hyperagent global doc 'OTCHealth Cash Playbook — The Medvi Mirror'.
+
+**SHIPPED tonight (CTO autonomous, $0 incremental, nothing sent/charged):**
+1. CLAIMS-COMPLIANCE GATE (the Medvi moat, LIVE): new gateway MCP tool **claims_check** (image **p21**, deployed + verified). Channel-aware (ads/advertorials hardest), PSAP/FTC-FDA ruleset, runs on credit-funded Foundry gpt-5.4. Verified: non-compliant PSAP ad -> BLOCK risk 100 w/ fixes; compliant -> PASS risk 4 + rewrite. SOP-1 enforced in code. Every agent/engine can call it. (Source PR to otchealth-mcp-server: claims-check.ts + tools/index.ts.)
+2. FUNNEL (staged): iHEARtrio advertorial + self-qualifying quiz + offer + AWARE bundle + PSAP disclaimer (Hyperagent webpage, staging-banner; pricing/claims/links = PLACEHOLDER). Mirrors Medvi advertorial->quiz->offer.
+3. CREATIVE v1: 5 compliant ad/advertorial/SMS hooks gate-validated (3 PASS, 2 REVISE) — create->screen->ship loop proven.
+4. VOICE ECON decided: ElevenLabs 33M-char grant (~611 hrs) = PRE-RENDERED ad VO + AWARE coaching; Azure realtime (credits, ~10-18x cheaper/min) = ALL live CS/IVR/outbound. SOP-5.
+5. 8 SOPs written (claims, funnel-experiment, CS-sync, list/lifecycle, voice, daily-money, $25K-gate, reviews).
+
+**SCOPED NEXT:** daily P&L + $25K-tracker cron (needs delivery-target decision); real iHEARtrio/Shopify content into VoiceRAG cs-knowledge; Customer.io drip + reactivation DRAFTS (sends Matt-gated, TCPA); consumables subscription + reviews + SEO hub + Amazon + white-label SaaS scope.
+
+**GATED-TO-MATT (untouched):** real ad spend, list sends, DNS, pricing, treatment claims, OTC/FDA line, B2B contracts. Prior context: VoiceRAG CS agent went live earlier same day (gap #1).
