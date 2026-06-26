@@ -1,43 +1,51 @@
 # TODAY — the COO's directive (regenerate each morning; mark results through the day)
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date: 2026-06-26 (Friday). Operating window 9am-5pm PT. Calendar: CLEAR.
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in bank: $0. Burn: $50K/mo. Runway: 0 months. 17 days since the first-dollars
+moves were named. Today is a clear Friday with no commitments. This is the day.
 
-## Today's 3 moves (do these, in order)
+## Today's 3 moves (in order)
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
-- Report back: sent? to how many?
+### Move 1 (60 min, cash in days, NO gates) — Publish the Gumroad SOP store
+Five SOPs are drafted and ready. The COO has them waiting.
+What you do:
+1. Create a free Gumroad account at gumroad.com (5 min)
+2. Open the Notion task "COO Draft: Gumroad SOP Store, First 5 Listings"
+3. Paste each listing, upload the PDF, set instant delivery, set prices ($49-79, bundle $199)
+4. Hit publish
+Report back: link to the live store. That is first dollars in.
 Status: [ ] not started
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
+### Move 2 (15 min, unlocks the $66K email blast) — Prove the TReO checkout
+The checkout was remediated (Stripe-only, apps cut 34 to 12). It has NOT been proven
+with a real order. Place one real TReO order at $149 to confirm end-to-end. If it
+completes, the 66K HearingAssist list goes out the same day. If it fails, we diagnose now.
+What you do:
+1. Go to OTCHealthMart, add TReO to cart, complete checkout with a real card
+2. Report: did it complete? Order number?
 Status: [ ] not started
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
-Status: [ ] not started
+### Move 3 (30 min, conditional on Move 2 passing) — Fire the reactivation email
+Draft is complete. Subject: "We have been thinking about you." CAN-SPAM ready.
+Two placeholders to fill: physical postal address + TReO shop URL.
+Fill them, review for 5 minutes, send to the HearingAssist segment in Customer.io.
+66K contacts. First email since the campaign dropped.
+Report back: sent count, delivery rate.
+Status: [ ] conditional on Move 2
 
 ## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+More tooling, more building, more research. The system is done. The drafts are done.
+Today is for executing, not preparing. If you feel the urge to build something,
+come back to Move 1.
 
-## Yesterday's results
-(none logged yet)
+## Yesterday's results (2026-06-25)
+COO booked a 2hr CASH MOVE block 9:30-11:30 AM PT. Lifecycle drafted the
+reactivation email (NEEDS MATT). Digital-products drafted 5 Gumroad SOPs (NEEDS MATT).
+Both are still sitting, waiting for Matt's 60 min of execution. That was yesterday.
+Today is the day to close them.
 
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+## Upcoming calendar
+- June 29 (Mon): Therapy 3-4 PM PT (do not book over)
+- June 30 (Tue): Mindful Health Solutions 8:30-11:30 AM PT (do not book over)
