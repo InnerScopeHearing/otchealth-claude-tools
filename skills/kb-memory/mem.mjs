@@ -32,7 +32,7 @@
 import crypto from "node:crypto";
 import { readFileSync, existsSync, writeFileSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
@@ -256,7 +256,24 @@ async function append(type, share) {
 // index-one.mjs is fail-open. Shared by append() + entity set.
 function maybeIndex(entry, shared) {
   if (!shared) return;
-  try { spawn(process.execPath, [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)], { detached: true, stdio: "ignore" }).unref(); } catch {}
+  const args = [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)];
+  // HYPERAGENT FIX (2026-06-26): on the Hyperagent runtime mem.mjs runs under RunWithCredentials;
+  // when that tool-call process returns, a detached/unref'd child is KILLED before it finishes the
+  // embed+upsert -> fresh SHARED facts land in the durable ledger but miss the memory-exec AI Search
+  // index until the 6h reindex (invisible to semantic recall / the per-prompt pack / company-brain /
+  // MCP clients for up to 6h). So on that runtime index SYNCHRONOUSLY (bounded + fail-open). On Claude
+  // Code (long-lived session) keep the non-blocking detached spawn so the write stays off the hot path.
+  // RING-SAFE: still gated on `shared`. FAIL-OPEN: any error is swallowed; the ledger write already happened.
+  const syncIndex = process.env.KB_SYNC_INDEX === "1"
+    || process.env.NODE_USE_ENV_PROXY === "1"
+    || (process.env.HOME || "").startsWith("/agent");
+  try {
+    if (syncIndex) {
+      spawnSync(process.execPath, args, { stdio: "ignore", timeout: 25000 });
+    } else {
+      spawn(process.execPath, args, { detached: true, stdio: "ignore" }).unref();
+    }
+  } catch {}
 }
 
 // ---- typed ENTITY / current-value layer (Wave 3): answer "what is X NOW?" deterministically. An
