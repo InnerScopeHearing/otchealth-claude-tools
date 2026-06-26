@@ -85,3 +85,18 @@ All capabilities below are LIVE on the governed gateway (https://mcp.otchealth.a
 
 ### Hard rules (unchanged, non-negotiable)
 - Ring safety: never expose PHI (MedReview) / MNPI (Capital/INND) / attorney-privileged (CLO) to external AI clients. Never use PHI/BAA creds on the non-BAA Hyperagent runtime. Never commit secret VALUES (names ok). iOS builds + TestFlight = CTO-only.
+
+
+## 2026-06-26 — CTO Bulletin: VoiceRAG customer-service agent LIVE (Medvi gap #1 closed)
+
+**WHY:** Medvi gap analysis (one-person $1.8B telehealth co) showed our $ gap is the REVENUE-facing L1 (growth/creative/CS/analytics), not more engineering plumbing. Medvi ran CS on ElevenLabs voice; we now have the Azure-native equivalent.
+
+**SHIPPED (verified end-to-end this run):** otchealth-voicerag Container App in rg-otchealth-apps-prod (env cae-otchealth-apps, eastus2). Image acrotc55c84f6bef.azurecr.io/otchealth-voicerag:v1 (ACR remote build). Real-time voice+chat via Azure OpenAI gpt-realtime (deployment gpt-rt-test on octhealth-aoai-4701, api-version 2025-04-01-preview) grounded by AI Search index 'cs-knowledge' (NEW: Azure-OpenAI vectorizer + text-embedding-3-large + 'sem' semantic config; 12 non-PHI seed docs). FQDN otchealth-voicerag.wonderfulpond-a1ddc412.eastus2.azurecontainerapps.io. Ingress transport=auto, stickySessions=sticky, minReplicas=1, system-assigned MI. Search uses least-priv QUERY key.
+
+**SECURITY:** pre-shared token gate (SM: voicerag-access-token; value NEVER in repo). /health open; all else 401 without token. PHI guardrail baked into system prompt: general info only, FORCED handoff on any individual hearing-result/medical/diagnosis question; refunds/order-changes collect order# + human follow-up only. Non-BAA runtime — cs-knowledge contains zero PHI by construction; MedReview excluded entirely.
+
+**VERIFIED:** health 200; auth gate 401/200; client WS /realtime -> 101; upstream gpt-realtime -> 101 with key+2025-04-01-preview+gpt-rt-test. Full audio loop = Matt browser go/no-go (Phase 1).
+
+**ROLLOUT (per Vera brief):** Phase 1 otchealthmart Shopify (zero PHI) -> Phase 2 iHEARtest CHAT-ONLY first -> Phase 3 companion/InnerEase -> Phase 4 AWARE (legal review) + telephony (ACS Call Automation). NEVER MedReview.
+
+**NEXT (open):** replace seed docs with real Shopify/Intercom content sync (per-app scoped indexes idx-<app>); App Insights + transcript PHI-scrub + nightly voice eval (golden set + groundedness); ACS PSTN bridge; harden auth to Entra Easy Auth; swap key auth -> managed identity (Cognitive Services User + Search Index Data Reader RBAC). Research briefs (voice arch / biz integration / ops playbook) captured in Hyperagent thread cmqtwvk5t00sq06addf0i4wws.
