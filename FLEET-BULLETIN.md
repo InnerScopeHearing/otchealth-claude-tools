@@ -47,3 +47,41 @@ Write with: node setup/bulletin.mjs add "<line>"
 **CONNECTIVITY PRIORITY ORDER (CEO directive — every agent, every engine):** to reach any service, try in order: (1) **Custom MCP server FIRST** — mcp.otchealth.app (governed, ring-safe, audited); (2) **Direct/native MCP** (platform github__/notion__/etc.) if it exists; (3) **Direct API as LAST RESORT** — CTO Direct Token API (token from Notion vault or GCP Secret Manager; never commit secret values; never PHI/BAA on non-BAA runtime). Standing CTO duty: keep the custom gateway's tool coverage ahead of fleet needs. Near-term fix: add GitHub WRITE tools (push/PR/merge) to the custom gateway (read-only there today; native GitHub MCP proved flaky this session, forcing the direct-API fallback).
 
 **Gateway Wave A/A+ shipped (prod image p12, PR #14 merged):** agentic-hybrid recall (sem + contentVector); kb_search (commons/memory-exec open); kb_search_privileged (finance->cfo, legal-company->clo, legal-personal->clo-personal; cto/default REFUSED — ring verified); Content Safety (shield_check/groundedness_check); Document Intelligence (invoice/contract); llm_azure cost path (gpt-5.1 standard / gpt-5.4 high, cap 100); nightly eval Job (debug pending). FLEET COST PROTOCOL: route commodity LLM work to credit-funded Azure (llm_azure), keep hard reasoning on Claude. Full Azure/MS coverage gap analysis + adopt roadmap in kb-memory ledger 20260626-008.
+
+## 2026-06-26 — FLEET CAPABILITIES & SOPs (major update; every agent, every engine)
+
+All capabilities below are LIVE on the governed gateway (https://mcp.otchealth.app, prod image p14) and inherited by every agent on every platform. The gateway is self-describing: call `catalog_master` to see every tool + its governance RULE, and `catalog_skill(name)` for how-tos. CONNECTIVITY PRIORITY (always): custom MCP gateway FIRST -> native platform MCP -> direct API (vault/Secret Manager token) last.
+
+### Memory & knowledge (all agents)
+- `memory_recall` — now AGENTIC-HYBRID (query-planning + vector + 'sem' semantic ranker + RRF) over memory-exec. Use BEFORE asserting any cross-team fact.
+- `kb_search` — hybrid search over OPEN indexes: `commons-company-journal`, `memory-exec`.
+- `kb_search_privileged` — RING-GATED: `finance-cfo-source-docs`/`finance-otchealth-cfo-source-docs` (lane=cfo), `legal-company` (clo), `legal-personal` (clo-personal). Requires the matching trusted OAuth lane; cto/default/external are REFUSED.
+
+### Cost protocol (every agent) — FLEET COST PROTOCOL
+- Route COMMODITY LLM work (summarize/classify/extract/synthesize) to `llm_azure` (credit-funded Azure gpt-5.1 standard / gpt-5.4 high) instead of metered Claude tokens. Keep hard reasoning on Claude. Tiers: tier:'standard'|'high'.
+- gpt-4.1-mini is BANNED for quality work. gpt-5.5 pending quota.
+
+### Guardrails (gateway-level, inherited)
+- `shield_check` (Prompt Shields — injection/jailbreak), `groundedness_check` (hallucination flagging). Content Safety resource cs-otchealth.
+
+### Document AI (CFO/CLO)
+- `docintel_analyze_invoice` (CFO/Xero), `docintel_analyze_contract` (CLO). Read/analyze only, NON-PHI. Never send MedReview/PHI docs.
+
+### GitHub (CTO-gated writes; all agents read)
+- Reads (all): `github_list_pull_requests`, `github_list_workflow_runs`, `github_get_file_contents`.
+- Writes (CTO lane only): `github_push_files`, `github_create_pull_request`, `github_merge_pull_request`. Dry-run by default (pass dry_run:false to execute).
+
+### Trusted per-agent OAuth lanes (NEW)
+- Machine identities via client_credentials at /oauth/token: lanes cfo/clo/clo-personal (creds in SM: oauth-lane-<agent>-id/secret). These gate kb_search_privileged. NEVER hand lane creds to an external AI platform.
+
+### GitHub autonomous coding agents (NEW)
+- Assign a GitHub issue to `openai-code-agent` (Codex — WORKING) -> it opens a PR autonomously. `anthropic-code-agent` (Claude) currently failing to start (GitHub preview bug; Support ticket filed).
+- Org-wide Copilot instructions live in InnerScopeHearing/.github; reusable app starter in InnerScopeHearing/app-template (paused, Developer agent owns app-creation research).
+- BYOK 'Azure_Foundry' custom model (gpt-5.4/gpt-5.1) lets Copilot run on our Azure credits.
+
+### Security & governance
+- GitHub Advanced Security (secret scanning + push protection + Dependabot) ON across 18 repos (medreview excluded - PHI).
+- Azure: Microsoft Purview (governance), Defender for Cloud CSPM Standard.
+
+### Hard rules (unchanged, non-negotiable)
+- Ring safety: never expose PHI (MedReview) / MNPI (Capital/INND) / attorney-privileged (CLO) to external AI clients. Never use PHI/BAA creds on the non-BAA Hyperagent runtime. Never commit secret VALUES (names ok). iOS builds + TestFlight = CTO-only.
