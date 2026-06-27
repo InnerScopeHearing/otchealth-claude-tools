@@ -4,14 +4,15 @@ Ranked by cash impact x speed x "only Matt can do it." The COO pulls today's 1-3
 from the top of this list. Update status as items complete.
 
 ## NOW (this week — first dollars)
-1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
-   today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
-3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
-   connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
-4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
-   securities firewall). Rebuild the cadence you dropped. [open]
+1. **Send the reactivation email** [OVERDUE 18 DAYS as of 2026-06-27]. Draft complete in
+   Notion: "NEEDS MATT: Approve + Send Reactivation Email to 85K list." Two items to fill
+   (physical address + Helen's phone), then send in Customer.io. ~30 min. [NEEDS MATT]
+2. **Launch the Gumroad SOP store.** 14 SOPs noted as ready. Create Gumroad account, list
+   at $49-149, instant delivery. First dollars in days. [Matt-create-account]
+3. **Connect Stripe in Shopify** (15 min). Unlocks all online payment collection. [Matt]
+4. **File FDA OTC Establishment Registration** (~$10K, <2wk). Unlocks $2-3M inventory pool.
+   [Matt-only, can start anytime, do not let Stripe block this]
+5. **Restart LinkedIn** — one factual post about a real product/milestone. [open]
 
 ## THIS WEEK (protect + unlock)
 5. **HARD GATE - Rotate the GCP SA + PostHog all-access keys** (treat as compromised
