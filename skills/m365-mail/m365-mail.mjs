@@ -16,10 +16,23 @@
 //   node m365-mail.mjs since <mailbox> <YYYY-MM-DD> [top]      # msgs w/ attachments since a date
 //   node m365-mail.mjs attachments <mailbox> <messageId> <dir> # download a message's attachments
 //   node m365-mail.mjs export <mailbox> <messageId> <dir>      # full email (headers+body html) + attachments, ready for the pdf skill
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import crypto from "node:crypto"; import os from "node:os"; import { execFileSync } from "node:child_process";
 
-const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID"), SEC = need("GRAPH_MAIL_CLIENT_SECRET");
-function need(n) { const v = process.env[n]; if (!v) { console.error(`Missing env ${n}`); process.exit(2); } return v; }
+// Creds: prefer the LEAST-PRIVILEGE read-only mail app (graph-mail-ro-*, innd.com tenant 9acb23d0;
+// roles Mail.Read+User.Read.All+Files.Read.All -> ~2KB token that passes the egress proxy). Fall back
+// to env, then the legacy admin app (graph-mail-*, ~20KB token the proxy REJECTS). Self-hydrate from
+// GCP Secret Manager via the claude-driver SA (on Hyperagent only the SA is in env). See ledger 20260627-036/037.
+const _P="otchealth-shared-prod"; const _b=(x)=>Buffer.from(x).toString("base64url");
+function _loadSA(){ if(process.env.GCP_CLAUDE_DRIVER_SA_JSON){try{return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);}catch{}} for(const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`,"/agent/.gcp_claude_driver_sa.json"]){try{if(existsSync(p))return JSON.parse(readFileSync(p,"utf8"));}catch{}} return null; }
+async function _gcp(){ const sa=_loadSA(); if(!sa) return null; const n=Math.floor(Date.now()/1000); const c={iss:sa.client_email,scope:"https://www.googleapis.com/auth/cloud-platform",aud:"https://oauth2.googleapis.com/token",iat:n,exp:n+3500}; const i=`${_b(JSON.stringify({alg:"RS256",typ:"JWT"}))}.${_b(JSON.stringify(c))}`; const s=crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key); const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:`${i}.${Buffer.from(s).toString("base64url")}`})}); return (await r.json()).access_token; }
+async function _sm(t,id){ const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${_P}/secrets/${id}/versions/latest:access`,{headers:{Authorization:`Bearer ${t}`}}); if(r.status!==200) return null; const j=await r.json(); return j.payload?Buffer.from(j.payload.data,"base64").toString("utf8").trim():null; }
+let T,CID,SEC;
+async function resolveCreds(){
+  T=process.env.GRAPH_MAIL_TENANT_ID; CID=process.env.GRAPH_MAIL_CLIENT_ID; SEC=process.env.GRAPH_MAIL_CLIENT_SECRET;
+  if(!CID||!SEC||!T){ const g=await _gcp(); if(g){ T=T||await _sm(g,"graph-mail-ro-tenant-id")||await _sm(g,"graph-mail-tenant-id"); CID=CID||await _sm(g,"graph-mail-ro-client-id")||await _sm(g,"graph-mail-client-id"); SEC=SEC||await _sm(g,"graph-mail-ro-client-secret")||await _sm(g,"graph-mail-client-secret"); } }
+  if(!T||!CID||!SEC){ console.error("Missing Graph mail creds (env or SM graph-mail-ro-*/graph-mail-*)."); process.exit(2); }
+}
 
 async function token() {
   const r = await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, {
@@ -30,16 +43,23 @@ async function token() {
   if (!j.access_token) { console.error("token error: " + JSON.stringify(j).slice(0, 300)); process.exit(1); }
   return j.access_token;
 }
-async function gget(tok, url, extraHeaders) {
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}`, ...(extraHeaders || {}) } });
-  const j = await r.json();
-  if (j.error) { console.error(`HTTP ${r.status}: ${JSON.stringify(j.error).slice(0, 200)}`); process.exit(1); }
+function gget(tok, url, extraHeaders) {
+  // Graph data calls MUST use curl on this runtime: node/undici cannot reach graph.microsoft.com (the
+  // egress proxy returns HTML); curl works. token() still uses fetch (login.microsoftonline.com is fine).
+  const args = ["-sS", "-H", `Authorization: Bearer ${tok}`];
+  for (const [k, v] of Object.entries(extraHeaders || {})) args.push("-H", `${k}: ${v}`);
+  args.push(url);
+  let out; try { out = execFileSync("curl", args, { maxBuffer: 64 * 1024 * 1024 }).toString(); }
+  catch (e) { console.error("graph curl failed: " + ((e.stderr && e.stderr.toString()) || e.message || "").slice(0, 200)); process.exit(1); }
+  let j; try { j = JSON.parse(out); } catch { console.error("graph non-JSON response: " + out.slice(0, 200)); process.exit(1); }
+  if (j.error) { console.error(`Graph error: ${JSON.stringify(j.error).slice(0, 200)}`); process.exit(1); }
   return j;
 }
 const GBASE = "https://graph.microsoft.com/v1.0";
 const enc = encodeURIComponent;
 
 const [cmd, a1, a2, a3] = process.argv.slice(2);
+await resolveCreds();
 const tok = await token();
 
 if (cmd === "users") {
