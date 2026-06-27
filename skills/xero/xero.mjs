@@ -65,8 +65,21 @@ async function smAddVersion(t, id, v) {
   if (!r.ok) throw new Error("SM addVersion " + r.status);
 }
 
+// Client creds: prefer env (Claude-side hydration), else self-fetch from SM (Hyperagent: the
+// kb-memory wrapper provides only the GCP SA, not XERO_*). Makes the skill portable across engines.
+async function clientBasic(smTok) {
+  let id = process.env.XERO_CLIENT_ID, sec = process.env.XERO_CLIENT_SECRET;
+  if ((!id || !sec) && smTok) {
+    try {
+      id = id || await smReadLatest(smTok, "xero-client-id");
+      sec = sec || await smReadLatest(smTok, "xero-client-secret");
+    } catch (e) { console.error("SM client-cred read failed: " + e.message); }
+  }
+  if (!id || !sec) throw new Error("Missing XERO_CLIENT_ID/SECRET (env or SM xero-client-id/xero-client-secret).");
+  return Buffer.from(`${id}:${sec}`).toString("base64");
+}
+
 async function accessToken(orgKey) {
-  const basic = Buffer.from(`${need("XERO_CLIENT_ID")}:${need("XERO_CLIENT_SECRET")}`).toString("base64");
   const secretId = `xero-refresh-token-${orgKey}`;
   let smTok = null, refresh, persistId = secretId;
   if (smAvailable()) {
@@ -79,6 +92,7 @@ async function accessToken(orgKey) {
       }
     } catch (e) { console.error("SM read failed: " + e.message); }
   }
+  const basic = await clientBasic(smTok);
   if (!refresh) {
     // Per-org env var is always allowed; the legacy unsuffixed XERO_REFRESH_TOKEN is the
     // otchealth fallback ONLY. Never let another org silently borrow the otchealth token.
