@@ -15,8 +15,11 @@
  */
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
 const PROJECT="otchealth-shared-prod"; const b64url=(b)=>Buffer.from(b).toString("base64url"); const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
-const DOCEXT=/\.(pdf|png|jpe?g|tiff?|bmp)$/i;
-const CT={pdf:"application/pdf",png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",tif:"image/tiff",tiff:"image/tiff",bmp:"image/bmp"};
+const DOCEXT=/\.(pdf|png|jpe?g|tiff?|bmp|docx|xlsx|pptx)$/i; // Doc Intelligence read accepts PDF, images, AND OOXML office
+const CT={pdf:"application/pdf",png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",tif:"image/tiff",tiff:"image/tiff",bmp:"image/bmp",
+  docx:"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx:"application/vnd.openxmlformats-officedocument.presentationml.presentation"};
 function loadSA(){ if(process.env.GCP_CLAUDE_DRIVER_SA_JSON){try{return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);}catch{}} for(const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`,"/agent/.gcp_claude_driver_sa.json"]){try{if(fs.existsSync(p))return JSON.parse(fs.readFileSync(p,"utf8"));}catch{}} throw new Error("no SA"); }
 async function gcpToken(){const sa=loadSA();const now=Math.floor(Date.now()/1000);const cl={iss:sa.client_email,scope:"https://www.googleapis.com/auth/cloud-platform",aud:"https://oauth2.googleapis.com/token",iat:now,exp:now+3500};const i=`${b64url(JSON.stringify({alg:"RS256",typ:"JWT"}))}.${b64url(JSON.stringify(cl))}`;const s=crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key);const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:`${i}.${Buffer.from(s).toString("base64url")}`})});return (await r.json()).access_token;}
 async function sm(tok,id){const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${PROJECT}/secrets/${id}/versions/latest:access`,{headers:{Authorization:`Bearer ${tok}`}});if(r.status!==200)return null;const j=await r.json();return j.payload?Buffer.from(j.payload.data,"base64").toString("utf8").trim():null;}
@@ -34,7 +37,7 @@ function sideFor(n){ const i=n.lastIndexOf("/"); const dir=i>=0?n.slice(0,i+1):"
   const [endpoint,dkey]=await Promise.all([sm(g,"azure-docintel-endpoint"),sm(g,"azure-docintel-key")]);
   const stores=[];
   if(want.includes("legal")){ const k=await sm(g,"azure-legal-storage-key"); stores.push({name:"legal",account:"otchealthlegalstore",key:k,containers:["company","personal"]}); }
-  if(want.includes("cfo")){ const acct=await sm(g,"azure-cfo-storage-account"), k=await sm(g,"azure-cfo-storage-key"), cont=(await sm(g,"azure-cfo-storage-container"))||"cfo"; if(acct&&k) stores.push({name:"cfo",account:acct,key:k,containers:[cont]}); }
+  if(want.includes("cfo")){ const acct=(await sm(g,"azure-cfo-storage-account"))||"otchealthcfodata", k=await sm(g,"azure-cfo-storage-key"); if(acct&&k) stores.push({name:"cfo",account:acct,key:k,containers:["cfo-source-docs"]}); } // funded finance data room (NOT innd-stock)
   // gather candidates across all stores
   let candidates=[]; const stats={};
   for(const st of stores){ const ep=`https://${st.account}.blob.core.windows.net`; const rsas=sas(st.account,st.key,"rl");
