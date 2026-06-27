@@ -32,26 +32,33 @@
 //   node plaid.mjs statements-list <accessToken>         # available PDF statements (needs Statements product)
 //   node plaid.mjs statements-download <accessToken> <statementId> [outFile]
 
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import crypto from "node:crypto"; import os from "node:os";
 
 const ENV = (process.env.PLAID_ENV || "sandbox").toLowerCase();
 const HOST = ENV === "production" ? "https://production.plaid.com" : "https://sandbox.plaid.com";
 
-function need(name) {
-  const v = process.env[name];
-  if (!v) {
-    console.error(`Missing env ${name}. Store the Plaid creds in Secret Manager and hydrate them first.`);
-    process.exit(2);
-  }
-  return v;
+// Creds: prefer env (Claude-side hydration), else self-hydrate from GCP Secret Manager via the
+// claude-driver SA (Hyperagent: the kb-memory run.sh provides only the SA, not PLAID_*). Portable
+// across engines (same fix as xero.mjs). SM secret ids: plaid-client-id, plaid-secret.
+const _SM_PROJECT = "otchealth-shared-prod"; const _b64url = (b) => Buffer.from(b).toString("base64url");
+function _loadSA() { if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) { try { return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); } catch {} } for (const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`, "/agent/.gcp_claude_driver_sa.json"]) { try { if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8")); } catch {} } return null; }
+async function _gcpToken(sa) { const now = Math.floor(Date.now() / 1000); const cl = { iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3500 }; const i = `${_b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.${_b64url(JSON.stringify(cl))}`; const s = crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key); const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${i}.${Buffer.from(s).toString("base64url")}` }) }); return (await r.json()).access_token; }
+async function _sm(tok, id) { const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${_SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${tok}` } }); if (r.status !== 200) return null; const j = await r.json(); return j.payload ? Buffer.from(j.payload.data, "base64").toString("utf8").trim() : null; }
+let _CREDS = null;
+async function getCreds() {
+  if (_CREDS) return _CREDS;
+  let id = process.env.PLAID_CLIENT_ID, sec = process.env.PLAID_SECRET;
+  if (!id || !sec) { const sa = _loadSA(); if (sa) { try { const t = await _gcpToken(sa); id = id || await _sm(t, "plaid-client-id"); sec = sec || (await _sm(t, "plaid-secret")) || (await _sm(t, "plaid-client-secret")); } catch (e) { console.error("SM plaid-cred read failed: " + e.message); } } }
+  if (!id || !sec) { console.error("Missing PLAID_CLIENT_ID/PLAID_SECRET (env or SM plaid-client-id/plaid-secret)."); process.exit(2); }
+  _CREDS = { client_id: id, secret: sec }; return _CREDS;
 }
-function creds() { return { client_id: need("PLAID_CLIENT_ID"), secret: need("PLAID_SECRET") }; }
 
 async function call(path, body) {
   const res = await fetch(`${HOST}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...creds(), ...body }),
+    body: JSON.stringify({ ...(await getCreds()), ...body }),
   });
   const text = await res.text();
   let json;
@@ -151,7 +158,7 @@ if (cmd === "link-token" || cmd === "hosted-link") {
   const res = await fetch(`${HOST}/statements/download`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...creds(), statement_id: a2 }),
+    body: JSON.stringify({ ...(await getCreds()), statement_id: a2 }),
   });
   if (!res.ok) {
     console.error(`HTTP ${res.status} /statements/download`);
