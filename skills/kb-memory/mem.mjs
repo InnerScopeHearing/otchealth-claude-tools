@@ -246,6 +246,7 @@ async function append(type, share) {
   let shared = false;
   if (share || type === "status") shared = await publishShared(AGENT, entry);
   maybeIndex(entry, shared);
+  emitFleet(entry, shared); // fleet telemetry (env-gated KB_DD_EMIT=1, throttled, fail-open)
   console.log(`[kb-memory] ${type} -> ${AGENT} (${A.ring}) id=${entry.id}. Private ledger ${rows.length} entries${shared ? "; PUBLISHED to exec team feed" : ""}.`);
 }
 
@@ -296,6 +297,24 @@ function maybeIndex(entry, shared) {
   } else {
     try { spawn(process.execPath, [join(HERE, "index-one.mjs"), AGENT, JSON.stringify(entry)], { detached: true, stdio: "ignore" }).unref(); } catch {}
   }
+}
+
+// FLEET METRIC EMISSION (CEO motto: smarter/faster/cheaper/better-memory/autonomous -> observability).
+// Env-gated (KB_DD_EMIT=1, DEFAULT OFF) + throttled (<=1 emit / 5 min / agent) so it adds ZERO latency or
+// risk to the fleet's ledger writes unless explicitly enabled. Emits one LOW-CARDINALITY
+// otc.fleet.ledger_flush count to Datadog via dd-fleet.mjs (tags: agent/type/ring/engine/shared only).
+// FAIL-OPEN: never throws, never affects the ledger write or exit code. Bounded spawnSync (4s) because the
+// Hyperagent runtime kills detached children on return (same reason maybeIndex runs sync there).
+function emitFleet(entry, shared) {
+  try {
+    if (process.env.KB_DD_EMIT !== "1") return;
+    const stamp = `${CACHE_DIR}/.ddemit-${AGENT}`;
+    const now = Date.now();
+    try { if (existsSync(stamp) && (now - Number(readFileSync(stamp, "utf8") || 0)) < 300000) return; } catch {}
+    try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(stamp, String(now)); } catch {}
+    const engine = ((process.env.HOME || "").startsWith("/agent") || process.env.NODE_USE_ENV_PROXY === "1") ? "hyperagent" : "claude";
+    spawnSync(process.execPath, [join(HERE, "..", "datadog", "dd-fleet.mjs"), AGENT, entry.type, (A && A.ring) || "unknown", engine, shared ? "1" : "0"], { stdio: "ignore", timeout: 4000 });
+  } catch { /* fail-open: telemetry must never affect a ledger write */ }
 }
 
 // ---- typed ENTITY / current-value layer (Wave 3): answer "what is X NOW?" deterministically. An
