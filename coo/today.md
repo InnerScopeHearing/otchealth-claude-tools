@@ -1,43 +1,57 @@
-# TODAY — the COO's directive (regenerate each morning; mark results through the day)
+# TODAY — COO directive for 2026-06-28 (Sunday) -> Monday 2026-06-29
 
-Date: 2026-06-09 (seed). Operating window 9am-5pm.
+Date generated: 2026-06-28. Operating window: Monday 9am-3pm PT (Therapy 3-4pm PT).
+
+---
 
 ## The number
-Cash in bank: $0. Goal: first dollars THIS WEEK. Burn ~$50K/mo. The clock is real.
+Cash in bank: $0. Burn: $50K/mo. Runway: 0 months. Days since first cash move: 19.
 
-## Today's 3 moves (do these, in order)
+The reactivation email is now 19 days overdue. The Gumroad store has never been opened.
+Every day of delay is $0 in. This is the only metric that matters.
 
-### Move 1 (overdue, ~30 min) — Send the reactivation email
-The campaign that was due last Friday is still not out. This is the fastest, cheapest
-cash lever and it's just sitting there.
-- Open a Claude Code session: "draft the reactivation email for the 85K (offer:
-  accessories/TReO now, hearing-aid clearance teased), CAN-SPAM compliant."
-- Review it, approve, send the first segment in Customer.io.
-- Report back: sent? to how many?
-Status: [ ] not started
+---
 
-### Move 2 (cash in days, ~create account + 1 session) — Stand up the Gumroad store
-- Tell Claude (a session): "draft the 10-15 pharmacy/OTC compliance SOPs from Mark's
-  outline." (digital-products skill). Get the drafts.
-- Create the Gumroad account, list them at $49-149, turn on instant delivery.
-- Report back: listed? link?
-Status: [ ] not started
+## Monday's 3 moves (do these, in this order, before 3pm)
 
-### Move 3 (unlock the big pool, ~1-2 hrs of your time) — Flip one switch
-Pick ONE today: file the FDA OTC Establishment Registration, OR connect Stripe. Both are
-required to sell the 10,298 units; doing one today moves the $2-3M pool closer.
-- Report back: which one, started/done?
-Status: [ ] not started
+### Move 1 — SEND THE REACTIVATION EMAIL (overdue since June 9)
+Status: [OVERDUE - 19 days]
+Time needed: 30 minutes.
+This is the cheapest, fastest cash lever. It's already drafted. It just needs to go.
+- Open Customer.io -> Campaigns
+- Approve and send the reactivation email to the first segment (accessories/TReO offer now,
+  hearing aid clearance teased for post-FDA)
+- Report back: sent to how many?
+Block booked: Monday 9:30-11:30am PT (2 hours for moves 1 and 2 together)
 
-## Not a move today (resist it)
-Building more tools. The system is done. If you feel the urge, that's the avoidance
-pattern, come back to Move 1.
+### Move 2 — STAND UP THE GUMROAD SOP STORE (overdue since June 9)
+Status: [NOT STARTED - 19 days]
+Time needed: 60-90 minutes (create account + list products).
+Mark's SOPs are drafted. Gumroad account creation takes 10 minutes. First sale possible same day.
+- Go to gumroad.com, create OTCHealth account
+- List the first 3-5 SOPs at $49-99 each (instant digital delivery)
+- Report the link
+Block booked: Monday 9:30-11:30am PT (shared with Move 1)
+
+### Move 3 — FLIP ONE SWITCH (this unlocks the $2-3M pool)
+Status: [NOT STARTED - blocking $2-3M]
+Time needed: 1-2 hours.
+Pick ONE: file the FDA OTC Establishment Registration OR connect Stripe to the Shopify store.
+Both are required before the inventory sells. Do one today.
+- FDA: fda.gov/food/registration-food-facilities/registration -> OTC drug establishment
+- Stripe: Shopify admin -> Payments -> Stripe -> Connect
+Report back: which one, done or in progress?
+
+---
+
+## Not a move today
+More tooling. The system has been done since June 9. Zero cash has come in. Building is avoidance.
+
+## Calendar constraints (Monday)
+- 9am-3pm PT: OPEN (full productive window)
+- 3-4pm PT: Therapy (blocked)
+- 4-5pm PT: Free
 
 ## Yesterday's results
-(none logged yet)
-
-## The COO can now act for you
-The COO has its own mailbox (coo@innd.com), reads your calendar before it plans, and on
-your directive can send an email or book a meeting for you, then log it to the COO Tasks
-DB. Say "CcOO" anywhere, or let the scheduled routine run the morning for you. Before
-proposing today's blocks it checks your calendar so it never double-books you.
+None. 19 days since COO initialized. Zero cash moves completed. The three moves
+from June 9 are all still at "not started" or "overdue."
