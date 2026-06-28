@@ -27,6 +27,7 @@
  * PHI/MNPI: INND/personal data internal-only.
  */
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
+import { getAccessContext } from "../xero/xero-token.mjs";
 const SM_PROJECT="otchealth-shared-prod"; const BUCKET="otchealth-cfo-source-docs";
 const XTOKEN="https://identity.xero.com/connect/token"; const XCONN="https://api.xero.com/connections"; const XAPI="https://api.xero.com/api.xro/2.0";
 const DAILY_CAP=parseInt(process.env.DAILY_CAP||"900",10); const RESERVE=parseInt(process.env.RESERVE||"100",10);
@@ -42,14 +43,11 @@ async function gcsGet(name){ const r=await fetch(`https://storage.googleapis.com
 async function gcsPut(name,buf,ct){ const r=await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}`,{method:"POST",headers:{Authorization:`Bearer ${await gcp()}`,"Content-Type":ct||"application/octet-stream"},body:buf}); if(!r.ok)throw new Error("gcsPut "+r.status); }
 async function gcsAppend(name,line){ const prev=await gcsGet(name); const buf=Buffer.concat([prev||Buffer.alloc(0),Buffer.from(line+"\n","utf8")]); await gcsPut(name,buf,"application/x-ndjson"); }
 // ---- Xero auth (per-org refresh + re-persist; client creds self-hydrated) ----
+// Token + tenant via the shared broker (access-token cache + cross-process refresh lock + disconnect
+// detection). Eliminates the single-use rotation race with the CFO's interactive xero-bulk/xero.mjs runs.
 async function xeroToken(org){
-  const [cid,csec,rtok]=await Promise.all([sm("xero-client-id"),sm("xero-client-secret"),sm(`xero-refresh-token-${org}`)]);
-  if(!cid||!csec||!rtok) throw new Error(`missing creds for ${org}`);
-  const r=await fetch(XTOKEN,{method:"POST",headers:{Authorization:"Basic "+Buffer.from(`${cid}:${csec}`).toString("base64"),"Content-Type":"application/x-www-form-urlencoded"},body:`grant_type=refresh_token&refresh_token=${encodeURIComponent(rtok)}`});
-  const j=await r.json(); if(!j.access_token) throw new Error(`token ${org}: ${JSON.stringify(j).slice(0,120)}`);
-  if(j.refresh_token && j.refresh_token!==rtok){ const ps=await smWrite(`xero-refresh-token-${org}`,j.refresh_token); if(ps>=300) throw new Error(`refreshed ${org} but FAILED to persist rotated token (SM ${ps}) — aborting to avoid token loss`); }
-  const tid=(await (await fetch(XCONN,{headers:{Authorization:`Bearer ${j.access_token}`}})).json())[0]?.tenantId;
-  return {access:j.access_token, tid};
+  const c=await getAccessContext(org);
+  return {access:c.access_token, tid:c.tenantId};
 }
 // ---- per-op execution (returns {ok, status, remaining, info}) ----
 async function execOp(op, ctx){

@@ -19,6 +19,7 @@
 //   node xero-bulk.mjs <org> limits          # show current rate-limit headroom (1 cheap call)
 // stdin JSON = an array of Xero objects WITHOUT the wrapper key (the tool wraps them).
 import crypto from "node:crypto";
+import { getAccessContext } from "./xero-token.mjs";
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const CONN_URL = "https://api.xero.com/connections";
 const API = "https://api.xero.com/api.xro/2.0";
@@ -37,23 +38,15 @@ async function smToken() { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_S
 async function smReadLatest(t, id) { const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 async function smAddVersion(t, id, v) { const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); let r = await add(); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await add(); } if (!r.ok) throw new Error("SM addVersion " + r.status); }
 
-async function accessToken(orgKey) {
-  const secretId = `xero-refresh-token-${orgKey}`; let smTok = null, refresh, persistId = secretId;
-  if (smAvailable()) { try { smTok = await smToken(); refresh = await smReadLatest(smTok, secretId); if (!refresh && orgKey === "otchealth") { const legacy = await smReadLatest(smTok, "xero-refresh-token"); if (legacy) { refresh = legacy; persistId = "xero-refresh-token"; } } } catch (e) { console.error("SM read failed: " + e.message); } }
-  // Client creds: env, else self-hydrate from SM (xero-client-id/secret) so this runs on Hyperagent
-  // (the kb-memory wrapper provides only the GCP SA, not XERO_*). Same portability fix as xero.mjs.
-  let _cid = process.env.XERO_CLIENT_ID, _csec = process.env.XERO_CLIENT_SECRET;
-  if (!_cid || !_csec) { try { const tk = smTok || (smAvailable() ? await smToken() : null); if (tk) { _cid = _cid || await smReadLatest(tk, "xero-client-id"); _csec = _csec || await smReadLatest(tk, "xero-client-secret"); } } catch {} }
-  if (!_cid || !_csec) throw new Error("Missing XERO_CLIENT_ID/SECRET (env or SM xero-client-id/xero-client-secret).");
-  const basic = Buffer.from(`${_cid}:${_csec}`).toString("base64");
-  if (!refresh) { refresh = process.env[`XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}`]; if (!refresh && orgKey === "otchealth") refresh = process.env.XERO_REFRESH_TOKEN; }
-  if (!refresh) throw new Error(`No refresh token for org '${orgKey}'. Run the OAuth consent first.`);
-  const r = await fetch(TOKEN_URL, { method: "POST", headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}` });
-  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(`token refresh ${r.status}: ${JSON.stringify(j).slice(0, 160)}`);
-  if (j.refresh_token && j.refresh_token !== refresh) { if (smTok) { try { await smAddVersion(smTok, persistId, j.refresh_token); console.error(`Xero rotated ${orgKey} token -> persisted.`); } catch (e) { console.error(`ROTATE PERSIST FAILED (${e.message})`); } } else console.error(`NOTE: ${orgKey} token rotated but no SA to persist.`); }
-  return j.access_token;
+// Token + tenant now come from the shared broker (access-token cache + cross-process refresh lock +
+// disconnect detection) — eliminates the per-invocation single-use rotation race. The legacy SM/refresh
+// helpers above remain for back-compat but are off the hot path.
+const _tenantByOrg = {};
+async function accessToken(orgKey) { const c = await getAccessContext(orgKey); _tenantByOrg[orgKey] = c.tenantId; return c.access_token; }
+async function resolveTenant(token, sel) {
+  const k = orgKeyFrom(sel); if (_tenantByOrg[k]) return _tenantByOrg[k];
+  const r = await fetch(CONN_URL, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }); if (!r.ok) throw new Error("connections " + r.status); const conns = await r.json(); const hit = conns.find((c) => (c.tenantName || "").toLowerCase().includes((sel || "").toLowerCase())) || conns[0]; if (!hit) throw new Error("no tenant"); return hit.tenantId;
 }
-async function resolveTenant(token, sel) { const r = await fetch(CONN_URL, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }); if (!r.ok) throw new Error("connections " + r.status); const conns = await r.json(); const hit = conns.find((c) => (c.tenantName || "").toLowerCase().includes((sel || "").toLowerCase())) || conns[0]; if (!hit) throw new Error("no tenant"); return hit.tenantId; }
 function readStdin() { return new Promise((res) => { let d = ""; if (process.stdin.isTTY) return res(""); process.stdin.on("data", (c) => (d += c)); process.stdin.on("end", () => res(d)); }); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

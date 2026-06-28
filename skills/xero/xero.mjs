@@ -15,6 +15,7 @@
 //   node xero.mjs <org> request <METHOD> <Endpoint>    # JSON body on stdin for writes
 //   <org> = otchealth | innd | hearingassist | personal (or a name substring)
 import crypto from "node:crypto";
+import { getAccessContext } from "./xero-token.mjs";
 
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const CONN_URL = "https://api.xero.com/connections";
@@ -79,35 +80,15 @@ async function clientBasic(smTok) {
   return Buffer.from(`${id}:${sec}`).toString("base64");
 }
 
+// Token acquisition delegates to the shared broker (access-token cache + cross-process refresh lock +
+// disconnect detection). This eliminates the per-call single-use rotation race. The legacy SM/refresh
+// helpers above are retained for back-compat but no longer the hot path. Stashes the resolved tenant so
+// the get/request path can skip a redundant /connections call.
+const _tenantByOrg = {};
 async function accessToken(orgKey) {
-  const secretId = `xero-refresh-token-${orgKey}`;
-  let smTok = null, refresh, persistId = secretId;
-  if (smAvailable()) {
-    try {
-      smTok = await smToken();
-      refresh = await smReadLatest(smTok, secretId);
-      if (!refresh && orgKey === "otchealth") {
-        const legacy = await smReadLatest(smTok, "xero-refresh-token");
-        if (legacy) { refresh = legacy; persistId = "xero-refresh-token"; }
-      }
-    } catch (e) { console.error("SM read failed: " + e.message); }
-  }
-  const basic = await clientBasic(smTok);
-  if (!refresh) {
-    // Per-org env var is always allowed; the legacy unsuffixed XERO_REFRESH_TOKEN is the
-    // otchealth fallback ONLY. Never let another org silently borrow the otchealth token.
-    refresh = process.env[`XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}`];
-    if (!refresh && orgKey === "otchealth") refresh = process.env.XERO_REFRESH_TOKEN;
-  }
-  if (!refresh) throw new Error(`No refresh token for org '${orgKey}' (SM ${secretId} / env XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}). Run the OAuth consent for this org first.`);
-  const r = await fetch(TOKEN_URL, { method: "POST", headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}` });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`token refresh failed ${r.status}: ${JSON.stringify(j).slice(0, 200)}`);
-  if (j.refresh_token && j.refresh_token !== refresh) {
-    if (smTok) { try { await smAddVersion(smTok, persistId, j.refresh_token); console.error(`Xero rotated ${orgKey} token -> persisted (${persistId}).`); } catch (e) { console.error(`ROTATE PERSIST FAILED for ${orgKey} (${e.message}): new token NOT saved.`); } }
-    else console.error(`NOTE: ${orgKey} token rotated but no SA to persist. Update ${secretId} or the connection will break.`);
-  }
-  return j.access_token;
+  const c = await getAccessContext(orgKey);
+  _tenantByOrg[orgKey] = c.tenantId;
+  return c.access_token;
 }
 
 async function connections(token) {
@@ -145,7 +126,7 @@ try {
   if (!sel || !cmd) { console.error("usage: xero.mjs connections [org] | <org> get <Endpoint> | <org> request <METHOD> <Endpoint>"); process.exit(2); }
   const orgKey = orgKeyFrom(sel);
   const token = await accessToken(orgKey);
-  const tenantId = await resolveTenant(token, sel);
+  const tenantId = _tenantByOrg[orgKey] || await resolveTenant(token, sel);
   if (cmd === "get") {
     if (!a1) { console.error("usage: xero.mjs <org> get <Endpoint>"); process.exit(2); }
     await call("GET", tenantId, a1, token);
