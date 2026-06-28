@@ -47,7 +47,7 @@ async function xeroToken(org){
   if(!cid||!csec||!rtok) throw new Error(`missing creds for ${org}`);
   const r=await fetch(XTOKEN,{method:"POST",headers:{Authorization:"Basic "+Buffer.from(`${cid}:${csec}`).toString("base64"),"Content-Type":"application/x-www-form-urlencoded"},body:`grant_type=refresh_token&refresh_token=${encodeURIComponent(rtok)}`});
   const j=await r.json(); if(!j.access_token) throw new Error(`token ${org}: ${JSON.stringify(j).slice(0,120)}`);
-  if(j.refresh_token && j.refresh_token!==rtok) await smWrite(`xero-refresh-token-${org}`,j.refresh_token);
+  if(j.refresh_token && j.refresh_token!==rtok){ const ps=await smWrite(`xero-refresh-token-${org}`,j.refresh_token); if(ps>=300) throw new Error(`refreshed ${org} but FAILED to persist rotated token (SM ${ps}) — aborting to avoid token loss`); }
   const tid=(await (await fetch(XCONN,{headers:{Authorization:`Bearer ${j.access_token}`}})).json())[0]?.tenantId;
   return {access:j.access_token, tid};
 }
@@ -91,10 +91,10 @@ async function runOrg(org){
     st.used++; st.cursor++; did++;
     if(res.remaining!=null) st.lastRemaining=res.remaining;
     if(!DRY) await gcsAppend(resName, JSON.stringify({cursor:st.cursor-1,ok:res.ok,status:res.status,info:res.info,ts:new Date().toISOString()}));
-    if(did%10===0) await gcsPut(stateName,Buffer.from(JSON.stringify(st)),"application/json"); // checkpoint every 10
+    if(!DRY && did%10===0) await gcsPut(stateName,Buffer.from(JSON.stringify(st)),"application/json"); // checkpoint every 10 (LIVE only)
     const dt=Date.now()-t0; if(!DRY && dt<MIN_SPACING) await sleep(MIN_SPACING-dt);
   }
-  await gcsPut(stateName,Buffer.from(JSON.stringify(st)),"application/json"); // final checkpoint
+  if(!DRY) await gcsPut(stateName,Buffer.from(JSON.stringify(st)),"application/json"); // final checkpoint — DRYRUN is side-effect-free (no cursor/state write, no token touch)
   console.log(`[${org}] ran ${did} ops this pass. cursor=${st.cursor}/${lines.length} used=${st.used}/${DAILY_CAP} lastRemaining=${st.lastRemaining}${st.cursor>=lines.length?" — QUEUE COMPLETE":""}`);
 }
 (async()=>{
