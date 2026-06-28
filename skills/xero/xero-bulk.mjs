@@ -38,9 +38,14 @@ async function smReadLatest(t, id) { const r = await fetch(`https://secretmanage
 async function smAddVersion(t, id, v) { const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); let r = await add(); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await add(); } if (!r.ok) throw new Error("SM addVersion " + r.status); }
 
 async function accessToken(orgKey) {
-  const basic = Buffer.from(`${need("XERO_CLIENT_ID")}:${need("XERO_CLIENT_SECRET")}`).toString("base64");
   const secretId = `xero-refresh-token-${orgKey}`; let smTok = null, refresh, persistId = secretId;
   if (smAvailable()) { try { smTok = await smToken(); refresh = await smReadLatest(smTok, secretId); if (!refresh && orgKey === "otchealth") { const legacy = await smReadLatest(smTok, "xero-refresh-token"); if (legacy) { refresh = legacy; persistId = "xero-refresh-token"; } } } catch (e) { console.error("SM read failed: " + e.message); } }
+  // Client creds: env, else self-hydrate from SM (xero-client-id/secret) so this runs on Hyperagent
+  // (the kb-memory wrapper provides only the GCP SA, not XERO_*). Same portability fix as xero.mjs.
+  let _cid = process.env.XERO_CLIENT_ID, _csec = process.env.XERO_CLIENT_SECRET;
+  if (!_cid || !_csec) { try { const tk = smTok || (smAvailable() ? await smToken() : null); if (tk) { _cid = _cid || await smReadLatest(tk, "xero-client-id"); _csec = _csec || await smReadLatest(tk, "xero-client-secret"); } } catch {} }
+  if (!_cid || !_csec) throw new Error("Missing XERO_CLIENT_ID/SECRET (env or SM xero-client-id/xero-client-secret).");
+  const basic = Buffer.from(`${_cid}:${_csec}`).toString("base64");
   if (!refresh) { refresh = process.env[`XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}`]; if (!refresh && orgKey === "otchealth") refresh = process.env.XERO_REFRESH_TOKEN; }
   if (!refresh) throw new Error(`No refresh token for org '${orgKey}'. Run the OAuth consent first.`);
   const r = await fetch(TOKEN_URL, { method: "POST", headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}` });
