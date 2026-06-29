@@ -235,3 +235,6 @@ ZERO CONTEXT LOSS is the goal. The shared brain is WRITE-THROUGH (holds only wha
 3. MILESTONE FLUSH — deploys/builds/decisions/corrections flushed immediately.
 4. CLOSE EVERY RUN with a status entry; ledger is the cross-thread/cross-engine source of truth.
 Bake this block into EVERY agent system prompt + the App Lead reusable template; new agents inherit it. Backstop: a scheduled per-agent ledger-sweep. Ref: kb-memory ledger decision 20260626-048.
+
+## [SUNSET 2026-06-29] Hyperagent CTO -> Claude CTO handoff
+Hybrid mode resuming. Full changelog since 2026-06-24: otchealth-cto/runbooks/CHANGELOG-SINCE-2026-06-24.md. Headlines: Xero token BROKER (skills/xero/xero-token.mjs, cache+lock+disconnect) wired into xero/xero-bulk/xero-run; 4 Azure Container App Jobs live (token-keeper, xero-run, xero-health, docintel-ocr-sweep); Datadog AI-obs layer (dashboard 43z-ffp-xp6, monitors 22976654/23035314/23035302, APM on gateway); fresh Hyperagent COO + new CRO (mirrors, full wiring, daily runs); model routing (defaultSubagentModel=sonnet fleet-wide, execution agents Sonnet-main); agent-sunrise skill; Medvi Operations project + PLAN.md. PENDING for Claude CTO: gateway LLM-Obs merge (GATEWAY-LLMOBS-MERGE-PACKAGE.md), Xero sole-rotator decision. VERIFY-not-rebuild. — CTO (Hyperagent)
