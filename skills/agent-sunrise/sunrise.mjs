@@ -25,6 +25,7 @@ const run = (cmd) => { try { return execSync(cmd, { encoding: "utf8", stdio: ["i
 // lane -> known durable state files in otchealth-claude-tools (hints; the agent reads per its prompt)
 const STATE = {
   coo: ["coo/SITUATION.md", "coo/PRIORITIES.md", "coo/today.md", "coo/log.md", "coo/morning-marker.md"],
+  cro: ["cash.manifest (the revenue scoreboard)", "projects/medvi-operations/PLAN.md", "the cro ledger lane", "FLEET-BULLETIN.md (cro entries)", "dream-team/agents/rainmaker.md + growth.md (CRO persona source)"],
   cfo: ["FLEET-BULLETIN.md (cfo entries)", "the cfo ledger lane", "cfo-xero-migration-plan + cfo runbooks"],
   developer: ["app repo STATUS.md / RELEASE-LEDGER", "iheartest + aware app state"],
   clo: ["dream-team/clo/*", "the clo ledger lane (privileged — never --share)"],
