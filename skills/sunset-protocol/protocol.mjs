@@ -37,7 +37,7 @@ const HANDOFF_PREFIX = "_HANDOFF/";
 const DISPATCH_PREFIX = "_DISPATCH/";
 
 // The full roster a fleet sunset covers (exec + cash + product). Source of truth for cards: dream-team/agents/*.md.
-const ROSTER = ["cto", "cfo", "clo", "coo", "developer", "commerce", "rainmaker", "lifecycle", "switchboard", "capital", "growth", "guardian", "medic"];
+const ROSTER = ["cto", "cfo", "clo", "coo", "cro", "developer", "commerce", "rainmaker", "lifecycle", "switchboard", "capital", "growth", "guardian", "medic"];
 // Rings: SENSITIVE ledgers never have their text embedded in a commons-stored doc.
 const SENSITIVE = new Set(["cfo", "clo", "clo-personal", "capital"]);
 
