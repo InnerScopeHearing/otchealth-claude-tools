@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>From the Chair — Production Game Plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#2a2521;--ink2:#574d42;--line:#e4dac9;--paper:#f6efe3;--card:#fffdf8;
+    --sales:#8a4b2f;--care:#3f7a6d;--gold:#b8862f;--ai:#7a5ea8;--rule:#d8cab2;--flag:#b4452f}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:900px;margin:0 auto;padding:0 6%}
+  .cover{padding:8vh 0 4vh;border-bottom:2px solid var(--ink)}
+  .kick{font-size:.72rem;letter-spacing:.3em;text-transform:uppercase;color:var(--sales);font-weight:700}
+  h1{font-family:'Fraunces';font-weight:500;font-size:clamp(2.6rem,7vw,4.6rem);line-height:1;letter-spacing:-.02em;margin:.2em 0}
+  .cover .sub{font-family:'Fraunces';font-style:italic;font-size:clamp(1.2rem,3vw,1.7rem);color:var(--ink2);max-width:42ch}
+  section{padding:3.2rem 0;border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:.7rem;letter-spacing:.26em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:.5rem}
+  h2{font-family:'Fraunces';font-weight:600;font-size:clamp(1.6rem,4vw,2.3rem);margin:.2rem 0 .4rem;letter-spacing:-.01em}
+  h3{font-family:'Fraunces';font-weight:600;font-size:1.25rem;margin:1.8rem 0 .5rem}
+  p{margin-bottom:1rem;font-size:1.04rem;color:#38312a}
+  .lead{font-size:1.1rem}
+  b{color:var(--ink)}
+  ul,ol{margin:.4rem 0 1rem 1.2rem} li{margin:.35rem 0;font-size:1.02rem;color:#38312a}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1rem 0}
+  .c{border:1px solid var(--line);border-radius:12px;padding:1.3rem 1.4rem;background:var(--card)}
+  .c.a{border-top:4px solid var(--sales)} .c.b{border-top:4px solid var(--care)}
+  .c .lbl{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;font-weight:700}
+  .c.a .lbl{color:var(--sales)} .c.b .lbl{color:var(--care)}
+  .c h4{font-family:'Fraunces';font-size:1.2rem;font-weight:600;margin:.2rem 0 .5rem}
+  .c p{font-size:.94rem;color:var(--ink2)} .c ul{margin-left:1rem} .c li{font-size:.9rem;color:var(--ink2)}
+  table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.92rem}
+  th,td{text-align:left;padding:.6rem .7rem;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);font-weight:700}
+  td.sa{color:var(--sales);font-weight:500} td.ca{color:var(--care);font-weight:500}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.3rem 1.5rem;margin:1rem 0}
+  .box.gold{border-left:4px solid var(--gold)} .box.ai{border-left:4px solid var(--ai);background:#f7f3fb}
+  .box.flag{border-left:4px solid var(--flag);background:#fbf1ee}
+  .pill{display:inline-block;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;font-weight:700;padding:.18rem .5rem;border-radius:5px;margin-right:.3rem}
+  .p-sales{background:#f3e3d6;color:var(--sales)} .p-care{background:#dcebe6;color:var(--care)}
+  .ex{border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:0 10px 10px 0;padding:1rem 1.2rem;margin:.8rem 0;background:#fff}
+  .ex .t{font-family:'Fraunces';font-weight:600;font-size:1.05rem;margin-bottom:.2rem}
+  .ex .ty{font-size:.64rem;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);font-weight:700}
+  .ex .field{border-bottom:1px solid var(--line);height:1.6rem;margin:.45rem 0}
+  .ex table{margin:.5rem 0}
+  .phase{display:grid;grid-template-columns:auto 1fr;gap:1rem;margin:.7rem 0;align-items:start}
+  .phase .ph{font-family:'Fraunces';font-style:italic;color:var(--gold);font-weight:600;font-size:1.05rem;white-space:nowrap}
+  .phase .pd b{display:block;font-size:1.05rem}
+  .need{background:#fff7ec;border:1px solid var(--rule);border-radius:10px;padding:1rem 1.3rem;margin:1rem 0}
+  .price{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.8rem;margin:1rem 0}
+  .price .pc{border:1px solid var(--line);border-radius:12px;padding:1.1rem;text-align:center;background:var(--card)}
+  .price .pc.bundle{border:2px solid var(--gold);background:#fffaf0}
+  .price .pc .amt{font-family:'Fraunces';font-size:1.9rem;font-weight:600;color:var(--ink)}
+  .price .pc .nm{font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);font-weight:700;margin-bottom:.3rem}
+  .price .pc .sub{font-size:.82rem;color:var(--ink2);margin-top:.3rem}
+  .foot{padding:3rem 0 5rem;text-align:center;color:var(--ink2);font-size:.85rem}
+  .foot .m{font-family:'Fraunces';font-style:italic;font-size:1.2rem;color:var(--sales)}
+  @media(max-width:680px){.cards,.price{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header class="cover"><div class="wrap">
+  <span class="kick">Production Game Plan · Draft for Matt</span>
+  <h1>From the Chair</h1>
+  <p class="sub">From where we are now → two finished, substantial, sellable products + a bundle. The full path, the workbook engine, and the price.</p>
+</div></header>
+
+<section><div class="wrap">
+  <span class="eyebrow">Where we are right now</span>
+  <h2>What's already in hand</h2>
+  <ul>
+    <li><b>Both interviews captured, clean, and triple-saved</b> (Hyperagent + OneDrive + the brain ledger).</li>
+    <li><b>Kim's spine drafted</b> (13 chapters, "The Front Desk") and <b>Mark's spine drafted</b> (11 chapters, "Selling Is Serving").</li>
+    <li><b>A combined 18-chapter master outline</b> — though its audience split was wrong (see below) and is now corrected.</li>
+  </ul>
+  <p class="lead">What's left is the real work: turn the spines into <b>full chapters</b>, build a <b>genuinely substantial workbook</b> per chapter, repackage into the <b>two correct editions</b>, run compliance, and list it. This document is the plan for exactly that.</p>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Correction</span>
+  <h2>Two editions — both for professionals</h2>
+  <p>I had the two editions as "Patients &amp; Families" vs "Hearing Professionals." That was wrong. The real model (your call): <b>both editions sell to people who work in a hearing practice</b> — same content, two mindsets.</p>
+  <div class="cards">
+    <div class="c a"><div class="lbl">Edition A · The Closer</div>
+      <h4>The Sales &amp; Owner Edition</h4>
+      <p>For owners, salespeople, and commission-based dispensers who <b>own the number</b> and want to win.</p>
+      <ul><li>Language: close, win the room, conversion, commission, growth</li><li>Energy: Mark's "selling is serving"</li><li>Promise: sell more — by selling yourself, not the device</li></ul>
+    </div>
+    <div class="c b"><div class="lbl">Edition B · The Professional</div>
+      <h4>The Care &amp; Patient-Experience Edition</h4>
+      <p>For front desk, call center, support staff, and dispensers/audiologists who <b>don't want to "sell"</b> and see themselves as professionals/caregivers first.</p>
+      <ul><li>Language: patient care, trust, outcomes, professional excellence</li><li>Energy: Kim's "care is the system"</li><li>Promise: better patient outcomes &amp; a practice patients love</li></ul>
+    </div>
+  </div>
+  <div class="box gold"><b>The insight that makes this work:</b> the <b>techniques are identical</b> — only the vocabulary changes. Edition B lets the anti-sales professional adopt the exact same mechanics that grow a practice, <b>without ever using the word "sell."</b> That's why two books from one body of content isn't a gimmick — it's the same medicine in the bottle each reader will actually swallow. (Both draw on <em>both</em> Mark and Kim; the editions differ in framing/emphasis, not in who's quoted.)</p></div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Engine</span>
+  <h2>Same technique, two vocabularies</h2>
+  <p>This translation table is the heart of "repackage, don't rewrite." We write the chapter core once, then run every concept through this lens for each edition.</p>
+  <table>
+    <tr><th>The technique (shared core)</th><th>Edition A — Sales/Owner</th><th>Edition B — Professional/Care</th></tr>
+    <tr><td>Build trust before recommending</td><td class="sa">"Sell yourself, not the device"</td><td class="ca">"Earn the patient's trust first"</td></tr>
+    <tr><td>Surface objections early</td><td class="sa">"Handle objections before they kill the sale"</td><td class="ca">"Understand the patient's real concerns"</td></tr>
+    <tr><td>Denial &gt; stigma &gt; vanity &gt; cost</td><td class="sa">"What's really blocking the sale"</td><td class="ca">"What's really keeping them from care"</td></tr>
+    <tr><td>Thinker / Knower / Feeler</td><td class="sa">"Read the buyer, close the buyer"</td><td class="ca">"Communicate the way each patient needs"</td></tr>
+    <tr><td>Ask for the decision</td><td class="sa">"Ask for the sale"</td><td class="ca">"Help them say yes to better hearing"</td></tr>
+    <tr><td>Track outcomes (COSI 3 goals)</td><td class="sa">"Lock the win, drive referrals"</td><td class="ca">"Define and deliver patient success"</td></tr>
+    <tr><td>The metric you watch</td><td class="sa">Close rate · revenue · commission</td><td class="ca">Help/fit-success rate · patient outcomes · satisfaction</td></tr>
+  </table>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Workbook Strategy — the core of your question</span>
+  <h2>Why the workbook IS the product</h2>
+  <p class="lead">At a real price point, the book is the <em>story</em> and the workbook is the <em>value</em>. Two reasons to make it heavy:</p>
+  <ol>
+    <li><b>Value &amp; engagement:</b> people pay for transformation, not pages. A workbook that makes them apply each principle to <b>their own practice, their own patients, their own numbers</b> is what justifies a professional price — and what actually changes their results, which drives reviews, referrals, and repeat buyers.</li>
+    <li><b>Anti-piracy moat:</b> a blank PDF can be shared — but it's nearly worthless blank. The value only exists once <b>filled in with the reader's real data</b>, which makes it personal, effortful, and pointless to copy. A finished workbook becomes <em>their</em> operating manual, not a file to pass around. We reinforce this with per-buyer personalization (name + license # on the cover, a Gumroad license key, a light watermark).</li>
+  </ol>
+
+  <h3>The exercise toolkit (mixed into every chapter)</h3>
+  <p>Each chapter's workbook draws from this set so it's varied, active, and substantial — not blank lines:</p>
+  <ul>
+    <li><b>Self-Score</b> — rate yourself 1–10 on the chapter's skill (baseline → re-score at 30/60/90 days)</li>
+    <li><b>Script Builder</b> — write <em>your</em> words for the technique (your repeat-back, your cost-reframe)</li>
+    <li><b>Real-Patient Log</b> — track 3–5 actual patients applying the principle, and the outcome</li>
+    <li><b>This-Week Drill</b> — a specific action to run this week + what happened</li>
+    <li><b>Decision Tool</b> — a worksheet they complete (modality identifier, COSI 3-goals capture, objection map)</li>
+    <li><b>Metric Tracker</b> — baseline → target → actual on the number that matters</li>
+    <li><b>Role-Play Card</b> — practice with a colleague + a scored checklist</li>
+    <li><b>Reflect &amp; Commit</b> — a personal insight + a dated commitment with an accountability partner</li>
+  </ul>
+
+  <h3>The per-chapter template (consistent spine, ~3–5 pages of work each)</h3>
+  <ol>
+    <li><b>The Principle</b> — one line + the one quote from Mark/Kim</li>
+    <li><b>Where I Am Now</b> — self-score + a short honest diagnostic</li>
+    <li><b>Make It Mine</b> — the script/decision tool, filled in their words</li>
+    <li><b>Try It This Week</b> — the drill + the real-patient log</li>
+    <li><b>Measure It</b> — the metric tracker</li>
+    <li><b>Reflect &amp; Commit</b> — insight + dated commitment</li>
+  </ol>
+  <p>Across ~18 chapters that's <b>~70–110 pages of genuine, fillable work</b> — a real implementation system, not an afterthought. Same template in both editions; the prompts get the vocabulary swap.</p>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">Proof of Depth · Sample Chapter Workbook</span>
+  <h2>Chapter 7 — Reading the Person (Thinkers, Knowers, Feelers)</h2>
+  <p>Here's one chapter fully built out, in <b>both edition framings</b>, so you can see exactly what "substantial" looks like. Every other chapter follows this template.</p>
+
+  <div class="ex">
+    <span class="ty">1 · The Principle</span>
+    <div class="t">People decide in three ways — Thinkers (data), Knowers (gut/bullets), Feelers (heart/stories). Match theirs, or you lose them.</div>
+    <p style="font-size:.92rem;color:var(--ink2);margin:0">"You have to be a chameleon — recognize your own dominant modality, then switch based on the person in front of you." — Mark Moore</p>
+  </div>
+
+  <div class="ex">
+    <span class="ty">2 · Where I Am Now — Self-Score</span>
+    <div class="t">Rate yourself 1–10, honestly. Re-score in 30 days.</div>
+    <table>
+      <tr><th>Skill</th><th>Today</th><th>Day 30</th></tr>
+      <tr><td>I can spot a Thinker / Knower / Feeler within 2 minutes</td><td>___</td><td>___</td></tr>
+      <tr><td>I change <em>how</em> I explain based on the person</td><td>___</td><td>___</td></tr>
+      <tr><td>I know my <em>own</em> dominant modality (and its blind spot)</td><td>___</td><td>___</td></tr>
+    </table>
+    <p style="font-size:.9rem;margin:.3rem 0 0"><b>My own dominant modality is:</b> ☐ Thinker ☐ Knower ☐ Feeler — <span class="pill p-sales">A</span>and the buyers I lose most are: <div class="field"></div> <span class="pill p-care">B</span>and the patients I struggle to reach are: <div class="field"></div></p>
+  </div>
+
+  <div class="ex">
+    <span class="ty">3 · Make It Mine — Script Builder</span>
+    <div class="t">Write your own one-liner for each type. (Same exercise, edition-specific aim.)</div>
+    <table>
+      <tr><th>Type</th><th class="sa">A: your line to move them to a yes</th><th class="ca">B: your line to help them feel understood</th></tr>
+      <tr><td><b>Thinker</b> (give data)</td><td><div class="field"></div></td><td><div class="field"></div></td></tr>
+      <tr><td><b>Knower</b> (give bullets)</td><td><div class="field"></div></td><td><div class="field"></div></td></tr>
+      <tr><td><b>Feeler</b> (give a story)</td><td><div class="field"></div></td><td><div class="field"></div></td></tr>
+    </table>
+  </div>
+
+  <div class="ex">
+    <span class="ty">4 · Try It This Week — Real-Patient Log</span>
+    <div class="t">Tag your next 5 people by modality, switch your approach, record what happened.</div>
+    <table>
+      <tr><th>#</th><th>Modality</th><th>How I switched</th><th><span class="sa">A: outcome (yes/think/no)</span> · <span class="ca">B: did they feel heard?</span></th></tr>
+      <tr><td>1</td><td>___</td><td><div class="field" style="margin:0"></div></td><td>___</td></tr>
+      <tr><td>2</td><td>___</td><td><div class="field" style="margin:0"></div></td><td>___</td></tr>
+      <tr><td>3</td><td>___</td><td><div class="field" style="margin:0"></div></td><td>___</td></tr>
+      <tr><td>4</td><td>___</td><td><div class="field" style="margin:0"></div></td><td>___</td></tr>
+      <tr><td>5</td><td>___</td><td><div class="field" style="margin:0"></div></td><td>___</td></tr>
+    </table>
+  </div>
+
+  <div class="ex">
+    <span class="ty">5 · Measure It — Metric Tracker</span>
+    <div class="t"><span class="pill p-sales">A</span> Close rate this week ___% → goal ___%. &nbsp; <span class="pill p-care">B</span> Of 5 patients, how many said "you really understood me" ___ /5 → goal ___ /5.</div>
+  </div>
+
+  <div class="ex">
+    <span class="ty">6 · Reflect &amp; Commit</span>
+    <div class="t">The one person this changed: <div class="field"></div> One thing I'll do differently next week: <div class="field"></div> I'll check my Day-30 re-score with (accountability partner): ________ on (date): ________</div>
+  </div>
+
+  <div class="box ai"><b>AI-Layer call-out (every chapter has one):</b> "Reading the modality" is exactly what good lifecycle messaging does at scale — the same offer written as data, bullets, or a story. <span class="pill p-sales">A</span> for the owner: how to run this across your whole prospect list. <span class="pill p-care">B</span> for the professional: how automated follow-up keeps every patient feeling personally understood.</div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">Pricing — my recommendation (your gate)</span>
+  <h2>Priced as professional development, not a $9 ebook</h2>
+  <p>This is a B2B-style product — a practice-improvement system that can raise a dispenser's close rate or a front desk's patient retention. That audience pays for ROI. With a substantial workbook backing it, here's where I'd land:</p>
+  <div class="price">
+    <div class="pc a"><div class="nm">Edition A or B</div><div class="amt">$79</div><div class="sub">eBook + full fillable Workbook (single edition)</div></div>
+    <div class="pc bundle"><div class="nm">Both-Editions Bundle</div><div class="amt">$129</div><div class="sub">Best for a whole practice (owner + staff) · the hero SKU</div></div>
+    <div class="pc b"><div class="nm">Intro / launch</div><div class="amt">$49</div><div class="sub">First-week or warm-list price to seed reviews</div></div>
+  </div>
+  <p style="font-size:.95rem;color:var(--ink2)">Rationale: a single edition at <b>$79</b> is an easy yes for a professional investing in their craft; the <b>$129 bundle</b> is the natural buy for an owner equipping both themselves and their team (and makes the single price feel reasonable). A <b>$49</b> launch price seeds early reviews/testimonials. Later upsells: a "Practice License" (multi-seat) at $299–499, or a video/companion course. <b>All numbers are yours to set — I prepare, you price.</b></p>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Roadmap</span>
+  <h2>From here to selling — 7 phases</h2>
+
+  <div class="phase"><div class="ph">Phase 0</div><div class="pd"><b>Lock structure &amp; reconcile (now)</b>You confirm the two-edition model + price direction; I reconcile against the original <em>BOOK-PROJECT-OVERVIEW.md</em> + Prologue/Ch1 once you re-share them. Finalize the chapter list + workbook template. <span style="color:var(--flag)">Needs you: scope doc + Prologue/Ch1, price OK.</span></div></div>
+
+  <div class="phase"><div class="ph">Phase 1</div><div class="pd"><b>Write the full manuscript (shared core)</b>Expand both spines into ~18 full chapters of real prose from the interviews — substantial, in Mark's and Kim's voices. One shared core, written once. <em>(CRO builds; staged for your read.)</em></div></div>
+
+  <div class="phase"><div class="ph">Phase 2</div><div class="pd"><b>Build the full Workbook (both variants)</b>One complete fillable module per chapter (~70–110 pp) using the template above, then run every prompt through the vocabulary swap to produce the A and B variants. <em>This is the value engine — the biggest single build.</em></div></div>
+
+  <div class="phase"><div class="ph">Phase 3</div><div class="pd"><b>Repackage into the two editions</b>Same core + edition-specific intro, framing boxes, vocabulary, cover, and title. Output: Edition A book+workbook, Edition B book+workbook.</div></div>
+
+  <div class="phase"><div class="ph">Phase 4</div><div class="pd"><b>Compliance pass (CCO/claims gate)</b>Credential accuracy (Licensed Hearing Aid Dispensers, never "audiologist" for Mark/Kim), health-claim disclaimers, keep clearly separate from the iHEAR TReO PSAP, INND heritage → counsel. <span style="color:var(--flag)">Hard gate before publish.</span></div></div>
+
+  <div class="phase"><div class="ph">Phase 5</div><div class="pd"><b>Production &amp; packaging</b>Format the eBooks (PDF/EPUB) + fillable Workbooks (real PDF form fields), design covers + 3D mockups, add per-buyer personalization + license. Build the 3 Gumroad SKUs (A, B, Bundle).</div></div>
+
+  <div class="phase"><div class="ph">Phase 6</div><div class="pd"><b>Listing + sales pages</b>Write the Gumroad listings (titles, descriptions, benefit copy, screenshots of the workbook), set prices, ratings/refund policy. Stage everything; <span style="color:var(--flag)">you click publish + set price.</span></div></div>
+
+  <div class="phase"><div class="ph">Phase 7</div><div class="pd"><b>Launch &amp; sell</b>Seed reviews at the intro price, then drive traffic: the warm list, hearing-professional communities/associations, LinkedIn, and a simple advertorial. Track sales; iterate copy. <span style="color:var(--flag)">Sends/ad-spend = your gate.</span></div></div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">What I need from you to move</span>
+  <div class="need">
+    <ol style="margin-bottom:0">
+      <li><b>Confirm the two-edition model + my read of the audiences</b> (A: owners/sales/commission · B: front-desk/support/dispensers-who-won't-sell).</li>
+      <li><b>Re-share the original <em>BOOK-PROJECT-OVERVIEW.md</em> + Prologue/Ch1</b> so I reconcile to your exact structure (or tell me to proceed from this plan).</li>
+      <li><b>A price direction</b> (thumbs up/down on $79 / $129 / $49, or your numbers).</li>
+      <li><b>Green light to start Phase 1–2</b> (write full chapters + build the full workbook) — the big build.</li>
+    </ol>
+  </div>
+  <div class="box flag"><b>Standing gates:</b> publish, pricing, real sends, and ad spend are all yours. All copy routes through the CCO/claims gate before publish. This book is a memoir/method about <b>traditional hearing aids</b> — kept clearly separate from the iHEAR TReO PSAP.</div>
+</div></section>
+
+<footer class="foot"><div class="wrap">
+  <p class="m">From the Chair</p>
+  <p>Production Game Plan · two professional editions + bundle · the workbook is the value · draft for Matt</p>
+</div></footer>
+
+</body>
+</html>

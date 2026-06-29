@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>From the Chair — Mark's Spine (First Draft)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#2a2521;--ink-soft:#574d42;--line:#e2d8c8;--paper:#f6efe3;--card:#fffdf8;
+    --accent:#8a4b2f;--accent-soft:#bf7e54;--gold:#b8862f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;line-height:1.7;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;padding:0 7%}
+  .cover{min-height:88vh;display:flex;flex-direction:column;justify-content:center;padding:8vh 0;border-bottom:1px solid var(--line)}
+  .kicker{font-family:'Inter';font-size:.72rem;letter-spacing:.32em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .cover h1{font-family:'Fraunces';font-weight:500;font-size:clamp(3rem,8.5vw,5.6rem);line-height:.98;letter-spacing:-.02em;margin:.28em 0 .1em}
+  .cover .sub{font-family:'Fraunces';font-style:italic;font-weight:400;font-size:clamp(1.3rem,3.4vw,1.9rem);color:var(--ink-soft);max-width:36ch}
+  .cover .byline{margin-top:2.4rem;font-size:.95rem;color:var(--ink-soft)}
+  .cover .byline strong{color:var(--ink);font-weight:600}
+  .tag{display:inline-block;margin-top:2rem;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent-soft);border-radius:2rem;padding:.4rem 1rem;background:#fbf2ea}
+  section{padding:5.5rem 0;border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:.72rem;letter-spacing:.28em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:1rem}
+  h2{font-family:'Fraunces';font-weight:500;font-size:clamp(1.9rem,5vw,2.9rem);line-height:1.08;letter-spacing:-.015em;margin-bottom:1.4rem}
+  h3{font-family:'Fraunces';font-weight:600;font-size:1.35rem;margin:2.4rem 0 .7rem;color:var(--ink)}
+  .chap-no{font-family:'Fraunces';font-style:italic;font-size:1rem;color:var(--accent-soft);display:block;margin-bottom:.3rem}
+  p{margin-bottom:1.15rem;font-size:1.06rem;color:#38312a}
+  blockquote{font-family:'Fraunces';font-style:italic;font-weight:400;font-size:clamp(1.4rem,3.6vw,1.85rem);line-height:1.32;color:var(--accent);border-left:3px solid var(--accent-soft);padding:.2rem 0 .2rem 1.4rem;margin:2rem 0}
+  blockquote cite{display:block;font-family:'Inter';font-style:normal;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);margin-top:.9rem;font-weight:500}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:2.2rem 2.4rem;margin-top:2.6rem}
+  .toc ol{list-style:none;counter-reset:c}
+  .toc li{counter-increment:c;padding:.55rem 0;border-bottom:1px dashed var(--line);font-size:1rem;display:flex;gap:.9rem}
+  .toc li:last-child{border-bottom:none}
+  .toc li::before{content:counter(c,decimal-leading-zero);font-family:'Fraunces';font-style:italic;color:var(--accent-soft);min-width:2ch}
+  .method{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1.6rem 1.8rem;margin:1.6rem 0}
+  .method .n{font-family:'Fraunces';font-style:italic;color:var(--gold);font-size:1.05rem}
+  .method h4{font-family:'Fraunces';font-weight:600;font-size:1.18rem;margin:.2rem 0 .5rem}
+  .method p{font-size:1rem;margin-bottom:0;color:var(--ink-soft)}
+  .ai{border-left:3px solid var(--gold);background:#fcf7ee;padding:1.1rem 1.3rem;margin:1.8rem 0;border-radius:0 10px 10px 0}
+  .ai .lab{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);font-weight:600;display:block;margin-bottom:.4rem}
+  .ai p{font-size:1rem;margin-bottom:0;color:#4a4035}
+  .wbk{background:#fff;border:1px solid var(--line);border-radius:14px;padding:1.7rem 1.9rem;margin:1.4rem 0}
+  .wbk h4{font-family:'Fraunces';font-weight:600;font-size:1.15rem;margin-bottom:.6rem}
+  .wbk .field{border-bottom:1px solid var(--line);height:1.9rem;margin:.6rem 0}
+  .wbk ul{margin:.4rem 0 0 1.1rem;color:var(--ink-soft);font-size:.98rem}
+  .wbk ul li{margin:.3rem 0}
+  .note{font-size:.92rem;color:var(--ink-soft);font-style:italic}
+  .footer{padding:4rem 0 6rem;text-align:center}
+  .footer .mark{font-family:'Fraunces';font-style:italic;font-size:1.3rem;color:var(--accent)}
+  .footer p{font-size:.85rem;color:var(--ink-soft)}
+  .divider{width:48px;height:2px;background:var(--accent-soft);margin:0 auto 1.6rem}
+  @media(max-width:600px){.wrap{padding:0 8%}section{padding:4rem 0}}
+</style>
+</head>
+<body>
+
+<header class="cover">
+  <div class="wrap">
+    <span class="kicker">From the Chair · The Sales Chair</span>
+    <h1>Selling Is&nbsp;Serving</h1>
+    <p class="sub">Mark Moore on why you never sell a hearing aid — you sell yourself.</p>
+    <p class="byline">As told by <strong>Mark Moore</strong>, Licensed Hearing&nbsp;Aid&nbsp;Dispenser &nbsp;·&nbsp; 23 years, 10,000+ fittings, 40,000+ patients &nbsp;·&nbsp; The sales &amp; ownership spine of <em>From the Chair</em></p>
+    <span class="tag">First Draft · From Mark's Interview · For Matt's Review</span>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <p style="font-family:'Fraunces';font-style:italic;font-size:1.4rem;line-height:1.4;color:var(--accent)">"People don't care how much you know until they know how much you care. No one wants to be sold — but everyone wants to buy."</p>
+    <p>Mark Moore sat across the table from more than forty thousand people. He sold over ten thousand of them hearing devices across twenty-three years and a chain of offices from California to Florida — one of the largest privately owned practices in the country. And he'll tell you, flatly, that almost none of it was about hearing aids.</p>
+    <p>This is Mark's voice, drawn from his own telling, organized into the chapters that form the sales-and-ownership spine of <em>From the Chair</em>. It pairs with Kim Moore's chapters on the care-and-front-desk side. Where Kim made people feel safe, Mark helped them decide — and his entire method rests on a single inversion: the device is never the point. You are.</p>
+    <div class="toc">
+      <span class="eyebrow">The Chapters</span>
+      <ol>
+        <li>The Trunk and the Back Room — how he got in, and the lesson that nearly broke him</li>
+        <li>Rain on the Roof — the first sale, and why he stayed twenty-three years</li>
+        <li>You Don't Sell a Hearing Aid, You Sell Yourself</li>
+        <li>No One Wants to Be Sold</li>
+        <li>"It Costs Too Much" — the objection that isn't the real one</li>
+        <li>The Real Reason — denial, stigma, vanity, cost (in that order)</li>
+        <li>Thinkers, Knowers, and Feelers</li>
+        <li>What Brings You In Today?</li>
+        <li>Who Wears the Pants — the family in the room</li>
+        <li>One Price, and It Includes Me</li>
+        <li>The Patient Journey — why forty thousand came back</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter One</span>
+    <h2>The Trunk and the Back Room</h2>
+    <p>Mark knew nothing about hearing aids — only that his grandfather had worn "big, banana-type" ones behind his ears in the 1960s that squealed and squeaked. Then he met Kim, and her whole family was in the business. Her father, Marvin, had built his own practice from scratch, starting the way the old-timers did: selling hearing aids with his brother out of the trunk of a car, going office to office and into convalescent hospitals, before licensing even existed in most states. By the time Mark came around, Marvin owned five stores.</p>
+    <blockquote>"He asked me, 'You ever think about going into the hearing aid business? If you're going to court my daughter, I need to know you can support her. And the hearing aid business has been very, very good to us.'"<cite>Mark Moore</cite></blockquote>
+    <p>Mark learned the trade the hard way, training under Kim's uncle — a man who actually <em>built</em> hearing aids in a back room from prefab faceplates, picking circuits to match the slope of a person's loss, pouring acrylic molds, soldering receivers. The uncle sent him out to people's dining-room tables with a portable audiometer to test and sell devices he'd then have to go back and build himself.</p>
+    <p>That's where Mark learned the lesson that shaped everything after:</p>
+    <blockquote>"You cannot sell, manufacture, fit, and service all in one — you're going to run out of time. You'll stop selling, then you have to fill the funnel again, then you run out of time again. I either had to be in sales, or in manufacturing. I couldn't do both."<cite>Mark Moore</cite></blockquote>
+    <p>Once licensed, he asked to work in-office. Within two or three months he doubled the uncle's production — from 25–30 units a month to 50–60. When the uncle wanted to ship him off to open a brand-new, unmarketed office an hour away, Mark declined. He understood, even then, that you don't walk away from an established patient base to start cold.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Two</span>
+    <h2>Rain on the Roof</h2>
+    <p>The uncle took a hunting trip and left Mark — a trainee, not yet licensed — to run the office for a week. "I was very conscious that I was incompetent," Mark says. "I knew I really didn't know." He sold eight or nine hearing aids that week anyway. One was to a woman about seventy-five, who told him her friends were frustrated at repeating themselves and everyone said she turned the TV up too loud. He ordered her an Electone, glued the impression in the box, dropped it in the mailbox, and made her an appointment for two weeks out.</p>
+    <p>Three days after he delivered it, she came back through the front door calling his name.</p>
+    <blockquote>"She put both arms out, came to me, and just started crying. 'You have changed my life. It rained yesterday, and I just sat and bawled because I heard the rain on the roof — and I didn't even know I missed that.'"<cite>Mark Moore</cite></blockquote>
+    <p>She'd started hearing the leaves blow down the street, the birds in the morning. "You just gave me a new life." For Mark, something turned over in that moment that never turned back.</p>
+    <blockquote>"From that day forward, it was not a business anymore. It was helping people. It was being the conduit to helping another individual. It's the gift of giving — and I achieved the ultimate gift of giving, which is hearing. That's what made me stay."<cite>Mark Moore</cite></blockquote>
+    <p>The hearing aid, he decided, was not a widget. It was much more — and they were the ones doing it. That conviction is the engine under every technique in this book.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Three</span>
+    <h2>You Don't Sell a Hearing Aid, You Sell Yourself</h2>
+    <p>Ask Mark what most people get wrong about sales, and the answer is immediate: they try to sell the product.</p>
+    <blockquote>"You don't sell the hearing aid. The hearing aid does a function. You sell what the benefits are to them — specifically to them, not the general public. And you're selling yourself, on what you can do for them."<cite>Mark Moore</cite></blockquote>
+    <p>The device, in his hands, is just a tool — and the beauty of selling yourself rather than the tool is that the tool is replaceable. If a particular aid isn't working, he can change the form factor, the brand, the type, and the patient still trusts <em>him</em> to make it right. He compares it to a physician: run the tests, start a treatment, and if the first doesn't work, try another. The patient isn't buying the treatment. They're buying the expert.</p>
+    <p>Which leads to his sharpest line about returns:</p>
+    <blockquote>"If a person returns a hearing aid, they're not returning a hearing aid. They're returning <em>you</em>. They believe you can't help them — and that's because you tried to sell them a hearing aid instead of yourself."<cite>Mark Moore</cite></blockquote>
+    <p>He used stories — real, generalized from the thousands he'd fit — not to brag about other people, but to prove that he <em>understood</em>: the family arguments, the his-and-hers TVs, the exhaustion of always saying "what?" People don't care how much you know, he repeats, until they know how much you care.</p>
+    <div class="ai">
+      <span class="lab">The AI-Layer</span>
+      <p>"Sell yourself" is the one thing that can't be automated — and that's the point. Every automated touch (the ad, the email, the chatbot) exists to earn the human conversation where trust is actually built. Technology fills the funnel and carries the follow-up; the human still closes.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Four</span>
+    <h2>No One Wants to Be Sold</h2>
+    <p>Mark's whole posture flows from one observation about human nature:</p>
+    <blockquote>"No one wants to be sold. But everyone wants to buy. So how do you sell something in a way that people don't feel sold — they feel like they bought it? That's the key."<cite>Mark Moore</cite></blockquote>
+    <p>Being good at sales, to Mark, meant understanding decision-making — why the person is sitting across from him at all. Why did they answer the ad? Why did they walk through the door <em>today</em>? Getting to the root of the problem, naming the pain they're reluctant to admit, and earning a "yes I'll do it" — that's the craft. It's conversation. It's stories. It's getting them to understand that <em>you</em> understand.</p>
+    <p>He's careful, too, not to assume. The patient did not come in to buy — and treating them like a buyer is exactly how you lose them.</p>
+    <blockquote>"They don't want to be sold, and they don't even want to buy. But they want to be helped. They ultimately know that buying a hearing aid is the help — but they didn't come in to buy."<cite>Mark Moore</cite></blockquote>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Five</span>
+    <h2>"It Costs Too Much"</h2>
+    <p>When a patient says it costs too much — or that they can get it cheaper down the street — Mark doesn't defend the price. He reframes the cost.</p>
+    <blockquote>"Not doing anything is too costly long term. Untreated, you cause more problems — with your spouse, your family — and there's credible evidence linking hearing loss to comorbidities, the biggest being cognitive. Today is the best day to do it, because we can do better today than we can a year from now."<cite>Mark Moore</cite></blockquote>
+    <p>And "cheaper somewhere else" he meets head-on, gently: the person down the street may have more credentials and more bells and whistles — "but if you get it cheaper somewhere else, you're not getting <em>me</em> anymore." He'll also name the long-term sting of buying inferior:</p>
+    <blockquote>"People generally regret getting the less expensive thing, because the poor quality costs them more down the road to correct. The short-term bite of a higher cost stings less than the long-term sting of the wrong product."<cite>Mark Moore</cite></blockquote>
+    <p>His close on cost is always the same shape: <em>I certainly understand finances are a real consideration — but this is for your health, your relationships, and for preserving what you still have before it gets worse. Get the best you can afford today, and I'll be here to walk you through it.</em></p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Six</span>
+    <h2>The Real Reason</h2>
+    <p>Everyone throws up cost first. Mark says cost is almost never the real reason. There are four objections — and the order people <em>say</em> them is the exact opposite of the truth.</p>
+    <blockquote>"They say cost, vanity, stigma, denial. But invert it. It's really denial number one, stigma number two, vanity number three, and cost number four. They throw up cost because they're in denial."<cite>Mark Moore</cite></blockquote>
+    <p>Denial and stigma travel together: hearing aids have always been linked to <em>old, damaged, handicapped</em>. People look in the mirror and see themselves fifteen years younger; they can't picture themselves wearing "that." Men, in his experience, are more vain than women — partly hair, mostly stigma — and a man who comes in alone usually came for validation that he's fine. A woman who comes in alone is often ready to buy, because she takes her health seriously and has already decided to act.</p>
+    <blockquote>"Years ago Duke did a survey of the most embarrassing products as people age. Number one was a hearing aid — by a huge margin, even over adult diapers. People don't understand it's far more embarrassing to say 'huh?' all day than to just wear one."<cite>Mark Moore</cite></blockquote>
+    <p>So the real work isn't answering cost. It's getting the person to first admit they have a permanent problem that only a hearing aid solves — and to trust you enough to say that it's more embarrassing to <em>not</em> hear than to wear one. Even the patient who can easily afford it will say no until they cross that line.</p>
+    <div class="ai">
+      <span class="lab">The AI-Layer</span>
+      <p>If denial and stigma are the real objections, the marketing must meet them with dignity — benefit-led, never "old" or "handicapped," and always inside the claims line. The message that lowers the wall is the same one Mark used at the table: <em>you, specifically, get your life back.</em></p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Seven</span>
+    <h2>Thinkers, Knowers, and Feelers</h2>
+    <p>The heart of Mark's craft is reading how a person makes decisions — and then changing how <em>he</em> communicates to match. He sorts people into three decision-making modalities.</p>
+    <p><strong>Thinkers</strong> (~15%) decide with their brains. They walk in with a file of downloaded specs, quotes from other offices, and a zillion questions; they can never have too much data. <strong>Knowers</strong> (~30%) decide from the gut — give them the cliff-notes, a few bullet points, a quick demonstration, and they're sure. <strong>Feelers</strong> (~55–60%, the largest group) decide with their hearts — they want pictures, color, and stories of what it will do for <em>them</em>.</p>
+    <blockquote>"Feelers want the story of how it's going to make them feel better. A thinker wants to know exactly what the product does. A knower wants the highlights and no story. If you data-dump on a feeler, or tell a story to an engineer, you lose them."<cite>Mark Moore</cite></blockquote>
+    <p>He remembers an engineer — a pure thinker — who decided he could build the device himself for fifty bucks. Mark couldn't get past the man's dominant modality. The lesson he drew: everyone has a <em>second</em> modality, and if you can't reach the first, reach the second.</p>
+    <blockquote>"You have to be a chameleon. Recognize your own dominant modality, then switch based on the person in front of you. Once you can read other people's modalities, you have the inside track to a yes."<cite>Mark Moore</cite></blockquote>
+    <p>And it isn't only for patients. The same skill, he notes, is how you lead coworkers, run multiple offices, and get along with family. It's how you become a master communicator.</p>
+    <div class="ai">
+      <span class="lab">The AI-Layer</span>
+      <p>Modality-matching is what good AI messaging does at scale: the same offer rendered as data for the thinker, bullets for the knower, and a story for the feeler. Mark did it by reading a face across the table; software can do it across a list — if it's taught his three buckets.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Eight</span>
+    <h2>What Brings You In Today?</h2>
+    <p>Mark never dives into the test. He has a conversation first — and it starts with one question.</p>
+    <blockquote>"'What brings you in today?' I don't want to assume they're here to buy, because that's where you get into trouble. I want to know the real reason they're here."<cite>Mark Moore</cite></blockquote>
+    <p>Then he does something deceptively simple: he repeats their answer back to them. "I'm here because my wife thinks I have a hearing problem." — "Oh, your wife thinks you have a hearing problem." And he stops, and lets them keep talking. Every time he reflects their own words, he reinforces — in their own ears, now spoken by him — that there's a problem worth solving.</p>
+    <blockquote>"If they felt it was important to tell you, you have to feel it's important to repeat back. All it does is reinforce why they're there. Now they've heard it from you, even though they said it."<cite>Mark Moore</cite></blockquote>
+    <p>He draws the objections out early — "Do you know what hearing aids cost? Have you tried them before? Tell me why you <em>don't</em> want one" — before he ever explains an audiogram. And he never uses a canned presentation. The principles are fixed; the delivery is different for every person, because what comes across is compassion, not a script.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Nine</span>
+    <h2>Who Wears the Pants</h2>
+    <p>When a patient doesn't come alone, the room changes — and the companion becomes the most powerful tool Mark has. The first job is to read the dynamic.</p>
+    <blockquote>"You have to figure out really quick who wears the pants in the family. If there's a support system — she's the one who dragged him in because she's tired of yelling — then you get her on your side, and now it's two against one."<cite>Mark Moore</cite></blockquote>
+    <p>He empathizes with the spouse out loud, making sure they feel understood — pacing them the same way he paces the patient, repeating back what they came in for. He keeps the spouse in the room during speech testing on purpose, so they can hear for themselves how many words their partner misses. A hard "no" turns to "yes," more often than not, when the family becomes the ally rather than the obstacle.</p>
+    <blockquote>"What changes the room from a no to a yes? You utilize every tool you have — and the spouse, the third party, is the best tool to change that room."<cite>Mark Moore</cite></blockquote>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Ten</span>
+    <h2>One Price, and It Includes Me</h2>
+    <p>Mark wants price on the table early — he surfaces it during the history, before the presentation, so he knows the objection is coming. When it lands, he bundles it into a single idea:</p>
+    <blockquote>"It's one price for the hearing device, and it includes my expertise. It's not the hearing aid — it's me. This is the price for me to help you, period."<cite>Mark Moore</cite></blockquote>
+    <p>Financing exists as a bridge for the patient who needs it, and he'll name it plainly. But the real lever isn't the payment plan — it's sincerity.</p>
+    <blockquote>"A lot of people have more credentials than I have. But it's your ability to come across sincere — that they believe <em>you</em> can help them hear better. And then they'll pay whatever it is. The cost doesn't matter anymore, because they believe in you."<cite>Mark Moore</cite></blockquote>
+    <p>It is the same idea as the returns chapter, seen from the other side: when the patient is buying you, price stops being the conversation.</p>
+    <div class="ai">
+      <span class="lab">The AI-Layer</span>
+      <p>Automation can present the offer, the comparison, and the financing cleanly and consistently — but the moment of "I believe in you" is human. Know where the handoff is, and protect it.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Eleven</span>
+    <h2>The Patient Journey</h2>
+    <p>Mark and Kim built one of the largest privately owned practices in the country — more than forty thousand patients, offices from California to Florida. What set them apart, Mark says, was a deliberate, duplicatable <em>patient journey process</em>, unique to them and repeatable across every office.</p>
+    <p>At its core was a tool he adapted himself — a <strong>modified COSI</strong> (Client-Oriented Scale of Improvement) — narrowed to three specific listening situations each patient most wanted to improve. He learned its importance the hard way, from a woman who returned aids that worked beautifully everywhere except the one place she'd bought them for:</p>
+    <blockquote>"She said, 'It's not doing what I want.' I said, 'But you're hearing great with your friends and family.' She said, 'Yeah, but I didn't buy it for that. I bought it to hear my British show on PBS.' I can't make accents easier — but I learned to make sure we agree, up front, on what they actually want this for."<cite>Mark Moore</cite></blockquote>
+    <p>So at delivery he'd lock in three concrete goals, in the patient's own words — and then measure success against <em>those</em>, not against a generic audiogram. That alignment, plus relentless follow-up, recalls, and upgrades, is why patients came back for decades and sent their families. The journey, not the gimmick, was the growth engine.</p>
+    <div class="ai">
+      <span class="lab">The AI-Layer</span>
+      <p>The journey process is a managed lifecycle: capture the three goals, track progress against them, and automate the check-ins and recalls. Mark ran it by hand across a dozen offices — the same discipline now scales without losing the personal thread.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="eyebrow">The Method, Distilled</span>
+    <h2>Mark's Method</h2>
+    <p class="note">Twelve principles pulled straight from Mark's own words — the teachable spine for the Workbook and for any sales floor that would rather serve than sell.</p>
+
+    <div class="method"><span class="n">01</span><h4>Sell yourself, not the device</h4><p>The aid is a replaceable tool. The patient is buying your expertise and your promise to make it right.</p></div>
+    <div class="method"><span class="n">02</span><h4>No one wants to be sold; everyone wants to buy</h4><p>Sell so they feel they bought it. Help, don't push.</p></div>
+    <div class="method"><span class="n">03</span><h4>Care first — they'll let you in</h4><p>People don't care how much you know until they know how much you care.</p></div>
+    <div class="method"><span class="n">04</span><h4>Invert the objections</h4><p>Cost is #4. The real order is denial → stigma → vanity → cost. Solve the real one.</p></div>
+    <div class="method"><span class="n">05</span><h4>Read the modality</h4><p>Thinker (data), Knower (bullets), Feeler (story). Be a chameleon; if you can't reach the first, reach the second.</p></div>
+    <div class="method"><span class="n">06</span><h4>Ask, then repeat back</h4><p>"What brings you in today?" — then reflect their words to reinforce the reason and draw out objections early.</p></div>
+    <div class="method"><span class="n">07</span><h4>Never run a canned pitch</h4><p>The principles are fixed; the delivery changes for every person. Compassion, not a script.</p></div>
+    <div class="method"><span class="n">08</span><h4>Make the family your ally</h4><p>Find who wears the pants, empathize with the spouse, keep them in the room for speech testing.</p></div>
+    <div class="method"><span class="n">09</span><h4>Reframe cost as the cost of waiting</h4><p>Inaction is the expensive choice. Today beats a year from now, every time.</p></div>
+    <div class="method"><span class="n">10</span><h4>One price — and it includes me</h4><p>Bundle the expertise into the price. Sincerity outsells credentials.</p></div>
+    <div class="method"><span class="n">11</span><h4>A return is the patient returning you</h4><p>Change the tool, keep the trust. They're not rejecting the device — they're rejecting the relationship.</p></div>
+    <div class="method"><span class="n">12</span><h4>Agree on three goals, then deliver them</h4><p>The modified COSI: define success in the patient's own words at delivery, and measure against that.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="eyebrow">Companion Workbook · Sample</span>
+    <h2>Put It to Work</h2>
+    <p class="note">A taste of the fillable Workbook (Hearing Professionals edition) — turning Mark's method into drills a sales floor can run this week.</p>
+
+    <div class="wbk">
+      <h4>Exercise 1 · Know Your Own Modality</h4>
+      <p>Are you a Thinker, Knower, or Feeler? Write how you naturally pitch — then note who you're losing because of it.</p>
+      <div class="field"></div><div class="field"></div>
+    </div>
+    <div class="wbk">
+      <h4>Exercise 2 · The Repeat-Back Drill</h4>
+      <p>On your next five patients, ask "What brings you in today?" and reflect their exact words back. Note what they revealed that they wouldn't have otherwise.</p>
+      <div class="field"></div><div class="field"></div>
+    </div>
+    <div class="wbk">
+      <h4>Exercise 3 · Invert the Objection</h4>
+      <p>Next time you hear "it costs too much," write what you think the <em>real</em> objection is (denial / stigma / vanity) and how you'll address that instead.</p>
+      <div class="field"></div>
+    </div>
+    <div class="wbk">
+      <h4>Exercise 4 · Read the Room</h4>
+      <p>For your next couples appointment: who wears the pants? What did you say to bring the spouse onto your side?</p>
+      <div class="field"></div><div class="field"></div>
+    </div>
+    <div class="wbk">
+      <h4>Exercise 5 · The Three Goals (Modified COSI)</h4>
+      <p>At your next delivery, capture the three specific listening situations the patient most wants to win — in their words.</p>
+      <ul><li>Goal 1:</li><li>Goal 2:</li><li>Goal 3:</li></ul>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="divider"></div>
+    <p class="mark">From the Chair</p>
+    <p>The Sales Chair · Mark Moore's spine · First draft from interview · For Matt's review</p>
+    <p style="margin-top:1rem">Pairs with Kim Moore's care &amp; front-desk chapters to complete the volume.</p>
+  </div>
+</footer>
+
+</body>
+</html>

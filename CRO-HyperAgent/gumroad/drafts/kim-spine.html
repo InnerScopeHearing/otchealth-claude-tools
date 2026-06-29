@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>From the Chair — Kim's Spine (First Draft)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#2b2622; --ink-soft:#5c5347; --line:#e2d8c8; --paper:#f7f1e6; --card:#fffdf8;
+    --accent:#9a5b34; --accent-soft:#c98a5e; --gold:#b8862f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;line-height:1.7;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;padding:0 7%}
+  /* Cover */
+  .cover{min-height:88vh;display:flex;flex-direction:column;justify-content:center;padding:8vh 0;border-bottom:1px solid var(--line)}
+  .kicker{font-family:'Inter';font-size:.72rem;letter-spacing:.32em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .cover h1{font-family:'Fraunces';font-weight:500;font-size:clamp(3.2rem,9vw,6rem);line-height:.98;letter-spacing:-.02em;margin:.28em 0 .1em}
+  .cover .sub{font-family:'Fraunces';font-style:italic;font-weight:400;font-size:clamp(1.3rem,3.4vw,1.9rem);color:var(--ink-soft);max-width:34ch}
+  .cover .byline{margin-top:2.4rem;font-size:.95rem;color:var(--ink-soft)}
+  .cover .byline strong{color:var(--ink);font-weight:600}
+  .tag{display:inline-block;margin-top:2rem;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent-soft);border-radius:2rem;padding:.4rem 1rem;background:#fff8ef}
+  /* Section frame */
+  section{padding:5.5rem 0;border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:.72rem;letter-spacing:.28em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:1rem}
+  h2{font-family:'Fraunces';font-weight:500;font-size:clamp(1.9rem,5vw,2.9rem);line-height:1.08;letter-spacing:-.015em;margin-bottom:1.4rem}
+  h3{font-family:'Fraunces';font-weight:600;font-size:1.35rem;margin:2.4rem 0 .7rem;color:var(--ink)}
+  .chap-no{font-family:'Fraunces';font-style:italic;font-size:1rem;color:var(--accent-soft);display:block;margin-bottom:.3rem}
+  p{margin-bottom:1.15rem;font-size:1.06rem;color:#39322b}
+  p .lead{font-size:1.15rem}
+  blockquote{font-family:'Fraunces';font-style:italic;font-weight:400;font-size:clamp(1.4rem,3.6vw,1.85rem);line-height:1.32;color:var(--accent);border-left:3px solid var(--accent-soft);padding:.2rem 0 .2rem 1.4rem;margin:2rem 0}
+  blockquote cite{display:block;font-family:'Inter';font-style:normal;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);margin-top:.9rem;font-weight:500}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:2.2rem 2.4rem}
+  .toc ol{list-style:none;counter-reset:c}
+  .toc li{counter-increment:c;padding:.55rem 0;border-bottom:1px dashed var(--line);font-size:1rem;display:flex;gap:.9rem}
+  .toc li:last-child{border-bottom:none}
+  .toc li::before{content:counter(c,decimal-leading-zero);font-family:'Fraunces';font-style:italic;color:var(--accent-soft);min-width:2ch}
+  .method{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1.6rem 1.8rem;margin:1.6rem 0;position:relative}
+  .method .n{font-family:'Fraunces';font-style:italic;color:var(--gold);font-size:1.05rem}
+  .method h4{font-family:'Fraunces';font-weight:600;font-size:1.18rem;margin:.2rem 0 .5rem}
+  .method p{font-size:1rem;margin-bottom:0;color:var(--ink-soft)}
+  .ai{border-left:3px solid var(--gold);background:#fbf6 ec;background:#fcf7ee;padding:1.1rem 1.3rem;margin:1.8rem 0;border-radius:0 10px 10px 0}
+  .ai .lab{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);font-weight:600;display:block;margin-bottom:.4rem}
+  .ai p{font-size:1rem;margin-bottom:0;color:#4a4035}
+  .wbk{background:#fff;border:1px solid var(--line);border-radius:14px;padding:1.7rem 1.9rem;margin:1.4rem 0}
+  .wbk h4{font-family:'Fraunces';font-weight:600;font-size:1.15rem;margin-bottom:.6rem}
+  .wbk .field{border-bottom:1px solid var(--line);height:1.9rem;margin:.6rem 0}
+  .wbk ul{margin:.4rem 0 0 1.1rem;color:var(--ink-soft);font-size:.98rem}
+  .wbk ul li{margin:.3rem 0}
+  .note{font-size:.92rem;color:var(--ink-soft);font-style:italic}
+  .footer{padding:4rem 0 6rem;text-align:center}
+  .footer .mark{font-family:'Fraunces';font-style:italic;font-size:1.3rem;color:var(--accent)}
+  .footer p{font-size:.85rem;color:var(--ink-soft)}
+  .divider{width:48px;height:2px;background:var(--accent-soft);margin:0 auto 1.6rem}
+  @media(max-width:600px){.wrap{padding:0 8%}section{padding:4rem 0}}
+</style>
+</head>
+<body>
+
+<header class="cover">
+  <div class="wrap">
+    <span class="kicker">From the Chair · Book One of a Family Trilogy</span>
+    <h1>The Front&nbsp;Desk</h1>
+    <p class="sub">Kim Moore on caring for people who couldn't hear — three generations, one chair at a time.</p>
+    <p class="byline">As told by <strong>Kim Moore</strong>, Licensed Hearing&nbsp;Aid&nbsp;Dispenser &nbsp;·&nbsp; The care &amp; front-desk spine of <em>From the Chair</em></p>
+    <span class="tag">First Draft · From Kim's Interview · For Matt &amp; Mark's Review</span>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <p class="lead" style="font-family:'Fraunces';font-style:italic;font-size:1.4rem;line-height:1.4;color:var(--accent)">"You hear with your brain, not your ears — and believe me, the brain loves a quiet world."</p>
+    <p>This is the part of the business no one writes a book about. Not the selling. The <em>caring</em>. The phone answered with a smile you can hear. The Hershey bar handed to every person who walked through the door. The gold sticker for a man who finally heard the birds. For more than thirty-five years and across more than seventy clinics, that was Kim Moore's work — and it is the reason patients came back, brought their families, and chose, in her words, "the gift of hearing."</p>
+    <p>What follows is Kim's voice, drawn directly from her own telling, organized into the chapters that form the care-and-front-desk spine of <em>From the Chair</em>. It pairs with Mark Moore's chapters on the sales-and-ownership side. Together they are the method three generations of the Moore family used to help people hear again.</p>
+    <div class="toc" style="margin-top:2.6rem">
+      <span class="eyebrow">The Chapters</span>
+      <ol>
+        <li>Folding Mailers at the Kitchen Table — how she got in, and why the front desk</li>
+        <li>Caring Is the Longer Journey</li>
+        <li>The First Visit — putting a frightened person at ease</li>
+        <li>The Testing Chair — "don't shoot the messenger," and the Hershey bar</li>
+        <li>When the Family Is in the Room</li>
+        <li>The Fears — vanity, stigma, cost, and the fear of failing</li>
+        <li>You Are the Business — the front desk, and the mirror that wasn't there</li>
+        <li>Saving the Return — the white envelope and the one issue that matters</li>
+        <li>Why They Sent Their Friends</li>
+        <li>The Honest Truth — even when it costs the sale</li>
+        <li>Running a Caring Practice — hiring, clean bathrooms, and the coffee that's always on</li>
+        <li>Winning Without Selling</li>
+        <li>What I Hope They Remember</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter One</span>
+    <h2>Folding Mailers at the Kitchen Table</h2>
+    <p>Kim grew up in the hearing-aid business. Around the age of ten, her father would bring home the advertising mailers, and all the kids would fold, stamp, and address them so he could mail them off — that was how he brought people into the office to buy hearing aids. Her brother would fight for the job of feeding envelopes to the postage machine. Looking back, she says, that was the first time she ever worked for her parents.</p>
+    <blockquote>"My dad would come home at dinner and tell us how many hearing aids he'd sold that day off the mailers we'd done. Because of us helping, I saw great results for our efforts. Our teamwork paid off — and I learned how valuable a support person can be."<cite>Kim Moore</cite></blockquote>
+    <p>At thirteen she went to work with her dad over the summer. He showed her how to treat customers with kindness — friendly, helpful with whatever they needed. The receptionist, a woman named Marilyn, was patient with her and beloved by the patients; Kim found herself loving Marilyn's whole approach. Her mother taught her the bookkeeping side, explaining that every great business needs someone overseeing the accounting so the selling can keep the lights on. Two lessons stuck, and she carried them into the Moores' own business decades later:</p>
+    <p><strong>Everyone puts their pants on the same way.</strong> No matter the walk of life, everyone deserves kindness and respect — her dad taught her that. And: <strong>always treat everyone the way you want to be treated.</strong></p>
+    <p>After marrying Mark, they opened their own business in Woodland, California, and expanded into multiple cities. Kim became a licensed dispenser to help cover the locations — but she and Mark agreed her gift was service, so she focused on the testing, the delivery, and the follow-up. The front desk and the booth became, and stayed, the work she loved.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Two</span>
+    <h2>Caring Is the Longer Journey</h2>
+    <p>Ask Kim the difference between caring for a patient and selling to one, and the answer is immediate: caring is a long journey; selling is a quick in-and-out. To her, the caring is the part that matters — and it starts long before anyone talks about a hearing aid.</p>
+    <blockquote>"The caring starts the moment an appointment is made — for a test, or just to come in and talk. Walking in for the first time can be a very scary experience. The front-desk person has to make that person feel right at home."<cite>Kim Moore</cite></blockquote>
+    <p>That first call deserves positive reinforcement: <em>good for you for coming in.</em> Because, as Kim says again and again, no one believes they need a hearing aid. The job is not to push a device. The job is to walk someone, kindly, down a road they're afraid of.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Three</span>
+    <h2>The First Visit</h2>
+    <p>"Frankly, no one really feels they need a hearing aid," Kim says. And there's a reason it's hard: you hear with your brain, not your ears — and the brain has grown comfortable in a quiet world. It takes about a month to build the new habit. When a hearing aid first goes in, the world is suddenly loud and strange; even your own voice "sounds like you're in a barrel."</p>
+    <p>So she walked people through it, step by step — her "journey to better hearing." She'd tell patients to talk to themselves at first, to get used to their own voice again. She'd hold their hand through the strangeness.</p>
+    <blockquote>"People only want to know that they matter to you in this world. Just holding their hand, getting them through the steps, telling them <em>I've got you</em> — that really counts."<cite>Kim Moore</cite></blockquote>
+    <p>About halfway through, something shifts: the patient stops hearing the world as unbearably noisy and starts focusing on voices, on understanding. That's the turn. That's when they know it's working.</p>
+    <div class="ai">
+      <span class="lab">The AI Layer</span>
+      <p>Kim's "month to build the habit" is exactly what a modern follow-up sequence is for. The same hand-holding she did in person — the check-ins, the encouragement, the small next step — is what a thoughtful lifecycle program (a timed series of warm messages and reminders) can deliver at scale, so no one is left alone in week two when their own voice still sounds like a barrel.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Four</span>
+    <h2>The Testing Chair</h2>
+    <p>Most dispensers, Kim says, think the testing is the boring part. To her it was the highlight of the day. The booth was where she got to know the person — and where the caring became real.</p>
+    <p>She had her rituals. She'd congratulate a patient for taking the second step toward better hearing (the first being walking in the door). Before the test she'd say, with a smile, <em>"don't shoot the messenger"</em> — because she was always secretly hoping they had no loss at all. And every single person who came in for a test got a Hershey bar. Not a sale requirement. Just for coming in.</p>
+    <blockquote>"It only worked with a Hershey. The minute I'd hand it over, it took them back — to the first time they had one, or who they shared it with. One man said, 'I sure wish my brother was here. We used to share our Hershey bar.' His twin had passed. That's what the candy bar was about."<cite>Kim Moore</cite></blockquote>
+    <p>Over the years she tested more than ten thousand people. "Testing brought me down to that human level of just wanting to help somebody," she says, "and I owned it." It's also simply practical: without a test, it's very hard to fit anyone well.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Five</span>
+    <h2>When the Family Is in the Room</h2>
+    <p>A spouse or grown child is so often there — sometimes skeptical, sometimes certain Mom doesn't need a thing. Kim had a way to let the family see for themselves. With a master audiometer or demo aids, she'd have the patient turn their back and close their eyes, send the loved one just outside the door, and have them ask ordinary questions — <em>where do you want to go for lunch?</em></p>
+    <p>One time a daughter came in "storming," convinced her mother — a retired schoolteacher — didn't need the aids and frankly wanting the refund. Kim ran the demonstration. The mother, hearing well, answered every question.</p>
+    <blockquote>"The daughter came back into the room in tears. 'Okay, Mom, you really do need these — you're hearing amazing.' Seeing the loved one be that happy, that was one of the greatest experiences. Because when you can't hear, it's a pretty lonely, quiet world."<cite>Kim Moore</cite></blockquote>
+    <p>For Kim, this is the whole philosophy in one moment: hearing is a gift, and a hearing aid is what gives it back — the grandkids, the birds, the noisy beautiful world. The only question is whether the person will accept the gift.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Six</span>
+    <h2>The Fears</h2>
+    <p>Vanity. Looking old. Stigma. Cost. But underneath all of them, Kim found, is the real one: the fear of failing — of having to learn something new at this stage of life.</p>
+    <blockquote>"There's no right or wrong way through this journey. Each one is unique. Be kind to yourself, and let's travel this road together."<cite>Kim Moore</cite></blockquote>
+    <p>She'd remind patients that she had the gift to help them hear — but accepting it was theirs to decide. And she framed the stakes plainly and without fear-mongering: humans aren't meant to be alone. Not being able to hear the people around you quietly robs you of independence and connection. She believed, completely, that hearing changes lives for the better — and she said so honestly.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Seven</span>
+    <h2>You Are the Business</h2>
+    <p>The front desk, Kim says, was always her forte — and the most under-appreciated job in the building. Years before, working at a chiropractor's office, she'd learned to answer the phone in front of a mirror: you had to see your own smile before you picked up, so your voice came across friendly. There was no mirror at the hearing-aid office, so she imagined one.</p>
+    <blockquote>"I learned that I <em>am</em> the business. When I answer the phone, I'm representing the whole company. You need to bring your A-game. You need to understand that you matter."<cite>Kim Moore</cite></blockquote>
+    <p>She greeted every patient, made sure they had coffee and cookies, helped with paperwork, listened. "The selling process — of anything — starts the minute that front-desk person answers the phone." And she's blunt about how rare it has become: she'll tell you about a recent doctor's visit where that warmth was simply gone. She could, she says, step back behind a front desk today and still do it better than most.</p>
+    <div class="ai">
+      <span class="lab">The AI Layer</span>
+      <p>"The smile you can hear" is now a design spec. A well-built phone and chat experience — whether a human or an AI assistant answers first — can carry Kim's warmth into every first contact: patient, unhurried, genuinely glad you called. The front desk never closes, and it never has a bad day. The standard, though, is still Kim's: you are the business the moment someone reaches you.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Eight</span>
+    <h2>Saving the Return</h2>
+    <p>People come back unhappy for every reason under the sun — Kim has heard them all, the funny ones and the true ones. Back then they'd send each patient home with everything tucked in a white envelope: the box, the charger, the paperwork. So when someone walked in holding that white envelope, the staff knew exactly what was coming, and knew to gear up. "That," she says, "is when the hard work begins."</p>
+    <blockquote>"Listen to all their concerns, and figure out which one matters most at that moment. Each concern is valid to them. Once you find the real one, you can fix it — and keep them on the journey."<cite>Kim Moore</cite></blockquote>
+    <p>She tells the story of a woman in her early forties — unusually young — who'd lost her hearing suddenly after a car wreck. Skeptical, managing "fine," ready to return the smallest aids they made. On her third visit she sat down and announced she was keeping them: "I didn't know there were birds in my backyard. And I didn't know a can of soda makes that <em>popping</em> sound." Her husband thought it was hilarious. "I decided," she told Kim, "I need to start being among the living again." She came back for years.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Nine</span>
+    <h2>Why They Sent Their Friends</h2>
+    <p>Trust, for Kim, came easy — she has the gift of gab and a real hunger to know people. She'd listen to patients tell the story of their whole lives, ask questions, remember the details, and pick up next time right where they'd left off.</p>
+    <blockquote>"I traveled the world hundreds of times in their stories, and I never left the office. This age group is often lonely. They want someone to hear their stories — to know their stories mattered."<cite>Kim Moore</cite></blockquote>
+    <p>There was the Colonel she always addressed by rank. The veterans whose tattoos and tales she loved. Doctors, attorneys, postal workers — every walk of life through the door. In Woodland, people would simply drop by the lobby for coffee and donuts and company; it was always on. That listening is what brought the brothers and sisters and friends and neighbors in behind them. Kindness was the marketing.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Ten</span>
+    <h2>The Honest Truth</h2>
+    <p>Sometimes being honest costs the sale. Kim knew it and did it anyway. When a patient wanted to give up, the kind thing — and the honest thing — was to tell them the truth: you have a loss, you need the aid, be patient with yourself, trust the process even when you don't yet know why you should.</p>
+    <blockquote>"It's usually not the cost that bothers them most. It's that they don't want to fail. So I'd be honest — you need these, you need to wear them — knowing it might make them want to return. I gave my best every time. I didn't always keep the sale. But they always got the truth."<cite>Kim Moore</cite></blockquote>
+    <p>"I know a secret," she says. "I know the hearing aids work. They don't — not yet." Closing that gap honestly, without pressure, was the whole job.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Eleven</span>
+    <h2>Running a Caring Practice</h2>
+    <p>As an owner who was never the "salesy" one, Kim cared most about how the practice <em>felt</em>. She never asked staff to do anything she wouldn't do herself — cleaning the office, running the desk, doing tests, even selling. And she hired for one thing above all, with a question that sounds strange until you hear why:</p>
+    <blockquote>"I'd ask: what was your relationship with your parents and grandparents? If they loved and respected the older people in their lives, I knew they'd be right for this age group. If they didn't, they weren't meant for this business."<cite>Kim Moore</cite></blockquote>
+    <p>The environment mattered as much as the people: clean bathrooms ("not something out of a gas station"), a vacuumed floor, coffee and cookies and donuts and tea and water always out. "It takes forever to get a patient to come in, and one moment to lose them." Patients, she says flatly, are your lifeline. Treat them with kindness or they won't come back — and they won't send anyone either.</p>
+    <div class="ai">
+      <span class="lab">The AI Layer</span>
+      <p>Kim's hiring question — "tell me about your parents and grandparents" — is a values screen, and values screens are exactly what you bake into the standards an AI front desk or a new-hire playbook is held to. The warmth can't be faked, but it <em>can</em> be specified, taught, and checked: greet like family, listen first, never rush, the customer is always right.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Twelve</span>
+    <h2>Winning Without Selling</h2>
+    <p>Her advice to any front-desk person or dispenser who hates selling fits on an index card — and it's the opposite of a sales tactic:</p>
+    <blockquote>"Treat each patient like they were your parents, your grandparents, or your older friends. If you truly care about each patient, you will never come across as pushy."<cite>Kim Moore</cite></blockquote>
+    <p>Listen to the need. Lead with kindness and respect. Don't be afraid to hold a hand — you may be the only person that patient speaks to all week. Make them comfortable. The experience starts the moment they call and never ends as long as they're yours. And the old rule still holds: the customer is always right. Care, genuinely, and the selling takes care of itself.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="chap-no">Chapter Thirteen</span>
+    <h2>What I Hope They Remember</h2>
+    <p>Asked what she's most proud of, Kim doesn't hesitate: she hopes patients remember her as someone who genuinely cared about them and their hearing journey. Hearing loved ones' voices. A baseball game on TV. Feeling independent again.</p>
+    <p>There was a woman terrified she wouldn't hear her granddaughter's wedding. A month out, Kim started her on the aids — six hours a day, then eight, then ten — and walked her through every step. Two weeks after the wedding she came back beaming, having earned, of course, a generous pile of gold stickers:</p>
+    <blockquote>"'Kim, I heard the whole wedding. I heard the reception. I heard everything. Thank you for giving me the gift of hearing my granddaughter's wedding.' Cheers to all my patients over the years — and thank you for choosing the gift of hearing. It has been my pleasure serving all of you."<cite>Kim Moore</cite></blockquote>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="eyebrow">The Method, Distilled</span>
+    <h2>Kim's Method</h2>
+    <p class="note">Thirteen principles pulled straight from Kim's own words — the teachable spine for the Workbook and for any front-desk or care team.</p>
+
+    <div class="method"><span class="n">01</span><h4>The caring starts before the selling</h4><p>The journey begins on the first phone call, not at the close. Reinforce the decision to come in.</p></div>
+    <div class="method"><span class="n">02</span><h4>You hear with your brain, not your ears</h4><p>It takes ~a month to rebuild the habit. Set the expectation, then walk the steps together.</p></div>
+    <div class="method"><span class="n">03</span><h4>You are the business</h4><p>Whoever answers the phone <em>is</em> the company. Smile before you pick up — your voice carries it.</p></div>
+    <div class="method"><span class="n">04</span><h4>The Hershey-bar welcome</h4><p>A small, warm gift for everyone who comes in — no purchase required. Connection over conversion.</p></div>
+    <div class="method"><span class="n">05</span><h4>Don't shoot the messenger</h4><p>Frame the test with humor and hope. You're on their side, rooting for no loss at all.</p></div>
+    <div class="method"><span class="n">06</span><h4>Let the family see for themselves</h4><p>The back-turned, eyes-closed loved-one demo turns a skeptic into an ally in two minutes.</p></div>
+    <div class="method"><span class="n">07</span><h4>Celebrate every step</h4><p>Gold stickers. "Go get yourself a coffee, you deserve it." Progress deserves to be marked.</p></div>
+    <div class="method"><span class="n">08</span><h4>Find the one issue that matters</h4><p>When the white envelope comes back, listen for the single real concern — then fix that.</p></div>
+    <div class="method"><span class="n">09</span><h4>Listen them into loyalty</h4><p>People want their stories to matter. Remember the details; pick up where you left off.</p></div>
+    <div class="method"><span class="n">10</span><h4>Honesty over the sale</h4><p>Tell the truth even when it risks the return. Trust outlasts any single transaction.</p></div>
+    <div class="method"><span class="n">11</span><h4>Hire for how they love their elders</h4><p>"What was your relationship with your parents and grandparents?" tells you everything.</p></div>
+    <div class="method"><span class="n">12</span><h4>The room is part of the care</h4><p>Clean bathrooms, coffee always on, a vacuumed floor. Never ask staff to do what you won't.</p></div>
+    <div class="method"><span class="n">13</span><h4>Treat them like your own family</h4><p>Parents, grandparents, older friends. Care that genuinely, and you'll never be pushy.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <span class="eyebrow">Companion Workbook · Sample</span>
+    <h2>Put It to Work</h2>
+    <p class="note">A taste of the fillable Workbook that ships alongside the book — turning Kim's method into exercises a front desk or care team can use Monday morning.</p>
+
+    <div class="wbk">
+      <h4>Exercise 1 · The Mirror That Isn't There</h4>
+      <p>Before your next ten phone calls, picture the mirror. Note what changed in how the call went.</p>
+      <div class="field"></div><div class="field"></div>
+    </div>
+    <div class="wbk">
+      <h4>Exercise 2 · Your Hershey Bar</h4>
+      <p>What's the small, no-strings welcome that fits <em>your</em> practice? Pick one and use it for two weeks.</p>
+      <ul><li>The gesture:</li><li>Who hands it over, and when:</li><li>What you noticed:</li></ul>
+      <div class="field"></div>
+    </div>
+    <div class="wbk">
+      <h4>Exercise 3 · The Loved-One Demo Script</h4>
+      <p>Write your version of the back-turned demonstration — the three questions you'd have a family member ask.</p>
+      <div class="field"></div><div class="field"></div><div class="field"></div>
+    </div>
+    <div class="wbk">
+      <h4>Exercise 4 · Find the One Issue</h4>
+      <p>Think of the last unhappy patient. List every concern they raised — then circle the one that actually mattered.</p>
+      <div class="field"></div><div class="field"></div>
+    </div>
+    <div class="wbk">
+      <h4>Exercise 5 · The Hiring Question</h4>
+      <p>Write down how your last hire answered "tell me about your parents and grandparents" — or ask your next one.</p>
+      <div class="field"></div><div class="field"></div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <div class="divider"></div>
+    <p class="mark">From the Chair</p>
+    <p>Book One: The Front Desk · Kim Moore's spine · First draft from interview · For Matt &amp; Mark's review</p>
+    <p style="margin-top:1rem">Pairs with Mark Moore's sales &amp; ownership chapters to complete the volume.</p>
+  </div>
+</footer>
+
+</body>
+</html>
