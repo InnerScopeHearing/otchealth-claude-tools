@@ -96,7 +96,7 @@ Then she told me about the leaves blowing down the street. The birds when the su
 
 From that day forward, I felt it was not a business anymore. The hearing aid was no longer a product with a circuit and a trim pot. It was the conduit to something that mattered — really mattered — in a way that almost nothing in commerce actually does.
 
-I've fitted over ten thousand people with hearing devices in a twenty-three year career. The reason I stayed was that first patient. The rain on the roof. The understanding that what we do is not profit and loss — it's restoring something to people that they didn't even know they had lost.
+I've fitted over ten thousand people with hearing devices in a twenty-three year career. The reason I stayed was that first patient. The rain on the roof. The understanding that what we do is not profit and loss — it's giving people back access to sounds they didn't even know they had been missing.
 
 [NARRATOR: Kim]
 
