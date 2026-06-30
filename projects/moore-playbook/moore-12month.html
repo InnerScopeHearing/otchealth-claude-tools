@@ -1,0 +1,387 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Moore Playbook — 12-Month Implementation</title>
+<script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';mermaid.initialize({startOnLoad:true,securityLevel:'loose',theme:'base',themeVariables:{primaryColor:'#e8f3f1',primaryBorderColor:'#0b6b5e',primaryTextColor:'#0b3b34',lineColor:'#0b6b5e',fontSize:'14px'}});</script>
+<style>body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:1100px;margin:0 auto;padding:24px;color:#1a1a1a;line-height:1.5}
+h1{color:#0b3b34;border-bottom:3px solid #0b6b5e;padding-bottom:8px}h2{color:#0b6b5e;margin-top:34px;border-bottom:1px solid #d6e7e3;padding-bottom:4px}h3{color:#0b3b34}
+.mermaid{background:#fafdfc;border:1px solid #d6e7e3;border-radius:10px;padding:14px;margin:12px 0;overflow:auto}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13px}th,td{border:1px solid #d6e7e3;padding:6px 8px;text-align:left;vertical-align:top}th{background:#0b6b5e;color:#fff}small{color:#666}
+.q{background:#eef6ee;border-left:5px solid #0b6b5e;padding:8px 14px;border-radius:6px;margin:8px 0}</style></head><body>
+<h1>The Moore Playbook — 12-Month Implementation</h1><small>COO, all 9 exec hats, 2026-06-30. OTCHealth cash engine + INND capital flywheel, AI-operated (Medvi mirror). Full detail in MOORE-PLAYBOOK-12MONTH.md.</small>
+<h2>The whole machine across 12 months</h2><pre class='mermaid'>flowchart TD
+  A[&quot;Q1: Connect Stripe payout bank (Matt)&quot;] --&gt; B[&quot;Q1: Prove TReO checkout (CHECKOUT-PROOF=PASS)&quot;]
+  C[&quot;Q1: Merge + deploy + verify claims_check (the moat)&quot;] --&gt; D[&quot;Q1: Reignition send-go to 66,224 (Matt)&quot;]
+  E[&quot;Q1: Refunds + CS operationally true (BRAND-HEALTH=READY)&quot;] --&gt; D
+  B --&gt; D
+  A --&gt; D
+  F[&quot;Q1: Fix $25K tracker (REIGNITION_START_DATE) + unit-econ model&quot;] --&gt; G[&quot;Q1: Daily contribution P&amp;L heartbeat + GATE-STATE cadence&quot;]
+  D --&gt; H[&quot;Q1: First bankable cash settles to Mercury&quot;]
+  H --&gt; I[&quot;Q1: First recurring SKU (consumables) + Gumroad&quot;]
+  G --&gt; J[&quot;Q2: Measured CVR + Fabric/Power BI scoreboard&quot;]
+  I --&gt; J
+  J --&gt; K[&quot;Q2: Paid testing (48-72h kill/scale) + creative factory&quot;]
+  K --&gt; L[&quot;Q2: $25K NET reignition gate CLEARED&quot;]
+  L --&gt; M[&quot;Q2: Named clinical reviewer + FDA OTC reg (~$10K)&quot;]
+  J --&gt; N[&quot;Q2: AWARE second recurring SKU + lifecycle/churn-save&quot;]
+  M --&gt; O[&quot;Q3: OTC iHEAR Matrix launched to warm base&quot;]
+  K --&gt; P[&quot;Q3: Amazon (Brand Registry) + creator/affiliate flywheel&quot;]
+  N --&gt; Q[&quot;Q3: Recurring base + per-channel margin truth&quot;]
+  H --&gt; R[&quot;Q3: 10,298-unit pool liquidation in costed waves&quot;]
+  O --&gt; S[&quot;Q4: Recurring is the headline metric (LTV:CAC &gt;=3:1)&quot;]
+  Q --&gt; S
+  P --&gt; S
+  R --&gt; T[&quot;Q4: Pool cleared to ~0 = realized cash&quot;]
+  S --&gt; U[&quot;CASH ENGINE: ~$1M+ ARR-equivalent run-rate&quot;]
+  T --&gt; U
+  V[&quot;Q1-Q4: AI OS (gateway + brain + claims_check + autonomous fleet)&quot;] --&gt; U
+  U --&gt;|&quot;disclosable traction, counsel-gated&quot;| W[&quot;CAPITAL FLYWHEEL (INND, MNPI/framework-level)&quot;]
+  X[&quot;HARD GATE: counsel retained + key-rotation GREEN&quot;] --&gt; W
+  W --&gt; Y[&quot;Reg D 506(c) + Reg CF + Reg A+ teed up + roll-up currency&quot;]
+  Y --&gt;|&quot;capital + acquisition currency fund more traction&quot;| U</pre>
+<h2>12-month Gantt</h2><pre class='mermaid'>gantt
+    title Moore Playbook — 12-Month Master Program (Q1-Q4)
+    dateFormat YYYY-MM-DD
+    section Q1 Execution+Ops (COO)
+    Four P0 gates + GO PACKET            :q1a, 2026-07-01, 10d
+    Forcing GATE-STATE cadence + spine   :q1b, 2026-07-08, 21d
+    section Q1 Tech (CTO)
+    Merge/deploy claims_check + rotation  :q1c, 2026-07-01, 14d
+    Heartbeat job + inference fix         :q1d, 2026-07-08, 14d
+    section Q1 Finance (CFO)
+    Fix $25K tracker + unit-econ model    :q1e, 2026-07-01, 10d
+    section Q1 Revenue (CRO)
+    Seeded reignition to 66,224           :q1f, 2026-07-10, 14d
+    Consumables sub + Gumroad             :q1g, 2026-07-15, 21d
+    section Q2 Finance+Revenue
+    Measured CVR + Fabric scoreboard      :q2a, 2026-10-01, 30d
+    Paid testing + creative factory       :q2b, 2026-10-15, 45d
+    $25K NET gate + AWARE sub             :q2c, 2026-11-01, 30d
+    section Q2 Compliance+Product (CCO/CPO)
+    FTC affiliate SOP + clinical reviewer :q2d, 2026-10-01, 45d
+    FDA OTC pathway scoped (reviewer-signed):q2e, 2026-11-01, 30d
+    section Q3 Product+Commerce
+    FDA reg + OTC Matrix launch           :q3a, 2027-01-01, 45d
+    Amazon Brand Registry + pool waves    :q3b, 2027-01-15, 60d
+    section Q3 Growth (CRO)
+    Creator/affiliate flywheel            :q3c, 2027-02-01, 45d
+    section Q3 Capital (IR, counsel-gated)
+    Reg D 506(c) + Reg CF TTW launch      :q3d, 2027-01-15, 60d
+    section Q4 Recurring+Demand
+    Recurring becomes headline metric     :q4a, 2027-04-01, 60d
+    Pool cleared to cash + org floor      :q4b, 2027-04-01, 45d
+    section Q4 Tech+Ops
+    AI OS diligence-grade + SPOF de-risk  :q4c, 2027-04-01, 45d
+    section Q4 Capital (counsel-gated)
+    Reg A+ + reverse-split + roll-up      :q4d, 2027-05-01, 60d</pre>
+<h2>AI tech stack architecture</h2><pre class='mermaid'>flowchart TD
+  subgraph L3[&quot;LAYER 3 — Thin Human (hard gates only)&quot;]
+    M[&quot;Matt: payout bank, send-go, spend, pricing, counsel, clinical reviewer, INND&quot;]
+  end
+  subgraph L1[&quot;LAYER 1 — AI Exec + Agent Workforce (~$0 marginal)&quot;]
+    EX[&quot;Exec fleet: COO/CTO/CRO/CFO/CPO/CCO/CLO/Capital/Developer + App Leads&quot;]
+    BR[&quot;company-brain (federated, cited) + kb-memory ledgers&quot;]
+    GW[&quot;Unified MCP gateway (mcp.otchealth.app): scoped, audited, ring-aware&quot;]
+    CC[&quot;claims_check (FTC/FDA + securities firewall = the moat in code)&quot;]
+    VR[&quot;VoiceRAG + voice fleet (ElevenLabs + Azure realtime CS)&quot;]
+    AU[&quot;Autonomy: browser-agent, Tier-1 cron jobs, Tier-2 claude -p runners&quot;]
+    TM[&quot;fleet-telemetry + agent-evals + fleet-medic + model routing&quot;]
+    LB[&quot;doc-indexer librarians (self-indexing data rooms)&quot;]
+  end
+  subgraph L2[&quot;LAYER 2 — Outsourced Atoms (rented services)&quot;]
+    AT[&quot;iHEAR mfg, 3PL/refurb, Stripe/Shopify/Mercury, creators, Amazon FBA, CPA, counsel, FDA consult, HSA/FSA&quot;]
+  end
+  subgraph SUB[&quot;SUBSTRATE — Grant/Credit-Funded (rented, disposable)&quot;]
+    AZ[&quot;Azure ($25K-&gt;$150K: Container Apps, AI Search, Blob, Key Vault, Azure OpenAI/foundry)&quot;]
+    OT[&quot;GCP Secret Manager + PHI BAA; Depot $5k CI; GitHub $10k GHAS; PostHog $50k; ElevenLabs 33M; Daytona $10k&quot;]
+  end
+  M --&gt; EX
+  EX --&gt; GW
+  GW --&gt; CC
+  EX --&gt; BR
+  EX --&gt; VR
+  EX --&gt; AU
+  EX --&gt; TM
+  EX --&gt; LB
+  CC --&gt; AT
+  GW --&gt; AT
+  AU --&gt; AT
+  EX --&gt; AZ
+  EX --&gt; OT
+  AT --&gt; AZ
+  BR --&gt; AZ
+  LB --&gt; AZ
+  PHI[&quot;PHI ring (MedReview/Companion) — carved OUT, GCP BAA only&quot;] -.absolute wall.-&gt; GW</pre>
+<h2>Master roadmap (quarterly)</h2>
+<div class='q'><b>0-3mo (Q1 IGNITE)</b> — north star: First bankable reignition cash settles to Mercury; the moat is real and the cadence forces action.<br><small>cash: First real reignition revenue on the board; cumulative NEW reignition revenue ~$5K-$10K toward the $25K gate | capital: Cold + prepare-and-flag only. Counsel NOT retained (master unlock pending Matt). Key-rotation is a HARD GATE recorded as a blocking precondition on every investor/public step. Bundle one-move-handoverable.</small></div>
+<ul><li>FOUR P0 GATES IN ONE MOTION: Matt connects the Stripe payout bank (payouts_enabled TRUE on acct_1SQyXZAwjS2xuomw); one real full-price PAIR99 order proven end-to-end (paid+unrefunded+settling) = CHECKOUT-PROOF=PASS; CTO merges+deploys+verifies claims_check (gateway PR #24/#25/#26, deployed image==main, 12/12 acceptance strings with audit-log ids); refunds+reachable CS operationally true = BRAND-HEALTH=READY</li><li>CFO fixes revenue-tracker.mjs to REIGNITION_START_DATE (gate reads 0% not the false ~100% off the $227K all-time) and builds OTCHEALTH-UNIT-ECON.xlsx (6 live-formula tabs: Assumptions, Conversion Bridge, TReO Contribution GM-after-returns, CAC &amp; Payback, Subscription LTV, Cash Bridge)</li><li>CTO rotates the 28-credential ops leak to secret-scan CI GREEN and repoints default inference off the throttled aoai-4701 to otchealth-foundry</li><li>Seeded reignition: ~2,000-contact wave (bounce &lt;3%, spam &lt;0.1%, clicks land on the proven checkout) then full release of the 66,224; first reignition orders</li><li>First recurring SKU LIVE (consumables Shopify-native Selling Plan, 30/60/90-day, ~10-15% off) attached post-purchase, &gt;=15% attach; Gumroad zero-gate SOP store live</li><li>Daily CONTRIBUTION P&amp;L heartbeat on cron + COO forcing GATE-STATE brief (gate header + heartbeat + one owned action + 2-red auto-escalation); integration spine artifacts (MEASUREMENT-SPINE/RACI/RISK-REGISTER/CASH-BRIDGE/CLINICAL-SIGNOFF) ratified</li><li>Capital drafts the Engage-Securities-Counsel brief + the empty counsel-onboarding bundle (data-room INDEX, accredited-verification memo + Rule 506(d) questionnaire, TTW funnel scaffold, 6490 prerequisites, securities-firewall checklist) - all flagged ATTORNEY REVIEW REQUIRED, nothing solicited</li></ul>
+<div class='q'><b>3-6mo (Q2 INSTRUMENT &amp; SCALE)</b> — north star: Measured unit economics replace assumptions; the $25K gate clears NET and arms the OTC ascension.<br><small>cash: Monthly run-rate reaching ~$20K-$40K; $25K cumulative reignition gate CROSSED (net); contribution/order holds &gt;=$60 at real return rates | capital: If counsel retained: data room DD-ready, TTW reservation funnel built+parked (no money), audit-readiness clock started with a CPA. If not: stack stays one-move-ready, blocker explicitly counsel-retention + key-rotation (escalated to Matt). No solicitation.</small></div>
+<ul><li>Live conversion bridge instrumented in PostHog (sent-&gt;open-&gt;click-&gt;session-&gt;initiated_checkout-&gt;purchase) and reconciled daily; measured email-&gt;buyer CVR replaces the load-bearing assumption</li><li>Microsoft Fabric + Power BI FP&amp;A scoreboard live (unifies Stripe/Shopify/PostHog/RevenueCat/QBO into contribution P&amp;L, cohorts, CAC/LTV, runway, gate progress) and becomes the board number</li><li>AI creative factory at 20-30 claims_check-gated creatives/week; disciplined paid-ads testing at small authorized budget, kill/scale at 48-72h on cost-per-initiated-checkout under the CFO PAID-SPEND GUARDRAILS</li><li>Full Customer.io lifecycle live (abandoned-cart, welcome, day-14/45 churn-save &gt;=30%, 7-day review request); AWARE wired as the SECOND recurring SKU (RevenueCat); CareNow stays BLOCKED (17(b))</li><li>$25K NET cumulative reignition revenue confirmed and reconciled; SOP-7 fires; ~$10K FDA OTC Establishment Registration authorized at the CASH-BRIDGE trigger; NAMED human clinical reviewer engaged + sign-off SOP ratified</li><li>FTC affiliate-audit + creator-persona-verification SOP published + CLO rider; CTO arms the Tier-2 autonomous runner and CI-gates agent-evals per role; n8n + secret-store SPOF reduction begun (Key Vault dual-read)</li><li>FDA OTC pathway (21 CFR 800.30 self-cert vs 510(k)) scoped + labeling drafted + reviewer-signed, staged BEHIND the gate</li></ul>
+<div class='q'><b>6-9mo (Q3 ASCEND &amp; MULTI-CHANNEL)</b> — north star: Multi-channel revenue on validated unit economics; OTC line live; the pool liquidating; capital rung turning under counsel.<br><small>cash: Monthly run-rate approaching six figures (~$80K-$120K/mo); &gt;=3 profitable channels; recurring revenue &gt;=30% of mix; &gt;=70% of the 10,298 pool monetized in flight | capital: First rung turning IF counsel retained + traction real + key-rotation green: 506(c) operating (front-load 20-30% week 1, 100% accredited-verified, never self-cert), Reg CF live (~35-40% reservation-&gt;investment), IR cadence started, roll-up screen research-only. CPA audit-readiness gap quantified.</small></div>
+<ul><li>FDA OTC registration filed; OTC iHEAR Matrix ($349) launched to the warmed/subscriber base via the screening-result upsell; ascension AOV lift measured; recurring tail (consumables/AWARE) attached to OTC buyers at &gt;=15%</li><li>Amazon TReO live under (pending) Brand Registry (iHEAR trademark refiled) - attach-our-offer-to-existing-ASIN first, then FBA + A+ content, CA/MX added; all copy claims_check-screened (PSAP-only)</li><li>Creator/affiliate flywheel launched (30-50 vetted micro-creators) behind the published FTC audit SOP, 100% claims_check-logged; affiliate CAC below paid-ads CAC</li><li>Legacy pool liquidation in costed refurb waves (~1,500-3,000 units cumulative; pool drawn to ~7,000-8,800) at $199-299 across Shopify+Amazon+clearance tier; HSA/FSA acceptance live at checkout</li><li>Per-channel + per-SKU contribution P&amp;Ls; RTM medication-adherence billing READINESS (CPT 98975-98981) with a PHI-ring/BAA + clearinghouse + payer path and a dated go/no-go (PHI-gated, carved out of the non-PHI gateway)</li><li>Paved-road agent/app factory + IaC/DR (non-PHI landing zone in Bicep, brain reindex-from-source DR drill); cost-per-task down via model routing</li><li>Capital (counsel-led): Reg D 506(c) accredited tranche operating with verified accredited status; Reg CF launched off the TTW reservations (Form C on EDGAR); first counsel-reviewed factual shareholder update; non-binding scored roll-up shortlist (zero outreach)</li></ul>
+<div class='q'><b>9-12mo (Q4 COMPOUND &amp; ENTERPRISE-READY)</b> — north star: The machine runs itself; recurring is the headline metric; the capital ladder is sequenced and the AI OS is diligence-grade.<br><small>cash: Annualized run-rate crossing seven figures (~$1M+ ARR equivalent); 4+ profitable channels; recurring revenue &gt;=35%; positive contribution + funded runway on the base scenario | capital: Flywheel legitimately compounding (counsel-gated throughout): 506(c)+Reg CF operating, Reg A+ teed up, reverse-split board-decision-ready, first roll-up move structurable, IR cadence standing. Diligence-grade tech/security + CPA-grade financials packets assembled (ATTORNEY-REVIEW-REQUIRED, no MNPI/share counts/prices/valuations).</small></div>
+<ul><li>Recurring base material and growing: &gt;=50% of device buyers on a recurring SKU, blended monthly churn &lt;=8%, LTV:CAC &gt;=3:1 sustained; recurring-mix re-rating modeled (framework-level, counsel-gated) as the prioritization lever</li><li>Demand a self-running multi-channel machine on a real organic floor (ASO + content/SEO + PR + creator + paid) at stable/falling CAC; legacy pool cleared to ~0 (the $2-3M retail pool converted to realized cash + working capital)</li><li>The AI OS runs the company by default: &gt;=70% of recurring tech/ops/CS/data-room/build tasks autonomous (Tier-1 jobs + Tier-2 runners) at held eval quality; human touch limited to hard gates</li><li>The full illustrative $1B model built bottom-up (recurring base + device + portfolio + roll-up) with every line traced to a CAC/conversion/churn/margin input; subscription-mix re-rating + M&amp;A accretion/dilution templates built</li><li>Operator-SPOF de-risked: ratified continuity/bus-factor plan, scheduled credential rotation, a tested DR drill, and each surviving hard gate a &lt;=10-min GO PACKET</li><li>Capital ladder compounding under counsel: Reg A+ Form 1-A inputs counsel-ready with audited financials; reverse-split (FINRA 6490) decision-ready package on the board&#x27;s desk; a first stock-as-currency roll-up move structurable on Matt+counsel+CFO go; standing Reg-FD-compliant quarterly IR cadence</li><li>Year-2 plan ratified: finance targets + treasury/reserve policy, the codified attach/retention/demand playbook, and next-12-month subscriber+LTV targets off MEASURED year-1 cohorts; company default-alive on the base scenario</li></ul>
+<h2>Top quarterly moves</h2><table><tr><th>Quarter</th><th>Move</th><th>Owner</th></tr>
+<tr><td>Q1 (0-3mo)</td><td>Clear the four P0 gates in one motion (Stripe payout bank + checkout-proof + claims_check merged/deployed/verify-firing + brand-health true), then fire the seeded reignition to 66,224 on the send-go</td><td>Matt (gates) + CTO (verify/deploy) + COO (GO PACKET) + CRO (send)</td></tr>
+<tr><td>Q1 (0-3mo)</td><td>Fix the $25K tracker to a REIGNITION_START_DATE basis, stand up the daily contribution-P&amp;L heartbeat, convert the brief to a forcing GATE-STATE cadence, and launch the first recurring SKU (consumables) + Gumroad</td><td>CFO + CTO + COO + CRO</td></tr>
+<tr><td>Q2 (3-6mo)</td><td>Replace assumed CVR with measured PostHog conversion-bridge numbers, stand up the Fabric/Power BI scoreboard, run disciplined paid testing at 48-72h kill/scale under CFO guardrails, and cross the $25K NET reignition gate</td><td>CFO + CRO + CTO</td></tr>
+<tr><td>Q2 (3-6mo)</td><td>Publish the FTC affiliate-audit SOP, engage the NAMED human clinical reviewer + ratify the sign-off SOP, scope+reviewer-sign the FDA OTC pathway behind the gate, and authorize FDA registration (~$10K) at the CASH-BRIDGE trigger</td><td>CCO + CPO + Matt (clinical reviewer + FDA spend)</td></tr>
+<tr><td>Q3 (6-9mo)</td><td>FDA-register and launch the OTC iHEAR Matrix to the warm base, open Amazon under (pending) Brand Registry, and launch the creator/affiliate flywheel behind the audit SOP</td><td>CPO + Commerce/CRO + named clinical reviewer + Matt</td></tr>
+<tr><td>Q3 (6-9mo)</td><td>Liquidate the 10,298-unit pool in costed refurb waves across channels, assemble the CPA-grade capital-sequence financials, and (counsel-led, if retained) operate Reg D 506(c) + launch Reg CF off the TTW reservations</td><td>Commerce + CFO + Capital/IR + counsel + Matt</td></tr>
+<tr><td>Q4 (9-12mo)</td><td>Make recurring the headline metric on a renewing base (&gt;=50% device buyers on a sub, churn &lt;=8%, LTV:CAC &gt;=3:1) and run demand as a self-running multi-channel machine on a real organic floor</td><td>CRO/Lifecycle + Growth + CPO</td></tr>
+<tr><td>Q4 (9-12mo)</td><td>Make the AI OS diligence-grade + SPOF-de-risked, build the bottom-up illustrative $1B model + re-rating/roll-up templates, and sequence the capital ladder (Reg A+ teed up, reverse-split decision-ready, first roll-up move structurable) - all counsel-gated, framework-level</td><td>CTO + CFO + COO + Capital/IR + counsel + Matt</td></tr>
+</table>
+<h2>The 9 executive functions — process diagrams</h2>
+<h3>CFO — Finance / FP&amp;A</h3><p><small>As CFO I inherit a company at ~$0 cash (Mercury ~$2.41), $0 revenue in 90 days, ~$50K/mo burn, ~0 runway, against a PROVEN-but-dormant store ($227,290 all-time / 1,484 orders, historic AOV ~$153) and a locked warm list of 66,224. Finance infrastructure exists in pieces: QBO production for 4 entities, Xero 4 orgs, Plaid (7 tokens, 24mo history), a CFO Azure Blob data room (17,962 objects, indexed + librarian-autonomous), the company-brain, and a read-only revenue-tracker.mjs heartbeat. But there is NO consumer unit-economics model, the $25K gate tracker measures all-time (~$227K) not NEW reignition revenue so it would false-green at ~100% on first run, gross margin is asserted (85-90%) but never computed after returns/shipping/Stripe/refund-labor on a 60-day-guarantee PSAP, and the daily heartbeat reports gross revenue not contribution. The entire $1B model is downstream of one untested fact the docs flag as load-bearing: does the warm list still convert. My job over 12 months is to turn finance from a dormant bookkeeping function into the company&#x27;s instrumented FP&amp;A nervous system that lets one operator scale without surprise, while honoring the PHI/non-PHI ring, the securities firewall (INND = MNPI, framework-level only, counsel-gated), and the PSAP claims wall.</small></p>
+<pre class='mermaid'>flowchart TD
+  Q1[&quot;0-3mo: MAKE THE NUMBER TRUE - fix $25K gate, build unit-econ model, contribution P&amp;L, cash bridge&quot;]
+  Q2[&quot;3-6mo: INSTRUMENT SCALE - measured CVR, Fabric/Power BI scoreboard, recurring baseline, treasury reconcile&quot;]
+  Q3[&quot;6-9mo: MARGIN TRUTH + CAPITAL-GRADE - per-channel P&amp;L, RTM readiness, CPA reviewed/audited financials, 13-week forecast&quot;]
+  Q4[&quot;9-12mo: THE 1B MODEL + FLYWHEEL - recurring base + device + portfolio + roll-up, mix re-rating, accretion/dilution, board pack&quot;]
+  Q1 --&gt;|&quot;gate measures NEW revenue; GM-after-returns sourced&quot;| Q2
+  Q2 --&gt;|&quot;real CVR + contribution scoreboard + funded reserve&quot;| Q3
+  Q3 --&gt;|&quot;per-channel margin + CPA financials + RTM go/no-go&quot;| Q4
+  Q1 -.-&gt;|&quot;P0 fixes unblock all&quot;| GATE[&quot;$25K NET gate -&gt; FDA trigger (Matt)&quot;]
+  GATE -.-&gt; Q3
+  Q4 --&gt; OUT[&quot;Default-alive on a defended model; capital-grade financials; flywheel armed (counsel-gated)&quot;]
+  WALL[&quot;LEGAL WALLS (prepare-and-flag only): INND=MNPI/securities (counsel) | PHI ring for RTM (BAA) | PSAP claims wall | cash outlays + KYC = Matt&quot;]
+  WALL -.-&gt; Q3
+  WALL -.-&gt; Q4</pre>
+<h3>CTO — AI Tech Stack &amp; Infra</h3><p><small>I run the tech function internally as the CTO: the Medvi-style 3-layer AI operating system (exec + app-lead/developer agent workforce, the unified MCP gateway mcp.otchealth.app, kb-memory + company-brain, claims_check, VoiceRAG + the voice fleet, doc-indexer librarians, browser-agent, fleet-telemetry/agent-evals, model routing on Azure OpenAI), all on grant/credit-funded infra at ~$0 marginal cash. Honest state per the 2026-06-30 E2E: the stack is ~90% built and verified-live (gateway with ring + INND-ticker compliance gate, company-brain across 14 sources, finance connectors, n8n self-host 29 active workflows, VoiceRAG, PlantID backend, Datadog), but it is dormant-ready, not scaled, and carries five live fragilities that gate the whole playbook. The load-bearing ones: claims_check (the in-code compliance MOAT) is gateway PR #24 UNMERGED running on a branch image (rw4) ahead of main, so a routine redeploy silently drops the moat; the 28-credential otchealth-ops leak is un-rotated with secret-scan CI red (hard-blocks every public/INND action); an Azure OpenAI throttle alert is firing now (default secret points at the 10K-TPM aoai-4701, not the 1000K foundry); cross-engine state survives only in kb-memory + origin/main (single-engine SPOF, LLM-Obs done-but-not-deployed so a blackout is invisible); and the shared brain layer + gateway repo lack PR-review gates with 47 stale drafts hiding real infra. This 12-month plan extends the existing near-term EXECUTION-PROGRAM (its 10-step CTO list + Phases 0-6) from &quot;harden + survive the reignition&quot; into &quot;scale a resilient, multi-engine AI OS and grow the agent workforce one quarter at a time at ~$0 marginal cost.&quot;</small></p>
+<pre class='mermaid'>flowchart TD
+    S[&quot;Today: AI OS ~90% built, dormant, 5 live fragilities&quot;] --&gt; Q1
+    subgraph Q1[&quot;0-3mo STABILIZE&quot;]
+        A1[&quot;Pin gateway: merge claims_check + R/W to main, drift check&quot;]
+        A2[&quot;Rotate 28-cred leak, secret-scan GREEN&quot;]
+        A3[&quot;Clear AOAI throttle, enforce model routing&quot;]
+        A4[&quot;claims_check wired into publish paths + PR gates&quot;]
+        A5[&quot;Deploy LLM-Obs + heartbeat + uptime + engine-down runbook&quot;]
+    end
+    Q1 --&gt; Q2
+    subgraph Q2[&quot;3-6mo SCALE WORKFORCE + KILL SPOF&quot;]
+        B1[&quot;Arm Tier-2 autonomous runners&quot;]
+        B2[&quot;CI-gate agent-evals + telemetry per agent&quot;]
+        B3[&quot;Cross-engine CI rule + game-day&quot;]
+        B4[&quot;n8n failover + secrets to Key Vault&quot;]
+        B5[&quot;Gateway + VoiceRAG load-proven for reignition&quot;]
+    end
+    Q2 --&gt; Q3
+    subgraph Q3[&quot;6-9mo INDUSTRIALIZE&quot;]
+        C1[&quot;Paved-road agent + app factory&quot;]
+        C2[&quot;Full IaC + tested DR&quot;]
+        C3[&quot;Cost/throughput engineering -30% tokens&quot;]
+        C4[&quot;Gateway enterprise security + least-privilege&quot;]
+        C5[&quot;Brain/data-room platform scales on demand&quot;]
+    end
+    Q3 --&gt; Q4
+    subgraph Q4[&quot;9-12mo COMPOUND + ENTERPRISE-READY&quot;]
+        D1[&quot;Run company on autonomous fleet by default&quot;]
+        D2[&quot;Diligence-grade tech packet (counsel-gated)&quot;]
+        D3[&quot;Cross-cloud + multi-engine failover SLAs&quot;]
+        D4[&quot;PHI-ring Azure move prepared-and-flagged&quot;]
+        D5[&quot;OS as reusable portfolio leverage&quot;]
+    end
+    Q4 --&gt; E[&quot;Resilient, scaled, ~$0-marginal AI OS: one operator runs the company of a thousand&quot;]</pre>
+<h3>CRO — The Cash Engine</h3><p><small>The CRO function is ~90% built and 100% dormant: a proven-but-asleep Shopify store (~$227K all-time / 1,484 orders, $0 in last 90 days, 0 TReO units sold), a warm mailable list LOCKED at 66,224 contacts, a focus-group-tested TReO advertorial+quiz funnel, PAIR99 ($99 pair) live, and the claims_check compliance moat in place. But there is no proven full-price checkout, no recurring SKU, no creative factory, no affiliate program, and $0 authorized ad spend. The entire engine sits behind four P0 gates (Stripe payout bank, checkout-proof, claims_check deployed, brand-health true) plus a Matt email send-go that have not moved in ~20 days. My job over 12 months: convert this from a dormant store into a repeatable, multi-channel, AI-run acquisition machine that goes warm-list reignition -&gt; first cash -&gt; $25K gate -&gt; six- then seven-figure run-rate, with compliance enforced in code as the moat.</small></p>
+<pre class='mermaid'>flowchart TD
+  A[&quot;CRO 12-Month Cash Engine&quot;] --&gt; Q1[&quot;0-3mo IGNITE: clear 4 P0 gates&quot;]
+  A --&gt; Q2[&quot;3-6mo INSTRUMENT and SCALE OWNED&quot;]
+  A --&gt; Q3[&quot;6-9mo MULTI-CHANNEL and FLYWHEEL&quot;]
+  A --&gt; Q4[&quot;9-12mo REPEATABLE MACHINE&quot;]
+
+  Q1 --&gt; G1[&quot;Stripe payout bank + CHECKOUT-PROOF + claims_check + brand-health&quot;]
+  G1 --&gt; G2[&quot;Matt send-go: fire 66,224 warm list (seed wave first)&quot;]
+  G2 --&gt; G3[&quot;First bankable reignition cash&quot;]
+  G3 --&gt; G4[&quot;Consumables subscription live + Gumroad parallel lane&quot;]
+
+  Q2 --&gt; S1[&quot;AI creative factory: 20-30/wk through claims_check&quot;]
+  S1 --&gt; S2[&quot;Paid-ads kill/scale on cost-per-initiated-checkout&quot;]
+  S2 --&gt; S3[&quot;Full Customer.io lifecycle: cart, day 14/45, reviews&quot;]
+  S3 --&gt; S4[&quot;$25K GATE crossed -&gt; SOP-7 OTC-prep flag&quot;]
+  S4 --&gt; S5[&quot;FTC affiliate-audit SOP ready&quot;]
+
+  Q3 --&gt; F1[&quot;Creator flywheel: 30-50 vetted micro-creators&quot;]
+  Q3 --&gt; F2[&quot;Amazon TReO channel via SP-API&quot;]
+  Q3 --&gt; F3[&quot;iHEARtest magnet -&gt; TReO drip&quot;]
+  F1 --&gt; F4[&quot;AWARE recurring LTV tier&quot;]
+  F2 --&gt; F4
+  F3 --&gt; F4
+  F4 --&gt; R1[&quot;Six-figure monthly run-rate&quot;]
+
+  Q4 --&gt; M1[&quot;100-200+ creators, affiliate = lowest CAC&quot;]
+  Q4 --&gt; M2[&quot;Mature paid-ads machine 30-50/wk&quot;]
+  Q4 --&gt; M3[&quot;Deepen Amazon/Gumroad + OTC-tier ascension&quot;]
+  M1 --&gt; M4[&quot;Documented self-running acquisition machine&quot;]
+  M2 --&gt; M4
+  M3 --&gt; M4
+  M4 --&gt; R2[&quot;Seven-figure annualized run-rate&quot;]
+
+  G4 -.-&gt; S1
+  S5 -.-&gt; F1
+  R1 -.-&gt; M1
+  R2 -.-&gt; CAP[&quot;Feeds INND capital flywheel (framework-level, counsel-gated)&quot;]</pre>
+<h3>CCO — Compliance Moat</h3><p><small>As CCO the honest state is: the &quot;compliance enforced in code&quot; moat the whole Medvi-mirror thesis rests on is asserted but NOT yet operational. The claims_check FTC/FDA gate lives in otchealth-mcp-server PR #24, UNMERGED, running on a branch image, so a routine redeploy from main silently drops the moat at the exact moment 66,224 reignition emails would land. Standing hard gates are correctly held (TReO PSAP firewall, OTC/iHEAR hearing-aid sale blocked pre-FDA-registration, CareNow share-bundle = Securities Act 17(b) BLOCK, outbound SMS = TCPA BLOCK, draft-141 CONDITIONAL-CLEAR pending proven checkout + reachable CS + Matt send-go), but enforcement is partly documentation not code, the 60-day-guarantee/CS-reachability claims are not yet operationally true (FTC Mail-or-Telephone-Order-Rule exposure), and the 28-credential ops leak is un-rotated (blocks any public/INND posture). The function today is one person&#x27;s gate; the 12-month job is to turn it into hardened, audited, channel-aware code that scales faster than volume + affiliates + channels + the raise.</small></p>
+<pre class='mermaid'>flowchart TD
+    subgraph Q1[&quot;0-3mo: MAKE THE MOAT REAL&quot;]
+        A1[&quot;Merge + deploy + verify-fire claims_check (pin to main)&quot;]
+        A2[&quot;Clear draft-141 + funnel, audit-log ids&quot;]
+        A3[&quot;BRAND-HEALTH READY: refund + CS operationally true&quot;]
+        A4[&quot;Hard BLOCKs proven: SMS-TCPA, CareNow-17b, INND, device&quot;]
+        A1 --&gt; A2 --&gt; A3 --&gt; A4
+    end
+    subgraph Q2[&quot;3-6mo: SCALE TO PAID + AFFILIATE&quot;]
+        B1[&quot;FTC affiliate/creator SOP + CLO rider (before creator 1)&quot;]
+        B2[&quot;Channel-aware net-impression + substantiation in code&quot;]
+        B3[&quot;Subscription ROSCA/cancel/auto-renew pack&quot;]
+        B4[&quot;Post-publish monitor + CI regression + private CCO ring&quot;]
+        B1 --&gt; B2 --&gt; B3 --&gt; B4
+    end
+    subgraph Q3[&quot;6-9mo: DEVICE-GRADE + SECURITIES FLYWHEEL&quot;]
+        C1[&quot;OTC FDA registration + MDR/complaint pathway&quot;]
+        C2[&quot;PSAP-vs-device claim boundary enforced in gate&quot;]
+        C3[&quot;Reg FD + 17b + quiet-period codified in IR path&quot;]
+        C4[&quot;Quarterly FTC/FDA/SEC mock look-back dossier&quot;]
+        C1 --&gt; C2 --&gt; C3 --&gt; C4
+    end
+    subgraph Q4[&quot;9-12mo: INSTITUTIONALIZE THE MOAT&quot;]
+        D1[&quot;Written Compliance Management System (CMS)&quot;]
+        D2[&quot;Per-channel/per-jurisdiction rulesets for every new channel&quot;]
+        D3[&quot;Self-improving gate (evals + drift + brain loop)&quot;]
+        D4[&quot;Diligence-grade compliance package = valuation asset&quot;]
+        D1 --&gt; D2 --&gt; D3 --&gt; D4
+    end
+    A4 --&gt; B1
+    B4 --&gt; C1
+    C4 --&gt; D1
+    D4 --&gt; E[&quot;Compliance-as-moat scales ahead of volume, affiliates, channels + the raise&quot;]</pre>
+<h3>CPO — Product Portfolio</h3><p><small>The product engine is ~90% built and 100% dormant: the TReO PSAP wedge, the iHEARtest magnet, and the AWARE/Companion/PlantID app portfolio all exist, but $0 in 90 days, no recurring SKU live, and the load-bearing $25K-gate tracker is broken (it sums $227K all-time against the gate and false-greens at ~100% on first run). The product ladder is sound on paper (TReO wedge -&gt; iHEARtest magnet -&gt; consumables/AWARE recurring -&gt; OTC iHEAR line ascension at $25K + FDA) but every ascension rung is vapor: zero recurring product has billed a second cycle, no FDA registration is filed, and there is NO named human clinical reviewer engaged (the AI-CPO and the retired LHAD cannot sign device/OTC-tier claims). The CPO&#x27;s defining authority this year is the clinical/device sign-off chain that unlocks the regulated OTC line, plus pacing what ships vs pauses across the product ladder and the incubator app portfolio. Honest read: the function is a roadmap-and-gatekeeper today, not a shipping engine, and its single highest-leverage 12-month job is to convert the $25K gate from a false instrument into a real one and to stand up the human-clinical chain BEFORE cash forces the OTC decision.</small></p>
+<pre class='mermaid'>flowchart TD
+  A[&quot;CPO function: product ladder + clinical sign-off&quot;] --&gt; B[&quot;0-3mo: make the gate real&quot;]
+  B --&gt; B1[&quot;Fix 25K tracker (new-revenue basis)&quot;]
+  B --&gt; B2[&quot;Consumables sub = first recurring SKU&quot;]
+  B --&gt; B3[&quot;Engage NAMED human clinical reviewer&quot;]
+  B --&gt; B4[&quot;iHEARtest wired as magnet into TReO offer&quot;]
+  B1 --&gt; C[&quot;3-6mo: scope FDA + 2nd recurring SKU&quot;]
+  B2 --&gt; C
+  B3 --&gt; C
+  B4 --&gt; C
+  C --&gt; C1[&quot;FDA OTC pathway scoped + labeling staged behind gate&quot;]
+  C --&gt; C2[&quot;AWARE = second recurring SKU&quot;]
+  C --&gt; C3[&quot;Portfolio ship/pause map&quot;]
+  C1 --&gt; D[&quot;6-9mo: cross 25K gate + OTC ascension&quot;]
+  C2 --&gt; D
+  C3 --&gt; D
+  D --&gt; D1[&quot;At 25K: reviewer signs, Matt funds, FDA filed&quot;]
+  D1 --&gt; D2[&quot;Launch OTC iHEAR Matrix to warm base&quot;]
+  D2 --&gt; E[&quot;9-12mo: compound base + INND proof&quot;]
+  E --&gt; E1[&quot;Recurring base over 50% of buyers&quot;]
+  E --&gt; E2[&quot;Stage OTC reserve tier (Axis/Linx)&quot;]
+  E --&gt; E3[&quot;Counsel-gated product-proof for IR narrative&quot;]
+  E3 --&gt; F[&quot;Product ladder live end-to-end + compounding&quot;]</pre>
+<h3>Capital / IR — INND Flywheel</h3><p><small>The Capital/IR function is fully documented and architecturally complete (INND-CAPITAL-FLYWHEEL.md, INND-ROLLUP-LANDSCAPE.md, the raise-ops and ir-support skills) but 100 percent cold: zero counsel retained, zero artifacts built, zero disclosable traction. Two absolute upstream blockers govern everything I do: (1) no barred securities counsel is engaged (the master unlock for every rung), and (2) the 28-credential ops-leak / GCP SA / PostHog key rotation is DEFERRED with secret-scan CI red, an explicit HARD GATE that blocks any investor or public-facing action. The deepest constraint is honest: capital is strictly downstream of operating traction, and with the store dormant ($0 in 90 days), there is no legitimate, Reg-FD-compliant story to raise on yet, so my entire 12-month job until traction arrives is to assemble counsel-ready packets and the data-room scaffold, never to solicit anyone. The EXECUTION-PROGRAM already specifies my near-term 12-action prepare-and-flag bundle (days 1-12) and Phase 6 (weeks 8-24); this plan extends that into the full 12-month arc, advancing each rung only as gates clear.</small></p>
+<pre class='mermaid'>flowchart TD
+  A[&quot;Q1 0-3mo: Prepare-and-flag bundle (7 packets, ATTORNEY REVIEW REQUIRED)&quot;] --&gt; B{&quot;Counsel retained AND key-rotation green AND disclosable traction?&quot;}
+  K[&quot;HARD GATE: GCP SA + PostHog + 28-cred rotation, CI green&quot;] --&gt; B
+  T[&quot;Traction: warm-list reignition converts (capital is downstream)&quot;] --&gt; B
+  B --&gt;|No| P[&quot;Stay prepare-and-flag: build/maintain packets, NO solicitation&quot;]
+  P --&gt; A
+  B --&gt;|Yes| C[&quot;Q2 3-6mo: Hand over bundle; counsel selects vehicle + structure; data room DD-ready; TTW funnel parked; audit clock starts&quot;]
+  C --&gt; D[&quot;Q3 6-9mo: Reg D 506(c) live (verified accredited) + Reg CF off reservation funnel (Form C); IR cadence begins; non-binding roll-up screen&quot;]
+  D --&gt; E[&quot;Q4 9-12mo: Reverse-split decision-ready (FINRA 6490, board); Reg A+ teed up (audited, Form 1-A); first stock-as-currency roll-up move (S-4 or 506 exempt)&quot;]
+  E --&gt; F[&quot;Flywheel compounds: capital + acquisition currency fund more operating traction&quot;]
+  F -.-&gt;|each turn larger radius| C
+  G[&quot;Securities firewall checklist: Reg FD / no-promotion / PSLRA / 17(b) / Rule 144 / FINRA 24-09&quot;] --&gt; C
+  G --&gt; D
+  G --&gt; E
+  H[&quot;Every investor-facing item: AI drafts -&gt; counsel reviews -&gt; Matt approves -&gt; then sent/filed&quot;] --&gt; D
+  H --&gt; E</pre>
+<h3>Commerce — Inventory &amp; Channels</h3><p><small>Today the Commerce function is mid-paragraph: the store is PROVEN BUT DORMANT (~$227,290 all-time / 1,484 orders, $0 last 90 days, 0 TReO units in 90 days), checkout is still UNPROVEN end-to-end (Stripe payouts_enabled=FALSE, no bank linked), and ~10,298 owned legacy units (~$2-3M retail) sit in a warehouse with NO refurb/3PL partner, no per-unit cost-out, and no returns-routing. Amazon SP-API is connected and write-capable for OTCHealth Inc. (seller A2OUVRQWO8BC1S, US/CA/MX/BR) via the amazon-sp-api skill, but the iHEAR Brand Registry path is gated on the abandoned 2019 iHEAR trademark (refile, ~$300-2k) and no live listing exists; Gumroad (the only zero-gate cash lane) is drafted but unshipped. So the function owns three lanes that are all armed-but-idle: liquidate the owned atoms, scale the three channels, and stand up the physical-ops (fulfillment/returns/HSA-FSA) that everything else depends on — none has executed in ~20 days. EXTENDS the near-term EXECUTION-PROGRAM (Phases 0-6); this is the 12-month build on top of first-cash.</small></p>
+<pre class='mermaid'>flowchart TD
+  A[&quot;Commerce / Liquidator 12-month arc&quot;] --&gt; Q1[&quot;0-3mo: Prove rail + source atoms&quot;]
+  A --&gt; Q2[&quot;3-6mo: Open Amazon + start liquidation&quot;]
+  A --&gt; Q3[&quot;6-9mo: Scale channels + partnerships&quot;]
+  A --&gt; Q4[&quot;9-12mo: Finish pool + self-running engine&quot;]
+
+  Q1 --&gt; Q1a[&quot;3-vendor 3PL/refurb RFQ + 100-unit pilot&quot;]
+  Q1 --&gt; Q1b[&quot;Returns/RMA ops true (60-day guarantee real)&quot;]
+  Q1 --&gt; Q1c[&quot;Gumroad zero-gate lane live&quot;]
+  Q1 --&gt; Q1d[&quot;Consumables subscription (Shopify Selling Plan)&quot;]
+
+  Q1a --&gt; Q2a[&quot;Refurb in waves 500-1000/mo -&gt; Shopify + Amazon&quot;]
+  Q1b --&gt; Q2a
+  Q2 --&gt; Q2b[&quot;iHEAR trademark refile + Brand Registry (pending)&quot;]
+  Q2 --&gt; Q2c[&quot;FBM -&gt; FBA (Buy Box + Prime)&quot;]
+  Q2 --&gt; Q2d[&quot;HSA/FSA at checkout&quot;]
+
+  Q2a --&gt; Q3a[&quot;Scale liquidation 1500-2500/mo + clearance tier&quot;]
+  Q2b --&gt; Q3b[&quot;Amazon CA/MX + A+ content + Sponsored Products&quot;]
+  Q3 --&gt; Q3c[&quot;B2B: pharmacy / senior-living wholesale pilots&quot;]
+  Q3 --&gt; Q3d[&quot;FTC-audited affiliate/creator flywheel&quot;]
+
+  Q3a --&gt; Q4a[&quot;Clear residual ~3000 units -&gt; pool to zero&quot;]
+  Q3c --&gt; Q4b[&quot;Wholesale pilots -&gt; repeatable channel&quot;]
+  Q4 --&gt; Q4c[&quot;Automated order-&gt;3PL-&gt;returns-&gt;reorder loop&quot;]
+  Q4 --&gt; Q4d[&quot;Recurring MRR + LTV:CAC &gt;= 3:1&quot;]
+
+  Q4a --&gt; Z[&quot;$2-3M pool liquidated; multi-channel self-running engine -&gt; feeds capital flywheel&quot;]
+  Q4b --&gt; Z
+  Q4c --&gt; Z
+  Q4d --&gt; Z
+
+  G[&quot;Human/counsel gates: Stripe bank, inventory spend, trademark, send-go, claims_check&quot;] -.-&gt; A
+  O[&quot;Outsourced atoms: 3PL refurb/warehouse/ship, carriers, FBA, payment rails&quot;] -.-&gt; A</pre>
+<h3>Growth &amp; Lifecycle — Recurring Engine</h3><p><small>The recurring engine and demand machine are ~90% specced and 100% dormant. The near-term EXECUTION-PROGRAM.md (weeks 1-26) already lays out cohort-1: connect Stripe payout bank (P0, Matt), prove TReO checkout, stand up consumables on Shopify NATIVE selling plans (30/60/90-day, ~10-15% off), post-purchase attach, day-14/45 churn-save drips, AWARE as second SKU, and a week-4/5 kill-or-scale gate (targets &gt;=15% attach, &gt;=70% cycle-2 retention, &gt;=30% churn-save). But today: zero live recurring SKU, $0 MRR, the cro and growth ledgers are empty, 66,224 warm contacts are decaying, and demand generation (ASO, content/SEO, earned PR, paid) is unbuilt beyond the single reignition send. This 12-month plan does NOT redo weeks 1-26; it builds the arc that takes cohort-1 from a proof to the load-bearing recurring-revenue base (subscribers + LTV per quarter), with FTC/ROSCA negative-option compliance enforced in code as the moat and INND kept framework-level/MNPI-internal.</small></p>
+<pre class='mermaid'>flowchart TD
+    subgraph Q1[&quot;0-3mo: Prove the rail&quot;]
+        A[&quot;Stripe payout bank + checkout-proof (Matt P0)&quot;] --&gt; B[&quot;Consumables on Shopify native selling plans&quot;]
+        B --&gt; C[&quot;Post-purchase attach + day-0 fallback&quot;]
+        C --&gt; D[&quot;Reignite 66,224 (seed then full)&quot;]
+        D --&gt; E[&quot;Cohort-1 instrumented in PostHog + churn-save d14/d45&quot;]
+        E --&gt; F{&quot;Attach &gt;=15% AND cycle-2 &gt;=70%?&quot;}
+    end
+    F --&gt;|&quot;scale&quot;| G[&quot;3-6mo: Renewable demand floor&quot;]
+    F --&gt;|&quot;below&quot;| B
+    subgraph Q2[&quot;3-6mo: Organic floor + retention&quot;]
+        G --&gt; H[&quot;ASO (iHEARtest magnet) + content/SEO + earned PR&quot;]
+        H --&gt; I[&quot;AWARE 2nd recurring SKU (RevenueCat cross-sell)&quot;]
+        I --&gt; J[&quot;Mature lifecycle: milestone, winback, churn &lt;=8%&quot;]
+    end
+    J --&gt; K[&quot;6-9mo: Scale acquisition on proven economics&quot;]
+    subgraph Q3[&quot;6-9mo: Paid + creator flywheel&quot;]
+        K --&gt; L[&quot;Instrumented paid loop (CFO guardrails, LTV:CAC &gt;=3:1)&quot;]
+        L --&gt; M[&quot;Creator flywheel (FTC SOP + CLO rider gated)&quot;]
+        M --&gt; N[&quot;Bundles + full-segment lifecycle + quarterly cohort review&quot;]
+    end
+    N --&gt; O[&quot;9-12mo: Compound to the LTV re-rate&quot;]
+    subgraph Q4[&quot;9-12mo: Recurring is the headline&quot;]
+        O --&gt; P[&quot;OTC cross-sell at $25K gate + CareNow on counsel clearance&quot;]
+        P --&gt; Q[&quot;LTV optimization, referral/loyalty, industrialized demand&quot;]
+        Q --&gt; R[&quot;Material renewing recurring base -&gt; CFO model + counsel-gated INND narrative&quot;]
+    end
+    CG[&quot;claims_check + CCO brand-health gate (the moat, in code)&quot;] -.enforces every send/asset.-&gt; Q1
+    CG -.-&gt; Q2
+    CG -.-&gt; Q3
+    CG -.-&gt; Q4</pre>
+<h3>COO — Operating System &amp; Integration</h3><p><small>The machine is ~90% built and ~100% dormant: cash ~$2.41, $0 revenue in 90 days, ~$50K/mo burn, ~0 runway, ~20 days with the first-dollar gate unmoved. As COO I have shipped a daily 3-move brief that informs but does not FORCE action, so the single $99 checkout-proof gate and the send-go to 66,224 warm contacts have sat open. My function exists but is not yet a closing mechanism: there is no forcing gate-state cadence, no automatic revenue heartbeat, no codified integration spine (measurement/RACI/risk-register/cash-bridge), no weekly/monthly governance rhythm, and the entire company is one operator with no SPOF de-risking. The 6-month EXECUTION-PROGRAM (weeks 1-26) proves the engine; my 12-month job is to turn proof into a self-running operating system that the solo operator + AI fleet run with hands-off at everything but the hard gates.</small></p>
+<pre class='mermaid'>flowchart TD
+  A[&quot;Q1 0-3mo: Forcing cadence + integration spine&quot;] --&gt; A1[&quot;GATE-STATE brief + revenue heartbeat&quot;]
+  A --&gt; A2[&quot;Spine artifacts: MEASUREMENT / RACI / RISK / CASH-BRIDGE / CLINICAL&quot;]
+  A1 --&gt; B[&quot;Q2 3-6mo: Governance rhythm + shrink human gates + instrument fleet&quot;]
+  A2 --&gt; B
+  B --&gt; B1[&quot;Weekly kill-scale review + monthly board&quot;]
+  B --&gt; B2[&quot;browser-agent + Tier-2 runner shrink soft gates&quot;]
+  B --&gt; B3[&quot;agent-evals + fleet-telemetry + fleet-medic&quot;]
+  B1 --&gt; C[&quot;Q3 6-9mo: Unify all lanes into one operating picture&quot;]
+  B2 --&gt; C
+  B3 --&gt; C
+  C --&gt; C1[&quot;One board-grade scoreboard (churn + sub-mix)&quot;]
+  C --&gt; C2[&quot;Every lane in the gate-graph + risk-register&quot;]
+  C --&gt; C3[&quot;Capital-readiness bundle (counsel-gated)&quot;]
+  C1 --&gt; D[&quot;Q4 9-12mo: Self-running OS + SPOF de-risking&quot;]
+  C2 --&gt; D
+  C3 --&gt; D
+  D --&gt; D1[&quot;Cadence runs hands-off + fully SOP&#x27;d&quot;]
+  D --&gt; D2[&quot;Continuity plan + scheduled rotation + DR drill&quot;]
+  D --&gt; D3[&quot;Hard gates minimized to &lt;=10-min GO PACKETs&quot;]
+  D1 --&gt; E[&quot;Annual board: engine self-running, next 12mo locked&quot;]
+  D2 --&gt; E
+  D3 --&gt; E</pre>
+</body></html>
