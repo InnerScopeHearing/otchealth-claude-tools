@@ -129,10 +129,14 @@ const PROVIDERS = {
   quickbooks: {
     kind: "oauth-rotating",
     tokenUrl: "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
-    clientId: "quickbooks-client-id",
-    clientSecret: "quickbooks-client-secret",
-    refreshSecret: "quickbooks-refresh-token", // rotates (100d window)
-    accessSecret: "quickbooks-access-token",
+    clientId: "qbo-client-id",
+    clientSecret: "qbo-client-secret",
+    // QBO is MULTI-ENTITY: one app/client, but a SEPARATE rotating refresh token PER company.
+    // The live SM scheme is qbo-refresh-<entity> (NOT a single quickbooks-refresh-token, which was
+    // an empty placeholder -> the keeper used to no-op on MISSING_SECRETS). qbo.mjs mints access on
+    // demand, so there is no per-entity access secret to persist here; we only rotate the refresh token.
+    tenants: ["otchealth", "innd", "hearingassist", "personal"],
+    refreshSecretFor: (t) => `qbo-refresh-${t}`, // per-entity, rotates on every refresh (100d window)
     windowDays: 100,
     auth: "basic",
   },
@@ -150,16 +154,18 @@ const PROVIDERS = {
 function metaSecret(p) { return `token-keeper-meta-${p}`; }
 
 // ---------- core operations ----------
-async function refreshOAuth(tok, name, cfg, { force }) {
+// Refresh ONE rotating-oauth credential (a single refresh-secret id). No meta write here; the caller
+// aggregates + stamps meta. Returns { ok, rotated?, dryRun?, reason? }.
+async function refreshOneOAuth(tok, cfg, refreshSecretId, accessSecretId, { force }) {
   const [clientId, clientSecret, refreshTokenVal] = await Promise.all([
-    smRead(tok, cfg.clientId), smRead(tok, cfg.clientSecret), smRead(tok, cfg.refreshSecret),
+    smRead(tok, cfg.clientId), smRead(tok, cfg.clientSecret), smRead(tok, refreshSecretId),
   ]);
   const missing = [];
   if (!clientId) missing.push(cfg.clientId);
   if (!clientSecret) missing.push(cfg.clientSecret);
-  if (!refreshTokenVal) missing.push(cfg.refreshSecret);
-  if (missing.length) return { provider: name, ok: false, reason: "MISSING_SECRETS", missing };
-  if (!force) return { provider: name, ok: true, dryRun: true, note: "would refresh + rotate (use --force)" };
+  if (!refreshTokenVal) missing.push(refreshSecretId);
+  if (missing.length) return { ok: false, reason: "MISSING_SECRETS", missing };
+  if (!force) return { ok: true, dryRun: true, note: "would refresh + rotate (use --force)" };
 
   const headers = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
   const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshTokenVal });
@@ -171,19 +177,34 @@ async function refreshOAuth(tok, name, cfg, { force }) {
   const r = await fetch(cfg.tokenUrl, { method: "POST", headers, body });
   const j = await r.json().catch(() => ({}));
   if (!r.ok || !j.access_token) {
-    return { provider: name, ok: false, reason: "REFRESH_FAILED", status: r.status, detail: (j.error || JSON.stringify(j)).toString().slice(0, 160) };
+    return { ok: false, reason: "REFRESH_FAILED", status: r.status, detail: (j.error || JSON.stringify(j)).toString().slice(0, 160) };
   }
   // CRITICAL: persist the ROTATED refresh token (this is the bit everyone forgets).
   const writes = [];
-  if (j.refresh_token && j.refresh_token !== refreshTokenVal) {
-    writes.push(smAddVersion(tok, cfg.refreshSecret, j.refresh_token));
-  }
-  writes.push(smAddVersion(tok, cfg.accessSecret, j.access_token));
-  writes.push(smAddVersion(tok, metaSecret(name), JSON.stringify({ lastRefresh: new Date().toISOString(), expiresIn: j.expires_in || null, rotated: !!j.refresh_token })));
+  if (j.refresh_token && j.refresh_token !== refreshTokenVal) writes.push(smAddVersion(tok, refreshSecretId, j.refresh_token));
+  if (accessSecretId) writes.push(smAddVersion(tok, accessSecretId, j.access_token));
   const res = await Promise.all(writes);
   const bad = res.find((x) => x.status >= 300);
-  if (bad) return { provider: name, ok: false, reason: "PERSIST_FAILED", status: bad.status, detail: bad.body.slice(0, 160) };
-  return { provider: name, ok: true, rotated: !!(j.refresh_token && j.refresh_token !== refreshTokenVal), accessExpiresIn: j.expires_in || null };
+  if (bad) return { ok: false, reason: "PERSIST_FAILED", status: bad.status, detail: bad.body.slice(0, 160) };
+  return { ok: true, rotated: !!(j.refresh_token && j.refresh_token !== refreshTokenVal), accessExpiresIn: j.expires_in || null };
+}
+
+// Refresh a provider: single-tenant (xero) OR multi-tenant (quickbooks = one client, a rotating
+// refresh token per company). Stamps the meta sidecar only on a real (forced) refresh.
+async function refreshOAuth(tok, name, cfg, { force }) {
+  if (Array.isArray(cfg.tenants) && cfg.tenants.length) {
+    const tenants = [];
+    for (const t of cfg.tenants) tenants.push({ tenant: t, ...(await refreshOneOAuth(tok, cfg, cfg.refreshSecretFor(t), null, { force })) });
+    if (force && tenants.some((x) => x.ok && !x.dryRun)) {
+      await smAddVersion(tok, metaSecret(name), JSON.stringify({ lastRefresh: new Date().toISOString(), tenants: tenants.map((x) => ({ tenant: x.tenant, ok: x.ok, rotated: !!x.rotated })) }));
+    }
+    return { provider: name, ok: tenants.every((x) => x.ok), multi: true, tenants };
+  }
+  const r = await refreshOneOAuth(tok, cfg, cfg.refreshSecret, cfg.accessSecret, { force });
+  if (force && r.ok && !r.dryRun) {
+    await smAddVersion(tok, metaSecret(name), JSON.stringify({ lastRefresh: new Date().toISOString(), expiresIn: r.accessExpiresIn || null, rotated: !!r.rotated }));
+  }
+  return { provider: name, ...r };
 }
 
 async function validateStatic(tok, name, cfg) {
@@ -208,7 +229,8 @@ async function doRefresh(tok, name, { force }) {
 async function status(tok) {
   const out = [];
   for (const [name, cfg] of Object.entries(PROVIDERS)) {
-    const ids = [cfg.refreshSecret, cfg.accessSecret, cfg.apiToken, cfg.clientId, cfg.clientSecret].filter(Boolean);
+    const refs = Array.isArray(cfg.tenants) ? cfg.tenants.map((t) => cfg.refreshSecretFor(t)) : [cfg.refreshSecret];
+    const ids = [...refs, cfg.accessSecret, cfg.apiToken, cfg.clientId, cfg.clientSecret].filter(Boolean);
     const present = {};
     for (const id of ids) present[id] = await smExists(tok, id);
     let meta = null;
@@ -257,7 +279,8 @@ const has = (flag) => process.argv.includes(flag);
     const created = [], existed = [], failed = [];
     const ids = new Set();
     for (const cfg of Object.values(PROVIDERS)) {
-      [cfg.refreshSecret, cfg.accessSecret, cfg.apiToken, cfg.clientId, cfg.clientSecret].filter(Boolean).forEach((x) => ids.add(x));
+      const refs = Array.isArray(cfg.tenants) ? cfg.tenants.map((t) => cfg.refreshSecretFor(t)) : [cfg.refreshSecret];
+      [...refs, cfg.accessSecret, cfg.apiToken, cfg.clientId, cfg.clientSecret].filter(Boolean).forEach((x) => ids.add(x));
     }
     Object.keys(PROVIDERS).forEach((p) => ids.add(metaSecret(p)));
     for (const id of ids) {
