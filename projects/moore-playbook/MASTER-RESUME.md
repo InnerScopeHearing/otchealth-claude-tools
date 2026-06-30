@@ -88,3 +88,44 @@ TCPA on SMS; brand-health before scaling.
 *Verified durable 2026-06-30 (triple-checked: blob ledger has ids 20260630-002/003/004; journal 44
 entries; origin at commit 066a4c4 with all docs). Maintained by the COO. If this doc and the ledger
 disagree, the ledger wins; if the chat and either disagree, the ledger/docs win.*
+
+---
+
+## APPENDIX: FULL ARTIFACT MANIFEST (2026-06-30 checkpoint)
+Every output produced for the Moore Playbook program, where it lives, and its durable backing.
+Durable stores per item: GIT (GitHub origin) + this repo + (the ledger/journal index in Azure Blob).
+
+### A. claude-tools — branch `claude/moore-execution-program` = DRAFT PR #244 (HEAD bbf32f4)
+`projects/moore-playbook/`:
+- MOORE-PLAYBOOK.md (the Billion-Dollar Roadmap, ~20KB)
+- INND-CAPITAL-FLYWHEEL.md (capital sequence, counsel-gated, ~13KB)
+- INND-ROLLUP-LANDSCAPE.md (roll-up research, ~12KB)
+- EXECUTION-PROGRAM.md (9-persona near-term program, weeks 1-26, ~183KB)
+- GAP-REVIEW.md (27 verified gaps + verdicts, ~97KB)
+- MOORE-PLAYBOOK-12MONTH.md (9 exec hats x 4 quarters + master roadmap + AI stack + $1B bridge, ~228KB)
+- MASTER-RESUME.md (this recovery doc)
+- moore-execution-program.html (rendered diagram pack: master flow + gantt + 9 dims)
+- moore-12month.html (rendered diagram pack: whole-machine + 12-mo gantt + AI-stack + 9 functions)
+- dispatch-artifacts/ (14 executed dispatch deliverables):
+  - cfo/: OTCHEALTH-UNIT-ECON.md, REVENUE-TRACKER-PATCH.md, PAID-SPEND-GUARDRAILS.md
+  - capital/: ENGAGE-COUNSEL-BRIEF.md, REGD-DATAROOM-INDEX.md, ACCREDITED-VERIFICATION-MEMO.md
+  - cco/: FTC-AFFILIATE-CREATOR-SOP.md, CLAIMS-CHECK-ACCEPTANCE-TEST.md, DRAFT-141-CLEARANCE-MEMO.md
+  - cro/: DRAFT-141-FINAL.md, CONSUMABLES-SELLING-PLAN-SPEC.md
+  - commerce/: GUMROAD-SOP-STORE.md, REFURB-3PL-RFQ.md, AMAZON-PATH-RECONCILE.md
+`projects/medvi-operations/`: MEDVI-MIRROR-PLAYBOOK.md, PLAN.md, README.md, SOURCES.md
+
+### B. otchealth-cto — `docs/medvi/` (on main): OTCHEALTH-CASH-PLAYBOOK.md, iheartreo-funnel.html, system-map.html, revenue-tracker.mjs
+
+### C. otchealth-exec — branch `claude/brave-cori-glpslp` = DRAFT PR #2 (HEAD 13707d8) — the early COO cash work incl. THE PDFs
+`coo/`: today.md, log.md, SITUATION.md, PRIORITIES.md (+ the COO operating docs)
+- coo/diagnostics/: STORE-CONVERSION-DIAGNOSTIC.md, SHOPIFY-LAUNDRY-LIST.md
+- coo/demand-content/DEMAND-PACK.md
+- coo/gumroad-launch/: LAUNCH-RUNBOOK.md, README.md, generate_pdfs.py, sops.json, OTCHealth-SOP-PDFs.zip, **pdf/ = 14 branded SOP PDFs**
+
+### D. Durable memory (Azure Blob, otchealthcommons/company-journal)
+- Ledger: `_MEMORY/coo.jsonl` (private) + `_MEMORY/_exec/coo.jsonl` (shared) — the decisions/facts/pitfalls index of all the above
+- Journal: `_JOURNAL/coo/<date>/<session>.jsonl` — full turn-by-turn capture
+
+### E. Open-PR disposition (per the PR-hygiene standard)
+- PR #244 (claude-tools): the Moore Playbook program. Disposition = HOLD for Matt review, then MERGE (docs, low-risk).
+- PR #2 (otchealth-exec): the early COO cash work + the SOP PDFs. Disposition = HOLD for Matt review, then MERGE.
