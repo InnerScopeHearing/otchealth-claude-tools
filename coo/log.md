@@ -42,3 +42,4 @@ bank connect; the one proving TReO order for CHECKOUT-PROOF) are IN PROGRESS per
 direct as of today, not stalled. Gumroad fully stood up, first-listing choice pending with
 CRO. Nothing new for Matt that he doesn't already know (he is the source of today's
 updates) — no push notification sent.
+2026-06-30 (later still) | morning-guard | skipped | another duplicate routine trigger same day; verified against the coo ledger, no new facts since the last skip (no CHECKOUT-PROOF=PASS posted by CTO yet, no payout-connect confirmation, no Gumroad listing yet). coo/today.md and PRIORITIES.md already current (PR #250, merged 85011ed) - no changes needed. No brief resent, no notification sent.
