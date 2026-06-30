@@ -32,6 +32,10 @@ function sideFor(n){ const i=n.lastIndexOf("/"); const dir=i>=0?n.slice(0,i+1):"
 
 (async()=>{
   const DRY=process.env.DRYRUN==="1"; const LIMIT=parseInt(process.env.LIMIT||"300",10); const CONC=parseInt(process.env.CONC||"6",10);
+  // OOM guard: each worker buffers a whole blob in memory; a single huge file OOM-kills the container
+  // (this is what crashed the old 1Gi job). Skip blobs whose Content-Length exceeds MAX_MB (default 200)
+  // BEFORE buffering, so one giant file can never take the run down. Oversize files are just left un-OCR'd.
+  const MAXB=parseInt(process.env.MAX_MB||"200",10)*1024*1024;
   const want=(process.env.STORES||"legal,cfo").split(",");
   const g=await gcpToken();
   const [endpoint,dkey]=await Promise.all([sm(g,"azure-docintel-endpoint"),sm(g,"azure-docintel-key")]);
@@ -46,11 +50,14 @@ function sideFor(n){ const i=n.lastIndexOf("/"); const dir=i>=0?n.slice(0,i+1):"
       stats[`${st.name}/${c}`]={docs:docs.length,todo:todo.length}; todo.forEach(n=>candidates.push({store:st,ep,container:c,name:n})); } }
   console.log("scope:",JSON.stringify(stats)); console.log("total docs needing OCR:",candidates.length);
   if(DRY) return;
-  const work=candidates.slice(0,LIMIT); let ok=0,fail=0; const wsasCache={};
+  const work=candidates.slice(0,LIMIT); let ok=0,fail=0,over=0; const wsasCache={};
   function wsas(st){ return wsasCache[st.account]||(wsasCache[st.account]=sas(st.account,st.key,"rcwl")); }
   let idx=0;
   async function worker(){ while(idx<work.length){ const it=work[idx++]; const {store,ep,container,name}=it; const ext=(name.split(".").pop()||"pdf").toLowerCase();
-    try{ const dl=await fetch(`${ep}/${container}/${enc(name)}?${sas(store.account,store.key,"rl")}`); if(!dl.ok){fail++;continue;} const buf=Buffer.from(await dl.arrayBuffer());
+    try{ const dl=await fetch(`${ep}/${container}/${enc(name)}?${sas(store.account,store.key,"rl")}`); if(!dl.ok){fail++;continue;}
+      const clen=parseInt(dl.headers.get("content-length")||"0",10);
+      if(clen>MAXB){ over++; try{await dl.body?.cancel();}catch{} continue; } // skip oversize BEFORE buffering (OOM guard)
+      const buf=Buffer.from(await dl.arrayBuffer());
       const text=await docintel(endpoint,dkey,buf,CT[ext]||"application/octet-stream");
       const put=await fetch(`${ep}/${container}/${enc(sideFor(name))}?${wsas(store)}`,{method:"PUT",headers:{"x-ms-blob-type":"BlockBlob","Content-Type":"text/plain; charset=utf-8"},body:text});
       if(put.status===201) ok++; else fail++;
@@ -58,5 +65,5 @@ function sideFor(n){ const i=n.lastIndexOf("/"); const dir=i>=0?n.slice(0,i+1):"
     if((ok+fail)%25===0) console.log(`  ...${ok+fail}/${work.length} (ok ${ok}, fail ${fail})`);
   } }
   await Promise.all(Array.from({length:CONC},()=>worker()));
-  console.log(`DONE this run: ${ok} sidecars written, ${fail} failed, of ${work.length} processed. Backlog remaining: ${Math.max(0,candidates.length-ok)}.`);
+  console.log(`DONE this run: ${ok} sidecars written, ${fail} failed, ${over} oversize-skipped (>${Math.round(MAXB/1048576)}MB), of ${work.length} processed. Backlog remaining: ${Math.max(0,candidates.length-ok)}.`);
 })().catch(e=>{console.error("ERR",e.message);process.exit(1);});
