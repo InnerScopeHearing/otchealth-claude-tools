@@ -4,14 +4,17 @@ Ranked by cash impact x speed x "only Matt can do it." The COO pulls today's 1-3
 from the top of this list. Update status as items complete.
 
 ## NOW (this week — first dollars)
-1. **Launch the Gumroad SOP store.** Claude drafts the 10-15 SOPs from Mark's outline
-   today; Matt creates the Gumroad account + lists them. First dollars in days. [open]
-2. **Send the overdue email campaign.** The one due last Friday. Reactivation to the 85K.
-   Claude drafts; Matt approves + sends in Customer.io. ~30 min. [OVERDUE]
-3. **Flip the two switches:** file FDA OTC Establishment Registration (~$10K, <2wk) and
-   connect Stripe. Unlocks the $2-3M inventory pool. [Matt-only, blocking]
-4. **Restart LinkedIn** — one factual post about a real product/milestone (growth-pr,
-   securities firewall). Rebuild the cadence you dropped. [open]
+1. **Close the 2 Matt-only gates (~15 min combined).** (a) Connect the Stripe payout bank
+   (payouts_enabled=FALSE on acct_1SQyXZAwjS2xuomw — charges work, cash has nowhere to
+   land). (b) Place ONE real non-refunded full-price TReO order (PAIR99) to clinch
+   CHECKOUT-PROOF=PASS. Both **in progress, Matt direct, 2026-06-30**. [Matt-only, THE gate]
+2. **Fire draft-141 to the 66,224 list** the instant both gates above close. Staged,
+   CCO-cleared, dash-clean. Needs only Matt's send-go. [gated on #1]
+3. **Pick + publish the first Gumroad listing.** Account is fully stood up. Choosing
+   between "From the Chair" (Mark's book, manuscript locked) and the 5-SOP bundle with CRO.
+   Zero gates once chosen. [open, near-done]
+4. **FDA OTC Establishment Registration** (~$10K, <2wk) — unlocks the $2-3M inventory pool.
+   Fund AFTER first dollars land, not before. [Matt-only, deferred]
 
 ## THIS WEEK (protect + unlock)
 5. **HARD GATE - Rotate the GCP SA + PostHog all-access keys** (treat as compromised
