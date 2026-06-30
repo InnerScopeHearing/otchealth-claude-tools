@@ -34,3 +34,27 @@ hits are auditable.
 2026-06-09 build | Idempotency recovery + log format (review) | done | Morning guard now has a recovery path: if any step fails after the marker is claimed, the marker is deleted and Matt is alerted so the next run retries instead of silently skipping. Guard-hit and failure log lines now follow the file format (... | morning-guard | skipped/failed | ...).
 2026-06-09 build | Failure-alert fallback channel (review) | done | If the morning brief fails on the email step, alerting Matt via email would also fail. Recovery now alerts over an email-independent channel: a guaranteed high-priority "Needs Matt" task in the COO Tasks DB (Notion), plus a best-effort calendar alert event and email only when email was not the failing step.
 2026-06-09 coo-check | COO invoked after another build session (org move + Depot + cloud-env setup) | flagged | Every entry in today's log is "build." The 3 cash moves are still not-started and the Friday reactivation email is still unsent. Named the pattern, redirected to Move 1, offered to draft the email + the Gumroad SOPs now.
+
+2026-06-10 to 2026-06-29 catch-up | (backfilled, source: kb-memory coo ledger — this file
+had gone stale since the 2026-06-09 seed while the ledger stayed current) | done | Built:
+own mailbox + n8n hands (coo-read-calendar/coo-send-email/coo-create-meeting webhook
+paths, replacing the stale workflow-ID references); daily morning briefs sent 6/25-6/29
+(idempotency guard held, no duplicates); reactivation email + 5 Gumroad SOPs drafted;
+draft-141 written, CCO conditional-cleared, mailable LOCKED at 66,224; SITUATION.md and
+today.md reconciled to the live ledger (commits f815e7e5, eb993da4). Cash moves: still
+zero executed through day 20 (the TReO checkout-proof + Stripe payout connect gates stayed
+open the whole window).
+2026-06-30 09:xx | morning brief 2026-06-30 | sent | Day 21, $0 bank, $0 revenue. Calendar
+busy 8:30-11:30am PT; CASH BLOCK booked 12-2pm PT. Moves: (1) Matt prove TReO checkout
+PAIR99; (2) Gumroad first-product pricing/publish with CRO.
+2026-06-30 (later) | Moore Playbook + 12-month implementation + gap review + Miro board |
+done | Delivered and committed to main (PR #244 claude-tools, PR #2 otchealth-exec, both
+merged). 5 of 7 Moore-execution dispatches have committed artifact work product.
+2026-06-30 (later) | Matt direct updates | partial | Matt verified TReO checkout works in
+his own testing; is personally connecting the Stripe payout bank (in progress). Gumroad
+fully stood up; first product being finalized with CRO. Formal CHECKOUT-PROOF=PASS from
+CTO and the send-go on draft-141 are still outstanding.
+2026-06-30 (this run) | morning-guard | skipped | brief already sent today (Day 21,
+confirmed via kb-memory coo ledger entries 20260630-018/-019). Refreshed coo/today.md to
+the current state (two Matt-only gates in progress, Gumroad live awaiting first-product
+pick); no second brief sent, no duplicate calendar block booked.
