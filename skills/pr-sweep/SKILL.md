@@ -51,9 +51,14 @@ Every open PR resolves to exactly one. The first five are ACTION REQUIRED.
 | `REBASE` | mergeable=CONFLICTING | rebase onto base, re-run CI, then merge |
 | `FIX-OR-CLOSE` | checks FAILURE/ERROR | fix the failure or close the PR |
 | `STALE` | no update in > stale-days | revive or close. No zombies. |
+| `HOLD` | carries the `hold` label | parked deliberately; not action-required. Reason + owner live in a PR comment. |
 | `IN-FLIGHT` | recent and not yet decideable | leave it; it is being worked |
 
 `medreview` (PHI/CTO-owned) is counted read-only and never flagged dev-actionable.
+
+To park a PR as HOLD (so the sweep stops flagging it), label it `hold` and leave a
+comment with the blocker + owner:
+`echo '{"labels":["hold"]}' | node skills/github-app/gh-app.mjs request POST /repos/<owner>/<repo>/issues/<n>/labels`
 
 ## The rule it enforces
 

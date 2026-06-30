@@ -37,8 +37,11 @@ left undecided.
    reason comment. A stale draft that newer work replaced gets closed, not left.
 4. **HOLD** - genuinely blocked (a gate: clinical/CPO, security review, a human/Matt
    decision, a dependency cooldown). Allowed ONLY with a written reason **and an
-   owner** recorded in the ledger and as a PR comment. "HOLD" without a named blocker
-   is just a zombie; close it instead.
+   owner** recorded in the ledger and as a PR comment, AND the **`hold` label** on the
+   PR. The label is what makes the hold real and machine-visible: `pr-sweep` treats a
+   `hold`-labelled PR as parked (not ACTION-REQUIRED) so the action list stays honest.
+   "HOLD" without the label + a named blocker is just a zombie; close it instead.
+   (Apply the label: `echo '{"labels":["hold"]}' | node skills/github-app/gh-app.mjs request POST /repos/<owner>/<repo>/issues/<n>/labels`.)
 5. **SPLIT** - too big or mixes concerns -> carve the mergeable slice out, merge that,
    close or re-scope the rest.
 

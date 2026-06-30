@@ -72,6 +72,7 @@ const Q = `query($owner:String!,$name:String!){
       nodes{
         number title isDraft mergeable createdAt updatedAt baseRefName headRefName
         author{login}
+        labels(first:20){nodes{name}}
         commits(last:1){nodes{commit{statusCheckRollup{state}}}}
       }
     }
@@ -85,6 +86,14 @@ function daysSince(iso) {
 // The disposition engine. Every open PR resolves to exactly one bucket.
 // ACTION-REQUIRED buckets are the ones that must not silently persist.
 function classify(pr, staleDays) {
+  // An explicit `hold` label is a recorded disposition (the standard requires a
+  // written reason + owner in the PR comment alongside it). It is NOT action-required:
+  // a held PR is being deliberately parked, not rotting. This keeps the ACTION list
+  // honest so it never gets trained-ignored.
+  const labels = (pr.labels?.nodes || []).map((l) => l.name.toLowerCase());
+  if (labels.some((n) => /^hold\b/.test(n) || n === "hold"))
+    return { bucket: "HOLD", action: false, why: `on HOLD (label) -> see PR comment for owner + reason` };
+
   const rollup = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state || "NONE"; // SUCCESS|FAILURE|PENDING|ERROR|EXPECTED|NONE
   const age = daysSince(pr.updatedAt);
   const green = rollup === "SUCCESS" || rollup === "NONE" || rollup === "EXPECTED";
