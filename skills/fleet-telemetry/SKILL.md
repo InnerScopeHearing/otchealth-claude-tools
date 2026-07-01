@@ -10,8 +10,13 @@ $50k-credit observability lane (not Datadog). Turns the agent fleet from a black
 measurable system: cost, tokens, model, tool usage, errors, and duration per agent per session.
 
 ## What it sends (metadata only — no prompts, outputs, file contents, PHI or MNPI)
-- `$ai_generation` (PostHog **LLM Observability** product): model, input/output tokens, latency, est cost.
-- `agent_session` (custom analytics): agent, turns, tool_calls, tools_used, tool_errors, tokens, est_cost_usd, duration_s, outcome.
+- `$ai_generation` (PostHog **LLM Observability** product): model, input/output tokens, latency, est cost,
+  `callsite_id` (defaults to the agent role; `--callsite <id>` overrides).
+- `agent_session` (custom analytics): agent, callsite_id, turns, tool_calls, tools_used, tool_errors, tokens, est_cost_usd, duration_s, outcome.
+
+`callsite_id` is the join key against `agent-evals`' `eval_result.callsite_id` (same default: the agent
+role). It is substrate for a future quality-per-dollar router that would join eval scores to real
+production model/cost by callsite; that router is NOT built here.
 
 ## Automatic
 Wired as a **Stop hook** (`.claude/settings.json`) so every agent session auto-reports on end.
