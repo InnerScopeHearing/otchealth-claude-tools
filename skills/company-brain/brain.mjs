@@ -60,10 +60,19 @@ async function init() {
 }
 async function embed(text) { for (let a = 0; a < 6; a++) { const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: [text] }) }); if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, (ra ? ra * 1000 : 1500 * (a + 1)))); continue; } if (!r.ok) throw new Error("embed " + r.status); return (await r.json()).data[0].embedding; } throw new Error("embed 429 exhausted"); }
 async function searchIndex(index, vec, query) {
-  const body = { search: query, top: PERK, vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: PERK }] };
-  const r = await fetch(`${AIS_EP}/indexes/${index}/docs/search?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  // vector_semantic_hybrid: BM25 keyword + vector fused by RRF, then the L2 SEMANTIC RERANKER
+  // (every room index carries the "sem" semantic config). This is the Microsoft-benchmarked default
+  // that fixes weak keyword-only recall. Falls back to plain hybrid if semantic errors (missing
+  // config / quota exhausted) so recall NEVER regresses below what we had.
+  const base = { search: query, top: PERK, vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: PERK }] };
+  const url = `${AIS_EP}/indexes/${index}/docs/search?api-version=${AIS_API}`;
+  const hdr = { "api-key": AIS_KEY, "Content-Type": "application/json" };
+  let r = await fetch(url, { method: "POST", headers: hdr, body: JSON.stringify({ ...base, queryType: "semantic", semanticConfiguration: "sem" }) });
+  if (!r.ok) r = await fetch(url, { method: "POST", headers: hdr, body: JSON.stringify(base) });
   if (!r.ok) return [];
-  return ((await r.json()).value || []).map(h => ({ score: h["@search.score"] || 0, text: (h.content || h.text || "").slice(0, 1200), path: h.path || h.title || "", entity: h.entity || "", agent: h.agent || "", type: h.type || "" }));
+  // With the semantic reranker present, @search.rerankerScore (0-4) is the authoritative relevance;
+  // fall back to @search.score when a room had to use plain hybrid.
+  return ((await r.json()).value || []).map(h => ({ score: h["@search.rerankerScore"] ?? h["@search.score"] ?? 0, text: (h.content || h.text || "").slice(0, 1200), path: h.path || h.title || "", entity: h.entity || "", agent: h.agent || "", type: h.type || "" }));
 }
 async function callChat(p, system, user, tries) {
   for (let a = 0; a < tries; a++) {
