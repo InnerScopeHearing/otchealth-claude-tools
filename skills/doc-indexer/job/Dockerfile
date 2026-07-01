@@ -26,4 +26,16 @@ COPY skills/kb-memory/ /app/skills/kb-memory/
 # fleet-medic: the auto-dispatch memory medic job (fleet-medic.sh -> medic.mjs scan --dispatch).
 # medic.mjs execs kb-memory/mem.mjs team-health (copied above) for its deterministic health spine.
 COPY skills/fleet-medic/ /app/skills/fleet-medic/
+# decision-clock (cron daily): decision.mjs sweep --dispatch reads Cosmos decisions_pending and
+# execFileSync's fleet-dispatch/dispatch.mjs to send ONE batched per-owner overdue-gate nudge.
+COPY skills/decision-clock/ /app/skills/decision-clock/
+# signal-radar (cron ~30 min): radar.mjs scan --emit runs the 5 detectors and execFileSync's
+# fleet-dispatch/dispatch.mjs to route above-threshold signals to the owning agent's inbox.
+COPY skills/signal-radar/ /app/skills/signal-radar/
+# fleet-dispatch: the shared per-owner inbox dispatcher both decision-clock and signal-radar shell
+# out to (execFileSync node .../fleet-dispatch/dispatch.mjs send <owner> <msg> --from <src>).
+COPY skills/fleet-dispatch/ /app/skills/fleet-dispatch/
+# grant-tracker: signal-radar's grant-burn-expiry detector reads grant-tracker/grants.json to flag
+# grants whose term lapsed but still show status=active (may now be billing at full cash rate).
+COPY skills/grant-tracker/ /app/skills/grant-tracker/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]
