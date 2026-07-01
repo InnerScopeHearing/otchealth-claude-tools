@@ -12,8 +12,10 @@
 //   node run-evals.mjs                 # run all tasks
 //   node run-evals.mjs --agent cto     # one role
 //   node run-evals.mjs --task cto-diagnose-failing-job --emit
+//   node run-evals.mjs --json out.json # also write a structured scorecard (for the CI prompt-regression
+//                                       # gate to diff base-vs-head; see .github/workflows/promptcheck.yml)
 import crypto from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { TIERS, chatBody } from "../../setup/model-routing.mjs";
@@ -24,6 +26,7 @@ const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i +
 const ONLY_AGENT = (takeVal("--agent", "") || "").toLowerCase();
 const ONLY_TASK = takeVal("--task", "");
 const EMIT = argv.includes("--emit");
+const JSON_OUT = takeVal("--json", "");
 const PASS_AT = 0.7;
 
 // short role briefs (v1). LATER: load the real dream-team agent definitions for full fidelity.
@@ -76,7 +79,7 @@ async function judge(task, rubric, answer) {
 }
 async function emit(results) {
   const key = await sm("posthog-fleet-ingest-key"); if (!key) return;
-  for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, score: r.score, pass: r.pass, judge_model: DEP } }) });
+  for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, callsite_id: r.callsite_id, score: r.score, pass: r.pass, model: DEP, judge_model: DEP } }) });
 }
 
 const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json") && f !== "personas.json").flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
@@ -91,7 +94,9 @@ for (const t of tasks) {
   try { answer = await chat((PERSONA[t.agent] || `You are the ${t.agent}.`) + " Answer concretely and completely: name the SPECIFIC tools, gates, thresholds, numbers, and rules you would apply and WHY, cover every relevant consideration explicitly rather than implying it, and whenever you refuse or block, also state the compliant path.", t.task); scored = await judge(t.task, t.rubric, answer); }
   catch (e) { console.error(` ERROR ${e.message}`); continue; }
   const pass = scored.score >= PASS_AT;
-  results.push({ id: t.id, agent: t.agent, score: scored.score, pass });
+  // callsite_id/prompt_file identify WHICH prompt surface this task exercises (default to the agent
+  // name when a task predates the tagging), the substrate a later quality-per-dollar router joins on.
+  results.push({ id: t.id, agent: t.agent, callsite_id: t.callsite_id || t.agent, prompt_file: t.prompt_file || null, score: scored.score, pass, notes: scored.notes, met: scored.met });
   process.stderr.write(` ${(scored.score * 100).toFixed(0)}%\n`);
   console.log(`[${pass ? "PASS" : "FAIL"}] ${t.agent}/${t.id}  ${(scored.score * 100).toFixed(0)}%  (${scored.met.filter(Boolean).length}/${t.rubric.length})  ${scored.notes}`);
 }
@@ -99,4 +104,8 @@ const avg = results.reduce((s, r) => s + r.score, 0) / (results.length || 1);
 const passed = results.filter(r => r.pass).length;
 console.log(`\nSCORECARD: ${passed}/${results.length} passed, avg ${(avg * 100).toFixed(0)}%`);
 if (EMIT) { await emit(results); console.log("emitted eval_result events -> PostHog Fleet Agents"); }
+if (JSON_OUT) {
+  writeFileSync(JSON_OUT, JSON.stringify({ model: DEP, passAt: PASS_AT, avg, passed, total: results.length, results }, null, 2));
+  console.log(`wrote scorecard json -> ${JSON_OUT}`);
+}
 process.exit(results.some(r => !r.pass) ? 1 : 0);
