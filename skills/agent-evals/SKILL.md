@@ -78,3 +78,35 @@ the gap, fix the instructions, re-measure.
 v1 runs the persona on gpt-4o (credits) so it measures the INSTRUCTIONS. For true model-fidelity
 (measure the actual Claude agent), add an `anthropic-api-key` and set `AGENT_MODEL`, and load the
 real dream-team agent definitions instead of the short persona briefs.
+
+## Multi-judge panel + calibration (north-star self-improving-loop wave, item B, report-only)
+`judgepanel.mjs` closes a gap in the single-judge gate above: run-evals.mjs's `judge()` asks ONE model
+to score a rubric, so that model's idiosyncrasies (harsh, lenient, or flat wrong on one criterion)
+become the gate's only signal. `judgepanel.mjs` adds a small PANEL of 2-3 judges drawn from
+`setup/model-routing.mjs` TIERS (default: quality + standard + cheap - never a hardcoded deployment
+id), aggregates their scores into one more-robust `panel_score`, and reports panel AGREEMENT (a
+confidence signal: "high"/"medium"/"low"/"unscored") so a reader can tell a well-agreed score apart
+from a coin-flip. It also CALIBRATES that panel_score against a human-labeled golden set
+(`golden-set.json`: `{id, panel_score, human_score, note}` pairs) via a monotone piecewise-linear
+curve, so the reported score tracks what a human reviewer would actually say.
+- PURE core (unit-testable, no network/fs): `aggregatePanel(judgeRows)`, `confidenceLabel(agreement,
+  nJudgesSurviving)`, `buildCalibration(goldenPairs)`, `calibrate(panelScore, calibration)`,
+  `attachPanelToResult(result, panel, calibration)`. `resolvePanelTiers(tierNames)` resolves tier names
+  via model-routing (never invents a deployment id).
+- IO shim: `runJudgePanel(judgeFn, task, rubric, answer, {tiers})` calls a caller-supplied judge
+  function once per tier and tolerates a single judge erroring out (drops it, does not fail the whole
+  panel) - `judgeFn` is where a caller (e.g. a future small patch to run-evals.mjs) would wire in its
+  existing Azure OpenAI `chat()`/`judge()` helpers per tier; this module performs no network I/O itself.
+- `attachPanelToResult` is PURELY ADDITIVE: it never overwrites `score`/`pass` (the existing
+  single-judge gate's verdict, unchanged); it only adds `panel_score`, `calibrated_score`, `agreement`,
+  `confidence`, `judge_tiers` fields a caller may fold into the scorecard or a PR comment.
+- REPORT-ONLY / advisory by design, same as the rest of this wave: no exit-code effect, not wired into
+  `promptcheck.yml`'s gate, no new external service (same Azure OpenAI/Foundry endpoint, different
+  tiers), NO ledger writes.
+- `node judgepanel-cli.mjs calibration-report [--golden golden-set.json] [--out report.md]` is a
+  pure-data (no network) CLI that prints the fitted calibration curve + its mean absolute error against
+  the golden set, so the calibration's own trustworthiness can be reviewed before it is ever applied to
+  a live scorecard.
+- Tests: `judgepanel.test.mjs` covers panel aggregation (mean, agreement math, errored-judge exclusion),
+  confidence labeling, calibration fitting (monotonicity under noisy labels, duplicate-bucket
+  averaging, identity curve with no data), and the additive-only invariant on `attachPanelToResult`.
