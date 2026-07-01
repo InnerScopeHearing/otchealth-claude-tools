@@ -84,6 +84,23 @@ jobs:
             --head "${{ github.workspace }}/head-scorecard.json" \
             --out "${{ github.workspace }}/promptcheck-comment.md"
 
+      # Self-improving loop, item #1 (report-only): propose reverting any regressed prompt file.
+      # This NEVER opens a PR or touches git in CI (that is the hard-gated `draft` command, dormant);
+      # it only writes a "Proposed self-repair" block that the next step appends to the same PR comment.
+      # selfrepair.mjs plan always exits 0, so it can never fail the workflow.
+      - name: Propose self-repair for regressions (report-only)
+        if: always()
+        continue-on-error: true
+        env:
+          # a GitHub-computed commit SHA, passed via env per the workflow-injection-safe pattern.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          node head/skills/agent-evals/selfrepair.mjs plan \
+            --base "${{ github.workspace }}/base-scorecard.json" \
+            --head "${{ github.workspace }}/head-scorecard.json" \
+            --base-sha "$BASE_SHA" \
+            --out "${{ github.workspace }}/selfrepair-comment.md"
+
       - name: Post (or update) the PR comment
         if: always()
         continue-on-error: true
@@ -97,8 +114,11 @@ jobs:
               return;
             }
             const body = fs.readFileSync(path, 'utf8');
+            // Append the self-repair proposal block if it was produced (report-only; may be absent).
+            const repairPath = `${process.env.GITHUB_WORKSPACE}/selfrepair-comment.md`;
+            const repairBlock = fs.existsSync(repairPath) ? `\n\n---\n${fs.readFileSync(repairPath, 'utf8')}` : '';
             const marker = '<!-- prompt-regression-gate -->';
-            const fullBody = `${marker}\n${body}`;
+            const fullBody = `${marker}\n${body}${repairBlock}`;
             const { owner, repo } = context.repo;
             const issue_number = context.payload.pull_request.number;
             const comments = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
@@ -119,5 +139,6 @@ jobs:
             ${{ github.workspace }}/base-scorecard.json
             ${{ github.workspace }}/head-scorecard.json
             ${{ github.workspace }}/promptcheck-comment.md
+            ${{ github.workspace }}/selfrepair-comment.md
           retention-days: 14
           if-no-files-found: ignore

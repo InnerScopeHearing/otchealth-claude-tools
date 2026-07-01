@@ -33,6 +33,24 @@ auto-roll-back a prompt. Covers 6 surfaces today: company-brain synthesis, kb-me
 distillation, and the CTO/CFO/CLO personas, plus focus-group-loop. PHI/MNPI/clo-personal lanes are
 out of scope (no MedReview, no INND/Xero/Plaid, no clo-personal golden tasks).
 
+## Self-repair (north-star loop item #1, report-only phase 1)
+`selfrepair.mjs` closes the detect->fix->verify loop on top of the gate above, adding NO new store,
+field, or model call. It reuses `promptcheck.mjs`'s exported `diffScorecards()` so its proposal and
+the gate's own comment can never disagree about what regressed.
+- `node selfrepair.mjs plan --base <base.json> --head <head.json> [--base-sha <sha>] [--out md] [--json plan.json]`
+  computes the AUTO-REPAIRABLE regressions (a regressed golden task whose `prompt_file` is known),
+  groups them by file (one revert fixes every task sharing that file), picks the biggest-drop
+  `primary`, and renders a "Proposed self-repair" block (the exact `git checkout <base-sha> -- <file>`
+  revert + a re-run command). Report-only: touches no git, opens no PR, ALWAYS exits 0. It is wired
+  into `promptcheck.yml` to append its proposal to the PR comment.
+- `node selfrepair.mjs draft ... --execute` is HARD-GATED (also needs env `SELFREPAIR_EXECUTE=1`):
+  only then does it create a fix branch off the PR head, restore the regressed prompt file(s) to their
+  base content, and open a **DRAFT** PR via the fleet-bot GitHub App. It NEVER marks ready and NEVER
+  merges; a human always acks. Dormant (not wired into any workflow) until a graduation step, tested
+  against a real live regression, turns it on. Without both gates it is a dry-run.
+- Regressions with no `prompt_file` are reported as SKIPPED with a reason (tag the task to enable),
+  never silently dropped. Tests: `selfrepair.test.mjs`.
+
 ## The eval -> improve loop (proven 2026-06-21)
 First run surfaced the CTO persona as too thin (0% on OOM-diagnosis + PHI-wall). Enriching the
 persona brief with those behaviors took CTO from 1/3 to 3/3. That is the flywheel: measure, find
