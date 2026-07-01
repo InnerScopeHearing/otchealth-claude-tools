@@ -41,6 +41,15 @@ async function getTxt(n) { const r = await fetch(`https://${ACCT}.blob.core.wind
 async function putTxt(n, body, ct) { const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("put " + r.status); }
 
 // ---- cheap model (foundry gpt-4.1-mini primary; azure-openai gpt-4o fallback) ----
+// intentional cheap-capture, non-summarization: gpt-4.1-mini is kept as the PRIMARY here by design
+// (nightly, high-volume, Azure-credit-funded distillation across every agent-day; gpt-4o is the
+// fallback, not the other way round, precisely because this path is meant to stay cheap). The one
+// NOTE for a future pass: the daily-digest call below (processAgentDay's digSys prompt) reads closer
+// to quality summarization than the distillation call does (it is a human-readable narrative digest,
+// not a bounded pitfall/decision/fact extraction); left UNCHANGED this pass per explicit scope (both
+// callsites share this single init, so there is no separate "primary" to split without restructuring
+// the chat() plumbing) rather than risk a regression. Flag for the CTO to decide whether the digest
+// call specifically should move to a quality-tier deployment.
 let M1, M1K, M1D, M2, M2K, M2D;
 async function initModel() { M1 = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); M1K = await sm("azure-foundry-key"); M1D = process.env.LIBRARIAN_MODEL || "gpt-4.1-mini"; M2 = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); M2K = await sm("azure-openai-key"); M2D = "gpt-4o"; }
 async function chatOne(ep, key, dep, sys, user, max) { for (let a = 0; a < 4; a++) { const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: sys }, { role: "user", content: user }], max_tokens: max, temperature: 0.2 }) }); if (r.status === 429) { await new Promise((s) => setTimeout(s, 2000 * (a + 1))); continue; } if (!r.ok) throw new Error("chat " + r.status); return (await r.json()).choices[0].message.content; } throw new Error("chat throttled"); }

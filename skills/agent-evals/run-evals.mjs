@@ -39,15 +39,29 @@ try { Object.assign(PERSONA, JSON.parse(readFileSync(join(HERE, "evals", "person
 function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
 async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 
+// Reasoning-family deployments (gpt-5.x, o-series) reject max_tokens + a non-default temperature;
+// they require max_completion_tokens and no temperature override. Mirrors the gateway's
+// src/azure/foundry.ts chat() body-shape branch.
+const REASONING_FAMILY = /^(gpt-5|o[0-9])/i;
+
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
   EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.AGENT_MODEL || "gpt-4o";
-  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.AGENT_FALLBACK_MODEL || "gpt-4.1-mini";
+  // FALLBACK: gpt-4.1-mini is BANNED for quality work. Both callsites here (running the agent persona
+  // AND the LLM-judge scoring against the rubric) are quality synthesis/evaluation, exactly the kind
+  // of work the ban targets, so the fallback moves to the gateway's real quality-tier Foundry
+  // deployment: gpt-5.1, the "standard" tier in otchealth-mcp-server/src/azure/foundry.ts (cfg().chat),
+  // the same deployment the gateway itself resolves to. Reasoning-family, so callChat branches its body.
+  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.AGENT_FALLBACK_MODEL || "gpt-5.1";
   if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key");
 }
 async function callChat(ep, key, dep, system, user, maxTokens, tries) {
+  const isReasoning = REASONING_FAMILY.test(dep || "");
+  const body = { messages: [{ role: "system", content: system }, { role: "user", content: user }] };
+  if (isReasoning) body.max_completion_tokens = maxTokens;
+  else { body.max_tokens = maxTokens; body.temperature = 0.2; }
   for (let a = 0; a < tries; a++) {
-    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.2 }) });
+    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
     return (await r.json()).choices[0].message.content;

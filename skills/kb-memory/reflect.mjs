@@ -21,6 +21,10 @@ const MIN_TOOLS = parseInt(val("--min-tools", "12"), 10) || 12;
 const AGENT = (process.env.KB_AGENT || val("--agent", "") || "").toLowerCase();
 // PreCompact (the highest-stakes distill) passes --prefer-fallback: use the uncontended foundry
 // gpt-4.1-mini as PRIMARY so the capture never blocks on the contended shared gpt-4o deployment.
+// intentional cheap-capture, non-summarization: this extracts 0-3 short durable-lesson candidates
+// from a session (a cheap, bounded-output classification task), NOT decision-grade quality synthesis,
+// so it stays on the gpt-4.1-mini fast/cheap path (the ban targets quality summarization work, e.g.
+// company-brain / focus-group-loop / agent-evals, not this). Left unchanged per fleet-wide fallback fix.
 const PREFER_FB = argv.includes("--prefer-fallback") || !!process.env.REFLECT_PREFER_FALLBACK;
 
 function loadSA() { if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) { try { return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); } catch {} } for (const p of [process.env.HOME + "/.gcp_claude_driver_sa.json", "/root/.gcp_claude_driver_sa.json"]) { try { return JSON.parse(readFileSync(p, "utf8")); } catch {} } return null; }
@@ -30,6 +34,7 @@ async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/to
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
   EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.REFLECT_MODEL || "gpt-4o";
+  // intentional cheap-capture, non-summarization (see note above): gpt-4.1-mini stays the default here.
   FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.REFLECT_FALLBACK_MODEL || "gpt-4.1-mini";
 }
 async function callChat(ep, key, dep, system, user, maxTokens, tries) {
