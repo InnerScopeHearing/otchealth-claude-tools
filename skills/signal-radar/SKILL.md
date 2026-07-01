@@ -10,7 +10,7 @@ It is deliberately narrow and boring: five hand-picked, high-precision detectors
 fleet already collects, each tuned so a healthy system stays SILENT. It never takes action on
 production; it only classifies, records, and routes a Signal to the human/agent who owns that lane.
 
-## Detectors (5 from the original brief + `contradiction-staleness`; one brief candidate dropped, see below)
+## Detectors (5 from the original brief + `contradiction-staleness` + `groundedness`; one brief candidate dropped, see below)
 
 1. **`sentry-error-spike`** — a Sentry project's error count this week is >= 3x the MEDIAN of the prior
    3 weeks, with an absolute floor (5 errors/week) so a low-volume project's noise never fires. MedReview
@@ -48,6 +48,26 @@ production; it only classifies, records, and routes a Signal to the human/agent 
    secret) beyond what kb-memory + model-routing already resolve. Pure core (`extractEntityKeys`,
    `candidateSlice`, `gateVerdict`, `recentClaimRows`, `scanRows`) is unit-tested with an injected fake
    entailment fn (no live network in tests).
+7. **`groundedness`** — a FAITHFULNESS/GROUNDEDNESS detector, a report-mode hallucination guard.
+   Self-improving-loop item D. Reads the SAME shared exec MEMORY feed `contradiction-staleness`
+   reads; for each recent claim-type row that carries a non-empty `source` field (a citation to
+   retrieved context), runs ONE bounded LLM faithfulness call asking whether the claim text is
+   actually entailed by that source. Rows with no `source` are skipped entirely (out of scope, not
+   guessed at). Cost is bounded HARD: rolling window (`GROUNDEDNESS_WINDOW_DAYS`, default 7), one
+   BOUNDED gpt tier (cheap/classification tier, not the quality/reasoning tier - this is a binary
+   classification, not open synthesis) call per sourced row, total calls capped
+   (`GROUNDEDNESS_MAX_LLM_CALLS`, default 40, <=40) with a no-silent-truncation note when the cap
+   bites, and a fixed character budget on both the claim and source excerpts handed to the model.
+   Two precision levers keep it quiet: a GROUNDING GATE (a verdict is discarded unless the model
+   echoes back the exact row id it was asked about) and a MATERIALITY FLOOR (only `unsupported`/
+   `contradicted` fire; `supported`/`partial` never do, so a normal paraphrase or summary is not
+   flagged). REPORT-MODE / observe-only: it NEVER writes the ledger; its `suggested_action` tells a
+   human/agent to re-verify against the source and drafts the `mem.mjs correct ...` command if the
+   claim cannot be substantiated. MNPI/PHI rows are dropped before the LLM ever sees them (defense in
+   depth on top of radar.mjs's central MNPI hard-route); MedReview/PHI-ring agents are never a data
+   source at all. Fail-open (no creds / no network -> idle, never throws). Adds NO new infra beyond
+   what kb-memory + model-routing already resolve. Pure core (`checkableRows`, `gateVerdict`,
+   `scanRows`) is unit-tested with an injected fake faithfulness fn (no live network in tests).
 
 **Dropped (from the original 6-candidate brief): PostHog funnel-step week-over-week drop.** Checked
 live: every real consumer-app PostHog project (iHEARtest 468379, AWARE 468388, Companion 468389, ...)

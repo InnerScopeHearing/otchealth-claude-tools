@@ -30,13 +30,14 @@ import * as grantBurnExpiry from "./detectors/grant-burn-expiry.mjs";
 import * as rotateSecretAge from "./detectors/rotate-secret-age.mjs";
 import * as markReviewOverdue from "./detectors/mark-review-overdue.mjs";
 import * as contradictionStaleness from "./detectors/contradiction-staleness.mjs";
+import * as groundedness from "./detectors/groundedness.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DISPATCH_PATH = join(HERE, "..", "fleet-dispatch", "dispatch.mjs");
 
-// Every detector module exports { NAME, OWNER, run() }. Adding a 7th detector later is: write the
+// Every detector module exports { NAME, OWNER, run() }. Adding another detector later is: write the
 // module (mirroring any existing one), import it, and add it here - no other file changes needed.
-const DETECTORS = [sentryErrorSpike, evalRegression, grantBurnExpiry, rotateSecretAge, markReviewOverdue, contradictionStaleness];
+const DETECTORS = [sentryErrorSpike, evalRegression, grantBurnExpiry, rotateSecretAge, markReviewOverdue, contradictionStaleness, groundedness];
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
