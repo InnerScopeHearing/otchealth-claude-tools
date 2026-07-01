@@ -1,0 +1,164 @@
+name: deploy
+
+# TEMPLATE — the reusable golden-path release pipeline, parameterized from
+# otchealth-mcp-server/.github/workflows/deploy.yml. Deploys ONLY from green main, builds the
+# image ONCE and promotes it by immutable @sha256 DIGEST, brings up a GREEN revision at 0%
+# traffic, asserts health, then shifts traffic. The `production` GitHub Environment gates the
+# deploy behind a required reviewer (separation of duties). Auth is OIDC (no stored SP secret).
+#
+# ADOPT (see templates/golden-path/README.md for the full 8-step sequence):
+#   1. Fill in every value in the `env:` block below for YOUR app.
+#   2. Create a per-app UAMI (Contributor on YOUR app's RG + AcrPull on the shared ACR only —
+#      NEVER reuse another app's UAMI or the gateway's id-gateway-deployer identity) and paste
+#      its clientId into the Azure/login step below. See the UAMI recipe in the design doc §3.4.
+#   3. Enable branch protection on `main` FIRST (required PR, required ci.yml check, "require
+#      branches up to date") and create a `production` GitHub Environment (branch=main, one
+#      required reviewer who is NOT the usual release-opener) BEFORE the first real deploy.
+#   4. First deploy via workflow_dispatch only; do not rely on the push-to-main auto-trigger
+#      until step 3's branch protection has actually been exercised once.
+#
+# AUTO-DEPLOY: runs on every push to main (i.e. every merge) AND on manual dispatch. Safe ONLY
+# once (1) branch protection means only build-green code reaches main, and (2) the health gate
+# below actually reflects your app's real readiness (do not weaken it to a bare 200 if your app
+# can return 200 while still broken — mirror the gateway's tool_count-style regression floor
+# with whatever invariant matters for YOUR service, or at minimum require a real payload field,
+# not just an HTTP status).
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why this deploy (audit note)'
+        required: false
+        default: 'manual release from green main'
+  push:
+    branches: [main]
+    # Only redeploy when something that actually changes the built image changes. A workflow /
+    # infra / docs-only merge must NOT spend an ACR build + revision cutover.
+    paths-ignore:
+      - '.github/**'
+      - 'infra/**'
+      - 'docs/**'
+      - '**.md'
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  # ── TEMPLATE VALUES — fill in for your app; do not reuse another app's values ──
+  ACR: acrotc55c84f6bef # shared registry is fine; images are namespaced by IMAGE_REPO below
+  APP: CHANGE-ME-container-app-name
+  APP_RG: CHANGE-ME-resource-group
+  IMAGE_REPO: CHANGE-ME-image-repo-name # e.g. flatstick-api, companion-backend
+  HEALTH_PATH: /health # your app's own health endpoint; must return JSON with a "status" field
+  # Optional regression floor, mirroring the gateway's tool_count guard. Leave both blank to
+  # skip the extra floor check and only require {"status":"ok"}. If you set HEALTH_MIN_FIELD,
+  # the JSON at that field must be >= HEALTH_MIN_VALUE or the deploy is treated as a regression
+  # and rolled back before traffic ever shifts.
+  HEALTH_MIN_FIELD: '' # e.g. "tool_count" — leave blank to disable
+  HEALTH_MIN_VALUE: '0'
+  # TEMPLATE NOTE: working directory for a monorepo subdirectory (must match ci.yml's WORKING_DIR
+  # and the Dockerfile's build context if the Dockerfile itself lives in that subdirectory).
+  WORKING_DIR: '.'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production # human approval gate; reviewer must differ from the release opener
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: Azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          # These are non-secret Azure identifiers, NOT credentials. Security is the OIDC
+          # federated credential on THIS APP'S OWN user-assigned managed identity, which trusts
+          # only subject `repo:InnerScopeHearing/<this-repo>:environment:production`. That
+          # identity must be least-privilege (Contributor on APP_RG + AcrPull on ACR ONLY) —
+          # see the UAMI recipe in the design doc. NEVER paste the gateway's or another app's
+          # client-id here; that would give this pipeline write access to a resource group it
+          # has no business touching.
+          client-id: CHANGE-ME-your-own-uami-client-id
+          tenant-id: 4ab58580-cc9c-49f7-b5c7-a77f84fdc270 # shared tenant, fine to reuse
+          subscription-id: 55c84f6b-ef90-4259-a58b-50835cc4cab4 # shared subscription, fine to reuse
+
+      - name: Build once (immutable, tagged by git sha)
+        working-directory: ${{ env.WORKING_DIR }}
+        run: az acr build -r "$ACR" -t "${IMAGE_REPO}:${GITHUB_SHA}" -f Dockerfile .
+
+      - name: Resolve immutable digest
+        id: digest
+        run: |
+          set -euo pipefail
+          DIGEST=$(az acr repository show -n "$ACR" --image "${IMAGE_REPO}:${GITHUB_SHA}" --query digest -o tsv)
+          echo "ref=${ACR}.azurecr.io/${IMAGE_REPO}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Deploying digest ${DIGEST}"
+
+      - name: Ensure multiple-revision mode (blue-green)
+        run: az containerapp revision set-mode -n "$APP" -g "$APP_RG" --mode multiple
+
+      - name: Deploy GREEN revision (starts at 0% traffic)
+        id: green
+        run: |
+          set -euo pipefail
+          SUFFIX="g$(echo "$GITHUB_SHA" | cut -c1-8)"
+          az containerapp update -n "$APP" -g "$APP_RG" \
+            --image "${{ steps.digest.outputs.ref }}" --revision-suffix "$SUFFIX" >/dev/null
+          echo "revision=${APP}--${SUFFIX}" >> "$GITHUB_OUTPUT"
+
+      - name: Assert GREEN health (+ optional regression floor)
+        run: |
+          set -euo pipefail
+          FQDN=$(az containerapp revision show -n "$APP" -g "$APP_RG" \
+            --revision "${{ steps.green.outputs.revision }}" --query properties.fqdn -o tsv)
+          for i in $(seq 1 25); do
+            code=$(curl -fsS -o /tmp/h.json -w '%{http_code}' "https://${FQDN}${HEALTH_PATH}" 2>/dev/null || echo 000)
+            [ "$code" = "200" ] && break
+            sleep 6
+          done
+          cat /tmp/h.json
+          node -e '
+            const h = require("/tmp/h.json");
+            if (h.status !== "ok") { console.error("health not ok"); process.exit(1); }
+            const field = process.env.HEALTH_MIN_FIELD;
+            if (field) {
+              const n = h[field] || 0, min = Number(process.env.HEALTH_MIN_VALUE);
+              if (n < min) { console.error(`REGRESSION: ${field} ${n} < ${min}`); process.exit(1); }
+              console.log(`GREEN healthy: ${field}=${n} (>= ${min}).`);
+            } else {
+              console.log("GREEN healthy: status ok (no regression floor configured).");
+            }
+          '
+
+      - name: Shift 100% traffic to GREEN (blue-green cutover)
+        run: |
+          az containerapp ingress traffic set -n "$APP" -g "$APP_RG" \
+            --revision-weight "${{ steps.green.outputs.revision }}=100"
+          echo "Live on ${{ steps.green.outputs.revision }} (digest ${{ steps.digest.outputs.ref }})."
+
+      # Self-healing: if anything after the GREEN revision came up failed (health gate, cutover),
+      # traffic never left the last-good (blue) revision. Deactivate the bad GREEN so it does not
+      # linger as an idle warm replica burning the shared free grant. Rollback is automatic: blue
+      # still holds 100% traffic.
+      - name: Roll back on failure (deactivate the bad GREEN; traffic stays on blue)
+        if: failure() && steps.green.outputs.revision != ''
+        run: |
+          echo "::warning::Deploy failed after GREEN came up. Traffic stayed on the last-good revision; deactivating ${{ steps.green.outputs.revision }}."
+          az containerapp revision deactivate -n "$APP" -g "$APP_RG" \
+            --revision "${{ steps.green.outputs.revision }}" || true
+
+      # Release hygiene: keep the now-active GREEN + the single most-recent inactive (instant
+      # rollback target); deactivate older inactive revisions so idle replicas stop burning the grant.
+      - name: Prune stale revisions (keep active + one warm rollback)
+        if: success()
+        run: |
+          set -euo pipefail
+          az containerapp revision list -n "$APP" -g "$APP_RG" -o json \
+            | jq -r '[.[] | select(.properties.active and .properties.trafficWeight==0)] | sort_by(.properties.createdTime) | .[:-1] | .[].name' \
+            | while read -r rev; do
+                [ -n "$rev" ] && (az containerapp revision deactivate -n "$APP" -g "$APP_RG" --revision "$rev" || true)
+              done
