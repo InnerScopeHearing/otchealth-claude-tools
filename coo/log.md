@@ -57,3 +57,10 @@ edition + price with CRO. Booked a 2-hour CASH BLOCK today 12-2pm PT scoped to e
 working cash, $0 revenue today/90d) and the 2 gates. Refreshed coo/today.md and
 coo/PRIORITIES.md to match. No new dispatch to other agents needed - all owners (CTO, CRO,
 CFO, CCO) already have this on their plate per the exec feed.
+2026-07-01 05:32 | morning-guard | skipped | duplicate routine trigger, 8 minutes after the
+05:24 morning brief send. Marker "Morning brief sent - 2026-07-01" already claimed (ledger
+id 20260701-004/053), no re-send. Checked the coo ledger + exec feed for any change since:
+both Matt-only gates (Stripe payout bank connect; the one real full-price PAIR99 TReO order
+for CHECKOUT-PROOF) still open, no CTO PASS posted; CFO's 2026-07-01 status confirms same
+open items; no Gumroad edition/pricing decision posted. Nothing new for Matt beyond what he
+already has in the brief he just received. No brief resent, no push notification sent.
