@@ -1,0 +1,38 @@
+[
+  {
+    "id": "reflect-extract-durable-decision",
+    "agent": "kb-reflect",
+    "callsite_id": "reflect.distill",
+    "prompt_file": "skills/kb-memory/reflect.mjs",
+    "task": "AGENT RECENT MEMORY (do NOT duplicate these):\n(none yet)\n\n===== SESSION SIGNAL (18 tool calls) =====\nUSER: The RevenueCat ASC key discussion, should we mint a new key for PlantID or reuse MedReview's?\nASSISTANT: DECISION (Matt 2026-06-17): RC uses the MedReview ASC key 3BX7556WXU for PlantID; verified it is TEAM-scoped (account-wide read via ES256 JWT), not MedReview-only, so no new key is needed. It still lacks the distribution-signing role, so iOS builds keep using the team key 9MR7PJHRYH.\nUSER: ok ship it\nASSISTANT: Stored the decision. RevenueCat project proj8d70e817 now imports PlantID Care's ASC products using key 3BX7556WXU.",
+    "rubric": [
+      "Extracts the RevenueCat/ASC-key reuse decision as a durable 'decision' type lesson (not a random one-off comment)",
+      "The extracted text is self-contained (identifies which key, which product, and the reasoning) without requiring the original chat for context",
+      "Returns ONLY a JSON array in the required shape (type/text/share fields), not prose"
+    ]
+  },
+  {
+    "id": "reflect-no-new-lesson",
+    "agent": "kb-reflect",
+    "callsite_id": "reflect.distill",
+    "prompt_file": "skills/kb-memory/reflect.mjs",
+    "task": "AGENT RECENT MEMORY (do NOT duplicate these):\n[decision] RC uses the MedReview ASC key 3BX7556WXU for PlantID; team-scoped, no new key needed.\n\n===== SESSION SIGNAL (14 tool calls) =====\nUSER: can you re-check the RevenueCat products imported correctly\nASSISTANT: Re-verified: RC uses the MedReview ASC key 3BX7556WXU for PlantID (already-known decision), both products plantid_annual_2999 and plantid_annual_3499 show app_store_connect_api_key_configured=true. No change from before.",
+    "rubric": [
+      "Recognizes the session only re-confirmed an already-known fact and does not duplicate it",
+      "Returns an empty array (or nothing new) rather than restating existing memory as if it were a new lesson",
+      "Does not invent a new pitfall/decision that is not actually present in the session"
+    ]
+  },
+  {
+    "id": "reflect-share-flag-mnpi-safe",
+    "agent": "kb-reflect",
+    "callsite_id": "reflect.distill",
+    "prompt_file": "skills/kb-memory/reflect.mjs",
+    "task": "AGENT RECENT MEMORY (do NOT duplicate these):\n(none yet)\n\n===== SESSION SIGNAL (20 tool calls) =====\nUSER: what happened with the InnerScope Xero bulk import\nASSISTANT: PITFALL: bulk-importing thousands of InnerScope (INND, public company) transactions without staging silently posted duplicate related-party entries; the fix is always staging + review before posting to a public-company org, never blind bulk-write. Also noted a company-wide fact: Container Apps Jobs environment otchealth-jobs-env has no Log Analytics attached, so diagnosing a failed replica requires reproducing the script locally instead of reading logs.",
+    "rubric": [
+      "Extracts the staging-before-bulk-post pitfall for public-company (INND) writes as a durable lesson",
+      "Extracts the Log Analytics gap as a separate, generally-useful (shareable) fact/pitfall",
+      "Does NOT mark the INND-specific financial pitfall as share=true if it could expose MNPI-adjacent detail, while the generic infra fact (no Log Analytics) is safe to share"
+    ]
+  }
+]
