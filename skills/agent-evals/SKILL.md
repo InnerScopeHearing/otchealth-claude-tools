@@ -33,23 +33,41 @@ auto-roll-back a prompt. Covers 6 surfaces today: company-brain synthesis, kb-me
 distillation, and the CTO/CFO/CLO personas, plus focus-group-loop. PHI/MNPI/clo-personal lanes are
 out of scope (no MedReview, no INND/Xero/Plaid, no clo-personal golden tasks).
 
-## Self-repair (north-star loop item #1, report-only phase 1)
-`selfrepair.mjs` closes the detect->fix->verify loop on top of the gate above, adding NO new store,
-field, or model call. It reuses `promptcheck.mjs`'s exported `diffScorecards()` so its proposal and
-the gate's own comment can never disagree about what regressed.
+## Self-repair (north-star loop items #1 REVERT + #3 REWRITE, report-only phase 1)
+`selfrepair.mjs` closes the detect->fix->verify loop on top of the gate above. Item #1's revert path
+adds NO new store, field, or model call; it reuses `promptcheck.mjs`'s exported `diffScorecards()` so
+its proposal and the gate's own comment can never disagree about what regressed.
 - `node selfrepair.mjs plan --base <base.json> --head <head.json> [--base-sha <sha>] [--out md] [--json plan.json]`
   computes the AUTO-REPAIRABLE regressions (a regressed golden task whose `prompt_file` is known),
   groups them by file (one revert fixes every task sharing that file), picks the biggest-drop
   `primary`, and renders a "Proposed self-repair" block (the exact `git checkout <base-sha> -- <file>`
   revert + a re-run command). Report-only: touches no git, opens no PR, ALWAYS exits 0. It is wired
   into `promptcheck.yml` to append its proposal to the PR comment.
+- `node selfrepair.mjs rewrite --base <base.json> --head <head.json> [--base-sha <sha>] [--head-sha <sha>] [--offline] [--out md] [--json proposal.json]`
+  (north-star loop item #3) graduates the FIX side from a blunt revert to a **gpt-5.1 REWRITE proposal**:
+  for the primary regressed prompt file it reads the base + head prompt text and the SPECIFIC failed
+  rubric criteria and proposes a MINIMAL rewrite of the regressed hunk that recovers those criteria WHILE
+  KEEPING the improvement the PR intended (it does not throw away the PR's change like a revert does).
+  REPORT-ONLY: it prints a clearly DRAFT-ONLY proposal, edits no file, touches no git, opens no PR, and
+  ALWAYS exits 0. The gpt-5.1 call is behind an injectable function so the pure core `proposeRewrite()` is
+  unit-testable offline; `--offline` (or no SA in env) skips the network and emits a well-formed abstaining
+  proposal. The pure exports are `proposeRewrite({regression, basePromptText, headPromptText, failedRubric})`,
+  `buildRewritePrompt(...)`, and `reRunFullSuiteCmd(agent)`. gpt-4.1-mini is BANNED for this synthesis; the
+  rewrite uses the fleet `quality` tier (gpt-5.1) via `setup/model-routing.mjs`.
 - `node selfrepair.mjs draft ... --execute` is HARD-GATED (also needs env `SELFREPAIR_EXECUTE=1`):
   only then does it create a fix branch off the PR head, restore the regressed prompt file(s) to their
-  base content, and open a **DRAFT** PR via the fleet-bot GitHub App. It NEVER marks ready and NEVER
-  merges; a human always acks. Dormant (not wired into any workflow) until a graduation step, tested
-  against a real live regression, turns it on. Without both gates it is a dry-run.
+  base content (revert mode, item #1), and open a **DRAFT** PR via the fleet-bot GitHub App. It NEVER
+  marks ready and NEVER merges; a human always acks. Dormant (not wired into any workflow) until a
+  graduation step, tested against a real live regression, turns it on. Without both gates it is a dry-run.
+  `draft --mode rewrite` is graduation-gated further: per the design's risk #1 (a rewrite can overfit the
+  one regressed task while silently breaking a DIFFERENT, untested rubric criterion), the draft path MUST
+  first re-run the FULL agent eval suite (`reRunFullSuiteCmd(agent)` = `node run-evals.mjs --agent <a>
+  --json <out>`, never a single `--task`) and confirm NO NEW regression before opening the draft PR. In
+  v1 `draft --mode rewrite` prints that mandatory sequence rather than auto-applying an unverified edit.
 - Regressions with no `prompt_file` are reported as SKIPPED with a reason (tag the task to enable),
-  never silently dropped. Tests: `selfrepair.test.mjs`.
+  never silently dropped. A rewrite with no `prompt_file` or no failed rubric ABSTAINS (a first-class safe
+  outcome, never a fabricated hunk). Tests: `selfrepair.test.mjs` (revert), `selfrepair-rewrite.test.mjs`
+  (rewrite; all model calls are injected fakes, no live network).
 
 ## The eval -> improve loop (proven 2026-06-21)
 First run surfaced the CTO persona as too thin (0% on OOM-diagnosis + PHI-wall). Enriching the
