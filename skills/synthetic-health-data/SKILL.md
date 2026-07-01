@@ -85,19 +85,49 @@ node deident.mjs --file real_extract.csv --csv                  # CSV in, CSV ou
 cat real_extract.json | node deident.mjs --out clean.json --report report.json
 ```
 
+### Fail-closed guarantee
+
+`deident.mjs` is **default-deny, not default-allow**. Every key in an input record is checked
+against an explicit SAFE allowlist of known non-identifying fields (age bands, ear side,
+per-frequency dB categoricals, result tiers, sex, state, ICD-10 dx code fields, and order
+totals/quantities/currency/line-item names). Any key that is not on that allowlist, and does not
+match a known identifier category, is **dropped** rather than passed through, and shows up in the
+strip report as `dropped (unclassified)`. There is no code path that returns an unrecognized
+column's value unchanged, so an unknown or newly added column in a real extract is safe by
+construction: it disappears from the output instead of leaking.
+
+On top of the default-deny structure, `deident.mjs` also runs shape-based identifier detection
+(belt-and-suspenders): a value that looks like an MRN, account number, VIN, device serial, or a
+generic prefixed code is redacted even under a key name none of the lists above recognize
+(covers variants such as `member_number`, `insurance_policy_no`, `claim_number`,
+`vehicle_serial`, `hearing_aid_sn`, and similar).
+
+**Known limitation - honorific heuristic, not full NER.** Names embedded in free-text note fields
+are caught with a heuristic: an honorific (`Dr.`, `Mr.`, `Mrs.`, `Ms.`, `Pt`, `Patient`) followed
+by one or more capitalized tokens is redacted. This is not full named-entity recognition and will
+miss a name in prose with no preceding honorific (for example "his wife Maria" with no title).
+The heuristic is a best-effort net on top of the default-deny structural guarantee; the
+structural guarantee, not the heuristic, is what actually prevents leakage of unknown columns.
+
 ### The 18 HIPAA Safe Harbor categories, and how this tool handles each
 
-1. **Names** -> redacted.
+1. **Names** -> redacted, including names embedded in free-text notes via the honorific
+   heuristic described above (see limitation note).
 2. **Geographic subdivisions smaller than a state** (street, city, county, precinct) -> redacted;
    state is kept (Safe Harbor permits state-level geography). ZIP: kept as the 3-digit prefix only
    if that prefix is on a verified >20,000-population allowlist, otherwise zeroed to `000`
    (conservative default: every ZIP is zeroed unless explicitly allowlisted).
-3. **All elements of dates** (except year) directly tied to an individual -> year only.
-   **Any age over 89 -> `90+`.**
+3. **All elements of dates** (except year) directly tied to an individual -> year only, including
+   non-ISO date shapes embedded in prose (`MM/DD/YYYY`, `M/D/YY`, `MM-DD-YYYY`, `15-Mar-2024`,
+   `Jan 3, 2024`). **Any age over 89 -> `90+`, and whenever a record's age exceeds 89, the DOB
+   field's year is also suppressed** (Safe Harbor forbids retaining any date element, including
+   year, once implied age exceeds 89 - keeping just the birth year would still narrow the subject
+   to a small population).
 4. **Telephone numbers** -> redacted.
 5. **Fax numbers** -> redacted.
 6. **Email addresses** -> redacted.
-7. **Social Security numbers** -> redacted.
+7. **Social Security numbers** -> redacted, including unanchored SSNs embedded in free text in
+   dashed, dotted, spaced, or bare-digit form.
 8. **Medical record numbers** -> redacted.
 9. **Health plan beneficiary numbers** -> redacted.
 10. **Account numbers** -> redacted.
@@ -108,14 +138,17 @@ cat real_extract.json | node deident.mjs --out clean.json --report report.json
 15. **IP addresses** -> redacted.
 16. **Biometric identifiers** -> redacted.
 17. **Full-face photographs and comparable images** -> redacted.
-18. **Any other unique identifying number, characteristic, or code** -> a generic-identifier
-    catch-all (any field named/suffixed `id`, `uuid`, `record_id`, `order_number`, etc.) is
-    redacted, and free-text fields (notes, comments) are scanned for embedded emails, phones,
-    SSNs, URLs, and IPs so identifiers hiding in prose are not missed.
+18. **Any other unique identifying number, characteristic, or code** -> covered two ways: a
+    generic-identifier key-name catch-all (any field named/suffixed `id`, `uuid`, `record_id`,
+    `order_number`, etc.), and the **fail-closed default**: any key that is not on the SAFE
+    allowlist and does not match a known category above is dropped outright, so an unrecognized
+    identifying column can never leak silently.
 
-Run it against nested JSON of any shape (arrays or single objects) or flat CSV; unknown fields are
-passed through untouched, known identifier fields are transformed per the table above, and any
-remaining string value is scrubbed for embedded identifiers regardless of field name.
+Run it against nested JSON of any shape (arrays or single objects) or flat CSV. Known identifier
+fields are transformed per the table above; note-like free-text fields (`note`, `notes`,
+`comment`, `comments`, `description`, `summary`, `narrative`) are kept but scrubbed for embedded
+identifiers; every other field is either on the SAFE allowlist (passed through, still scrubbed if
+a string) or dropped as unclassified. Nothing unrecognized is ever passed through untouched.
 
 ## Rule: where each tool runs
 
@@ -129,4 +162,8 @@ remaining string value is scrubbed for embedded identifiers regardless of field 
 
 `tests/synthetic-health-data.test.mjs` (run via the toolkit's `run-tests.sh`) validates every
 generator shape and asserts, for a synthetic "real-looking" record, that all 18 Safe Harbor
-categories are detected and transformed, including identifiers embedded in free text.
+categories are detected and transformed, including identifiers embedded in free text. It also
+carries fail-closed regression cases: an unclassified/unknown key is dropped rather than passed
+through, a prose name following an honorific is redacted, an unanchored SSN in free text is
+redacted, non-ISO dates in free text reduce to year only, an over-89 age suppresses the DOB
+year, and identifier-shaped values under unfamiliar key names are still caught.

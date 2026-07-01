@@ -138,14 +138,26 @@ test("deident zeroes 3-digit ZIP unless proven >20k population (category 2, ZIP 
   assert.equal(clean.zip, "000");
 });
 
-test("deident collapses dates to year only and ages>89 to 90+ (category 3)", () => {
+test("deident collapses dates to year only, ages>89 to 90+, and suppresses the DOB year too when age>89 (category 3)", () => {
   const { clean, stripped } = deidentRecord(REAL_LOOKING_RECORD);
-  assert.equal(clean.dob, "1930");
+  // REAL_LOOKING_RECORD has age: 96, so the DOB year itself must NOT be retained (1930 leaks
+  // decade-of-birth for a 90+ subject, which Safe Harbor forbids).
+  assert.notEqual(clean.dob, "1930");
+  assert.equal(clean.dob, "REDACTED-90+");
+  // Other (non-DOB) dates in the same record still reduce to year-only as normal.
   assert.equal(clean.admission_date, "2026");
   assert.equal(clean.age, "90+");
   assert.ok(stripped.includes("dates_full"));
   assert.ok(stripped.includes("age_over_89"));
+  assert.ok(stripped.includes("dob_year_over_89_suppressed"));
   assert.equal(yearOnly("2015-06-01"), "2015");
+});
+
+test("regression: over-89 DOB year suppression does not leak the birth year even when age lives in a different field", () => {
+  const record = { dob: "1930-05-14", age: 96 };
+  const { clean } = deidentRecord(record);
+  assert.notEqual(clean.dob, "1930");
+  assert.doesNotMatch(String(clean.dob), /1930/);
 });
 
 test("deident strips phone (4) and fax (5)", () => {
@@ -264,5 +276,68 @@ test("de-identified output of a generator-produced patient record also passes th
   const { clean } = deidentRecord(synthetic);
   assert.equal(clean.first_name, "[NAME-REDACTED]");
   assert.equal(clean.mrn, "[MRN-REDACTED]");
-  assert.match(clean.dob, /^\d{4}$/);
+  // dob is either a bare year (age <= 89) or the over-89 suppressed marker (age > 89); either
+  // way, no full date (month/day) survives.
+  assert.ok(/^\d{4}$/.test(clean.dob) || clean.dob === "REDACTED-90+", `unexpected dob shape: ${clean.dob}`);
+});
+
+// ---------- fail-closed regressions (adversarial review findings) ----------
+
+test("regression: default-deny drops an unclassified key instead of passing it through", () => {
+  const record = { custom_secret_id_that_matters: "XYZ-999-should-not-leak", state: "IL" };
+  const { clean, stripped } = deidentRecord(record);
+  assert.equal(clean.custom_secret_id_that_matters, undefined);
+  assert.ok(stripped.includes("dropped (unclassified)"));
+  assert.equal(clean.state, "IL"); // known-safe key still passes through
+});
+
+test("regression: unknown columns anywhere in a record are dropped, never silently passed through", () => {
+  const record = { weird_column: "secret-value-42", zip: "90210", name: "John Public" };
+  const { clean, stripped } = deidentRecord(record);
+  assert.equal(clean.weird_column, undefined);
+  assert.doesNotMatch(JSON.stringify(clean), /secret-value-42/);
+  assert.ok(stripped.includes("dropped (unclassified)"));
+});
+
+test("regression: prose names following an honorific are redacted from free text, not just dedicated name fields", () => {
+  const record = { note: "Pt John Q. Public reports headache. Seen by Dr. Sarah Chen. Wife Maria Public called." };
+  const { clean, stripped } = deidentRecord(record);
+  assert.doesNotMatch(clean.note, /John/);
+  assert.doesNotMatch(clean.note, /Sarah Chen/);
+  assert.ok(stripped.includes("names"));
+});
+
+test("regression: unanchored SSNs embedded in prose (no key name) are redacted", () => {
+  const record = { note: "SSN on file: 123-45-6789, backup format 123456789, and spaced 123 45 6789." };
+  const { clean, stripped } = deidentRecord(record);
+  assert.doesNotMatch(clean.note, /123-45-6789/);
+  assert.doesNotMatch(clean.note, /123456789/);
+  assert.doesNotMatch(clean.note, /123 45 6789/);
+  assert.ok(stripped.includes("ssn"));
+});
+
+test("regression: non-ISO dates embedded in prose (MM/DD/YYYY, Mon D YYYY, D-Mon-YYYY) reduce to year only", () => {
+  const record = { note: "Seen 03/15/2024 and again on Jan 3, 2024 and 15-Mar-2024." };
+  const { clean, stripped } = deidentRecord(record);
+  assert.doesNotMatch(clean.note, /03\/15\/2024/);
+  assert.doesNotMatch(clean.note, /Jan 3, 2024/);
+  assert.doesNotMatch(clean.note, /15-Mar-2024/);
+  assert.match(clean.note, /2024/); // year is retained, day/month are not
+  assert.ok(stripped.includes("dates_full"));
+});
+
+test("regression: shape-based ID detection catches identifier-shaped values under unfamiliar key names", () => {
+  const record = {
+    member_number: "HP99887766",
+    insurance_policy_no: "POL-887766",
+    claim_number: "CLM-2024-991",
+    vehicle_serial: "1HGCM82633A004352",
+    hearing_aid_sn: "HA-2024-99871",
+  };
+  const { clean } = deidentRecord(record);
+  assert.notEqual(clean.member_number, "HP99887766");
+  assert.notEqual(clean.insurance_policy_no, "POL-887766");
+  assert.notEqual(clean.claim_number, "CLM-2024-991");
+  assert.notEqual(clean.vehicle_serial, "1HGCM82633A004352");
+  assert.notEqual(clean.hearing_aid_sn, "HA-2024-99871");
 });
