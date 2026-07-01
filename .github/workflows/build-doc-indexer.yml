@@ -1,0 +1,33 @@
+name: build-doc-indexer
+
+# Rebuild + push the shared doc-indexer container image (otchealthacr/doc-indexer:latest) that the
+# Container Apps Jobs (signal-radar, decision-clock, librarians, fleet-medic) run. One-click, OIDC auth
+# (no stored credentials). Use after merging a change under any COPYd skill dir (signal-radar/, etc.).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to build/push'
+        required: false
+        default: 'latest'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login (OIDC, no stored secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: az acr build doc-indexer
+        run: |
+          set -euo pipefail
+          az acr build -r otchealthacr -t "doc-indexer:${{ github.event.inputs.tag }}" \
+            -f skills/doc-indexer/job/Dockerfile .
