@@ -1,0 +1,98 @@
+[
+  {
+    "id": "gs-01",
+    "query": "kb-memory ledger source of truth",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["source of truth", "ledger"],
+    "note": "Fleet Super-Brain protocol status entries assert the shared ledger is the source of truth."
+  },
+  {
+    "id": "gs-02",
+    "query": "self-repair draft PR promptcheck",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["selfrepair.mjs", "draft pr"],
+    "note": "CTO fact entry on self-repair item #1 (PR #266), report-only + draft-PR mode."
+  },
+  {
+    "id": "gs-03",
+    "query": "contradiction staleness signal radar detector",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["signal radar", "detector #6"],
+    "note": "CTO fact entry on the contradiction+staleness Signal Radar detector #6 shipping."
+  },
+  {
+    "id": "gs-04",
+    "query": "PostHog gateway ops observability sink",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["gateway ops", "posthog"],
+    "note": "CTO decision entry on the PostHog Gateway Ops sink (self-improving-loop item A)."
+  },
+  {
+    "id": "gs-05",
+    "query": "Front Door WAF alphanumeric hyphens deploy",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["waf policy names must be alphanumeric", "no hyphens"],
+    "note": "CTO pitfall entry: WAF policy names must be alphanumeric only, no hyphens."
+  },
+  {
+    "id": "gs-06",
+    "query": "published copy dash-clean compliance",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["dash-clean", "no em/en dashes"],
+    "note": "COO pitfall entry: published copy must be dash-clean (no em/en dashes)."
+  },
+  {
+    "id": "gs-07",
+    "query": "agents merge approved work to main CEO git",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["merge approved work to main themselves", "ceo does not handle"],
+    "note": "COO decision entry: agents merge their own approved work; the CEO doesn't handle git/PR merges."
+  },
+  {
+    "id": "gs-08",
+    "query": "Hyperagent CTO primary lead command change",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["hyperagent cto is now the primary lead", "claude cto is standby"],
+    "note": "CTO decision entry recording the 2026-07-01 command change (Matt directive)."
+  },
+  {
+    "id": "gs-09",
+    "query": "keeping a draft PR open protect main",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["draft pr open does not protect main", "only merge"],
+    "note": "CCO fact entry: a draft PR does not protect main, only merging deploys the CI workflow."
+  },
+  {
+    "id": "gs-10",
+    "query": "GitHub as agent memory coordination substrate",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["wrong substrate", "agent state"],
+    "note": "CTO pitfall entry: GitHub is the wrong substrate for agent team memory/coordination."
+  },
+  {
+    "id": "gs-11",
+    "query": "Cosmos vector similarity threshold near-duplicate cache",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["0.97", "near-duplicates"],
+    "note": "CTO decision entry: Phase 4 HOT-cache Cosmos vector similarity threshold >=0.97."
+  },
+  {
+    "id": "gs-12",
+    "query": "onboarding continue handler white screen overlay hang",
+    "agent": "commons",
+    "engine": "keyword",
+    "expect": ["overlay hang", "boot-ready signal"],
+    "note": "Developer pitfall entry on the onboarding Continue handler white-screen hang + fix."
+  }
+]
