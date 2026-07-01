@@ -188,7 +188,11 @@ export async function scanRows(rows, entail, opts = {}) {
   let truncated = false;
 
   // annotate ekeys once (scan-time; NOT persisted to the ledger - purely additive, no write path touched).
-  const annotated = rows.map((r) => (r.ekeys ? r : { ...r, ekeys: extractEntityKeys(r.text, r.tags) }));
+  // Guard first: a stray non-object feed line (literal "null", a bare primitive) would otherwise throw in
+  // the map and blank the WHOLE scan; drop just that line so fail-open is per-row, not per-scan.
+  const annotated = rows
+    .filter((r) => r && typeof r === "object")
+    .map((r) => (r.ekeys ? r : { ...r, ekeys: extractEntityKeys(r.text, r.tags) }));
 
   const recent = recentClaimRows(annotated, nowMs, windowDays).sort(
     (a, b) => (Date.parse(a.ts || "") || 0) - (Date.parse(b.ts || "") || 0)

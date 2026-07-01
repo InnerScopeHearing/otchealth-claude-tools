@@ -163,6 +163,21 @@ test("scanRows emits a HIGH signal for a grounded contradiction and NEVER writes
   assert.ok(!("write" in s) && !("commit" in s));
 });
 
+test("scanRows tolerates a stray non-object feed line (null/primitive) and still processes valid rows", async () => {
+  // a malformed shared-feed line that parsed to null or a bare primitive must NOT blank the whole scan.
+  const rows = [
+    null,
+    5,
+    { id: "20260601-001", agent: "cto", type: "fact", ts: iso(30 * DAY), text: "Azure AI Search will upgrade to the S1 tier" },
+    { id: "20260630-002", agent: "cto", type: "correction", ts: iso(1 * DAY), text: "Azure AI Search stays Basic; S1 was never executed" },
+  ];
+  const entail = async (newRow, slice) => (newRow.id === "20260630-002"
+    ? { label: "contradict", citedId: slice[slice.length - 1].id, reason: "flip" }
+    : { label: "agree", citedId: null });
+  const res = await scanRows(rows, entail, { nowMs: NOW });
+  assert.equal(res.signals.length, 1, "the valid contradiction still fires; the null/primitive rows were skipped, not fatal");
+});
+
 test("scanRows DISCARDS an ungrounded (hallucinated) contradiction verdict", async () => {
   const rows = [
     { id: "20260601-001", agent: "cto", type: "fact", ts: iso(30 * DAY), text: "depot is the ios build path" },
