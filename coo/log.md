@@ -43,3 +43,17 @@ direct as of today, not stalled. Gumroad fully stood up, first-listing choice pe
 CRO. Nothing new for Matt that he doesn't already know (he is the source of today's
 updates) — no push notification sent.
 2026-06-30 (later still) | morning-guard | skipped | another duplicate routine trigger same day; verified against the coo ledger, no new facts since the last skip (no CHECKOUT-PROOF=PASS posted by CTO yet, no payout-connect confirmation, no Gumroad listing yet). coo/today.md and PRIORITIES.md already current (PR #250, merged 85011ed) - no changes needed. No brief resent, no notification sent.
+2026-07-01 05:24 | morning brief | done | Day 22. No "Morning brief sent - 2026-07-01" marker
+existed, so this is a fresh morning run, not a duplicate. Read live calendar: clear today
+through 2026-07-05 (next events Mon 07-06 Therapy 3-4pm PT, Tue 07-07 Mindful Health
+Solutions 8:30-11:30am PT). Claimed the day (ledger id 20260701-004) before sending
+anything. Confirmed both Matt-only gates (Stripe payout bank connect on
+acct_1SQyXZAwjS2xuomw; the one real full-price PAIR99 TReO order for CHECKOUT-PROOF) are
+STILL open, unchanged since 2026-06-30 - no CTO PASS posted, no payout confirmation. Also
+confirmed the Gumroad "From the Chair" manuscript is fully complete (18 chapters + front/
+back matter, dash-clean, fact-checked) and ready to publish the moment Matt picks the
+edition + price with CRO. Booked a 2-hour CASH BLOCK today 12-2pm PT scoped to exactly the
+2 gates. Sent the morning brief to matthew@innd.com leading with the cash number ($0
+working cash, $0 revenue today/90d) and the 2 gates. Refreshed coo/today.md and
+coo/PRIORITIES.md to match. No new dispatch to other agents needed - all owners (CTO, CRO,
+CFO, CCO) already have this on their plate per the exec feed.
