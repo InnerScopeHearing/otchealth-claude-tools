@@ -84,8 +84,12 @@ async function sessionEnd() {
   if (!key) { console.error("no posthog-fleet-ingest-key"); process.exit(0); }
   const now = new Date().toISOString();
   const base = { distinct_id: agent, timestamp: now };
-  const aiProps = { "$ai_trace_id": sid, "$ai_model": m.model, "$ai_provider": "anthropic", "$ai_input_tokens": m.inTok + m.cacheW + m.cacheR, "$ai_output_tokens": m.outTok, "$ai_latency": Math.round(m.durMs / 1000), "$ai_total_cost_usd": +m.cost.toFixed(4), agent, session_id: sid };
-  const sessProps = { agent, session_id: sid, model: m.model, models: m.models, turns: m.turns, tool_calls: m.toolCalls, tools_used: Object.keys(m.tools), top_tools: Object.entries(m.tools).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`), tool_errors: m.errors, input_tokens: m.inTok, output_tokens: m.outTok, cache_read_tokens: m.cacheR, total_tokens: m.totalTok, est_cost_usd: +m.cost.toFixed(4), duration_s: Math.round(m.durMs / 1000), outcome: m.errors > 0 ? "had_tool_errors" : "clean" };
+  // callsite_id: the prompt-surface identifier for this session (defaults to the agent role, matching
+  // agent-evals' eval_result.callsite_id default). Substrate for a future quality-per-dollar router that
+  // joins eval scores to real production model/cost by callsite; the router itself is NOT built here.
+  const callsiteId = (takeVal("--callsite", "") || agent);
+  const aiProps = { "$ai_trace_id": sid, "$ai_model": m.model, "$ai_provider": "anthropic", "$ai_input_tokens": m.inTok + m.cacheW + m.cacheR, "$ai_output_tokens": m.outTok, "$ai_latency": Math.round(m.durMs / 1000), "$ai_total_cost_usd": +m.cost.toFixed(4), agent, callsite_id: callsiteId, session_id: sid };
+  const sessProps = { agent, callsite_id: callsiteId, session_id: sid, model: m.model, models: m.models, turns: m.turns, tool_calls: m.toolCalls, tools_used: Object.keys(m.tools), top_tools: Object.entries(m.tools).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`), tool_errors: m.errors, input_tokens: m.inTok, output_tokens: m.outTok, cache_read_tokens: m.cacheR, total_tokens: m.totalTok, est_cost_usd: +m.cost.toFixed(4), duration_s: Math.round(m.durMs / 1000), outcome: m.errors > 0 ? "had_tool_errors" : "clean" };
   await capture(key, [{ event: "$ai_generation", properties: { ...aiProps }, ...base }, { event: "agent_session", properties: { ...sessProps }, ...base }]);
   console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} tools=${m.toolCalls} tok=${m.totalTok} ~$${m.cost.toFixed(3)} -> PostHog Fleet Agents`);
 }

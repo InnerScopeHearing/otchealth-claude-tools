@@ -1,0 +1,123 @@
+# Prompt-regression CI gate — PHASE 1, REPORT-ONLY (never blocks merge).
+#
+# When a PR touches a prompt-bearing file (a SKILL.md, a Dream Team governance charter, the
+# agent-evals persona briefs, or the golden tasks themselves), this runs the agent-evals golden-task
+# suite TWICE, once checked out at the PR base and once at the PR head, judged by the SAME quality
+# model both times, and posts a scorecard-DIFF as a PR comment highlighting any regressions.
+#
+# This is explicitly NOT a merge gate: `continue-on-error: true` on every eval step, it is never added
+# as a required status check, and it never auto-merges or auto-rolls-back a prompt change. It is a
+# human-facing signal only. A later phase could tighten this; that is out of scope here (see
+# skills/agent-evals/promptcheck.mjs header comment).
+#
+# Scope is intentionally narrow to 6 high-traffic, already-covered surfaces (company-brain synthesis,
+# reflect distillation, the CTO/CFO/CLO personas, focus-group-loop) rather than all 87+ skills. PHI/MNPI/
+# clo-personal lanes are out of scope (no MedReview, no INND/Xero/Plaid, no clo-personal golden tasks).
+#
+# Needs GCP_CLAUDE_DRIVER_SA_JSON (repo/org secret; the same claude-driver SA every skill's `sm()`
+# helper uses to read otchealth-shared-prod Secret Manager for azure-openai-endpoint/-key +
+# azure-foundry-openai-endpoint/-key). Runs on ubuntu-latest so it never depends on the Depot connection.
+name: prompt-regression-check
+
+on:
+  pull_request:
+    paths:
+      - "skills/**/SKILL.md"
+      - "skills/agent-evals/evals/**"
+      - "dream-team/governance/charters/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  shadow-eval:
+    name: golden-task shadow eval (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # continue-on-error at the JOB level: nothing in this workflow can fail the PR, ever (phase 1).
+    continue-on-error: true
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          path: head
+          fetch-depth: 0
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Check out PR base into a sibling dir
+        working-directory: head
+        env:
+          # A git commit SHA (computed by GitHub, not free-form attacker text), but passed via env +
+          # quoted per the workflow-injection safe pattern rather than interpolated into the run: script.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -x
+          git worktree add ../base "$BASE_SHA"
+
+      - name: Run golden-task suite on PR BASE
+        id: base_eval
+        continue-on-error: true
+        working-directory: base/skills/agent-evals
+        env:
+          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+        run: node run-evals.mjs --json "${{ github.workspace }}/base-scorecard.json"
+
+      - name: Run golden-task suite on PR HEAD
+        id: head_eval
+        continue-on-error: true
+        working-directory: head/skills/agent-evals
+        env:
+          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+        run: node run-evals.mjs --json "${{ github.workspace }}/head-scorecard.json"
+
+      - name: Diff the two scorecards and render the PR comment
+        if: always()
+        continue-on-error: true
+        run: |
+          node head/skills/agent-evals/promptcheck.mjs diff \
+            --base "${{ github.workspace }}/base-scorecard.json" \
+            --head "${{ github.workspace }}/head-scorecard.json" \
+            --out "${{ github.workspace }}/promptcheck-comment.md"
+
+      - name: Post (or update) the PR comment
+        if: always()
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const path = `${process.env.GITHUB_WORKSPACE}/promptcheck-comment.md`;
+            if (!fs.existsSync(path)) {
+              console.log('no comment body produced (both evals likely failed to run); skipping comment');
+              return;
+            }
+            const body = fs.readFileSync(path, 'utf8');
+            const marker = '<!-- prompt-regression-gate -->';
+            const fullBody = `${marker}\n${body}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const existing = comments.data.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: fullBody });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: fullBody });
+            }
+
+      - name: Upload scorecards as build artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prompt-regression-scorecards
+          path: |
+            ${{ github.workspace }}/base-scorecard.json
+            ${{ github.workspace }}/head-scorecard.json
+            ${{ github.workspace }}/promptcheck-comment.md
+          retention-days: 14
+          if-no-files-found: ignore
