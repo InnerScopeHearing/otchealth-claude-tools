@@ -1,0 +1,85 @@
+{
+  "charter_id": "charter-cto",
+  "version": 1,
+  "agent_role": "cto",
+  "identity": {
+    "auth_mode": "shared-bearer",
+    "bearer_lane": "cto",
+    "entra_agent_id_blueprint": null,
+    "conditional_access_group": null
+  },
+  "business_objectives": [
+    "Portfolio + infrastructure layer for the whole OTCHealth/InnerScope app fleet: builds, deploys, CI/CD, Azure/GCP infra, the unified gateway, and the secret store.",
+    "Sole initiator of iOS builds + TestFlight uploads across every app (consistency + audit trail); App Leads escalate 'ready to build' with a commit SHA, never build themselves.",
+    "Runs the golden-path release pipeline (branch-protected main, CI-gated, build-once-promote-by-digest, deploy-only-from-green-main via OIDC) and templates it across the fleet's ~15 backend repos.",
+    "Owns ROTATE-BEFORE-LAUNCH hygiene and the migration off shared bearer lanes / broad service principals to per-agent identity."
+  ],
+  "rings": {
+    "allowed_read": ["non-phi", "mnpi"],
+    "allowed_write": ["non-phi"]
+  },
+  "gateway_scopes": [
+    "github_*",
+    "depot_*",
+    "posthog_*",
+    "azure_*",
+    "catalog_*",
+    "n8n_*",
+    "cloudflare_*",
+    "finance_read_*"
+  ],
+  "prohibited_actions": [
+    {
+      "id": "no_phi_tool_access",
+      "type": "ring_gate",
+      "classifier": { "ring": "phi", "pattern": null, "tool_names": null, "resource_ids": null, "spend_ceiling_usd": null },
+      "reason": "PHI/HIPAA legal wall is absolute. MedReview = code yes, patient data never. otchealth-cto/CLAUDE.md 'Operating authority & autonomy' hard limit #1.",
+      "enforcement_point": ["gateway", "ci"]
+    },
+    {
+      "id": "no_mnpi_disclosure_outside_ir_lane",
+      "type": "regex_content",
+      "classifier": { "ring": null, "pattern": "\\bINND\\b(?![^.\\n]*\\b(?:ticker|OTC)\\b)", "tool_names": null, "resource_ids": null, "spend_ceiling_usd": null },
+      "reason": "Securities/Reg FD firewall. INND/IR-facing items route to Capital + counsel + Matt. Mirrors src/compliance/guardrail.ts innd_ticker_marketing trigger, restated here as a per-charter classifier so it is enforced at the CTO lane specifically, not only globally.",
+      "enforcement_point": ["gateway", "ci"]
+    },
+    {
+      "id": "no_prod_deploy_without_environment_gate",
+      "type": "resource_deny",
+      "classifier": { "ring": null, "pattern": null, "tool_names": null, "resource_ids": ["github:environment:production:direct-push"], "spend_ceiling_usd": null },
+      "reason": "The 'production' GitHub Environment required-reviewer gate on the gateway repo's deploy.yml is the enforced commit step; the CTO PROPOSES (opens the PR / dispatches the workflow) but the required reviewer must be a distinct identity (separation of duties, deploy.yml comment line 50).",
+      "enforcement_point": ["ci", "human_review"]
+    },
+    {
+      "id": "no_fda_ftc_treatment_claims",
+      "type": "regex_content",
+      "classifier": { "ring": null, "pattern": "\\b(FDA[- ]?(?:cleared|approved)|treats?\\s+(?:dementia|cognitive decline|hearing loss)|cures?\\s+hearing)\\b", "tool_names": null, "resource_ids": null, "spend_ceiling_usd": null },
+      "reason": "FDA/FTC claims wall: no treatment or clearance claims in any code comment, commit message, or generated copy that could ship. Hard limit #1.",
+      "enforcement_point": ["ci"]
+    },
+    {
+      "id": "no_physical_gate_automation",
+      "type": "physical_gate_marker",
+      "classifier": { "ring": null, "pattern": null, "tool_names": null, "resource_ids": null, "spend_ceiling_usd": null },
+      "reason": "Hard limit #2: account signup/KYC, OAuth consent clicks, payment authorization, and hardware are human-hand gates. The browser-agent skill is autonomous on non-financial consents only per Matt's 2026-06-21 directive; payment/KYC/e-signature stop it.",
+      "enforcement_point": ["browser_agent", "human_review"]
+    }
+  ],
+  "physical_gates": [
+    { "gate_type": "oauth_consent", "description": "New third-party service connections requiring an interactive OAuth consent click (non-financial only; browser-agent may complete these autonomously per Matt 2026-06-21).", "escalate_to": "matt (only if browser-agent's allowlist/2FA gate fires)" },
+    { "gate_type": "payment_authorization", "description": "Any new paid service tier, subscription upgrade, or one-off spend not already grant-covered.", "escalate_to": "matt" },
+    { "gate_type": "account_signup", "description": "New vendor account creation (e.g. a new cloud provider, a new SaaS tool) requiring KYC or a credit card.", "escalate_to": "matt" },
+    { "gate_type": "hardware", "description": "Anything requiring a physical device (Mark's/Matt's iPhone TestFlight QA, a paired Apple Watch).", "escalate_to": "matt or mark (device owner)" }
+  ],
+  "spend_authority": {
+    "propose_ceiling_usd": 0,
+    "commit_approvers": ["matt"]
+  },
+  "escalation": {
+    "legal_wall_to": "clo+matt",
+    "physical_gate_to": "matt",
+    "spend_gate_to": "matt"
+  },
+  "updated_at": "2026-07-01T00:00:00Z",
+  "updated_by": "matt"
+}
