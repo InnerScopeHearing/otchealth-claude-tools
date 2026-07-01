@@ -10,7 +10,7 @@ It is deliberately narrow and boring: five hand-picked, high-precision detectors
 fleet already collects, each tuned so a healthy system stays SILENT. It never takes action on
 production; it only classifies, records, and routes a Signal to the human/agent who owns that lane.
 
-## Detectors (v1, 5 of the 6 candidates in the brief; #2 dropped, see below)
+## Detectors (5 from the original brief + `contradiction-staleness`; one brief candidate dropped, see below)
 
 1. **`sentry-error-spike`** — a Sentry project's error count this week is >= 3x the MEDIAN of the prior
    3 weeks, with an absolute floor (5 errors/week) so a low-volume project's noise never fires. MedReview
@@ -29,6 +29,25 @@ production; it only classifies, records, and routes a Signal to the human/agent 
    Mark-review ritual) shipped >= 7 days ago, is not marked SUPERSEDED, and has no
    `qa/mark-reviews/<version>/mark-completed-<version>.pdf`. Scoped to iHEARtest today (the only repo
    with this convention); written generically so a future app repo can be pointed at the same detector.
+6. **`contradiction-staleness`** — a NEW row in the shared exec MEMORY feed (the same
+   `otchealthcommons/company-journal/_MEMORY/_exec/*.jsonl` lanes company-brain and reflect read)
+   CONTRADICTS a still-active older row, or makes one STALE-with-material-drift. Self-improving-loop
+   item #2. Entity resolution is a coarse LEXICAL key (a closed ~40-term fleet vocabulary + secret-id-
+   shaped tokens, reusing `mem.mjs`'s `normKey`), computed AT SCAN TIME (no new field on the ledger, no
+   backfill). Cost is bounded HARD: only rows in a rolling window (`CONTRADICTION_WINDOW_DAYS`, default
+   7) are examined, each same-entity slice is capped at <=20 rows, one quality-tier (gpt-5.1, never
+   gpt-4.1-mini) entailment call per recent row, total calls capped (`CONTRADICTION_MAX_LLM_CALLS`,
+   default 40) with a no-silent-truncation note when the cap bites. Two precision levers keep it quiet:
+   a GROUNDING GATE (the verdict is discarded unless the model cites a row id actually in the slice) and
+   a MATERIALITY FLOOR (only `contradict`/`stale-with-material-drift` fire; `agree`/`supersede`/
+   `paraphrase` never do, so a normal version bump is not flagged). REPORT-MODE / observe-only: it
+   NEVER writes the ledger; its `suggested_action` DRAFTS the exact `mem.mjs correct ...` command a
+   human/agent may choose to run. MNPI/PHI rows are dropped before the LLM ever sees them (defense in
+   depth on top of radar.mjs's central MNPI hard-route). Fail-open (no creds / no network -> idle,
+   never throws). New consumers of the shared exec feed; adds NO new infra (no Cosmos container, no new
+   secret) beyond what kb-memory + model-routing already resolve. Pure core (`extractEntityKeys`,
+   `candidateSlice`, `gateVerdict`, `recentClaimRows`, `scanRows`) is unit-tested with an injected fake
+   entailment fn (no live network in tests).
 
 **Dropped (from the original 6-candidate brief): PostHog funnel-step week-over-week drop.** Checked
 live: every real consumer-app PostHog project (iHEARtest 468379, AWARE 468388, Companion 468389, ...)
