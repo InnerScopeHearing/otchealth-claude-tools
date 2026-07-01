@@ -109,6 +109,20 @@ miss a name in prose with no preceding honorific (for example "his wife Maria" w
 The heuristic is a best-effort net on top of the default-deny structural guarantee; the
 structural guarantee, not the heuristic, is what actually prevents leakage of unknown columns.
 
+**Known limitation - street-address heuristic in prose.** Street addresses embedded in free-text
+notes (a house number followed by street-type tokens like St, Ave, Rd, Blvd, plus an optional
+trailing ", City ST ZIP") are redacted to `[ADDRESS-REDACTED]`. Structured geo/ZIP keys are handled
+separately (state kept, ZIP reduced to a Safe-Harbor 3-digit ZCTA). A bare city or town name in
+prose with no street suffix (for example "moved to Springfield last year") requires a gazetteer or
+full NER and is not caught by this heuristic. State-level geography is permitted under Safe Harbor
+and is intentionally retained. When a note field may carry uncaught free-text geography, drop the
+note field itself or apply expert determination.
+
+**DOB / age-over-89 coupling.** When a record's implied age exceeds 89 (derived from an explicit
+age field OR computed from a DOB-shaped field's year), the DOB year itself is suppressed
+(`REDACTED-90+`), not just any separate age field. Safe Harbor forbids retaining any date element,
+including year, once the implied age is over 89.
+
 ### The 18 HIPAA Safe Harbor categories, and how this tool handles each
 
 1. **Names** -> redacted, including names embedded in free-text notes via the honorific

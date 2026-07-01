@@ -78,8 +78,9 @@ const SAFE_KEYS = new Set([
   // clinical coding (ICD-10 style dx code + description are not identifiers under Safe Harbor)
   "dx_code", "dx_description",
   // order / commerce numeric + catalog fields with no link to an identified individual
-  "subtotal", "tax", "total", "quantity", "qty", "unit_price", "price", "line_total",
-  "product", "title", "financial_status", "fulfillment_status",
+  "subtotal", "tax", "total", "order_total", "amount", "amount_total", "grand_total",
+  "discount", "shipping", "shipping_cost", "currency", "quantity", "qty", "unit_price",
+  "price", "line_total", "product", "title", "financial_status", "fulfillment_status",
 ]);
 // NOTE: record_id / order_number are intentionally NOT on the safe allowlist. They are
 // per-individual unique identifiers under Safe Harbor category 18 and are redacted by
@@ -145,6 +146,12 @@ const MONTHS = "Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|J
 const DATE_MONTHNAME_RE = new RegExp(`\\b(${MONTHS})\\.?\\s+(\\d{1,2}),?\\s+(\\d{4})\\b`, "gi");
 // Honorific + capitalized-token name heuristic (documented limitation: not full NER).
 const HONORIFIC_NAME_RE = /\b(Dr|Mr|Mrs|Ms|Pt|Patient)\.?\s+([A-Z][a-zA-Z'-]*(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-zA-Z'-]+)*)/g;
+// Street-address heuristic (Safe Harbor cat. 2, geo smaller than a state) embedded in prose:
+// a house number + optional street-name tokens + a street-type suffix, optionally consuming a
+// trailing ", City" (and optional ST/ZIP). Documented limitation: bare city/town names in prose
+// without a street suffix require a gazetteer/NER and are not caught here (same heuristic class
+// as prose names). State-level geography is permitted under Safe Harbor and intentionally kept.
+const STREET_ADDRESS_RE = /\b\d{1,6}\s+(?:[A-Z][A-Za-z.'-]*\s+){0,4}(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Ct|Court|Way|Pl|Place|Ter|Terrace|Cir|Circle|Hwy|Highway|Pkwy|Parkway|Sq|Square|Trl|Trail|Apt|Suite|Ste|Unit)\b\.?(?:,?\s*(?:Apt|Suite|Ste|Unit|#)\.?\s*\w+)?(?:,\s*[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)?(?:,?\s*[A-Z]{2})?(?:\s+\d{5}(?:-\d{4})?)?/g;
 
 function normalizeYear(y) {
   const n = Number(y);
@@ -181,6 +188,8 @@ function scrubFreeText(text, stripped) {
   if (SSN_RE.test(out)) { stripped.add("ssn"); out = out.replace(SSN_RE, "[SSN-REDACTED]"); }
   if (URL_RE.test(out)) { stripped.add("url"); out = out.replace(URL_RE, "[URL-REDACTED]"); }
   if (IP_RE.test(out)) { stripped.add("ip_address"); out = out.replace(IP_RE, "[IP-REDACTED]"); }
+  // Street address (geo smaller than state) embedded in prose -> redacted; state-level kept.
+  if (STREET_ADDRESS_RE.test(out)) { stripped.add("geo_sub_state"); out = out.replace(STREET_ADDRESS_RE, "[ADDRESS-REDACTED]"); }
   // Honorific-based prose name heuristic (documented limitation: not full NER).
   if (HONORIFIC_NAME_RE.test(out)) {
     stripped.add("names");
@@ -215,6 +224,16 @@ function recordHasAgeOver89(record) {
     if (AGE_KEYS.includes(lowerKey)) {
       const n = Number(v);
       if (!Number.isNaN(n) && n > 89) return true;
+    }
+    // Implied age from a DOB-shaped field's YEAR, even when no explicit numeric age field exists.
+    // Safe Harbor: once the implied age could exceed 89, the DOB year itself must be suppressed.
+    if (isDobKey(lowerKey)) {
+      const m = /(\d{4})/.exec(String(v));
+      if (m) {
+        const yr = Number(m[1]);
+        const now = new Date().getFullYear();
+        if (!Number.isNaN(yr) && (now - yr) > 89) return true;
+      }
     }
     if (v && typeof v === "object" && !Array.isArray(v) && recordHasAgeOver89(v)) return true;
   }

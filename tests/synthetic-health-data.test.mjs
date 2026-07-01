@@ -341,3 +341,30 @@ test("regression: shape-based ID detection catches identifier-shaped values unde
   assert.notEqual(clean.vehicle_serial, "1HGCM82633A004352");
   assert.notEqual(clean.hearing_aid_sn, "HA-2024-99871");
 });
+
+test("regression: DOB year suppressed when the DOB itself implies age > 89 (no explicit age field)", () => {
+  // Record has an age_band (a band, not a numeric age) but no numeric age key; the over-89
+  // signal must be derived from the DOB year itself, and the year must not survive.
+  const record = { dob: "1930-05-14", age_band: "45-54", ear: "left" };
+  const { clean } = deidentRecord(record);
+  assert.ok(!/1930/.test(JSON.stringify(clean)), "DOB year 1930 must not survive for an age>89 record");
+  assert.equal(clean.age_band, "45-54");
+  assert.equal(clean.ear, "left");
+});
+
+test("regression: street address (and trailing city) embedded in a free-text note is redacted; state kept", () => {
+  const record = { note: "Home at 42 Elm St, Springfield. Follow up next week.", state: "MA" };
+  const { clean } = deidentRecord(record);
+  assert.ok(!/Elm St/.test(clean.note), "street address must be scrubbed from prose");
+  assert.ok(!/Springfield/.test(clean.note), "trailing city must be scrubbed from prose");
+  assert.ok(/\[ADDRESS-REDACTED\]/.test(clean.note));
+  assert.equal(clean.state, "MA", "state-level geography is permitted and must be retained");
+});
+
+test("regression: commerce numeric fields (order_total et al.) are retained, not over-redacted", () => {
+  const record = { order_total: 129.99, amount: 50, grand_total: 179.99, discount: 10, shipping: 5, currency: "USD" };
+  const { clean } = deidentRecord(record);
+  assert.equal(clean.order_total, 129.99);
+  assert.equal(clean.grand_total, 179.99);
+  assert.equal(clean.currency, "USD");
+});
