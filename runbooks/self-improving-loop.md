@@ -29,17 +29,29 @@ proves near-zero false positives.
   tested against a real live regression turns it on.
 - 8 unit tests (`selfrepair.test.mjs`); toolkit gate 240 green.
 
-### Item #2 — Contradiction + staleness scan = Signal Radar detector #6  (weeks 2-3, report-mode)
-Verified SOUND/BUILDABLE/SAFE. Add a deterministic entity-key field on memory rows (write-time tagger)
-+ backfill; a per-agent Cosmos checkpoint (change-feed high-water-mark); ONE bounded gpt-5.1 call per
-new row over a slice of at most ~20 same-entity rows (O(new facts), not O(n^2)). Inherits cooldown,
-MNPI route, PHI exclusion, dispatch. Grounding gate: discard verdicts citing a row not in the slice;
-only "contradict" and "stale-with-material-drift" fire; emits a Signal, NEVER writes the ledger.
-Shares company-brain's primary-then-foundry-fallback throttle (contends for the same Azure OpenAI quota).
+### Item #2 — Contradiction + staleness scan = Signal Radar detector #6  ✅ SHIPPED 2026-07-01 (PR #268, 6b88ac8)
+`skills/signal-radar/detectors/contradiction-staleness.mjs`, report-mode, LIVE in the signal-radar cron
+(image rebuilt runId ccm; live job run Succeeded). Simplified from the design to add NO new infra and
+never touch the mem.mjs write path: computes a coarse deterministic entity-key AT SCAN TIME (reuses
+mem.mjs normKey over a closed ~40-term vocab + secret-id tokens), reads the shared exec feed read-only
+(SAS sp=rl). Cost HARD-bounded: 7-day window (CONTRADICTION_WINDOW_DAYS) + same-entity slice capped at
+<=20 (MAX_CANDIDATES) + <=40 gpt-5.1 entailment calls/scan (CONTRADICTION_MAX_LLM_CALLS) + a
+no-silent-truncation note. Grounding gate discards any verdict citing a row not in the slice; only
+"contradict"/"stale-with-material-drift" fire. PHI-excluded + MNPI-routed on BOTH the new row and every
+prior row before any text reaches the LLM. EMITS a Signal (suggested_action DRAFTS the exact
+`mem.mjs correct ...` for a human) and NEVER writes the ledger. Adversarially verified (SHIP_WITH_NITS;
+the one nit - a stray non-object feed line - was fixed with a filter guard + regression test, 21 tests).
+First live scan: 0 contradictions across 40 examined of 328 recent claims (fleet memory is consistent).
+GRADUATION (per design): watch the cto inbox 1-2 weeks, tune the entity vocab/prompt against real false
+positives; only same-STRING entities today (synonym/transitive contradictions are the deferred graph).
 
-### Item #3 — Graduate self-repair to gpt-5.1 rewrite alternatives  (week 4+, still draft-only)
-Beyond a plain revert: propose a rewritten prompt hunk, re-run the FULL eval suite for that agent (not
-just the new task) before opening the draft PR; promptcheck.yml re-runs on the PR as a second check.
+### Item #3 — Graduate self-repair to gpt-5.1 rewrite alternatives  ✅ SHIPPED 2026-07-01 (PR #269, 1b118bd)
+`skills/agent-evals/selfrepair.mjs` extended: `proposeRewrite()` (pure, injected LLM) + a REPORT-ONLY
+`rewrite` CLI that proposes a gpt-5.1 minimal rewrite of the regressed prompt hunk (never edits files,
+touches git, or opens a PR). `reRunFullSuiteCmd(agent)` renders the mandatory WHOLE-suite re-run
+(shell-injection-safe) that any future draft must pass (no NEW regression) - the overfit guard from the
+design's risk #1. The draft path stays hard-gated (--execute + SELFREPAIR_EXECUTE=1) and draft-only;
+never auto-merges. Adversarially verified SHIP (12 tests; item #1's 8 still green). gpt-5.1, never mini.
 
 ### DEFERRED — bi-temporal entity graph (valid_from/valid_to over entities/edges)
 Verifier verdict sound=false: a prior superbrain panel already KILLED a standalone knowledge-graph
