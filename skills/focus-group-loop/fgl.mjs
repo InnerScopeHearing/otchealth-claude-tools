@@ -19,6 +19,7 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
+import { TIERS, chatBody } from "../../setup/model-routing.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const argv = process.argv.slice(2);
@@ -32,26 +33,17 @@ const CATALOG = argv.includes("--catalog");
 function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
 async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 
-// Reasoning-family deployments (gpt-5.x, o-series) reject max_tokens + a non-default temperature;
-// they require max_completion_tokens and no temperature override. Mirrors the gateway's
-// src/azure/foundry.ts chat() body-shape branch.
-const REASONING_FAMILY = /^(gpt-5|o[0-9])/i;
-
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
-  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.FGL_MODEL || "gpt-4o";
+  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.FGL_MODEL || TIERS.standard.deployment;
   // FALLBACK: gpt-4.1-mini is BANNED for quality work (persona review IS the quality signal that
-  // feeds the 90% gate). Use the gateway's real quality-tier Foundry deployment instead: gpt-5.1, the
-  // "standard" tier in otchealth-mcp-server/src/azure/foundry.ts (cfg().chat), the same deployment the
-  // gateway itself resolves to. Reasoning-family, so callChat below branches its request body.
-  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.FGL_FALLBACK_MODEL || "gpt-5.1";
+  // feeds the 90% gate). Defaults to the shared 'quality' tier (gpt-5.1, reasoning-family) via
+  // setup/model-routing.mjs, the single source of truth for tier + body shape fleet-wide.
+  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.FGL_FALLBACK_MODEL || TIERS.quality.deployment;
   if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key");
 }
 async function callChat(ep, key, dep, system, content, maxTokens, tries) {
-  const isReasoning = REASONING_FAMILY.test(dep || "");
-  const body = { messages: [{ role: "system", content: system }, { role: "user", content }] };
-  if (isReasoning) body.max_completion_tokens = maxTokens;
-  else { body.max_tokens = maxTokens; body.temperature = 0.5; }
+  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content }], maxTokens, temperature: 0.5 });
   for (let a = 0; a < tries; a++) {
     const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
