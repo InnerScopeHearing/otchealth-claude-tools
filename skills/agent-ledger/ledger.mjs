@@ -97,16 +97,19 @@ async function cx(v, rt, rl, path, { pk, body, ifMatch, isQuery, pkRange } = {})
   const t = await r.text(); let j = null; try { j = t ? JSON.parse(t) : null; } catch { j = { raw: t }; }
   return { status: r.status, ok: r.ok, body: j, etag: r.headers.get('etag') };
 }
-async function query(coll, q, pk) {
+async function query(coll, q, pk, params = []) {
   const rl = `dbs/${DB}/colls/${coll}`;
-  if (pk !== undefined) { const r = await cx('POST', 'docs', rl, `${rl}/docs`, { isQuery: true, body: { query: q }, pk }); return (r.body?.Documents) || []; }
+  const body = { query: q, parameters: params };
+  if (pk !== undefined) { const r = await cx('POST', 'docs', rl, `${rl}/docs`, { isQuery: true, body, pk }); return (r.body?.Documents) || []; }
   const d = new Date().toUTCString();
   const pr = await fetch(`${EP.replace(/\/+$/, '')}/${rl}/pkranges`, { headers: { Authorization: cAuth('GET', 'pkranges', rl, d), 'x-ms-date': d, 'x-ms-version': VER } });
   const ranges = ((await pr.json()).PartitionKeyRanges || []).map((x) => x.id);
   const out = [];
-  for (const rid of ranges) { const r = await cx('POST', 'docs', rl, `${rl}/docs`, { isQuery: true, body: { query: q }, pkRange: rid }); out.push(...((r.body?.Documents) || [])); }
+  for (const rid of ranges) { const r = await cx('POST', 'docs', rl, `${rl}/docs`, { isQuery: true, body, pkRange: rid }); out.push(...((r.body?.Documents) || [])); }
   return out;
 }
+// Guard: any caller-supplied id/pk interpolated into a Cosmos resourceLink URL must be charset-safe.
+function reqId(v, label = 'id') { if (!idOk(v)) throw new Error(`invalid ${label}`); return v; }
 const newId = (p) => `${p}_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
 async function appendEvent(taskId, kind, actor, detail) {
   await cx('POST', 'docs', `dbs/${DB}/colls/events`, `dbs/${DB}/colls/events/docs`, { pk: taskId, body: { id: newId('e'), type: 'event', task_id: taskId, kind, actor, detail, ts: new Date().toISOString() } });
@@ -122,7 +125,7 @@ function commonsSas() { const sv = '2021-12-02', ss = 'b', srt = 'co', perm = 'r
 async function resolveArtifact(uri) {
   uri = (uri || '').trim();
   if (!uri) return { resolved: false, detail: 'empty' };
-  if (uri.startsWith('blob:')) { if (!CACCT) return { resolved: false, detail: 'commons not configured' }; const rel = uri.slice(5).replace(/^company-journal\//, ''); const enc = rel.split('/').map(encodeURIComponent).join('/'); const r = await fetch(`https://${CACCT}.blob.core.windows.net/company-journal/${enc}?${commonsSas()}`, { method: 'HEAD' }); return { resolved: r.status === 200, detail: `blob ${rel} -> ${r.status}` }; }
+  if (uri.startsWith('blob:')) { if (!CACCT) return { resolved: false, detail: 'commons not configured' }; const rel = uri.slice(5).replace(/^company-journal\//, ''); const parts = rel.split('/'); if (parts.some((p) => p === '' || p === '.' || p === '..')) return { resolved: false, detail: 'bad blob path (no ./.. segments)' }; const enc = parts.map(encodeURIComponent).join('/'); const r = await fetch(`https://${CACCT}.blob.core.windows.net/company-journal/${enc}?${commonsSas()}`, { method: 'HEAD' }); return { resolved: r.status === 200, detail: `blob ${rel} -> ${r.status}` }; }
   if (uri.startsWith('cosmos:')) { const [coll, pk, id] = uri.slice(7).split('/'); if (!['tasks', 'memory', 'events'].includes(coll) || !idOk(pk) || !idOk(id)) return { resolved: false, detail: 'bad cosmos uri' }; const r = await cx('GET', 'docs', `dbs/${DB}/colls/${coll}/docs/${id}`, `dbs/${DB}/colls/${coll}/docs/${id}`, { pk }); return { resolved: r.status === 200, detail: `cosmos ${coll}/${id} -> ${r.status}` }; }
   if (uri.startsWith('https://')) { let u; try { u = new URL(uri); } catch { return { resolved: false, detail: 'bad url' }; } if (!(await hostSafe(u.hostname))) return { resolved: false, detail: `blocked host ${u.hostname}` }; try { const r = await fetch(uri, { method: 'HEAD', redirect: 'manual' }); return { resolved: r.status < 400, detail: `${u.hostname} -> ${r.status}` }; } catch { return { resolved: false, detail: 'fetch failed' }; } }
   return { resolved: false, detail: 'unrecognized scheme (use blob:/cosmos:/https:)' };
@@ -154,13 +157,15 @@ const out = (o) => console.log(typeof o === 'string' ? o : JSON.stringify(o, nul
       if (!r.ok) throw new Error(`create -> ${r.status}`); await appendEvent(id, 'created', doc.created_by, `for ${owner}`); out(`created ${id} for ${owner} [open]`); return;
     }
     if (verb === 'list') {
-      const conds = ["c.board='fleet'", "c.type='task'"]; if (flag('owner')) conds.push(`c.owner_agent='${agentOk(flag('owner'))}'`); if (flag('status')) conds.push(`c.status='${flag('status')}'`);
-      const rows = await query('tasks', `SELECT c.id,c.owner_agent,c.status,c.priority,c.title FROM c WHERE ${conds.join(' AND ')}`, 'fleet');
+      const conds = ["c.board='fleet'", "c.type='task'"]; const lp = [];
+      if (flag('owner')) { conds.push('c.owner_agent=@o'); lp.push({ name: '@o', value: agentOk(flag('owner')) }); }
+      if (flag('status')) { if (!TASK_STATUSES.includes(flag('status'))) throw new Error(`status must be one of ${TASK_STATUSES.join('|')}`); conds.push('c.status=@s'); lp.push({ name: '@s', value: flag('status') }); }
+      const rows = await query('tasks', `SELECT c.id,c.owner_agent,c.status,c.priority,c.title FROM c WHERE ${conds.join(' AND ')}`, 'fleet', lp);
       out(rows.length ? rows.map((r) => `[${r.status}] ${r.priority} ${r.owner_agent}  ${r.id}  ${r.title}`).join('\n') : '(no tasks)'); return;
     }
-    if (verb === 'get') { const id = pos[2]; const r = await cx('GET', 'docs', `dbs/${DB}/colls/tasks/docs/${id}`, `dbs/${DB}/colls/tasks/docs/${id}`, { pk: 'fleet' }); if (r.status === 404) return out('not found'); const ev = await query('events', `SELECT c.kind,c.actor,c.ts,c.detail FROM c WHERE c.task_id='${id}'`, id); out({ task: r.body, events: ev }); return; }
+    if (verb === 'get') { const id = reqId(pos[2], 'task id'); const r = await cx('GET', 'docs', `dbs/${DB}/colls/tasks/docs/${id}`, `dbs/${DB}/colls/tasks/docs/${id}`, { pk: 'fleet' }); if (r.status === 404) return out('not found'); const ev = await query('events', 'SELECT c.kind,c.actor,c.ts,c.detail FROM c WHERE c.task_id=@tid', id, [{ name: '@tid', value: id }]); out({ task: r.body, events: ev }); return; }
     if (verb === 'claim') {
-      const id = pos[2]; const who = agentOk(flag('agent'));
+      const id = reqId(pos[2], 'task id'); const who = agentOk(flag('agent'));
       const r = await cx('GET', 'docs', `dbs/${DB}/colls/tasks/docs/${id}`, `dbs/${DB}/colls/tasks/docs/${id}`, { pk: 'fleet' }); if (r.status === 404) return out('not found');
       const t = r.body, now = new Date();
       if ((t.status === 'done' || t.status === 'cancelled')) return out(`cannot claim: ${t.status}`);
@@ -170,12 +175,12 @@ const out = (o) => console.log(typeof o === 'string' ? o : JSON.stringify(o, nul
       if (u.status === 412) return out('conflict (concurrent claim), retry'); if (!u.ok) throw new Error(`claim -> ${u.status}`); await appendEvent(id, 'claimed', who, `lease ${t.lease_until}`); out(`claimed ${id} for ${who} (lease 45m)`); return;
     }
     if (verb === 'update') {
-      const id = pos[2]; const r = await cx('GET', 'docs', `dbs/${DB}/colls/tasks/docs/${id}`, `dbs/${DB}/colls/tasks/docs/${id}`, { pk: 'fleet' }); if (r.status === 404) return out('not found');
+      const id = reqId(pos[2], 'task id'); const r = await cx('GET', 'docs', `dbs/${DB}/colls/tasks/docs/${id}`, `dbs/${DB}/colls/tasks/docs/${id}`, { pk: 'fleet' }); if (r.status === 404) return out('not found');
       const t = r.body; if (flag('status')) { if (flag('status') === 'done') return out('use "task done" (done=artifact enforced)'); t.status = flag('status'); } if (flag('priority')) t.priority = flag('priority'); if (flag('owner')) t.owner_agent = agentOk(flag('owner')); if (flag('artifact')) t.artifact_uri = flag('artifact'); if (flag('note')) t.notes = [...(t.notes || []), `[${new Date().toISOString()}] ${flag('by') || '?'}: ${flag('note')}`]; t.updated_at = new Date().toISOString();
       const u = await cx('PUT', 'docs', `dbs/${DB}/colls/tasks/docs/${id}`, `dbs/${DB}/colls/tasks/docs/${id}`, { pk: 'fleet', body: t, ifMatch: r.etag }); if (!u.ok) throw new Error(`update -> ${u.status}`); await appendEvent(id, 'updated', flag('by') || '?', flag('note') || flag('status') || ''); out(`updated ${id}`); return;
     }
     if (verb === 'done') {
-      const id = pos[2]; const who = agentOk(flag('agent')); const uri = flag('artifact');
+      const id = reqId(pos[2], 'task id'); const who = agentOk(flag('agent')); const uri = flag('artifact');
       const res = await resolveArtifact(uri);
       if (!res.resolved) { await appendEvent(id, 'complete_rejected', who, `${uri} :: ${res.detail}`); return out(`REJECTED (done=artifact): ${res.detail}. Land the work-product first (blob:/cosmos:/https:).`); }
       const r = await cx('GET', 'docs', `dbs/${DB}/colls/tasks/docs/${id}`, `dbs/${DB}/colls/tasks/docs/${id}`, { pk: 'fleet' }); if (r.status === 404) return out('not found');
@@ -186,7 +191,15 @@ const out = (o) => console.log(typeof o === 'string' ? o : JSON.stringify(o, nul
 
   if (group === 'mem') {
     if (verb === 'write') { const agent = agentOk(flag('agent')); const kind = flag('kind'); if (!MEMORY_KINDS.includes(kind)) throw new Error(`kind must be one of ${MEMORY_KINDS.join('|')}`); const rec = { id: newId('m'), type: 'memory', agent, kind, text: flag('text') || '', tags: (flag('tags') || '').split(',').filter(Boolean), source: flag('source') || null, created_at: new Date().toISOString() }; const r = await cx('POST', 'docs', `dbs/${DB}/colls/memory`, `dbs/${DB}/colls/memory/docs`, { pk: agent, body: rec }); if (!r.ok) throw new Error(`mem write -> ${r.status}`); out(`wrote ${rec.id} (${kind}) for ${agent}`); return; }
-    if (verb === 'search') { const conds = ["c.type='memory'"]; if (flag('agent')) conds.push(`c.agent='${agentOk(flag('agent'))}'`); if (flag('kind')) conds.push(`c.kind='${flag('kind')}'`); if (flag('contains')) conds.push(`CONTAINS(LOWER(c.text),'${(flag('contains') || '').toLowerCase().replace(/'/g, '')}')`); const rows = (await query('memory', `SELECT c.id,c.agent,c.kind,c.text,c.source FROM c WHERE ${conds.join(' AND ')}`, flag('agent') ? agentOk(flag('agent')) : undefined)).slice(0, parseInt(flag('limit', '15'), 10)); out(rows.length ? rows.map((r) => `[${r.kind}] ${r.agent} (${r.source || ''}): ${String(r.text).slice(0, 200)}`).join('\n\n') : '(no matches)'); return; }
+    if (verb === 'search') {
+      const conds = ["c.type='memory'"]; const mp = [];
+      const ag = flag('agent') ? agentOk(flag('agent')) : undefined; // agentOk output is charset-safe
+      if (ag) { conds.push('c.agent=@a'); mp.push({ name: '@a', value: ag }); }
+      if (flag('kind')) { if (!MEMORY_KINDS.includes(flag('kind'))) throw new Error(`kind must be one of ${MEMORY_KINDS.join('|')}`); conds.push('c.kind=@k'); mp.push({ name: '@k', value: flag('kind') }); }
+      if (flag('contains')) { conds.push('CONTAINS(LOWER(c.text),@q)'); mp.push({ name: '@q', value: (flag('contains') || '').toLowerCase() }); }
+      const rows = (await query('memory', `SELECT c.id,c.agent,c.kind,c.text,c.source FROM c WHERE ${conds.join(' AND ')}`, ag, mp)).slice(0, parseInt(flag('limit', '15'), 10));
+      out(rows.length ? rows.map((r) => `[${r.kind}] ${r.agent} (${r.source || ''}): ${String(r.text).slice(0, 200)}`).join('\n\n') : '(no matches)'); return;
+    }
   }
 
   if (group === 'inbox') {
