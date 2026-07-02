@@ -1,0 +1,20 @@
+{
+  "memory-exec": [
+    "how do we reconnect accounting after a token expiry",
+    "what pitfalls have agents hit with Xero re-consent",
+    "compute allocator routing decisions and cost tradeoffs",
+    "critic pass findings on a draft PR",
+    "fleet telemetry and PostHog eval_result events"
+  ],
+  "legal-personal-memory": [
+    "attorney-client privilege boundary decisions",
+    "securities firewall INND MNPI guidance",
+    "company vs personal matter wall status"
+  ],
+  "finance-cfo-memory": [
+    "multi-entity books segregation decisions",
+    "INND public company gated write log",
+    "personal books reconciliation status"
+  ],
+  "_comment": "Canned probe queries per Azure AI Search index, used by drift.mjs to sample recall quality on a schedule. Queries are DELIBERATELY generic/topic-level (not real PHI/PII/MNPI content) so they are safe to keep in the repo and safe to log top-score/coverage results for. Add a new index by adding a key here with 3-8 representative queries; drift.mjs discovers indexes from this file's keys, so onboarding a new memory index (e.g. a new commons-<agent>-memory) is just adding a row."
+}
