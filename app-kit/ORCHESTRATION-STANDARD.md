@@ -80,11 +80,35 @@ fresh read) rather than a cached or inherited copy. Stale local state is how dis
 fan-outs quietly stop being disjoint, two agents editing what they each believe is an
 up-to-date file, one of them silently clobbering the other's work on merge.
 
+## Rule 5: run a critic pass when the allocator flags it (useCritic=true)
+
+Sizing fan-out is one half; catching a subtly-wrong draft before it ships is the other.
+`compute-allocator` (which composes `recommendFanout` with live signals) returns `useCritic`
+alongside `agents`/`model`. When it is true (a lane is flapping, or the task text is high-stakes:
+security, migration, money, compliance, PHI, credentials, delete, production, irreversible),
+do not merely note it, RUN a real critic pass on the draft BEFORE committing:
+
+```
+# Advisory sizing + critic decision in one call:
+node skills/compute-allocator/allocate.mjs "<task text>" --live --lane <owner>
+# -> { agents, model, useCritic, rationale }
+
+# Run a REAL cheap-model critic on the draft, gated on the allocator's own useCritic call:
+node skills/critic-pass/run.mjs --task "<task text>" --draft-file <draft> --if-critic --min-severity medium
+# --if-critic makes run.mjs consult the allocator itself and only spend a model call when warranted.
+```
+
+`run.mjs` is fail-safe (a broken/absent critic approves, never blocks) and report-mode (exit 0 by
+default; `--fail-on-revise` exits 3 for a hard CI gate). If the verdict is `revise` with a medium+
+issue, address it and re-run once before shipping. This is Rule 0's discipline applied to output
+quality, not just fan-out width.
+
 ## Definition of Done (paste into any orchestration task)
 
 A fan-out decision is DONE when:
-- [ ] `recommendFanout` (or equivalent reasoning against these rules) sized the dispatch, not habit;
+- [ ] `recommendFanout`/`allocateCompute` (or equivalent reasoning against these rules) sized the dispatch, not habit;
 - [ ] agent count did not exceed 4;
+- [ ] when the allocator set `useCritic=true`, a real critic pass ran on the draft and any medium+ `revise` issue was addressed before shipping;
 - [ ] every subagent's diff was verified (read or tested) before being treated as real;
 - [ ] a synthesized conclusion was written to the ledger, separate from raw subagent output;
 - [ ] each subagent fresh-fetched the files it touched.
