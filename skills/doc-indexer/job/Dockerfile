@@ -48,4 +48,8 @@ COPY skills/ledger-compaction/ /app/skills/ledger-compaction/
 # --task dispatch; copying them lets that path produce the recommendation instead of silently skipping it.
 COPY skills/compute-allocator/ /app/skills/compute-allocator/
 COPY skills/fleet-telemetry/ /app/skills/fleet-telemetry/
+# ring-memory-index: the daily semantic reindex of each ring-ISOLATED agent memory ledger (CLO legal,
+# CFO finance) into its own AI Search index, so ring agents recall their OWN memory by meaning (the
+# per-ring equivalent of memory-exec). Self-resolves each ring store's creds from SM via the SA; ring-safe.
+COPY skills/ring-memory-index/ /app/skills/ring-memory-index/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]
