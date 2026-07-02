@@ -57,3 +57,18 @@ edition + price with CRO. Booked a 2-hour CASH BLOCK today 12-2pm PT scoped to e
 working cash, $0 revenue today/90d) and the 2 gates. Refreshed coo/today.md and
 coo/PRIORITIES.md to match. No new dispatch to other agents needed - all owners (CTO, CRO,
 CFO, CCO) already have this on their plate per the exec feed.
+2026-07-02 07:05 PT | morning brief | done | Day 23. No "Morning brief sent - 2026-07-02"
+marker existed, so this is a fresh morning run, not a duplicate. Read live calendar: clear
+today through 2026-07-05 (next events Mon 07-06 Therapy 3-4pm PT, Tue 07-07 Mindful Health
+Solutions 8:30-11:30am PT). Claimed the day (ledger id 20260702-001-2e22) before sending
+anything. Confirmed both Matt-only gates (Stripe payout bank connect on
+acct_1SQyXZAwjS2xuomw; the one real full-price PAIR99 TReO order for CHECKOUT-PROOF) are
+STILL open, now 3 days stale since Matt's last "in progress" update on 2026-06-30 — no CTO
+PASS posted, no payout confirmation. Gumroad "From the Chair" manuscript still complete and
+untouched, awaiting Matt's edition/pricing call. Booked a 2-hour CASH BLOCK today 12-2pm PT
+scoped to exactly the 2 gates. Sent the morning brief to matthew@innd.com leading with the
+cash number ($0 working cash, $0 revenue today/90d, Day 23 zero moves closed) and named the
+stall pattern directly: every log entry this week is a build or status update, none a
+dollar. Refreshed coo/today.md and coo/PRIORITIES.md to match. No new dispatch to other
+agents needed — CFO, CTO, and dev status entries from 2026-07-02 confirm the same picture
+(checkout-proof gate open, payout bank not connected, no new facts).

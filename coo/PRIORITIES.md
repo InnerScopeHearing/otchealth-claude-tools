@@ -7,8 +7,8 @@ from the top of this list. Update status as items complete.
 1. **Close the 2 Matt-only gates (~15 min combined).** (a) Connect the Stripe payout bank
    (payouts_enabled=FALSE on acct_1SQyXZAwjS2xuomw — charges work, cash has nowhere to
    land). (b) Place ONE real non-refunded full-price TReO order (PAIR99) to clinch
-   CHECKOUT-PROOF=PASS. Both **still open as of 2026-07-01** (last update from Matt was
-   2026-06-30 "in progress"; no confirmation since). Day 22. [Matt-only, THE gate]
+   CHECKOUT-PROOF=PASS. Both **still open as of 2026-07-02** (last update from Matt was
+   2026-06-30 "in progress"; no confirmation since — 3 days stale). Day 23. [Matt-only, THE gate]
 2. **Fire draft-141 to the 66,224 list** the instant both gates above close. Staged,
    CCO-cleared, dash-clean. Needs only Matt's send-go. [gated on #1]
 3. **Publish the Gumroad "From the Chair" listing.** Manuscript is DONE (18 chapters +
