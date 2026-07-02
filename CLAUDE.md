@@ -75,6 +75,14 @@ assume unless the user says otherwise.
   in the **non-PHI ring only**. Never point them at `otchealth-medreview-prod` or
   any PHI project. No PHI in generated assets, prompts, metadata, analytics,
   sandboxes, or AI tool context.
+- **Dev/test data is synthetic by default (Matt directive 2026-07-01).** Fixtures,
+  seed data, agent inputs, demos, screenshots: generate them with the
+  `synthetic-health-data` skill, never a real patient/customer roster. One command
+  is the fleet default: `node skills/synthetic-health-data/seed-fixtures.mjs`
+  (fixed seed -> byte-identical, reproducible bundle). Real PHI never touches a
+  non-BAA runtime; if a real extract is genuinely needed, de-identify it INSIDE the
+  BAA boundary with `deident.mjs` (fail-closed, Safe Harbor) and only the
+  de-identified output leaves. Full standard: `app-kit/DEV-DATA-STANDARD.md`.
 - **Branch discipline.** Develop on the designated feature branch; never push to a
   different branch without explicit permission. Open PRs as **draft**.
 - **Content rule.** No em dashes or en dashes in any *published app copy* (use
