@@ -83,5 +83,5 @@ test("fleet-learning safety: privileged rings are private (excluded from fleet),
     const r = RINGS.find((x) => x.label === label);
     assert.ok(!r.private, `${label} should NOT be private (feeds fleet-learning)`);
   }
-  assert.equal(FLEET_INDEX, "fleet-learning-memory");
+  assert.equal(FLEET_INDEX, "memory-exec");
 });
