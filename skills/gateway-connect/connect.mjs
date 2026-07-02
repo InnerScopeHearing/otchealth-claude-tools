@@ -1,18 +1,16 @@
 #!/usr/bin/env node
-// gateway-connect — one-and-done connect (+ auto-refresh) of an agent's Claude Code Desktop session to
-// the OTCHealth MCP gateway on its RING-SCOPED lane.
+// gateway-connect — one-and-done connect (+ auto-refresh) of an agent's Claude Code session to the
+// OTCHealth MCP gateway on its RING-SCOPED lane.
 //
 // WHY: the gateway (mcp.otchealth.app) issues short-lived (1h) access tokens via the client_credentials
-// grant, and each lane's token carries its agent identity so the gateway ring-gates privileged RAG
-// (kb_search_privileged returns only that lane's rooms). A static bearer header therefore expires hourly.
-// This mints the lane token, registers the gateway as a Claude Code MCP server, verifies the lane sees
-// its tools, and (in --watch) re-mints + re-registers just before expiry so the agent connects ONCE and
-// stays connected.
+// grant, and each lane's token carries its agent identity so the gateway ring-gates privileged RAG. A
+// static bearer header therefore expires hourly. This mints the lane token, registers the gateway as a
+// Claude Code MCP server, verifies the lane sees its tools, and (in --watch) re-mints just before expiry.
 //
-// SECURITY: the lane client_id/secret are read fresh from Secret Manager via the claude-driver SA (the
-// same SA azls.mjs/kb-memory use) and are NEVER printed. The access token is passed only into the local
-// `claude mcp add --header` arg and is NEVER logged. Runs on the agent's own Desktop (where `claude` +
-// the SA live); it does nothing sensitive beyond wiring that machine's own session to its own lane.
+// CRED SOURCE (Azure-first, off GCP): lane client_id/secret are read from AZURE KEY VAULT via an Azure
+// service principal supplied in the environment (AZURE_SP_CLIENT_ID/SECRET/TENANT_ID, AZURE_KEYVAULT_NAME).
+// If those env vars are absent, it falls back to the legacy GCP Secret Manager path (claude-driver SA) for
+// backward compatibility on Desktops still on GCP. The client_secret and access token are NEVER printed.
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -20,12 +18,13 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const SM = 'otchealth-shared-prod';
+const KV_NAME = process.env.AZURE_KEYVAULT_NAME || 'kv-otc-55c84f6bef';
 export const GATEWAY_MCP = 'https://mcp.otchealth.app/mcp';
 export const TOKEN_ENDPOINT = 'https://mcp.otchealth.app/oauth/token';
 const REFRESH_SKEW_S = 300; // re-mint this many seconds before expiry
 
-// Lane registry: lane -> its OAuth client_id/secret SM names + the Claude Code MCP server name. Add a
-// row to onboard another ring-scoped agent. Each lane MUST reference only its OWN lane creds (ring-safe).
+// Lane registry: lane -> its OAuth client_id/secret secret-names (SAME name in Key Vault and Secret
+// Manager) + the Claude Code MCP server name. Add a row to onboard another ring-scoped agent.
 export const LANES = {
   clo: { idSecret: 'oauth-lane-clo-id', secretSecret: 'oauth-lane-clo-secret', mcpName: 'otchealth-gateway' },
   'clo-personal': { idSecret: 'oauth-lane-clo-personal-id', secretSecret: 'oauth-lane-clo-personal-secret', mcpName: 'otchealth-gateway' },
@@ -48,8 +47,30 @@ export function buildAddArgs(mcpName, url, token) {
 export function laneClaim(token) {
   try { return JSON.parse(Buffer.from(String(token).split('.')[1], 'base64').toString()).agent || null; } catch { return null; }
 }
+/** True when the Azure service-principal env creds are present (selects the Key Vault cred source). */
+export function azureEnvPresent() {
+  return Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
+}
+/** Which cred source will be used, for a non-secret startup log line. */
+export function credSource() { return azureEnvPresent() ? `azure-keyvault:${KV_NAME}` : 'gcp-secret-manager'; }
 
-// ---- Secret Manager (claude-driver SA) ----
+// ---- Azure Key Vault (service principal from env) — PRIMARY ----
+async function kvToken() {
+  const r = await fetch(`https://login.microsoftonline.com/${process.env.AZURE_SP_TENANT_ID}/oauth2/v2.0/token`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: process.env.AZURE_SP_CLIENT_ID, client_secret: process.env.AZURE_SP_CLIENT_SECRET, grant_type: 'client_credentials', scope: 'https://vault.azure.net/.default' }),
+  });
+  const j = await r.json();
+  if (!j.access_token) throw new Error(`azure token: ${j.error || 'no access_token'}`);
+  return j.access_token;
+}
+async function kv(id, tok) {
+  const r = await fetch(`https://${KV_NAME}.vault.azure.net/secrets/${id}?api-version=7.4`, { headers: { Authorization: 'Bearer ' + tok } });
+  if (!r.ok) throw new Error(`key vault ${id}: ${r.status}`);
+  return String((await r.json()).value).trim();
+}
+
+// ---- GCP Secret Manager (claude-driver SA) — FALLBACK ----
 function saRaw() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
   return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, 'utf8');
@@ -69,12 +90,21 @@ async function sm(id, tok) {
   return Buffer.from((await r.json()).payload.data, 'base64').toString('utf8').trim();
 }
 
+/** Read a lane's [client_id, client_secret] from the active cred source (Key Vault first, else Secret Manager). */
+async function laneCreds(cfg) {
+  if (azureEnvPresent()) {
+    const tok = await kvToken();
+    return Promise.all([kv(cfg.idSecret, tok), kv(cfg.secretSecret, tok)]);
+  }
+  const tok = await smToken();
+  return Promise.all([sm(cfg.idSecret, tok), sm(cfg.secretSecret, tok)]);
+}
+
 /** Mint a short-lived lane token via client_credentials. Never logs the client_secret or the token. */
 export async function mintToken(lane) {
   const cfg = LANES[lane];
   if (!cfg) throw new Error(`unknown lane "${lane}" (known: ${Object.keys(LANES).join(', ')})`);
-  const tok = await smToken();
-  const [id, secret] = await Promise.all([sm(cfg.idSecret, tok), sm(cfg.secretSecret, tok)]);
+  const [id, secret] = await laneCreds(cfg);
   const r = await fetch(TOKEN_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'client_credentials', client_id: id, client_secret: secret }) });
   const { token, expiresIn } = parseTokenResponse(await r.json());
   return { token, expiresIn, mcpName: cfg.mcpName };
@@ -98,7 +128,7 @@ function register(mcpName, token) {
 
 async function connectOnce({ lane, doRegister, doVerify }) {
   const { token, expiresIn, mcpName } = await mintToken(lane);
-  console.log(`[gateway-connect] lane=${lane} token minted (agent=${laneClaim(token) || '?'}, expires_in=${expiresIn}s)`);
+  console.log(`[gateway-connect] lane=${lane} src=${credSource()} token minted (agent=${laneClaim(token) || '?'}, expires_in=${expiresIn}s)`);
   if (doRegister) { register(mcpName, token); console.log(`[gateway-connect] registered MCP server "${mcpName}" -> ${GATEWAY_MCP}`); }
   if (doVerify) { const v = await verify(token); console.log(`[gateway-connect] verify: /mcp tools/list HTTP ${v.status}, ${v.count} tools; privileged: ${v.privileged.join(', ') || '(none)'}`); }
   return expiresIn;
@@ -109,8 +139,8 @@ if (isMain) {
   const args = process.argv.slice(2);
   const lane = args.find((a) => !a.startsWith('--'));
   const watch = args.includes('--watch');
-  const verifyOnly = args.includes('--verify-only'); // mint + verify, do NOT register (offline-safe test of the lane)
-  const ifLane = args.includes('--if-lane'); // onboarding-safe: no-op (exit 0) when the agent has no gateway lane
+  const verifyOnly = args.includes('--verify-only');
+  const ifLane = args.includes('--if-lane');
   if (!lane) { console.error('usage: node connect.mjs <clo|clo-personal|cfo> [--watch] [--verify-only] [--if-lane]'); process.exit(2); }
   if (ifLane && !hasLane(lane)) { console.log(`[gateway-connect] no gateway lane for "${lane}"; skipping.`); process.exit(0); }
   (async () => {
@@ -129,4 +159,4 @@ if (isMain) {
 /** True when `lane` is a known gateway lane. Onboarding uses this to no-op for agents without a lane. */
 export function hasLane(lane) { return Object.prototype.hasOwnProperty.call(LANES, lane); }
 
-export default { LANES, GATEWAY_MCP, TOKEN_ENDPOINT, mintToken, buildAddArgs, parseTokenResponse, laneClaim, hasLane };
+export default { LANES, GATEWAY_MCP, TOKEN_ENDPOINT, mintToken, buildAddArgs, parseTokenResponse, laneClaim, hasLane, azureEnvPresent, credSource };

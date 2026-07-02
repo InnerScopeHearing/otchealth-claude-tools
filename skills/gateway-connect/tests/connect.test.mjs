@@ -50,3 +50,19 @@ test('CLI --if-lane on a laneless agent exits 0 and does nothing (no network, no
   const out = execFileSync('node', [runMjs, 'cto', '--if-lane'], { encoding: 'utf8' }); // exit 0, prints skip
   assert.match(out, /no gateway lane for "cto"; skipping/);
 });
+
+import { azureEnvPresent, credSource } from '../connect.mjs';
+
+test('azureEnvPresent + credSource: Key Vault when SP env is set, GCP fallback otherwise', () => {
+  const save = { id: process.env.AZURE_SP_CLIENT_ID, sec: process.env.AZURE_SP_CLIENT_SECRET, tn: process.env.AZURE_SP_TENANT_ID };
+  delete process.env.AZURE_SP_CLIENT_ID; delete process.env.AZURE_SP_CLIENT_SECRET; delete process.env.AZURE_SP_TENANT_ID;
+  assert.equal(azureEnvPresent(), false);
+  assert.equal(credSource(), 'gcp-secret-manager');
+  process.env.AZURE_SP_CLIENT_ID = 'x'; process.env.AZURE_SP_CLIENT_SECRET = 'y'; process.env.AZURE_SP_TENANT_ID = 'z';
+  assert.equal(azureEnvPresent(), true);
+  assert.match(credSource(), /^azure-keyvault:/);
+  // restore
+  if (save.id !== undefined) process.env.AZURE_SP_CLIENT_ID = save.id; else delete process.env.AZURE_SP_CLIENT_ID;
+  if (save.sec !== undefined) process.env.AZURE_SP_CLIENT_SECRET = save.sec; else delete process.env.AZURE_SP_CLIENT_SECRET;
+  if (save.tn !== undefined) process.env.AZURE_SP_TENANT_ID = save.tn; else delete process.env.AZURE_SP_TENANT_ID;
+});
