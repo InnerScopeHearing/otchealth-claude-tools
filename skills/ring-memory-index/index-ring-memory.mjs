@@ -153,7 +153,10 @@ async function ensureIndex(AIS, AK, index) {
 // any agent recalls what any other agent learned — the "learn from each other" layer. Privileged rings
 // (clo-personal, cfo — marked private:true) are NEVER written here. Same schema as the per-agent index
 // PLUS an `agent` field so recall shows/filters by who learned it.
-export const FLEET_INDEX = "fleet-learning-memory";
+export const FLEET_INDEX = "memory-exec"; // the EXISTING open shared brain (has an `agent` field);
+// reused as the fleet-learning target because the AI Search service is at its index quota, AND memory-exec
+// is already the cross-read layer every agent queries via kb_search/memory_recall — so non-privileged
+// private-lane detail becomes fleet-learnable with zero new index and zero gateway change.
 async function ensureFleetIndex(AIS, AK) {
   const schema = { name: FLEET_INDEX, fields: [
     { name: "id", type: "Edm.String", key: true },
@@ -232,7 +235,7 @@ export async function run(filterLabel) {
   const azure = { AIS: (ep || "").replace(/\/$/, ""), AK, AOAI: ((aoaiA || aoaiB) || "").replace(/\/$/, ""), AOK: keyA || keyB, DEP: dep || "text-embedding-3-large" };
   const rings = RINGS.filter((r) => !filterLabel || filterLabel === "all" || r.label === filterLabel);
   // Ensure the shared fleet-learning index exists if any non-privileged ring is in scope.
-  if (rings.some((r) => !r.private)) { try { await ensureFleetIndex(azure.AIS, azure.AK); } catch (e) { console.error("fleet index ensure failed (per-agent indexing continues):", e.message); } }
+  if (FLEET_INDEX !== "memory-exec" && rings.some((r) => !r.private)) { try { await ensureFleetIndex(azure.AIS, azure.AK); } catch (e) { console.error("fleet index ensure failed (per-agent indexing continues):", e.message); } }
   const out = [];
   for (const ring of rings) out.push(await indexRing(ring, azure, tok)); // sequential: fail-safe, bounded quota
   return out;
