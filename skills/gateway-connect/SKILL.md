@@ -25,3 +25,6 @@ skills/gateway-connect/cfo-gateway-connect.sh --watch    # CFO variant
 ## Notes
 - `--watch` re-mints ~5 min before expiry and re-runs `claude mcp add` (remove+add) to refresh the header. For a headless refresh, run it under `nohup`/`tmux` or a login cron on the Desktop.
 - This does NOT replace an agent's own ledger discipline (e.g. CLO's `azls.mjs` → `_MEMORY/clo-personal.jsonl`); it only ADDS gateway tools (semantic recall over the agent's own rooms, `llm_azure`, guardrails).
+
+## Automatic onboarding (session-start)
+`setup/session-start.sh` calls `session-connect.sh` on every session start: it resolves the agent (kb-memory resolver — no auto-claim), and if that agent has a gateway lane, one-shot mints + registers the gateway MCP for it. Fail-open + no-op for agents without a lane, non-Desktop envs (no `claude` CLI), or a missing SA — so it never blocks startup and only ever wires an agent into its OWN lane. Long sessions still want `--watch` (via the `clo-`/`cfo-` wrapper) to refresh past the 1h token.

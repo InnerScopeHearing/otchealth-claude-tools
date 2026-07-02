@@ -110,7 +110,9 @@ if (isMain) {
   const lane = args.find((a) => !a.startsWith('--'));
   const watch = args.includes('--watch');
   const verifyOnly = args.includes('--verify-only'); // mint + verify, do NOT register (offline-safe test of the lane)
-  if (!lane) { console.error('usage: node connect.mjs <clo|clo-personal|cfo> [--watch] [--verify-only]'); process.exit(2); }
+  const ifLane = args.includes('--if-lane'); // onboarding-safe: no-op (exit 0) when the agent has no gateway lane
+  if (!lane) { console.error('usage: node connect.mjs <clo|clo-personal|cfo> [--watch] [--verify-only] [--if-lane]'); process.exit(2); }
+  if (ifLane && !hasLane(lane)) { console.log(`[gateway-connect] no gateway lane for "${lane}"; skipping.`); process.exit(0); }
   (async () => {
     try {
       do {
@@ -124,4 +126,7 @@ if (isMain) {
   })();
 }
 
-export default { LANES, GATEWAY_MCP, TOKEN_ENDPOINT, mintToken, buildAddArgs, parseTokenResponse, laneClaim };
+/** True when `lane` is a known gateway lane. Onboarding uses this to no-op for agents without a lane. */
+export function hasLane(lane) { return Object.prototype.hasOwnProperty.call(LANES, lane); }
+
+export default { LANES, GATEWAY_MCP, TOKEN_ENDPOINT, mintToken, buildAddArgs, parseTokenResponse, laneClaim, hasLane };
