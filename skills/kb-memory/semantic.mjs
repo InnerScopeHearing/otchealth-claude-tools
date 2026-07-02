@@ -14,6 +14,9 @@
 //   node semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall]
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
+// Same-skill, dependency-free import: the near-duplicate similarity heuristic used to cluster like
+// recall hits across agents for trust scoring (see rankHitsByTrust). Always present alongside this file.
+import { tokenize, jaccard } from "./dedupe.mjs";
 const SM = "otchealth-shared-prod";
 const IDX = "memory-exec";
 const AIS_API = "2023-11-01";
@@ -124,6 +127,54 @@ async function readExecFeed() {
 // Exported for tests/semantic-docid.test.mjs (stability + key-charset safety). Pure.
 export const docId = (agent, id) => `${agent}__${id}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
 
+// Trust-rank + annotate recall hits using an INJECTED semantic-trust module (so this is pure and unit-
+// testable offline: the caller passes the dynamically-imported trust module, or null). Returns:
+//   { annot: Array|null, order: number[] }
+// annot[i] = { status, trust, distinct } for hit i, or null when trust scoring was unavailable (module
+// missing / wrong shape / threw), in which case order is the identity order and the caller prints the
+// plain score-ordered list. FAIL-OPEN by construction: any throw -> {annot:null, order}.
+//
+// CORROBORATION-ONLY by design. Recall hits are SUBJECT-LESS (the exec-feed index has no ekey/subject
+// field), so semantic-trust's groupAssertions() contradiction model does NOT fit here: it would bucket
+// every subject-less hit together and mislabel unrelated claims as mutual "contradictions", dragging even
+// a well-corroborated cluster to "contested". Instead we cluster hits by CLAIM-TEXT similarity (the same
+// tokenize/jaccard heuristic semantic-trust itself uses across agents) and score each cluster's distinct-
+// agent corroboration with scoreClaim() and NO contradictions. So "N distinct agents independently
+// recorded this same memory" floats ahead of a single unverified assertion; we do not fabricate
+// contradictions between memories that are simply about different things.
+const _TRUST_RANK = { durable: 0, corroborated: 1, unverified: 2, contested: 3 };
+const _CLAIM_SIM = 0.5; // matches semantic-trust's CLAIM_SIMILARITY_THRESHOLD
+export function rankHitsByTrust(hits, trust, nowMs = Date.now()) {
+  const order = hits.map((_, i) => i);
+  try {
+    if (!trust || typeof trust.scoreClaim !== "function") return { annot: null, order };
+    // Greedy cluster by claim-text similarity across agents (reuses kb-memory/dedupe.mjs's own
+    // tokenize/jaccard, the exact near-duplicate heuristic used intra-agent and by semantic-trust).
+    const clusters = []; // { repTokens, idxs: number[] }
+    hits.forEach((h, i) => {
+      const toks = tokenize(h.text || "");
+      let tgt = null;
+      for (const c of clusters) { if (jaccard(toks, c.repTokens) >= _CLAIM_SIM) { tgt = c; break; } }
+      if (!tgt) { tgt = { repTokens: toks, idxs: [] }; clusters.push(tgt); }
+      tgt.idxs.push(i);
+    });
+    const annot = new Array(hits.length).fill(null);
+    for (const c of clusters) {
+      const assertions = c.idxs.map((i) => ({ agent: hits[i].agent, ts: typeof hits[i].ts === "number" ? hits[i].ts : Date.parse(hits[i].ts || 0) || 0 }));
+      const scored = trust.scoreClaim({ assertions, nowMs });
+      for (const i of c.idxs) annot[i] = { status: scored.status, trust: scored.trust, distinct: scored.distinctAgents };
+    }
+    // Stable re-order by trust rank (durable first), preserving search-score order within a rank.
+    order.sort((a, b) => {
+      const ra = _TRUST_RANK[annot[a] && annot[a].status] ?? 2, rb = _TRUST_RANK[annot[b] && annot[b].status] ?? 2;
+      return ra !== rb ? ra - rb : a - b;
+    });
+    return { annot, order };
+  } catch {
+    return { annot: null, order: hits.map((_, i) => i) };
+  }
+}
+
 async function reindex() {
   await init(); await ensureIndex();
   const entries = await readExecFeed();
@@ -153,8 +204,24 @@ async function recall() {
   const r = await fetch(`${AIS_EP}/indexes/${IDX}/docs/search?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) { console.error("search " + r.status + " " + (await r.text()).slice(0, 200)); process.exit(1); }
   const hits = (await r.json()).value || [];
-  console.log(`# semantic recall "${QUERY}"${AGENT_FILTER ? ` @${AGENT_FILTER}` : ""} - ${hits.length} hit(s)\n`);
-  for (const h of hits) console.log(`[${h.agent}] [${h.type}] ${(h.ts || "").slice(0, 10)} (score ${(h["@search.score"] || 0).toFixed(3)})\n  ${(h.text || "").slice(0, 320)}${h.tags ? `\n  tags: ${h.tags}` : ""}\n`);
+
+  // semantic-trust wiring (ADVISORY, FAIL-OPEN): the shared exec feed is CROSS-AGENT, so the same
+  // real-world claim is often asserted independently by several agents in their own words. semantic-trust
+  // recognizes that (jaccard grouping of like claims across agents) and scores corroboration with time
+  // decay, so recall can float memories MULTIPLE agents agree on ahead of a single unverified assertion,
+  // and flag claims agents CONTRADICT each other on as contested. Purely additive: it re-orders and
+  // annotates the hits, never drops one. Any failure (module missing, scorer throws) degrades to the
+  // plain score-ordered print below.
+  const trust = await import("../semantic-trust/trust.mjs").catch(() => null);
+  const { annot, order } = rankHitsByTrust(hits, trust, Date.now());
+
+  console.log(`# semantic recall "${QUERY}"${AGENT_FILTER ? ` @${AGENT_FILTER}` : ""} - ${hits.length} hit(s)${annot ? " (trust-ranked: durable > corroborated > unverified, by cross-agent corroboration)" : ""}\n`);
+  for (const i of order) {
+    const h = hits[i];
+    const t = annot ? annot[i] : null;
+    const trustTag = t ? ` | trust: ${t.status} t=${(t.trust || 0).toFixed(2)}, ${t.distinct} agent${t.distinct === 1 ? "" : "s"}` : "";
+    console.log(`[${h.agent}] [${h.type}] ${(h.ts || "").slice(0, 10)} (score ${(h["@search.score"] || 0).toFixed(3)}${trustTag})\n  ${(h.text || "").slice(0, 320)}${h.tags ? `\n  tags: ${h.tags}` : ""}\n`);
+  }
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

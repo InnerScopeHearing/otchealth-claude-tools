@@ -131,3 +131,9 @@ the next reindex. **Per-prompt (Wave 2b follow-on):** when an agent's local keyw
 auto-injects up to 3 ring-safe `RELATED (shared brain, by meaning)` hits from `memory-exec` using the
 server-side SEMANTIC RANKER + a READ-ONLY query key (`azure-search-query-key`; no admin/embedding key on
 the hot path). Thin-triggered + 60s-throttled + 2s-bounded + fail-open; `KB_SEM_DISABLE=1` turns it off.
+
+**Trust-ranked recall (semantic-trust wiring):** `semantic.mjs recall` annotates + re-orders hits by
+CROSS-AGENT corroboration via `skills/semantic-trust`. Memories several agents independently recorded rank
+`durable`/`corroborated` and float ahead of a single `unverified` assertion (each hit shows `trust: <status>
+t=<0..1>, N agents`). Corroboration-only (recall hits have no subject key, so no contradiction fabrication);
+additive + fail-open — recall still works, just unranked, if semantic-trust is unavailable.

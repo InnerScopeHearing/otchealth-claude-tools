@@ -41,4 +41,11 @@ COPY skills/grant-tracker/ /app/skills/grant-tracker/
 # ledger-compaction: the daily Container App Job (compaction.sh -> run-compaction.mjs) that reads each
 # agent's kb-memory ledger and writes a non-destructive compacted summary. Imports kb-memory (above).
 COPY skills/ledger-compaction/ /app/skills/ledger-compaction/
+# compute-allocator + fleet-telemetry: fleet-dispatch's send now consults compute-allocator on TASK
+# dispatches (fan-out/model/critic recommendation), and allocate.mjs resolves the model tier via
+# fleet-telemetry/task-router.mjs and live signals via signal-radar (copied above). The dispatch import
+# is dynamic + fail-open, so these are only needed when a JOB (signal-radar/decision-clock) shells a
+# --task dispatch; copying them lets that path produce the recommendation instead of silently skipping it.
+COPY skills/compute-allocator/ /app/skills/compute-allocator/
+COPY skills/fleet-telemetry/ /app/skills/fleet-telemetry/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]
