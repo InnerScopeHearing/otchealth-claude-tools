@@ -50,3 +50,12 @@ const { agents, mode, rationale } = recommendFanout("compare Postgres vs DynamoD
 Non-PHI coordination channel. Do NOT dispatch MNPI (INND securities), PHI, or clo-personal/privileged
 content; route those in their own rings. The inbox is delete-after-read (low-volume hand-offs); a sender
 re-dispatches if needed. Fail-open: `check` never blocks or breaks a session.
+
+## Wired into compute-allocator (task dispatches consult it)
+On a TASK dispatch (`--task`/`--spawn`), `send` now consults **compute-allocator** (`allocateComputeAsync`
++ `recentSignalsFor(to)`) and stamps a `compute` recommendation — `{ agents, model, useCritic, rationale }`,
+informed by the target lane's live signal-radar signals — onto the queued inbox row. `check` surfaces that
+line at the target's next session, and `--spawn` folds it into the spawned runner's task text so the run
+acts on the recommended fan-out/model/critic instead of guessing. The import is **dynamic + fail-open**: if
+compute-allocator (or fleet-telemetry/signal-radar) is absent or errors, the dispatch queues normally with
+no annotation — a broken allocator can never block a hand-off. Plain (non-task) nudges are never annotated.

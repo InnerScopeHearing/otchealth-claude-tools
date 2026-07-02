@@ -109,3 +109,12 @@ node trust.mjs promote '{"trust":0.9,"status":"durable"}' 0.75
 - Additive and non-destructive: does not delete or mutate ledger rows or the shared feed, and does
   not write to any shared index. It only reads what it is handed and returns a score plus an advisory
   recommendation.
+
+## Wired into kb-memory semantic recall
+`kb-memory/semantic.mjs recall` now trust-ranks results via this skill (see `rankHitsByTrust`). Because
+recall hits are SUBJECT-LESS, the wiring is **corroboration-only**: it clusters like claims across agents
+by the same tokenize/jaccard heuristic, scores each cluster's distinct-agent corroboration with
+`scoreClaim` (no fabricated contradictions), and floats memories MULTIPLE agents independently recorded
+(`durable`/`corroborated`) ahead of a lone `unverified` assertion. Purely additive + fail-open: it
+re-orders and annotates hits, never drops one, and degrades to the plain score-ordered list if this module
+is missing or throws.

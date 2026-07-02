@@ -101,3 +101,11 @@ response, or signal-radar's own files failing to import) returns `[]`, which mak
 degrade cleanly to the pure `effort-scale` baseline with `useCritic` decided purely by the task text's
 own high-stakes keywords. A broken signal store can only ever make this skill LESS aggressive, never
 cause it to error out the caller's pipeline.
+
+## Wired into fleet-dispatch (the orchestration path consults it)
+`skills/fleet-dispatch/dispatch.mjs` consults this skill on every TASK dispatch: it calls
+`recentSignalsFor(to)` for the target lane's live signals, then `allocateComputeAsync` for the
+`{ agents, model, useCritic }` recommendation, stamps it on the queued inbox row (surfaced by `check`),
+and folds it into `--spawn`'s task text. The dispatch import is dynamic + fail-open, so this skill being
+absent or erroring never blocks a hand-off — it just means no recommendation is attached. Still advisory:
+the receiving/ spawned orchestrator decides whether to follow the fan-out/model/critic recommendation.

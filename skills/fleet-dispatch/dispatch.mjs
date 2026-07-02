@@ -57,6 +57,43 @@ const inboxKey = (agent) => `${PREFIX}${agent}.jsonl`;
 function fromNd(t) { return (t || "").split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
 const nd = (rows) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
 
+// compute-allocator wiring (ADVISORY, FAIL-OPEN). When a TASK is dispatched (--task/--spawn), consult
+// compute-allocator for how much compute the target should give it: agent fan-out, model tier, and
+// whether to run critic-pass, informed by the target lane's live signal-radar signals. Dynamic import
+// so a job image / install that lacks compute-allocator (or fleet-telemetry/signal-radar) still
+// dispatches normally, it just skips the annotation. Any error anywhere -> null (no annotation),
+// never a thrown error: a broken allocator can NEVER block a hand-off. `to` is used as the signal lane
+// (it is the owner routing key: cto|cfo|growth|commerce, exactly what recentSignalsFor expects).
+async function computeAllocationFor(to, taskText) {
+  try {
+    const mod = await import("../compute-allocator/allocate.mjs").catch(() => null);
+    if (!mod || typeof mod.allocateComputeAsync !== "function") return null;
+    let recentSignals = [];
+    if (typeof mod.recentSignalsFor === "function") {
+      recentSignals = await mod.recentSignalsFor(to).catch(() => []);
+      if (!Array.isArray(recentSignals)) recentSignals = [];
+    }
+    const rec = await mod.allocateComputeAsync({ taskText, recentSignals });
+    if (!rec || typeof rec !== "object") return null;
+    return {
+      agents: rec.agents,
+      model: rec.model,
+      useCritic: rec.useCritic,
+      rationale: rec.rationale,
+      signals: recentSignals.length,
+    };
+  } catch {
+    return null; // fail-open: dispatch proceeds with no compute annotation
+  }
+}
+
+// One-line, human+agent-readable summary of a compute recommendation for the inbox surface / spawn text.
+function fmtCompute(c) {
+  if (!c) return "";
+  return `recommended compute: ${c.agents} agent(s), model=${c.model}, critic-pass=${c.useCritic ? "yes" : "no"}` +
+    `${c.signals ? ` (informed by ${c.signals} recent signal(s) in this lane)` : ""}`;
+}
+
 async function send() {
   const to = (positional[0] || "").toLowerCase();
   const text = positional.slice(1).join(" ").trim();
@@ -67,11 +104,23 @@ async function send() {
   const d = new Date().toISOString();
   const id = `${d.slice(0, 10).replace(/-/g, "")}-${String(rows.filter((r) => (r.id || "").startsWith(d.slice(0, 10).replace(/-/g, ""))).length + 1).padStart(3, "0")}`;
   const entry = { id, ts: d, from, to, text, task: FLAG("--task") || FLAG("--spawn"), spawned: false };
+
+  // Consult compute-allocator ONLY for task-shaped dispatches (a plain notification nudge does not need
+  // a fan-out/model recommendation). Fail-open: null on any error, and the dispatch still queues.
+  let compute = null;
+  if (entry.task) {
+    compute = await computeAllocationFor(to, text);
+    if (compute) entry.compute = compute;
+  }
+
   let spawnNote = "";
   if (FLAG("--spawn")) {
     const repo = val("--repo", "otchealth-claude-tools");
     const minutes = val("--minutes", "90");
-    const task = `You are the ${to.toUpperCase()} agent. A directed dispatch from ${from.toUpperCase()} requires action. TASK:\n${text}\n\n(Activate your identity + memory first; open a draft PR for any change. This run is least-privilege and scoped to this repo.)`;
+    // Surface the allocator's recommendation to the spawned session so it actually acts on it (fan-out,
+    // model, critic-pass) instead of guessing. Advisory: the spawned orchestrator makes the final call.
+    const computeLine = compute ? `\n\nCOMPUTE (compute-allocator, advisory): ${fmtCompute(compute)}.\nRationale: ${compute.rationale}` : "";
+    const task = `You are the ${to.toUpperCase()} agent. A directed dispatch from ${from.toUpperCase()} requires action. TASK:\n${text}${computeLine}\n\n(Activate your identity + memory first; open a draft PR for any change. This run is least-privilege and scoped to this repo.)`;
     try {
       const gh = join(HERE, "..", "github-app", "gh-app.mjs");
       execFileSync("node", [gh, "request", "POST", `/repos/${OWNER}/${repo}/actions/workflows/autonomous-run.yml/dispatches`], { input: JSON.stringify({ ref: "main", inputs: { task, minutes } }), stdio: ["pipe", "ignore", "ignore"] });
@@ -80,7 +129,8 @@ async function send() {
   }
   rows.push(entry);
   await cPut(inboxKey(to), nd(rows));
-  console.log(`[fleet-dispatch] ${from} -> ${to}: queued id=${id}${spawnNote}. It surfaces at ${to}'s next session.`);
+  const computeNote = compute ? ` [${fmtCompute(compute)}]` : "";
+  console.log(`[fleet-dispatch] ${from} -> ${to}: queued id=${id}${spawnNote}${computeNote}. It surfaces at ${to}'s next session.`);
 }
 
 async function check() {
@@ -91,7 +141,7 @@ async function check() {
     const rows = fromNd(await cGet(inboxKey(agent)));
     if (!rows.length) process.exit(0);
     let out = `\n================= FLEET DISPATCH: ${rows.length} message(s) for ${agent.toUpperCase()} =================\n`;
-    for (const r of rows) out += `- [from ${r.from}] [${(r.ts || "").slice(0, 16).replace("T", " ")}]${r.task ? " (TASK)" : ""}\n  ${r.text}\n`;
+    for (const r of rows) out += `- [from ${r.from}] [${(r.ts || "").slice(0, 16).replace("T", " ")}]${r.task ? " (TASK)" : ""}\n  ${r.text}\n${r.compute ? `  -> ${fmtCompute(r.compute)}\n` : ""}`;
     out += `(Acted on these? They auto-clear after this read. To re-queue, the sender re-dispatches.)\n==================================================================\n`;
     process.stdout.write(out);
     await cDel(inboxKey(agent)); // ack: surface once, then clear
@@ -115,6 +165,10 @@ async function list() {
   }
   if (!n) console.log("(no pending dispatches)");
 }
+
+// Exported for tests (the wiring glue): computeAllocationFor is fail-open + offline-safe (its live
+// signal read degrades to [] with no creds), fmtCompute is pure formatting.
+export { computeAllocationFor, fmtCompute };
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
