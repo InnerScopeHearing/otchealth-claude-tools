@@ -65,3 +65,27 @@ test("the resolved model tier is reported (default standard = gpt-4o, never the 
   assert.equal(typeof r.model, "string");
   assert.notEqual(r.model, "gpt-4.1-mini");
 });
+
+// CLI-level test: --task-file is read (injection-safe input) and --if-critic gates a low-stakes task
+// to a no-model-call short-circuit. Offline: the allocator's decision is pure, no network is touched.
+import { test as _t2 } from "node:test";
+import { execFileSync } from "node:child_process";
+import { writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+
+_t2("CLI --task-file + --if-critic short-circuits a low-stakes lookup with no model call", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const runMjs = join(here, "..", "run.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "critic-cli-"));
+  const tf = join(dir, "task.txt");
+  const df = join(dir, "draft.txt");
+  writeFileSync(tf, "what is the current app version number"); // pure lookup -> useCritic=false
+  writeFileSync(df, "the version is 1.5.15");
+  const out = execFileSync("node", [runMjs, "--task-file", tf, "--draft-file", df, "--if-critic"], { encoding: "utf8" });
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.ran, false);
+  assert.equal(parsed.skipped, "useCritic=false");
+});
