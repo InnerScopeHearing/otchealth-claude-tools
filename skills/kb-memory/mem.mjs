@@ -36,6 +36,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeAdvisory } from "./dedupe.mjs";
+import { parseNdjson, serializeNdjson, nextId, isConflict, condHeaders } from "./blobwrite.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
 
 const SM = "otchealth-shared-prod";
@@ -133,7 +134,37 @@ async function fetchRetry(u, opts, tries = 4) {
   return last;
 }
 async function getText(name) { const r = await fetchRetry(url(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return await r.text(); }
+// ETag-aware read for optimistic concurrency: returns { text, etag } (etag null when the blob is absent).
+async function getTextMeta(name) { const r = await fetchRetry(url(name)); if (r.status === 404) return { text: null, etag: null }; if (!r.ok) throw new Error("get " + r.status); return { text: await r.text(), etag: r.headers.get("etag") }; }
 async function putText(name, body, ct) { const r = await fetchRetry(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160)); }
+// Conditional PUT for optimistic concurrency: pass the ETag read alongside the body; returns the raw
+// Response so the caller can detect a precondition failure (isConflict) and reload+retry.
+async function putTextCond(name, body, ct, etag) { return fetchRetry(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8", ...condHeaders(etag) }, body }); }
+// Atomically append to the JSONL ledger under optimistic concurrency. `buildEntry(freshRows)` MUST
+// recompute everything it needs (id via nextId, supersedes, etc.) from the rows it is handed, because
+// on a concurrent-writer conflict we reload the fresh blob and call it again. Returns { rows, entry }
+// after a committed write (entry === null if buildEntry opts out). Also refreshes the local cache and
+// the rendered MD view (MD is a derived, best-effort last-writer-wins view). Throws only if every
+// attempt loses the race (extreme contention) or on a non-conflict error.
+async function commitAppend(buildEntry, attempts = 6) {
+  let lastConflict;
+  for (let a = 0; a < attempts; a++) {
+    const { text, etag } = await getTextMeta(JSONL);
+    const rows = parseNdjson(text);
+    const entry = buildEntry(rows);
+    if (!entry) return { rows, entry: null };
+    rows.push(entry);
+    const r = await putTextCond(JSONL, serializeNdjson(rows), "application/x-ndjson", etag);
+    if (r.ok) {
+      writeCacheRows(KEYBASE, rows); // write-through: instantly in the local recall cache
+      try { await putText(MD, renderMd(rows), "text/markdown; charset=utf-8"); } catch {} // derived view; best-effort
+      return { rows, entry };
+    }
+    if (isConflict(r.status)) { lastConflict = r.status; await new Promise((s) => setTimeout(s, 120 * (a + 1))); continue; }
+    throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160));
+  }
+  throw new Error(`kb-memory: append lost the optimistic-concurrency race after ${attempts} attempts (last ${lastConflict}); no data was clobbered`);
+}
 
 // --- the shared EXEC team feed (commons; one file per agent => no cross-agent clobber) ---
 const C = AGENTS.commons;
@@ -214,7 +245,7 @@ async function semanticHits(prompt, creds, excludePrefixes) {
 }
 
 async function load() { const t = await getText(JSONL); if (!t) return []; return t.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
-function newId(rows) { const d = new Date().toISOString().slice(0, 10).replace(/-/g, ""); const n = rows.filter((r) => (r.id || "").startsWith(d)).length + 1; return `${d}-${String(n).padStart(3, "0")}`; }
+function newId(rows) { return nextId(rows); } // salted + monotonic, see blobwrite.mjs
 
 function renderMd(rows) {
   const fmt = (r) => `- [${(r.ts || "").slice(0, 10)}] ${r.text}${r.tags && r.tags.length ? `  _(#${r.tags.join(" #")})_` : ""}${r.source ? `  - ${r.source}` : ""}  \`${r.id}\``;
@@ -238,15 +269,13 @@ function renderMd(rows) {
 async function append(type, share) {
   if (!TEXT) { console.error(`need text: mem.mjs ${type} "<text>" --agent <a>`); process.exit(2); }
   await initStore();
-  const rows = await load();
-  // Non-blocking write-time advisory: flags a near-duplicate or a likely-missed correction so the
-  // operator can choose --supersedes instead of piling up disagreeing rows. Never blocks the write.
-  if (!SUPERSEDES) writeAdvisory(TEXT, rows, type);
-  const entry = { id: newId(rows), ts: new Date().toISOString(), type, text: TEXT, tags: TAGS, source: SOURCE || undefined, was: WAS || undefined, supersedes: SUPERSEDES || undefined };
-  rows.push(entry);
-  await putText(JSONL, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "application/x-ndjson");
-  writeCacheRows(KEYBASE, rows); // write-through: a just-stated fact is instantly in the local recall cache
-  await putText(MD, renderMd(rows), "text/markdown; charset=utf-8");
+  // Optimistic-concurrency append: buildEntry recomputes the id from the FRESH rows on every attempt,
+  // so a concurrent writer from the other engine can never be clobbered and ids never collide.
+  const { rows, entry } = await commitAppend((freshRows) => {
+    // Non-blocking write-time advisory (dedupe/contradiction). Never blocks the write.
+    if (!SUPERSEDES) writeAdvisory(TEXT, freshRows, type);
+    return { id: newId(freshRows), ts: new Date().toISOString(), type, text: TEXT, tags: TAGS, source: SOURCE || undefined, was: WAS || undefined, supersedes: SUPERSEDES || undefined };
+  });
   let shared = false;
   if (share || type === "status") shared = await publishShared(AGENT, entry);
   maybeIndex(entry, shared);
@@ -364,10 +393,7 @@ async function entityCmd() {
   if (sub === "alias") {
     const from = normKey(positional[1] || ""), to = normKey(positional[2] || "");
     if (!from || !to) { console.error('usage: mem.mjs entity alias "<from-phrasing>" <to-canonical-key> --agent <a>'); process.exit(2); }
-    const entry = { id: newId(rows), ts: new Date().toISOString(), type: "alias", ekey: from, evalue: to, text: `alias ${from} -> ${to}`, tags: TAGS };
-    rows.push(entry);
-    await putText(JSONL, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "application/x-ndjson");
-    writeCacheRows(KEYBASE, rows);
+    const { entry } = await commitAppend((freshRows) => ({ id: newId(freshRows), ts: new Date().toISOString(), type: "alias", ekey: from, evalue: to, text: `alias ${from} -> ${to}`, tags: TAGS }));
     console.log(`[kb-memory] alias ${from} -> ${to} -> ${AGENT} id=${entry.id}.`);
     return;
   }
@@ -375,16 +401,19 @@ async function entityCmd() {
     const k = resolveAlias(rows, positional[1] || "");
     const value = positional.slice(2).join(" ").trim();
     if (!k || !value) { console.error('usage: mem.mjs entity set <key> "<value>" --agent <a> [--source "..."] [--share]'); process.exit(2); }
-    const prev = currentEntity(rows, k);
-    const entry = { id: newId(rows), ts: new Date().toISOString(), type: "entity", ekey: k, evalue: value, text: `${k} = ${value}`, tags: TAGS, source: SOURCE || undefined, was: prev ? prev.evalue : undefined, supersedes: prev ? prev.id : undefined };
-    rows.push(entry);
-    await putText(JSONL, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "application/x-ndjson");
-    writeCacheRows(KEYBASE, rows);
-    await putText(MD, renderMd(rows), "text/markdown; charset=utf-8");
+    // Resolve the alias + prior value from the FRESH rows on each attempt, so a concurrent set of the
+    // same key supersedes the right (latest) prior entry rather than a stale snapshot.
+    let prevRef, keyRef;
+    const { entry } = await commitAppend((freshRows) => {
+      keyRef = resolveAlias(freshRows, positional[1] || "");
+      const prev = currentEntity(freshRows, keyRef);
+      prevRef = prev;
+      return { id: newId(freshRows), ts: new Date().toISOString(), type: "entity", ekey: keyRef, evalue: value, text: `${keyRef} = ${value}`, tags: TAGS, source: SOURCE || undefined, was: prev ? prev.evalue : undefined, supersedes: prev ? prev.id : undefined };
+    });
     let shared = false;
     if (SHARE) shared = await publishShared(AGENT, entry);
     maybeIndex(entry, shared);
-    console.log(`[kb-memory] entity ${k} = ${value} -> ${AGENT} id=${entry.id}${prev ? ` (was: ${prev.evalue})` : ""}${shared ? "; shared+indexed" : ""}.`);
+    console.log(`[kb-memory] entity ${keyRef} = ${value} -> ${AGENT} id=${entry.id}${prevRef ? ` (was: ${prevRef.evalue})` : ""}${shared ? "; shared+indexed" : ""}.`);
     return;
   }
   console.error('usage: mem.mjs entity set <key> "<value>" | get <key> | list | alias "<from>" <to>   --agent <a> [--share]');
