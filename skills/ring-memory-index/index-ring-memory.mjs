@@ -2,20 +2,23 @@
 // ring-memory-index — keep each RING-ISOLATED agent memory ledger semantically recallable.
 //
 // WHY: the shared exec brain (_MEMORY/_exec/*) is indexed into Azure AI Search `memory-exec`, so every
-// agent recalls SHARED memory by meaning. But ring-isolated agents keep their real work in a PRIVATE
-// ledger in their own ring store, which the shared reindex never touches:
-//   - CLO (legal ring):    otchealthlegalstore / personal / _MEMORY/clo-personal.jsonl  -> legal-personal-memory
-//   - CFO (finance ring):  otchealthcfodata / cfo-source-docs / _MEMORY/cfo.jsonl        -> finance-cfo-memory
+// agent recalls SHARED memory by meaning. But every agent also keeps its real work in a PRIVATE ledger,
+// which the shared reindex never touches:
+//   - CLO (legal ring):    otchealthlegalstore / personal        / _MEMORY/clo-personal.jsonl -> legal-personal-memory
+//   - CFO (finance ring):  otchealthcfodata    / cfo-source-docs / _MEMORY/cfo.jsonl           -> finance-cfo-memory
+//   - COO/CCO/CRO/CPO/developer (non-privileged, commons store): otchealthcommons / company-journal /
+//     _MEMORY/<agent>.jsonl -> commons-<agent>-memory (one index per agent, even though they share a store)
 // Those ledgers were only FLAT-readable (slow keyword scan over a large growing jsonl). This embeds each
-// ring ledger into its own AI Search index (BM25 + text-embedding-3-large vector + semantic ranker), so
-// the ring agent recalls its OWN decisions/status/facts by meaning, fast — the same upgrade memory-exec
-// gave the shared brain, applied per ring. The DOCUMENT corpora (legal-personal, finance-cfo-source-docs)
-// are indexed separately by doc-indexer; this is specifically the agent's memory ledger.
+// agent's ledger into its own AI Search index (BM25 + text-embedding-3-large vector + semantic ranker), so
+// the agent recalls its OWN decisions/status/facts by meaning, fast — the same upgrade memory-exec gave
+// the shared brain, applied per agent. The DOCUMENT corpora (legal-personal, finance-cfo-source-docs) are
+// indexed separately by doc-indexer; this is specifically the agent's memory ledger.
 //
-// RING SAFETY: each ring's ledger is embedded ONLY into that ring's own index (legal->legal-*, finance->
-// finance-*); content never crosses rings and is never printed. Creds self-resolve per ring from Secret
-// Manager via the claude-driver SA. Idempotent (mergeOrUpload by stable id) and fail-safe PER RING — one
-// ring's failure never blocks the others. Safe to run on a schedule.
+// RING SAFETY: each row is embedded ONLY into its own index — never crosses into another agent's index,
+// even when two rows share a store (the commons agents share otchealthcommons/company-journal, but each
+// still gets its own commons-<agent>-memory index). Content is never printed. Creds self-resolve per row
+// from Secret Manager via the claude-driver SA. Idempotent (mergeOrUpload by stable id) and fail-safe PER
+// ROW — one row's failure never blocks the others. Safe to run on a schedule.
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -48,6 +51,55 @@ export const RINGS = [
     ledger: "_MEMORY/cfo.jsonl",
     index: "finance-cfo-memory",
     idPrefix: "cfom",
+  },
+  // Non-privileged agents keep their PRIVATE lane in the shared COMMONS store (fleet commons /
+  // company-journal), one ledger per agent at _MEMORY/<agent>.jsonl. Unlike CLO/CFO these agents
+  // share a STORE but each still gets its own target index (commons-<agent>-memory) — no agent's
+  // private ledger is ever embedded into another agent's index.
+  {
+    label: "coo",
+    storeAcctSecret: "azure-commons-storage-account",
+    storeKeySecret: "azure-commons-storage-key",
+    container: "company-journal",
+    ledger: "_MEMORY/coo.jsonl",
+    index: "commons-coo-memory",
+    idPrefix: "coom",
+  },
+  {
+    label: "cco",
+    storeAcctSecret: "azure-commons-storage-account",
+    storeKeySecret: "azure-commons-storage-key",
+    container: "company-journal",
+    ledger: "_MEMORY/cco.jsonl",
+    index: "commons-cco-memory",
+    idPrefix: "ccom",
+  },
+  {
+    label: "cro",
+    storeAcctSecret: "azure-commons-storage-account",
+    storeKeySecret: "azure-commons-storage-key",
+    container: "company-journal",
+    ledger: "_MEMORY/cro.jsonl",
+    index: "commons-cro-memory",
+    idPrefix: "crom",
+  },
+  {
+    label: "cpo",
+    storeAcctSecret: "azure-commons-storage-account",
+    storeKeySecret: "azure-commons-storage-key",
+    container: "company-journal",
+    ledger: "_MEMORY/cpo.jsonl",
+    index: "commons-cpo-memory",
+    idPrefix: "cpom",
+  },
+  {
+    label: "developer",
+    storeAcctSecret: "azure-commons-storage-account",
+    storeKeySecret: "azure-commons-storage-key",
+    container: "company-journal",
+    ledger: "_MEMORY/developer.jsonl",
+    index: "commons-developer-memory",
+    idPrefix: "devm",
   },
 ];
 
