@@ -16,6 +16,20 @@ confidently and quickly. Today most apps have no automated tests (iHEARtest:
    Generalize this: a set of senior personas review each build for UX and produce
    a prioritized fix list. This catches usability bugs tests do not.
 
+## Dev/test data: synthetic by default (never real PHI)
+Test fixtures, seed data, focus-group inputs, and any records an agent builds
+against come from the `synthetic-health-data` skill, never from a real
+patient/customer roster. One command produces the canonical, reproducible bundle:
+
+```bash
+node skills/synthetic-health-data/seed-fixtures.mjs   # fixtures/synthetic/{hearing-screening,patient,customer,order}.json
+```
+
+A fixed seed gives byte-identical output, so commit the bundle (or the seed
+command) into the app repo and every contributor and CI run gets the same data.
+This is the fleet standard, see `app-kit/DEV-DATA-STANDARD.md` for the Iron Rule,
+the generator flags, and the (BAA-only) `deident.mjs` path for real extracts.
+
 ## Gate it in CI
 Wire unit + Maestro into the CI workflow so a red test blocks merge. Greptile
 reviews the PR in parallel. The human only checks the genuinely device-dependent
