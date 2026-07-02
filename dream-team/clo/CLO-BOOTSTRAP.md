@@ -101,7 +101,15 @@ are: **federal securities**, **Nevada corporate (NRS)**, **California family + c
 
 ## Matter index (the live book — populate + maintain via `legal matters`)
 Open a matter file per matter with: client, jurisdiction, type, adverse parties, status,
-key deadlines, and the document set. Known/expected matters:
+key deadlines, and the document set.
+
+**Initialized 2026-06-18 (bootstrap session).** Live matter IDs in the Azure store
+(see `TRIAGE-LOG.md` for the full triage): company — `corp-sec-ainnova`,
+`ga-flsa-backwage`, `corp-housekeeping`, `legacy-settlements`; personal (confidential)
+— `ca-divorce`, `ca-civil`. No court deadlines are docketed yet; the dated items are
+clearly-labeled self-set action ticklers until the real dockets / source docs are pulled.
+
+Known/expected matters:
 - **CORP/SEC:** Ainnova/OTCHealth transaction docs + disclosure; INND public-co reporting +
   Reg FD/Section 16 hygiene; OTCHealth + INND + HearingAssist corporate housekeeping
   (minutes, consents, NV annual lists, intercompany + related-party/due-to-officer
