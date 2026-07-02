@@ -120,7 +120,12 @@ async function send() {
     // Surface the allocator's recommendation to the spawned session so it actually acts on it (fan-out,
     // model, critic-pass) instead of guessing. Advisory: the spawned orchestrator makes the final call.
     const computeLine = compute ? `\n\nCOMPUTE (compute-allocator, advisory): ${fmtCompute(compute)}.\nRationale: ${compute.rationale}` : "";
-    const task = `You are the ${to.toUpperCase()} agent. A directed dispatch from ${from.toUpperCase()} requires action. TASK:\n${text}${computeLine}\n\n(Activate your identity + memory first; open a draft PR for any change. This run is least-privilege and scoped to this repo.)`;
+    // When the allocator set useCritic=true, don't just RECOMMEND a critic pass — give the spawned
+    // orchestrator the exact command to RUN one on its draft before committing (report-mode/fail-safe).
+    const criticLine = compute && compute.useCritic
+      ? `\n\nREQUIRED critic pass (this task was flagged useCritic=true): before you finalize/open your PR, run a real critic pass on your draft and revise once if it says so:\n  node skills/critic-pass/run.mjs --task ${JSON.stringify(text)} --draft-file <path-to-your-draft> --min-severity medium\n  (fail-safe: if it errors it approves and never blocks you; if verdict=="revise" with a medium+ issue, address it before shipping.)`
+      : "";
+    const task = `You are the ${to.toUpperCase()} agent. A directed dispatch from ${from.toUpperCase()} requires action. TASK:\n${text}${computeLine}${criticLine}\n\n(Activate your identity + memory first; open a draft PR for any change. This run is least-privilege and scoped to this repo.)`;
     try {
       const gh = join(HERE, "..", "github-app", "gh-app.mjs");
       execFileSync("node", [gh, "request", "POST", `/repos/${OWNER}/${repo}/actions/workflows/autonomous-run.yml/dispatches`], { input: JSON.stringify({ ref: "main", inputs: { task, minutes } }), stdio: ["pipe", "ignore", "ignore"] });

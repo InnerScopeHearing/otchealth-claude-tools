@@ -90,3 +90,37 @@ node critic.mjs parse < raw_model_output.txt [--min-severity high]
 ```
 The CLI only builds prompts and parses verdicts. The orchestrator/gateway supplies the actual
 model call and pipes the raw text into `parse`.
+
+## Executor (run.mjs) — actually RUNS the pass
+
+`critic.mjs` is pure (prompt + parse). `run.mjs` is the executor that supplies the real model call, so
+the orchestrator can RUN a critic pass in one command instead of hand-wiring prompt->model->parse:
+
+```
+node skills/critic-pass/run.mjs --task "<task>" --draft-file <path> [--constraints "a;b"] \
+  [--context "..."] [--min-severity high] [--tier standard] [--if-critic] [--live] [--fail-on-revise]
+```
+
+- Makes ONE real Azure OpenAI chat call via `setup/model-routing.mjs` (default tier `standard` = gpt-4o,
+  the Sonnet-tier analog critic-pass is designed for; NOT the banned `cheap`/gpt-4.1-mini). Override with
+  `CRITIC_MODEL`. Foundry fallback on sustained throttle, same as agent-evals.
+- **`--if-critic`**: consult `compute-allocator` (allocateCompute on the task text; `--live` also pulls
+  signal-radar signals) and RUN the pass only when it recommends `useCritic=true`; otherwise print
+  `{ran:false}` and spend nothing. This is the compute-allocator -> critic-pass wiring.
+- **Fail-safe / report-mode**: any failure (no creds, throttle, malformed output) degrades to
+  `{verdict:"approve", malformed:true}` — a broken critic NEVER blocks. Exit 0 by default;
+  `--fail-on-revise` exits 3 when the verdict is `revise` (hard CI gate).
+
+### Programmatic API
+```js
+import { runCriticPass, criticGate } from "./run.mjs";
+// criticGate short-circuits (no model call) unless useCritic is true:
+const r = await criticGate({ useCritic: alloc.useCritic, task, draft, minSeverity: "medium" });
+// -> { ran, verdict, issues, confidence, shouldRevise, malformed, model }
+// Inject a chatFn for tests/offline: runCriticPass({ task, draft, chatFn: async()=>'{"verdict":"approve"}' })
+```
+
+### Wired into the orchestration path
+`app-kit/ORCHESTRATION-STANDARD.md` Rule 5 mandates running this on the draft when the allocator sets
+`useCritic=true`, and `fleet-dispatch`'s `--spawn` folds the exact `run.mjs` command into the spawned
+session's task text whenever the dispatched task was flagged `useCritic=true`.
