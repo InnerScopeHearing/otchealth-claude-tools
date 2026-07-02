@@ -54,6 +54,15 @@ jobs:
           EVAL_FLOOR: '0.6'
         run: node skills/agent-evals/nightly-summary.mjs "${GITHUB_WORKSPACE}/nightly-scorecard.json"
 
+      # CI EVAL-GATE (report-only phase; see skills/agent-evals/eval-gate.mjs header). Compares
+      # tonight's scorecard against the last recorded baseline.json (repo-tracked, seeded at total=0
+      # so this is a no-op until a real baseline exists). NEVER blocks the nightly (no --enforce);
+      # this exercises the exact code path a future deploy-time gate (see deploy-eval-gate.yml) would
+      # invoke, so its output/format is battle-tested before anything depends on it for real.
+      - name: Eval-gate vs last baseline (report-only; --enforce is the future deploy-gate mode)
+        if: always()
+        run: node skills/agent-evals/eval-gate.mjs "${GITHUB_WORKSPACE}/nightly-scorecard.json" --baseline skills/agent-evals/baseline.json --tolerance 0.05
+
       - name: Upload scorecard + run log
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

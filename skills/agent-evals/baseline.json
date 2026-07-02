@@ -1,0 +1,8 @@
+{
+  "avg": 0.6,
+  "passed": 0,
+  "total": 0,
+  "recordedAt": "seed",
+  "model": "unknown",
+  "_comment": "Seed baseline for eval-gate.mjs. total=0 means eval-gate treats this as 'no baseline yet' (see compareToBaseline: hasBaseline requires total>0), so the FIRST real nightly run seeds the real baseline rather than gating against this placeholder. A follow-up can wire nightly-eval.yml to overwrite this file (via nextBaseline()) and open a small PR when the run passes, at which point real deltas start being tracked."
+}
