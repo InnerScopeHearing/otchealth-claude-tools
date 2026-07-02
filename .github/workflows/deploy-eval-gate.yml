@@ -1,0 +1,106 @@
+# Deploy Eval Gate — reusable workflow implementing the Azure GenAIOps #4/#31 pattern: "the eval
+# baseline GATES deploys", not just observes them. This is the enforceable half of the CI eval-gate;
+# nightly-eval.yml already runs the SAME eval-gate.mjs comparison in report-only mode every night so
+# the mechanism is proven before anything depends on it.
+#
+# PHASE: report-first, with a flip switch. `enforce` defaults to false (warn, never block) so it can be
+# wired into a deploy pipeline immediately with zero risk, observed for a burn-in period, then flipped
+# to true (blocking) once the baseline.json trend is trusted. This mirrors how promptcheck.yml started
+# report-only before any consideration of tightening.
+#
+# HOW A DEPLOY WORKFLOW USES THIS (once a real deploy pipeline exists — otchealth-claude-tools itself
+# has no deploy step today; this is the plumbing so the FIRST deploy pipeline that lands gets the gate
+# for free):
+#
+#   jobs:
+#     eval-gate:
+#       uses: InnerScopeHearing/otchealth-claude-tools/.github/workflows/deploy-eval-gate.yml@main
+#       secrets: inherit
+#       with:
+#         enforce: true          # flip to true once the baseline is trusted; false = warn-only
+#         tolerance: 0.05        # allowed drop (absolute) below the recorded baseline before flagging
+#     deploy:
+#       needs: eval-gate
+#       runs-on: ubuntu-latest
+#       steps: [ ... ]           # needs: eval-gate is itself the enforcement point once enforce=true,
+#                                # because this workflow's job fails (non-zero exit) on a blocked gate.
+#
+# Needs GCP_CLAUDE_DRIVER_SA_JSON (same claude-driver SA secret nightly-eval.yml / promptcheck.yml use).
+name: Deploy Eval Gate (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      enforce:
+        description: "Block (fail this job) on a detected regression. Default false = report-only/warn."
+        type: boolean
+        default: false
+      tolerance:
+        description: "Allowed absolute drop below the recorded baseline avg before flagging a regression."
+        type: number
+        default: 0.05
+      agent:
+        description: "Optional: restrict the gate to one agent's golden tasks (--agent filter). Empty = all."
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      enforce:
+        description: "Block on regression?"
+        type: boolean
+        default: false
+      tolerance:
+        description: "Regression tolerance (absolute, 0-1)"
+        type: string
+        default: "0.05"
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: golden-task eval gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Run golden-task suite (judge on Azure credits)
+        id: run
+        continue-on-error: true # run-evals.mjs exits 1 on any single failing task; that is a scoring
+                                 # SIGNAL for eval-gate.mjs to interpret, not a workflow error by itself.
+        working-directory: skills/agent-evals
+        env:
+          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+        run: |
+          AGENT_FLAG=""
+          if [ -n "${{ inputs.agent }}" ]; then AGENT_FLAG="--agent ${{ inputs.agent }}"; fi
+          node run-evals.mjs $AGENT_FLAG --json "${GITHUB_WORKSPACE}/deploy-gate-scorecard.json" 2>&1 | tee "${GITHUB_WORKSPACE}/deploy-gate.log"
+
+      - name: Eval-gate vs last baseline
+        id: gate
+        if: always()
+        run: |
+          ENFORCE_FLAG=""
+          if [ "${{ inputs.enforce }}" = "true" ]; then ENFORCE_FLAG="--enforce"; fi
+          node skills/agent-evals/eval-gate.mjs "${GITHUB_WORKSPACE}/deploy-gate-scorecard.json" \
+            --baseline skills/agent-evals/baseline.json \
+            --tolerance "${{ inputs.tolerance }}" \
+            $ENFORCE_FLAG
+
+      - name: Upload scorecard + run log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deploy-eval-gate-scorecard
+          path: |
+            deploy-gate-scorecard.json
+            deploy-gate.log
+          retention-days: 30
+          if-no-files-found: warn
