@@ -415,6 +415,11 @@ node "${TOOLS_DIR}/setup/bulletin.mjs" since 2>/dev/null || true
 # SessionStart hook, so even the very first session in a fresh container starts on the latest base.
 [ -n "${CLAUDE_PROJECT_DIR:-}" ] && bash "${TOOLS_DIR}/setup/repo-freshen.sh" "${CLAUDE_PROJECT_DIR}" 2>/dev/null || true
 
+# Agent onboarding: auto-connect this agent's Claude Code session to the MCP gateway on its OWN
+# ring-scoped lane (clo->clo, cfo->cfo, ...). Fail-open + no-op for agents without a lane, non-Desktop
+# envs (no `claude` CLI), or a missing SA — never blocks session start.
+bash "${TOOLS_DIR}/skills/gateway-connect/session-connect.sh" 2>/dev/null || true
+
 echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"
 

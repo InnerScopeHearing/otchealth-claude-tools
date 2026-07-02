@@ -32,3 +32,21 @@ test('laneClaim: decodes the agent claim from a JWT payload, null on garbage', (
   assert.equal(laneClaim(`h.${payload}.s`), 'clo');
   assert.equal(laneClaim('not-a-jwt'), null);
 });
+
+import { hasLane } from '../connect.mjs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+test('hasLane: true for known lanes, false otherwise (onboarding no-op gate)', () => {
+  assert.equal(hasLane('clo'), true);
+  assert.equal(hasLane('cfo'), true);
+  assert.equal(hasLane('cto'), false);   // CTO has no gateway lane -> onboarding skips
+  assert.equal(hasLane('nope'), false);
+});
+
+test('CLI --if-lane on a laneless agent exits 0 and does nothing (no network, no register)', () => {
+  const runMjs = join(dirname(fileURLToPath(import.meta.url)), '..', 'connect.mjs');
+  const out = execFileSync('node', [runMjs, 'cto', '--if-lane'], { encoding: 'utf8' }); // exit 0, prints skip
+  assert.match(out, /no gateway lane for "cto"; skipping/);
+});
