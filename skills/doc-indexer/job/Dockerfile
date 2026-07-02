@@ -38,4 +38,7 @@ COPY skills/fleet-dispatch/ /app/skills/fleet-dispatch/
 # grant-tracker: signal-radar's grant-burn-expiry detector reads grant-tracker/grants.json to flag
 # grants whose term lapsed but still show status=active (may now be billing at full cash rate).
 COPY skills/grant-tracker/ /app/skills/grant-tracker/
+# ledger-compaction: the daily Container App Job (compaction.sh -> run-compaction.mjs) that reads each
+# agent's kb-memory ledger and writes a non-destructive compacted summary. Imports kb-memory (above).
+COPY skills/ledger-compaction/ /app/skills/ledger-compaction/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]
