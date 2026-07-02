@@ -57,6 +57,11 @@ Flags: `--count N` (default 10), `--seed S` (any string or number; same seed plu
 gives byte-identical output), `--csv` (flatten nested objects into CSV instead of JSON),
 `--out FILE` (write to a file instead of stdout).
 
+**Fleet default (one command):** `node seed-fixtures.mjs` generates the canonical, reproducible
+fixture bundle for all common shapes (hearing-screening, patient, customer, order) at a fixed
+seed, plus a `manifest.json` with per-file sha256. This is the portfolio standard for dev/test
+data, see `app-kit/DEV-DATA-STANDARD.md`. Flags: `--out DIR`, `--seed S`, `--csv`.
+
 Shapes:
 - **hearing-screening** (iHEARtest-style): `age_band`, `ear`, per-frequency dB **category
   bands** (`250hz_band` ... `8000hz_band`, each one of `normal / mild / moderate /
