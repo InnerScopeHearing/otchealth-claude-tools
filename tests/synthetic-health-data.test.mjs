@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import {
   genHearingScreening, genPatient, genCustomer, genOrder, DB_CATEGORY_BANDS, RESULT_TIERS, FREQUENCIES_HZ,
 } from "../skills/synthetic-health-data/gen.mjs";
-import { deidentRecord, deidentifyAll, yearOnly, zip3Redact } from "../skills/synthetic-health-data/deident.mjs";
+import { deidentRecord, deidentifyAll, yearOnly, zip3Redact, toCsv } from "../skills/synthetic-health-data/deident.mjs";
 
 // ---------- gen.mjs: schema + no-real-PII checks ----------
 
@@ -367,4 +367,16 @@ test("regression: commerce numeric fields (order_total et al.) are retained, not
   assert.equal(clean.order_total, 129.99);
   assert.equal(clean.grand_total, 179.99);
   assert.equal(clean.currency, "USD");
+});
+
+test("regression: deident CSV output neutralizes formula-injection cells (=+-@)", () => {
+  // A cell that starts with = + - @ is executable if the CSV is opened in Excel/Sheets. toCsv must
+  // prefix it with a single quote so it renders as literal text.
+  const csv = toCsv([{ product: "=cmd|calc!A1", note: "@SUM(A1)", code: "+1", n: "-1", safe: "hello" }]);
+  const dataRow = csv.split("\n")[1];
+  assert.ok(dataRow.includes("'=cmd|calc!A1") || dataRow.includes('"\'=cmd|calc!A1'), "formula cell must be quote-guarded");
+  assert.ok(/'@SUM\(A1\)/.test(dataRow), "@ formula must be quote-guarded");
+  assert.ok(/(^|,|")'\+1/.test(dataRow), "+ formula must be quote-guarded");
+  assert.ok(/(^|,|")'-1/.test(dataRow), "- formula must be quote-guarded");
+  assert.ok(/(^|,)hello(,|$)/.test(dataRow), "ordinary text must NOT be altered");
 });

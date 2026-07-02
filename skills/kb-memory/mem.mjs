@@ -35,6 +35,7 @@ import { homedir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { writeAdvisory } from "./dedupe.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
 
 const SM = "otchealth-shared-prod";
@@ -238,6 +239,9 @@ async function append(type, share) {
   if (!TEXT) { console.error(`need text: mem.mjs ${type} "<text>" --agent <a>`); process.exit(2); }
   await initStore();
   const rows = await load();
+  // Non-blocking write-time advisory: flags a near-duplicate or a likely-missed correction so the
+  // operator can choose --supersedes instead of piling up disagreeing rows. Never blocks the write.
+  if (!SUPERSEDES) writeAdvisory(TEXT, rows, type);
   const entry = { id: newId(rows), ts: new Date().toISOString(), type, text: TEXT, tags: TAGS, source: SOURCE || undefined, was: WAS || undefined, supersedes: SUPERSEDES || undefined };
   rows.push(entry);
   await putText(JSONL, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "application/x-ndjson");

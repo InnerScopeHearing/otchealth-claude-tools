@@ -366,7 +366,11 @@ function toCsv(rows) {
   if (rows.length === 0) return "";
   const headers = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   const esc = (v) => {
-    const s = v === undefined || v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+    let s = v === undefined || v === null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+    // CSV formula-injection guard: a cell beginning with = + - @ (or tab/CR) executes as a formula
+    // if the de-identified CSV is opened in Excel/Sheets by a downstream analyst. Neutralize by
+    // prefixing a single quote so it renders as literal text.
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return [headers.join(","), ...rows.map((r) => headers.map((h) => esc(r[h])).join(","))].join("\n");
