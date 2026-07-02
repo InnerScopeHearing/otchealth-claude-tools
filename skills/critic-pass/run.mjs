@@ -133,15 +133,24 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const task = typeof args.task === "string" ? args.task : "";
+  // task / context accept a --*-file variant (injection-safe: CI passes a PR title/body via a file, never
+  // interpolated into the command line, so quotes/newlines/backticks in untrusted PR text can't break arg
+  // parsing or inject flags). The inline --task/--context still work for interactive use.
+  let task = typeof args.task === "string" ? args.task : "";
+  if (!task && typeof args["task-file"] === "string") {
+    try { task = readFileSync(args["task-file"], "utf8"); } catch (e) { console.error("cannot read --task-file: " + e.message); process.exit(2); }
+  }
   let draft = typeof args.draft === "string" ? args.draft : "";
   if (!draft && typeof args["draft-file"] === "string") {
     try { draft = readFileSync(args["draft-file"], "utf8"); } catch (e) { console.error("cannot read --draft-file: " + e.message); process.exit(2); }
   }
-  if (!task || !draft) { console.error('usage: node run.mjs --task "<task>" --draft-file <path> [--if-critic] [--live] [--min-severity high] [--fail-on-revise]'); process.exit(2); }
+  if (!task || !draft) { console.error('usage: node run.mjs (--task "<t>"|--task-file <p>) (--draft "<d>"|--draft-file <p>) [--context-file <p>] [--if-critic] [--live] [--min-severity high] [--fail-on-revise]'); process.exit(2); }
 
   const constraints = typeof args.constraints === "string" ? args.constraints.split(";").map((s) => s.trim()).filter(Boolean) : [];
-  const context = typeof args.context === "string" ? args.context : "";
+  let context = typeof args.context === "string" ? args.context : "";
+  if (!context && typeof args["context-file"] === "string") {
+    try { context = readFileSync(args["context-file"], "utf8"); } catch { context = ""; } // context is optional; a missing file is non-fatal
+  }
   const minSeverity = typeof args["min-severity"] === "string" ? args["min-severity"] : "medium";
   const tier = typeof args.tier === "string" ? args.tier : "standard";
 

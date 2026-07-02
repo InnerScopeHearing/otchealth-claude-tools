@@ -124,3 +124,13 @@ const r = await criticGate({ useCritic: alloc.useCritic, task, draft, minSeverit
 `app-kit/ORCHESTRATION-STANDARD.md` Rule 5 mandates running this on the draft when the allocator sets
 `useCritic=true`, and `fleet-dispatch`'s `--spawn` folds the exact `run.mjs` command into the spawned
 session's task text whenever the dispatched task was flagged `useCritic=true`.
+
+### Auto-gate on autonomous / draft PRs (critic-pr.yml)
+`.github/workflows/critic-pr.yml` runs this critic AUTOMATICALLY on every DRAFT PR and every `claude/*`
+branch PR (the autonomous-run + fleet-dispatch `--spawn` safety-net branches), on the credentialed CI
+runner (the `GCP_CLAUDE_DRIVER_SA_JSON` secret, same as promptcheck.yml), and posts a sticky verdict
+comment BEFORE a human finalizes the PR. This closes the loop for the least-privilege autonomous runner,
+which has no Secret Manager access and so cannot make the model call itself: the critic runs where creds
+already live, granting the unattended agent no new powers. Report-only (continue-on-error, never a
+required check); ordinary non-draft PRs skip the job entirely (zero model spend). PR title/body/diff are
+passed via `--task-file`/`--context-file`/`--draft-file` (injection-safe; never interpolated).
