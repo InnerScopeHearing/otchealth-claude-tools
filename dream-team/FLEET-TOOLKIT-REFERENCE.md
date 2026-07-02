@@ -239,6 +239,9 @@ Capacitor/Ionic packs, available when their plugins/skills load.
     Shark-Tank AI twins) to a 90% gate; `--catalog` feeds the brain.
   - **browser-agent** — hardened headless-Chromium for OAuth consents / signups / portal clicks
     (autonomous on non-financial consents; hard gates stay human).
+  - **agent-dispatch** — directed, loop-safe work hand-off BETWEEN agents: A addresses a task to B, B is
+    auto-woken (Tier B: `repository_dispatch` -> `claude -p` on Max) to do it and replies back. The PUSH
+    counterpart to the Super-Brain's shared PULL knowledge. Design: `dream-team/AGENT-DISPATCH-SYSTEM.md`.
   - **doc-indexer** + the data-room **librarians** — index/understand/push-search any document store
     into Azure AI Search (the rooms the brain federates).
   - **THE PROTOCOL:** `dream-team/SUPER-BRAIN-PROTOCOL.md` (the paste-ready onboarding prompt: stay

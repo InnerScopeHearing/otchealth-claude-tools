@@ -1,0 +1,86 @@
+# agent-dispatch WAKE (deploy in EACH AGENT repo's .github/workflows/). Tier-B auto-wake, part 2 of 2.
+#
+# Cold-starts THIS repo's agent with `claude -p` when a dispatch is routed to it. Seeded with the
+# dispatched task + the standing least-privilege rails (the autonomous-run posture). The agent reads the
+# Super-Brain, does the work as a DRAFT PR, then dispatches its reply back to the sender (which wakes them).
+#
+# SETUP (one time, per agent repo):
+#   - secret CLAUDE_CODE_OAUTH_TOKEN : from `claude setup-token` (Max plan; zero metered). The SAME token
+#       the timed autonomous runner uses. This is the ONLY privileged secret the woken agent gets.
+#   - (the router in the hub repo sends the repository_dispatch that triggers this)
+# Until the secret is set this skips cleanly. You can also trigger it manually (workflow_dispatch) to test.
+
+name: agent-dispatch wake
+
+on:
+  repository_dispatch:
+    types: [agent-dispatch]
+  workflow_dispatch:
+    inputs:
+      task:    { description: "Task to run (manual test)", required: true }
+      id:      { description: "Dispatch id", required: false, default: "manual" }
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: agent-dispatch-wake-${{ github.event.client_payload.id || github.event.inputs.id }}
+  cancel-in-progress: false   # idempotent ack guards re-runs; do not cancel a real one
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      # INJECTION-SAFE: the task/id come from another agent's payload, so they cross the boundary as env
+      # vars and are referenced as "$TASK"/"$DID" in shell, NEVER interpolated into a run: block.
+      TASK: ${{ github.event.client_payload.task || github.event.inputs.task }}
+      DID: ${{ github.event.client_payload.id || github.event.inputs.id }}
+      DTHREAD: ${{ github.event.client_payload.thread }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard - require the subscription token (never metered)
+        run: |
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]; then
+            echo "::warning::CLAUDE_CODE_OAUTH_TOKEN not set; dispatch ${DID} delivered but not woken (Tier B off)."
+            exit 0
+          fi
+          if [ -z "${TASK}" ]; then echo "::error::empty dispatch task"; exit 1; fi
+
+      - name: Install Claude Code
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run the dispatched task (subscription auth, least privilege, draft PR)
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        run: |
+          set +e
+          unset ANTHROPIC_API_KEY   # OAuth token must win, never the metered API
+          cat > /tmp/rails.txt <<'RAILS'
+          You were AUTO-WOKEN by a fleet dispatch (another agent handed you this task). Do it, then dispatch
+          a reply back. HARD RULES (least privilege, unattended):
+          1. Work ONLY on claude/* branches and open/update a DRAFT pull request. NEVER push to main.
+          2. NEVER touch PHI / MedReview data, INND or HearingAssist financial writes, or securities / IR
+             content. Stay in the non-PHI, non-financial-write lane.
+          3. STOP at any payment, KYC, account-login, or e-signature gate.
+          4. First, reconstruct context: read this repo's CLAUDE.md/HANDOFF, then the Super-Brain
+             (company-brain + kb-memory recall) before acting. Recall before you assert.
+          5. Make small reversible changes; run the relevant tests/build BEFORE you commit.
+          6. When done (or blocked), reply via the dispatch skill so the sender is woken:
+             node ~/.claude/skills/agent-dispatch/dispatch.mjs reply --from <you> --to <sender> --re "$DID" --task "<result or blocker>" --commit
+          RAILS
+          PROMPT="You are this repository's agent, auto-woken by fleet dispatch ${DID} (thread ${DTHREAD}).
+          DISPATCHED TASK:
+          ${TASK}
+
+          $(cat /tmp/rails.txt)"
+          claude -p "$PROMPT" --permission-mode acceptEdits --output-format json 2>&1 | tee -a /tmp/wake.jsonl
+          echo "dispatch ${DID} handled."
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: agent-dispatch-wake-log, path: /tmp/wake.jsonl, if-no-files-found: ignore }
