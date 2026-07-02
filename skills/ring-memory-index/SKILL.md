@@ -34,3 +34,8 @@ Runs from the doc-indexer job image (which carries the SA + resolves each store'
 import { RINGS, indexRing, run } from "./index-ring-memory.mjs";
 const results = await run("all"); // [{label, index, indexed, total} | {label, error}]
 ```
+
+## Fleet-learning layer (agents learn from each other)
+Beyond each agent's own index, every NON-PRIVILEGED agent's ledger is ALSO aggregated into one shared, agent-faceted index **`fleet-learning-memory`** (reusing the same embeddings — no extra cost). Any agent can semantically recall what any other non-privileged agent learned (COO/CCO/CRO/CPO/developer + future), with an `agent` field showing/filtering who. This is the "learn from each other" layer, complementing the shared exec brain (`memory-exec`).
+
+**Privileged rings are NEVER aggregated:** rows marked `private: true` (clo-personal legal, cfo finance-sensitive/MNPI) write ONLY to their own walled index — never to fleet-learning. So the fleet compounds off non-privileged detail while attorney-privileged / MNPI / PHI stay isolated by law. Enforced in code (indexRing skips fleet for private rings) and pinned by tests.

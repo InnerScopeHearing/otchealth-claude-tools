@@ -42,6 +42,7 @@ export const RINGS = [
     ledger: "_MEMORY/clo-personal.jsonl",
     index: "legal-personal-memory",
     idPrefix: "clop",
+    private: true, // PRIVILEGED (attorney-privileged personal legal): NEVER aggregated into fleet-learning.
   },
   {
     label: "cfo",
@@ -51,6 +52,7 @@ export const RINGS = [
     ledger: "_MEMORY/cfo.jsonl",
     index: "finance-cfo-memory",
     idPrefix: "cfom",
+    private: true, // PRIVILEGED (finance-sensitive / MNPI / Reg-FD): NEVER aggregated into fleet-learning.
   },
   // Non-privileged agents keep their PRIVATE lane in the shared COMMONS store (fleet commons /
   // company-journal), one ledger per agent at _MEMORY/<agent>.jsonl. Unlike CLO/CFO these agents
@@ -146,6 +148,26 @@ async function ensureIndex(AIS, AK, index) {
   const r = await fetch(`${AIS}/indexes/${index}?api-version=${API}`, { method: "PUT", headers: { "api-key": AK, "Content-Type": "application/json" }, body: JSON.stringify(schema) });
   if (!r.ok && r.status !== 204 && r.status !== 201 && r.status !== 200) throw new Error(`ensureIndex ${index}: ${r.status} ${(await r.text()).slice(0, 160)}`);
 }
+
+// FLEET-LEARNING: one shared index aggregating every NON-PRIVILEGED agent's ledger (agent-faceted), so
+// any agent recalls what any other agent learned — the "learn from each other" layer. Privileged rings
+// (clo-personal, cfo — marked private:true) are NEVER written here. Same schema as the per-agent index
+// PLUS an `agent` field so recall shows/filters by who learned it.
+export const FLEET_INDEX = "fleet-learning-memory";
+async function ensureFleetIndex(AIS, AK) {
+  const schema = { name: FLEET_INDEX, fields: [
+    { name: "id", type: "Edm.String", key: true },
+    { name: "agent", type: "Edm.String", filterable: true, facetable: true, searchable: true },
+    { name: "type", type: "Edm.String", filterable: true, facetable: true },
+    { name: "ts", type: "Edm.String", filterable: true, sortable: true },
+    { name: "tags", type: "Edm.String", searchable: true },
+    { name: "text", type: "Edm.String", searchable: true },
+    { name: "contentVector", type: "Collection(Edm.Single)", searchable: true, retrievable: false, dimensions: DIMS, vectorSearchProfile: "vp" },
+  ], vectorSearch: { algorithms: [{ name: "hnsw", kind: "hnsw" }], profiles: [{ name: "vp", algorithm: "hnsw" }] },
+    semantic: { configurations: [{ name: "sem", prioritizedFields: { prioritizedContentFields: [{ fieldName: "text" }], prioritizedKeywordsFields: [{ fieldName: "tags" }] } }] } };
+  const r = await fetch(`${AIS}/indexes/${FLEET_INDEX}?api-version=${API}`, { method: "PUT", headers: { "api-key": AK, "Content-Type": "application/json" }, body: JSON.stringify(schema) });
+  if (!r.ok && ![200, 201, 204].includes(r.status)) throw new Error(`ensureFleetIndex: ${r.status} ${(await r.text()).slice(0, 160)}`);
+}
 async function embed(AOAI, AOK, DEP, texts) {
   for (let a = 0; a < 6; a++) {
     const r = await fetch(`${AOAI}/openai/deployments/${DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOK, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) });
@@ -176,16 +198,24 @@ export async function indexRing(ring, azure, tok) {
       tags: Array.isArray(eR.tags) ? eR.tags.join(", ") : eR.tags || "",
       text: entryText(eR),
     })).filter((d) => d.text);
-    let indexed = 0, buf = [];
+    // Non-privileged rings ALSO feed the shared fleet-learning index (agent-faceted). Privileged rings
+    // (private:true) never do — their content stays walled to their own index.
+    const toFleet = !ring.private;
+    const push = async (index, value) => { if (value.length) await fetch(`${azure.AIS}/indexes/${index}/docs/index?api-version=${API}`, { method: "POST", headers: { "api-key": azure.AK, "Content-Type": "application/json" }, body: JSON.stringify({ value }) }); };
+    let indexed = 0, buf = [], fleetBuf = [];
     for (let i = 0; i < prep.length; i += EMBED_BATCH) {
       const chunk = prep.slice(i, i + EMBED_BATCH);
       let vecs;
       try { vecs = await embed(azure.AOAI, azure.AOK, azure.DEP, chunk.map((c) => c.text)); } catch { continue; }
-      chunk.forEach((c, j) => buf.push({ "@search.action": "mergeOrUpload", id: c.id, type: c.type, ts: c.ts, tags: c.tags, text: c.text.slice(0, 16000), contentVector: vecs[j] }));
-      if (buf.length >= PUSH_BATCH) { await fetch(`${azure.AIS}/indexes/${ring.index}/docs/index?api-version=${API}`, { method: "POST", headers: { "api-key": azure.AK, "Content-Type": "application/json" }, body: JSON.stringify({ value: buf }) }); indexed += buf.length; buf = []; }
+      chunk.forEach((c, j) => {
+        buf.push({ "@search.action": "mergeOrUpload", id: c.id, type: c.type, ts: c.ts, tags: c.tags, text: c.text.slice(0, 16000), contentVector: vecs[j] });
+        if (toFleet) fleetBuf.push({ "@search.action": "mergeOrUpload", id: `fleet__${ring.label}__${c.id}`, agent: ring.label, type: c.type, ts: c.ts, tags: c.tags, text: c.text.slice(0, 16000), contentVector: vecs[j] });
+      });
+      if (buf.length >= PUSH_BATCH) { await push(ring.index, buf); indexed += buf.length; buf = []; if (toFleet) { await push(FLEET_INDEX, fleetBuf); fleetBuf = []; } }
     }
-    if (buf.length) { await fetch(`${azure.AIS}/indexes/${ring.index}/docs/index?api-version=${API}`, { method: "POST", headers: { "api-key": azure.AK, "Content-Type": "application/json" }, body: JSON.stringify({ value: buf }) }); indexed += buf.length; }
-    return { label: ring.label, index: ring.index, indexed, total: rows.length };
+    await push(ring.index, buf); indexed += buf.length;
+    if (toFleet) await push(FLEET_INDEX, fleetBuf);
+    return { label: ring.label, index: ring.index, indexed, total: rows.length, fleet: toFleet };
   } catch (e) {
     return { label: ring.label, error: String((e && e.message) || e) };
   }
@@ -201,6 +231,8 @@ export async function run(filterLabel) {
   ]);
   const azure = { AIS: (ep || "").replace(/\/$/, ""), AK, AOAI: ((aoaiA || aoaiB) || "").replace(/\/$/, ""), AOK: keyA || keyB, DEP: dep || "text-embedding-3-large" };
   const rings = RINGS.filter((r) => !filterLabel || filterLabel === "all" || r.label === filterLabel);
+  // Ensure the shared fleet-learning index exists if any non-privileged ring is in scope.
+  if (rings.some((r) => !r.private)) { try { await ensureFleetIndex(azure.AIS, azure.AK); } catch (e) { console.error("fleet index ensure failed (per-agent indexing continues):", e.message); } }
   const out = [];
   for (const ring of rings) out.push(await indexRing(ring, azure, tok)); // sequential: fail-safe, bounded quota
   return out;
@@ -209,8 +241,8 @@ export async function run(filterLabel) {
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   const arg = process.argv.slice(2).find((a) => !a.startsWith("--")) || "all";
-  run(arg).then((res) => { for (const r of res) console.log(r.error ? `RING ${r.label}: ERROR ${r.error}` : `RING ${r.label}: indexed ${r.indexed}/${r.total} -> ${r.index}`); })
+  run(arg).then((res) => { for (const r of res) console.log(r.error ? `RING ${r.label}: ERROR ${r.error}` : `RING ${r.label}: indexed ${r.indexed}/${r.total} -> ${r.index}${r.fleet ? ` (+ ${FLEET_INDEX})` : " (PRIVATE, not in fleet)"}`); })
     .catch((e) => { console.error("ring-memory-index fatal:", e.message); process.exit(1); });
 }
 
-export default { RINGS, indexRing, run };
+export default { RINGS, FLEET_INDEX, indexRing, run };
