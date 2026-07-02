@@ -1,0 +1,8 @@
+# Pre-commit secret gate (supply-chain-guard).
+# Install once:  pipx install pre-commit && pre-commit install
+# Blocks a commit that contains a detectable secret before it reaches the remote.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.28.0
+    hooks:
+      - id: gitleaks
