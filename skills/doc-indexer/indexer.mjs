@@ -162,6 +162,10 @@ let GBUCKET, ACCT, CONTAINER, AKEY, _gtok = null, _gtokAt = 0;
 async function gAuth() { if (!_gtok || Date.now() - _gtokAt > 50 * 60 * 1000) { _gtok = await gToken("https://www.googleapis.com/auth/devstorage.read_write"); _gtokAt = Date.now(); } return _gtok; }
 const AVER = "2021-12-02";
 const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
+// List Blobs returns <Name> XML-escaped, so a blob literally named "Moore I&E.pdf" comes back as
+// "Moore I&amp;E.pdf". Capturing it raw stored the escaped form as the path, so every later getBuf
+// requested a non-existent blob -> "missing" errors for any name with & < > " '. Decode on capture.
+const xmlDec = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
 let AZ_SAS; // account SAS for blob ops: signs the SAS fields, not the blob path, so special-char
 // names (spaces, parens, +, &) work where per-request SharedKey canonicalization 403s.
 function buildAzSas() {
@@ -190,7 +194,7 @@ async function listAll(prefix) {
     while (url) { const r = await fetch(url, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (!r.ok) throw new Error("list " + r.status); const j = await r.json(); for (const o of j.items || []) out.push({ name: o.name, size: +o.size, mtime: o.updated }); url = j.nextPageToken ? `https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o?maxResults=1000&pageToken=${j.nextPageToken}${prefix ? `&prefix=${encodeURIComponent(prefix)}` : ""}` : null; }
   } else {
     let marker = "";
-    do { let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list&${AZ_SAS}`; if (prefix) url += `&prefix=${encodeURIComponent(prefix)}`; if (marker) url += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(url); if (!r.ok) throw new Error("list " + r.status); const xml = await r.text(); for (const m of xml.matchAll(/<Blob>([\s\S]*?)<\/Blob>/g)) { const b = m[1]; const name = (b.match(/<Name>([^<]+)<\/Name>/) || [])[1]; const size = +((b.match(/<Content-Length>([^<]+)<\/Content-Length>/) || [])[1] || 0); const mtime = (b.match(/<Last-Modified>([^<]+)<\/Last-Modified>/) || [])[1] || ""; if (name) out.push({ name, size, mtime }); } marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker);
+    do { let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list&${AZ_SAS}`; if (prefix) url += `&prefix=${encodeURIComponent(prefix)}`; if (marker) url += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(url); if (!r.ok) throw new Error("list " + r.status); const xml = await r.text(); for (const m of xml.matchAll(/<Blob>([\s\S]*?)<\/Blob>/g)) { const b = m[1]; const name = xmlDec((b.match(/<Name>([^<]+)<\/Name>/) || [])[1] || ""); const size = +((b.match(/<Content-Length>([^<]+)<\/Content-Length>/) || [])[1] || 0); const mtime = (b.match(/<Last-Modified>([^<]+)<\/Last-Modified>/) || [])[1] || ""; if (name) out.push({ name, size, mtime }); } marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker);
   }
   return out;
 }
