@@ -30,6 +30,22 @@ node skills/fleet-dispatch/dispatch.mjs check --agent <self>     # surface + ACK
 node skills/fleet-dispatch/dispatch.mjs list [--agent <a>]       # operator view of pending dispatches
 ```
 
+## effort-scale.mjs (fan-out sizing helper)
+A pure, dependency-free companion module, `effort-scale.mjs`, that answers "how many subagents
+should this task fan out to." It backs `app-kit/ORCHESTRATION-STANDARD.md`: before a `--spawn`
+(or any orchestrator fan-out), call `recommendFanout(taskText, hints)` to size the dispatch instead
+of guessing. See that standard for the full rules; the short version is a single lookup gets 1
+agent, a comparison gets 2-3, broad research or red-team gets up to 4, and 4 is a hard cap no
+matter how strong the signal (past 4 in-flight subagents nobody can verify every diff).
+
+```
+node skills/fleet-dispatch/effort-scale.mjs "<task text>" [--max N] [--min N]
+```
+```js
+import { recommendFanout } from "./skills/fleet-dispatch/effort-scale.mjs";
+const { agents, mode, rationale } = recommendFanout("compare Postgres vs DynamoDB for the ledger");
+```
+
 ## Guardrails
 Non-PHI coordination channel. Do NOT dispatch MNPI (INND securities), PHI, or clo-personal/privileged
 content; route those in their own rings. The inbox is delete-after-read (low-volume hand-offs); a sender
