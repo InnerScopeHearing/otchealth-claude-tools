@@ -71,3 +71,17 @@ test("exports the run + indexRing entry points", () => {
   assert.equal(typeof run, "function");
   assert.equal(typeof indexRing, "function");
 });
+
+import { FLEET_INDEX } from "../index-ring-memory.mjs";
+
+test("fleet-learning safety: privileged rings are private (excluded from fleet), non-privileged are not", () => {
+  const clo = RINGS.find((r) => r.label === "clo-personal");
+  const cfo = RINGS.find((r) => r.label === "cfo");
+  assert.equal(clo.private, true, "clo-personal MUST be private (never in fleet-learning)");
+  assert.equal(cfo.private, true, "cfo MUST be private (never in fleet-learning)");
+  for (const label of COMMONS_AGENTS) {
+    const r = RINGS.find((x) => x.label === label);
+    assert.ok(!r.private, `${label} should NOT be private (feeds fleet-learning)`);
+  }
+  assert.equal(FLEET_INDEX, "fleet-learning-memory");
+});
