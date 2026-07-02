@@ -423,6 +423,20 @@ bash "${TOOLS_DIR}/skills/gateway-connect/session-connect.sh" 2>/dev/null || tru
 echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"
 
+# ─── OTCHealth AI OS migration notice ────────────────────────────────
+# The Azure AI Foundry agent "otchealth-os" (project otchealth-os, gpt-5.4) is now the unified,
+# company-wide brain: every fleet ledger/data-room is being consolidated into its 13 Azure AI Search
+# indexes. Point new sessions at the reconciliation process so this session's knowledge lands in the
+# shared brain instead of staying siloed. Fail-open (best-effort only): never blocks session start.
+if [ -f "${TOOLS_DIR}/docs/OS-MIGRATION.md" ]; then
+  echo "───────────────────────────────────────────────────────────────────"
+  echo "[octools] OTCHealth AI OS is now the unified company brain (Foundry project otchealth-os, gpt-5.4)."
+  echo "[octools] To reconcile THIS session's knowledge into it, follow ${TOOLS_DIR}/docs/OS-MIGRATION.md"
+  echo "[octools]   (and runbooks/agent-gateway-connectivity.md once published) — the 8-step migration"
+  echo "[octools]   process for the global doc 'OTCHealth AI OS — Session Migration & Reconciliation Prompt'."
+  echo "───────────────────────────────────────────────────────────────────"
+fi
+
 # Always succeed: skills + agents are installed. Missing secrets are warned above,
 # not fatal — a session must be able to start without the GCP SA / Secret Manager.
 exit 0
