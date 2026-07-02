@@ -1,0 +1,53 @@
+name: provision-ring-memory-job
+
+# One-click provisioning of the daily Container Apps Job that re-embeds each ring-isolated agent memory
+# ledger (CLO legal, CFO finance, ...) into its per-ring AI Search index via skills/ring-memory-index.
+# Mirrors the decision-clock/signal-radar job pattern (doc-indexer:latest image, otchealth-jobs-env,
+# gcpsa secret). OIDC auth (no stored SP secret). Idempotent: create, else update.
+on:
+  workflow_dispatch:
+    inputs:
+      cron:
+        description: 'Cron expression (UTC)'
+        required: false
+        default: '40 23 * * *'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Create or update ring-memory-index-daily
+        env:
+          SA: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+          CRON: ${{ github.event.inputs.cron }}
+        run: |
+          set -euo pipefail
+          COMMON=(-n ring-memory-index-daily -g otchealth-automation-rg
+            --image otchealthacr.azurecr.io/doc-indexer:latest --registry-server otchealthacr.azurecr.io
+            --cpu 1 --memory 2Gi
+            --command node --args "/app/skills/ring-memory-index/index-ring-memory.mjs" "all")
+          if az containerapp job show -n ring-memory-index-daily -g otchealth-automation-rg >/dev/null 2>&1; then
+            echo "job exists -> update"
+            az containerapp job update "${COMMON[@]}" \
+              --replica-timeout 1800 --replica-retry-limit 1 \
+              --set-env-vars "GCP_CLAUDE_DRIVER_SA_JSON=secretref:gcpsa"
+            az containerapp job secret set -n ring-memory-index-daily -g otchealth-automation-rg --secrets "gcpsa=${SA}"
+          else
+            echo "job absent -> create"
+            az containerapp job create "${COMMON[@]}" \
+              --environment otchealth-jobs-env --trigger-type Schedule --cron-expression "${CRON}" \
+              --replica-timeout 1800 --replica-retry-limit 1 \
+              --secrets "gcpsa=${SA}" \
+              --env-vars "GCP_CLAUDE_DRIVER_SA_JSON=secretref:gcpsa"
+          fi
+          echo "Provisioned ring-memory-index-daily (cron ${CRON})."
