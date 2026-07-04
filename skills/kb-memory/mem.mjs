@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeAdvisory } from "./dedupe.mjs";
 import { parseNdjson, serializeNdjson, nextId, isConflict, condHeaders } from "./blobwrite.mjs";
+import { kvSecret } from "./azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
 
 const SM = "otchealth-shared-prod";
@@ -44,11 +45,15 @@ const AGENTS = {
   cfo:            { account: "otchealthcfodata",    accountSecret: "azure-cfo-storage-account",    keySecret: "azure-cfo-storage-key",    container: "cfo-source-docs", ring: "finance (MNPI/private)" },
   clo:            { account: "otchealthlegalstore", accountSecret: "azure-legal-storage-account",  keySecret: "azure-legal-storage-key",  container: "company",         ring: "legal company (privileged)" },
   "clo-personal": { account: "otchealthlegalstore", accountSecret: "azure-legal-storage-account",  keySecret: "azure-legal-storage-key",  container: "personal",        ring: "legal PERSONAL (privileged + confidential, segregated)" },
+  // exec = the UNIFIED executive identity (CEO direction 2026-07-04): the solo operator wears every
+  // C-suite hat, so the chiefs collapse into one 'exec' lane. Its ledger lives in the most-restricted
+  // (legal) account under a dedicated 'exec' container — never under-classify unified privileged content.
+  exec:           { account: "otchealthlegalstore", accountSecret: "azure-legal-storage-account",  keySecret: "azure-legal-storage-key",  container: "exec",            ring: "executive (unified chief; privileged)" },
   commons:        { account: "otchealthcommons",    accountSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal", ring: "fleet commons (shared)" },
 };
 // The executive team: agents whose status + shared facts flow into the connected team feed. Any agent
 // can publish/read; this set is documentation + the default `team` roster.
-const EXEC = ["coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth", "developer"];
+const EXEC = ["exec", "coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth", "developer"];
 const NO_SHARE = new Set(["clo-personal"]); // privilege wall: personal-matter memory never leaves its lane
 
 // ---- args ----
@@ -89,6 +94,12 @@ function saJwt(scope) {
   return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
 }
 async function sm(id) {
+  // Azure Key Vault FIRST (fleet secret store; GCP Secret Manager retired). Same secret names.
+  const kv = await kvSecret(id);
+  if (kv != null) return kv;
+  // Legacy GCP fallback ONLY if a claude-driver SA is actually present. Guarded so a missing SA
+  // returns null instead of triggering saJwt's hard process.exit — the Azure path is the norm now.
+  if (!resolveSaJson()) return null;
   const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` });
   const t = (await r0.json()).access_token;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });

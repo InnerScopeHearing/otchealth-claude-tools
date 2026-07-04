@@ -10,6 +10,7 @@
 import crypto from "node:crypto";
 import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { kvSecret } from "./azure-secret.mjs";
 
 const SM = "otchealth-shared-prod";
 const INGEST = "https://us.i.posthog.com/capture/";
@@ -27,8 +28,10 @@ function resolveSa() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
   try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; }
 }
-const raw = resolveSa(); if (!raw) process.exit(0);
-let sa; try { sa = JSON.parse(raw); } catch { process.exit(0); }
+// GCP SA is now OPTIONAL (Azure Key Vault is primary). Don't exit when it's absent — parse it lazily
+// so the legacy GCP fallback still works on any box that still carries it.
+const raw = resolveSa();
+let sa = null; if (raw) { try { sa = JSON.parse(raw); } catch { sa = null; } }
 function saJwt() {
   const n = Math.floor(Date.now() / 1e3), e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: n, exp: n + 3600 })}`;
@@ -50,10 +53,14 @@ function hooksWired() {
 
 (async () => {
   try {
-    const tok = (await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt())}` })).json()).access_token;
-    const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/posthog-fleet-ingest-key/versions/latest:access`, { headers: { Authorization: "Bearer " + tok } });
-    if (!r.ok) process.exit(0);
-    const key = Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
+    // Azure Key Vault FIRST (GCP retired); GCP fallback only if a SA is present.
+    let key = await kvSecret("posthog-fleet-ingest-key");
+    if (!key && sa) {
+      const tok = (await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt())}` })).json()).access_token;
+      const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/posthog-fleet-ingest-key/versions/latest:access`, { headers: { Authorization: "Bearer " + tok } });
+      if (r.ok) key = Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
+    }
+    if (!key) process.exit(0);
     const h = cacheHealth(AGENT);
     const wired = hooksWired();
     const status = h.ledger_size > 0 && wired ? "LIVE" : "DARK";
