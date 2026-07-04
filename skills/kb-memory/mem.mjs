@@ -62,8 +62,10 @@ const cmd = argv[0];
 const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const positional = argv.slice(1).filter((a, i, arr) => !a.startsWith("--") && !(i > 0 && arr[i - 1].startsWith("--")));
 const TEXT = positional.join(" ").trim();
-const AGENT = (takeVal("--agent", "") || "").toLowerCase();
-const A = AGENTS[AGENT] || (AGENT ? { ...AGENTS.commons, _file: AGENT } : null);
+const AGENT = (takeVal("--agent", "") || "").toLowerCase();        // the WRITER identity (who is acting)
+const ON = (takeVal("--on", "") || AGENT).toLowerCase();           // the TARGET ledger (default: self)
+const CROSS = Boolean(AGENT && ON && AGENT !== ON);                // writing on ANOTHER exec agent's ledger
+const A = AGENTS[ON] || (ON ? { ...AGENTS.commons, _file: ON } : null); // the STORE is the TARGET lane's
 const TAGS = (takeVal("--tags", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const SOURCE = takeVal("--source", "");
 const WAS = takeVal("--was", "");
@@ -118,15 +120,15 @@ function buildSas(acct, key) {
   return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
 // --- the agent's own private lane ---
-let ACCT, AKEY, AZ_SAS, KEYBASE, JSONL, MD;
+let ACCT, AKEY, AZ_SAS, KEYBASE, JSONL, MD, RECON;
 async function initStore() {
   if (!A) { console.error("need --agent <cfo|clo|clo-personal|commons|...>"); process.exit(2); }
   ACCT = process.env.KB_ACCOUNT || A.account || (await sm(A.accountSecret));
   AKEY = process.env.KB_KEY || (await sm(A.keySecret));
-  if (!ACCT || !AKEY) { console.error(`Missing storage creds for agent '${AGENT}' (account ${A.account}, key secret ${A.keySecret}).`); process.exit(2); }
+  if (!ACCT || !AKEY) { console.error(`Missing storage creds for ledger '${ON}' (account ${A.account}, key secret ${A.keySecret}).`); process.exit(2); }
   AZ_SAS = buildSas(ACCT, AKEY);
-  KEYBASE = A._file || AGENT;
-  JSONL = `_MEMORY/${KEYBASE}.jsonl`; MD = `_MEMORY/${KEYBASE}.md`;
+  KEYBASE = A._file || ON;
+  JSONL = `_MEMORY/${KEYBASE}.jsonl`; MD = `_MEMORY/${KEYBASE}.md`; RECON = `_MEMORY/${KEYBASE}.reconcile`;
 }
 const url = (name) => `https://${ACCT}.blob.core.windows.net/${A.container}/${encPath(name)}?${AZ_SAS}`;
 // Transient-fault retry for the blob ops. A memory WRITE must not be lost to a transient proxy/SAS 403,
@@ -258,6 +260,16 @@ async function semanticHits(prompt, creds, excludePrefixes) {
 async function load() { const t = await getText(JSONL); if (!t) return []; return t.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
 function newId(rows) { return nextId(rows); } // salted + monotonic, see blobwrite.mjs
 
+// ---- cross-lane INBOUND: entries another agent wrote ON this ledger (r.by !== owner), newer than the
+//      owner's last reconcile marker. This is the wake "first duty": read own ledger, then see what other
+//      agents left, and reconcile. Marker = _MEMORY/<kb>.reconcile (ISO ts) + a local mirror for the pack.
+const RECON_LOCAL = (kb) => `${CACHE_DIR}/.reconcile-${kb}`;
+async function readReconMarker() { try { const t = await getText(RECON); return (t || "").trim(); } catch { return ""; } }
+function inboundRows(rows, owner, marker) {
+  return rows.filter((r) => r.by && r.by !== owner && (!marker || (r.ts || "") > marker))
+             .sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+}
+
 function renderMd(rows) {
   const fmt = (r) => `- [${(r.ts || "").slice(0, 10)}] ${r.text}${r.tags && r.tags.length ? `  _(#${r.tags.join(" #")})_` : ""}${r.source ? `  - ${r.source}` : ""}  \`${r.id}\``;
   const active = rows.filter((r) => !rows.some((x) => x.supersedes === r.id));
@@ -280,18 +292,23 @@ function renderMd(rows) {
 async function append(type, share) {
   if (!TEXT) { console.error(`need text: mem.mjs ${type} "<text>" --agent <a>`); process.exit(2); }
   await initStore();
+  // CROSS-LANE (writing ON another agent's ledger): APPEND-ONLY + ATTRIBUTED. A cross write can NEVER
+  // supersede/overwrite the owner's (or anyone's) entry — a cross 'correct' is an annotation the OWNER
+  // reconciles on wake. Same-lane writes keep full supersede semantics. Every entry carries by=<writer>.
+  const supersedes = CROSS ? undefined : (SUPERSEDES || undefined);
   // Optimistic-concurrency append: buildEntry recomputes the id from the FRESH rows on every attempt,
   // so a concurrent writer from the other engine can never be clobbered and ids never collide.
   const { rows, entry } = await commitAppend((freshRows) => {
     // Non-blocking write-time advisory (dedupe/contradiction). Never blocks the write.
-    if (!SUPERSEDES) writeAdvisory(TEXT, freshRows, type);
-    return { id: newId(freshRows), ts: new Date().toISOString(), type, text: TEXT, tags: TAGS, source: SOURCE || undefined, was: WAS || undefined, supersedes: SUPERSEDES || undefined };
+    if (!supersedes) writeAdvisory(TEXT, freshRows, type);
+    return { id: newId(freshRows), ts: new Date().toISOString(), type, text: TEXT, tags: TAGS, by: AGENT, source: SOURCE || undefined, was: WAS || undefined, supersedes };
   });
   let shared = false;
   if (share || type === "status") shared = await publishShared(AGENT, entry);
   maybeIndex(entry, shared);
   emitFleet(entry, shared); // fleet telemetry (env-gated KB_DD_EMIT=1, throttled, fail-open)
-  console.log(`[kb-memory] ${type} -> ${AGENT} (${A.ring}) id=${entry.id}. Private ledger ${rows.length} entries${shared ? "; PUBLISHED to exec team feed" : ""}.`);
+  if (CROSS) console.log(`[kb-memory] ${type} BY ${AGENT} -> ON ${ON}'s ledger (${A.ring}) id=${entry.id} [cross-lane note, append-only, no-supersede]. ${ON} ledger now ${rows.length} entries; ${ON} sees it on next wake/reconcile.`);
+  else console.log(`[kb-memory] ${type} -> ${AGENT} (${A.ring}) id=${entry.id}. Private ledger ${rows.length} entries${shared ? "; PUBLISHED to exec team feed" : ""}.`);
 }
 
 // write-through SEMANTIC index for a SHARED entry: embed + upsert it into the memory-exec AI Search
@@ -404,7 +421,7 @@ async function entityCmd() {
   if (sub === "alias") {
     const from = normKey(positional[1] || ""), to = normKey(positional[2] || "");
     if (!from || !to) { console.error('usage: mem.mjs entity alias "<from-phrasing>" <to-canonical-key> --agent <a>'); process.exit(2); }
-    const { entry } = await commitAppend((freshRows) => ({ id: newId(freshRows), ts: new Date().toISOString(), type: "alias", ekey: from, evalue: to, text: `alias ${from} -> ${to}`, tags: TAGS }));
+    const { entry } = await commitAppend((freshRows) => ({ id: newId(freshRows), ts: new Date().toISOString(), type: "alias", ekey: from, evalue: to, text: `alias ${from} -> ${to}`, tags: TAGS, by: AGENT }));
     console.log(`[kb-memory] alias ${from} -> ${to} -> ${AGENT} id=${entry.id}.`);
     return;
   }
@@ -419,7 +436,7 @@ async function entityCmd() {
       keyRef = resolveAlias(freshRows, positional[1] || "");
       const prev = currentEntity(freshRows, keyRef);
       prevRef = prev;
-      return { id: newId(freshRows), ts: new Date().toISOString(), type: "entity", ekey: keyRef, evalue: value, text: `${keyRef} = ${value}`, tags: TAGS, source: SOURCE || undefined, was: prev ? prev.evalue : undefined, supersedes: prev ? prev.id : undefined };
+      return { id: newId(freshRows), ts: new Date().toISOString(), type: "entity", ekey: keyRef, evalue: value, text: `${keyRef} = ${value}`, tags: TAGS, by: AGENT, source: SOURCE || undefined, was: (CROSS ? undefined : (prev ? prev.evalue : undefined)), supersedes: (CROSS ? undefined : (prev ? prev.id : undefined)) };
     });
     let shared = false;
     if (SHARE) shared = await publishShared(AGENT, entry);
@@ -516,6 +533,13 @@ async function runPack() {
   const clip = (s, n = 200) => { s = (s || "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s; };
   const L = (r) => `[${r.type}] [${(r.ts || "").slice(0, 10)}] ${clip(r.text)}${r.was ? `  (was: ${clip(r.was, 80)})` : ""}`;
   const out = ["<<<WORKING-MEMORY>>>", beacon];
+  // WAKE FIRST-DUTY (hot path, cache-only, no network): surface notes OTHER agents wrote on this ledger
+  // since the last reconcile, so a fresh/compacted session sees inbound cross-agent input immediately.
+  try {
+    let marker = ""; try { marker = (readFileSync(RECON_LOCAL(kb), "utf8") || "").trim(); } catch {}
+    const inb = rows.filter((r) => r.by && r.by !== AGENT && (!marker || (r.ts || "") > marker)).slice(-6);
+    if (inb.length) { out.push(`## 📥 INBOUND (${inb.length}) - other agents wrote on your ledger; reconcile: mem.mjs inbound --agent ${AGENT}`); for (const r of inb) out.push(`- [by ${r.by}/${r.type}] ${clip(r.text, 140)}`); }
+  } catch {}
   if (ranked.length) { out.push("## RELEVANT TO THIS PROMPT:"); for (const r of ranked) out.push(L(r)); }
   if (entities.length) { out.push("## CURRENT VALUES (latest wins; deterministic):"); for (const r of entities) out.push(`- ${r.ekey} = ${clip(r.evalue, 120)}`); }
   if (corrections.length) { out.push("## CORRECTIONS (NOW, not the old belief):"); for (const r of corrections) out.push(`- NOW: ${clip(r.text)}${r.was ? `  (was: ${clip(r.was, 80)})` : ""}`); }
@@ -623,6 +647,27 @@ async function runPack() {
   await initStore();
   const rows = await load();
   if (cmd === "render") { await putText(MD, renderMd(rows), "text/markdown; charset=utf-8"); console.log(`rendered ${MD} (${rows.length} entries)`); return; }
+  if (cmd === "inbound") {
+    // WAKE FIRST-DUTY (read side): what other agents wrote ON this ledger since the last reconcile.
+    const marker = await readReconMarker();
+    const inb = inboundRows(rows, ON, marker);
+    console.log(`# 📥 INBOUND on ${ON}'s ledger - notes written by OTHER agents${marker ? ` since last reconcile (${marker.slice(0, 16)}Z)` : " (never reconciled)"}: ${inb.length}`);
+    for (const r of inb) console.log(`- [by ${r.by}] [${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}${r.was ? `  (was: ${r.was})` : ""}  \`${r.id}\``);
+    if (!inb.length) console.log("- (nothing new from other agents)");
+    else console.log(`\nReview + act on each, then: mem.mjs reconcile --agent ${ON}`);
+    return;
+  }
+  if (cmd === "reconcile") {
+    // WAKE FIRST-DUTY (ack side): mark the current inbound as reviewed. Advances the marker to now, so
+    // future inbound/tail/pack only surface notes written AFTER this. Does NOT delete anything.
+    const marker = await readReconMarker();
+    const inb = inboundRows(rows, ON, marker);
+    const newMark = new Date().toISOString();
+    await putText(RECON, newMark, "text/plain; charset=utf-8");
+    try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(RECON_LOCAL(KEYBASE), newMark); } catch {}
+    console.log(`[kb-memory] reconciled ${inb.length} cross-agent note(s) on ${ON}'s ledger; marker -> ${newMark}. Future inbound/tail/pack show only notes newer than this. (Nothing was deleted; the full history stays in the ledger.)`);
+    return;
+  }
   if (cmd === "recall") {
     const terms = TEXT.toLowerCase().split(/\s+/).filter(Boolean);
     const own = rows.filter((r) => matchq(r, terms)).sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, N);
@@ -637,6 +682,12 @@ async function runPack() {
     const pit = rows.filter((r) => r.type === "pitfall");
     const rest = rows.filter((r) => r.type !== "pitfall").sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, N);
     console.log(`# ${AGENT} ledger + TEAM view (source of truth)`);
+    // WAKE FIRST-DUTY: surface cross-agent notes on YOUR ledger first, so they're reconciled on wake.
+    try {
+      const marker = await readReconMarker();
+      const inb = inboundRows(rows, ON, marker);
+      if (inb.length) { console.log(`## 📥 INBOUND (${inb.length}) - other agents wrote on YOUR ledger; review then 'reconcile --agent ${ON}':`); for (const r of inb) console.log(`- [by ${r.by}] [${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}${r.was ? `  (was: ${r.was})` : ""}  \`${r.id}\``); }
+    } catch {}
     console.log(`## YOUR PITFALLS (${pit.length}, do not repeat):`); for (const r of pit) console.log(`- ${r.text}  \`${r.id}\``);
     console.log("## YOUR RECENT (facts / decisions / status / corrections):"); for (const r of rest.slice().reverse()) console.log(`[${r.type}] [${(r.ts || "").slice(0, 10)}] ${r.text}${r.was ? `  (was: ${r.was})` : ""}`);
     try {
@@ -651,6 +702,6 @@ async function runPack() {
     } catch (e) { console.log("## TEAM - (feed unavailable: " + e.message + ")"); }
     return;
   }
-  console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | render | whoami | use | list-agents");
+  console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | inbound | reconcile | render | whoami | use | list-agents\n  cross-lane: add --on <lane> to write on ANOTHER agent's ledger (append-only, attributed by=<--agent>); the owner sees it via 'inbound' / 'tail' on wake and 'reconcile' to ack.");
   process.exit(2);
 })().catch((e) => { console.error("ERROR: " + e.message); process.exit(1); });

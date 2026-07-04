@@ -137,3 +137,18 @@ CROSS-AGENT corroboration via `skills/semantic-trust`. Memories several agents i
 `durable`/`corroborated` and float ahead of a single `unverified` assertion (each hit shows `trust: <status>
 t=<0..1>, N agents`). Corroboration-only (recall hits have no subject key, so no contradiction fabrication);
 additive + fail-open — recall still works, just unranked, if semantic-trust is unavailable.
+
+## Cross-lane read/write + wake reconciliation (exec team, 2026-07-04)
+The exec ledgers stay SEPARATE per agent, but every exec agent can READ and WRITE any exec ledger to pass
+information and suggest corrections. Cross-writes are APPEND-ONLY + ATTRIBUTED and never supersede the
+owner's entries — the owner reconciles them on wake. This doubles as the inter-agent comms channel.
+
+- Write on ANOTHER agent's ledger:  `mem.mjs remember "<note>" --agent cfo --on clo`
+  (writer = --agent; target ledger = --on; entry is tagged `by:cfo`; cannot delete/supersede clo's entries.)
+- WAKE FIRST DUTY (every session): take in your OWN ledger, THEN check what other agents left you:
+    `mem.mjs inbound --agent <you>`     # notes other agents wrote on your ledger since last reconcile
+    ...review + act on each (record your own decisions/corrections normally)...
+    `mem.mjs reconcile --agent <you>`   # ack: advances the marker (deletes nothing; history is kept)
+  `tail` and the per-prompt pack also surface a 📥 INBOUND banner automatically, so a fresh/compacted
+  session sees inbound cross-agent input immediately.
+- clo-personal is excluded from cross-lane writes/sharing (attorney privilege, unwaivable).
