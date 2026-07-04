@@ -25,6 +25,7 @@
 //   node datadog.mjs request <METHOD> <path> [body<stdin]      # generic API passthrough
 
 import crypto from "node:crypto";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const SM = "otchealth-shared-prod";
 async function smToken() {
@@ -37,7 +38,7 @@ async function smToken() {
   if (!r.ok) throw new Error("SM auth " + r.status);
   return (await r.json()).access_token;
 }
-async function smRead(id) {
+async function smRead(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null;
   try {
     const t = await smToken();

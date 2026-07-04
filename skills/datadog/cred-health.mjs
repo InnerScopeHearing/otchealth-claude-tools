@@ -11,6 +11,7 @@
  * Fail-open per secret; never throws fatally. LOW-CARDINALITY (tag = secret id only).
  */
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const PROJECT="otchealth-shared-prod"; const b64url=(b)=>Buffer.from(b).toString("base64url");
 // Rotating OAuth secrets whose age matters for idle-expiry. Static keys (PAT/SA/ASC) are excluded by design.
 const ROTATING=[
@@ -19,7 +20,7 @@ const ROTATING=[
 ];
 function loadSA(){ if(process.env.GCP_CLAUDE_DRIVER_SA_JSON){try{return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);}catch{}} for(const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`,"/agent/.gcp_claude_driver_sa.json"]){try{if(fs.existsSync(p))return JSON.parse(fs.readFileSync(p,"utf8"));}catch{}} return null; }
 async function gcpToken(sa){const now=Math.floor(Date.now()/1000);const cl={iss:sa.client_email,scope:"https://www.googleapis.com/auth/cloud-platform",aud:"https://oauth2.googleapis.com/token",iat:now,exp:now+3500};const i=`${b64url(JSON.stringify({alg:"RS256",typ:"JWT"}))}.${b64url(JSON.stringify(cl))}`;const s=crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key);const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:`${i}.${Buffer.from(s).toString("base64url")}`})});return (await r.json()).access_token;}
-async function sm(tok,id){const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${PROJECT}/secrets/${id}/versions/latest:access`,{headers:{Authorization:`Bearer ${tok}`}});if(r.status!==200)return null;const j=await r.json();return j.payload?Buffer.from(j.payload.data,"base64").toString("utf8").trim():null;}
+async function sm(tok,id){ const _kv = await kvSecret(id); if (_kv != null) return _kv;const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${PROJECT}/secrets/${id}/versions/latest:access`,{headers:{Authorization:`Bearer ${tok}`}});if(r.status!==200)return null;const j=await r.json();return j.payload?Buffer.from(j.payload.data,"base64").toString("utf8").trim():null;}
 async function latestVersionAgeHours(tok,id){
   const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${PROJECT}/secrets/${id}/versions?pageSize=1`,{headers:{Authorization:`Bearer ${tok}`}});
   if(r.status!==200) return null; const j=await r.json(); const v=(j.versions||[])[0]; if(!v||!v.createTime) return null;

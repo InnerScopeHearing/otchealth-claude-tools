@@ -38,6 +38,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, extname } from "node:path";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const argv = process.argv.slice(2);
 function takeVal(name, def = null) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return def; }
@@ -152,7 +153,7 @@ async function gToken(scope) {
   if (!r.ok) throw new Error("SA auth " + r.status);
   return (await r.json()).access_token;
 }
-async function sm(id) {
+async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   if (!id) return null;
   try { const t = await gToken("https://www.googleapis.com/auth/cloud-platform"); const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); } catch { return null; }
 }

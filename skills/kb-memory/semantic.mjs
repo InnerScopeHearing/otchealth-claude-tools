@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 // Same-skill, dependency-free import: the near-duplicate similarity heuristic used to cluster like
 // recall hits across agents for trust scoring (see rankHitsByTrust). Always present alongside this file.
 import { tokenize, jaccard } from "./dedupe.mjs";
+import { kvSecret } from "./azure-secret.mjs";
 const SM = "otchealth-shared-prod";
 const IDX = "memory-exec";
 const AIS_API = "2023-11-01";
@@ -37,7 +38,7 @@ function saJwt(scope) {
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
   return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
 }
-async function sm(id) {
+async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` });
   const t = (await r0.json()).access_token;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
