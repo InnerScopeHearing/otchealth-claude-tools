@@ -81,6 +81,45 @@ fi
 set +e
 set +o pipefail
 
+# ─── Establish lane identity (~/.claude/.kb-agent) ──────────────────
+# kb-memory writes/recall + the gateway lane self-scope off this marker. Without it,
+# a session either can't scope its memory or (worse) writes to the wrong lane. We
+# resolve it RELIABLY but NEVER GUESS a lane — a wrong lane (esp. a privileged one)
+# is worse than none. Precedence:
+#   1. KB_AGENT env explicitly set  -> authoritative pin (overrides a stale GLOBAL
+#      marker left by a prior session on a reused/shared container). This is the
+#      per-session knob: set KB_AGENT=<lane> in the session's env and it sticks.
+#   2. else the shared resolver (skills/kb-memory/agent-id.sh): existing marker >
+#      repo committed .kb-agent (walked to git root) > unambiguous repo->lane auto-claim.
+# The result is validated against the known lane allow-list before it is persisted,
+# so a typo never becomes a bogus marker. Unresolved => loud WARN with the exact fix.
+KB_MARK="${HOME}/.claude/.kb-agent"
+KB_VALID="clo clo-personal cfo coo cpo cro cco cto developer"
+mkdir -p "${HOME}/.claude" 2>/dev/null
+_LANE=""; _LSRC=""
+if [ -n "${KB_AGENT:-}" ]; then
+  _LANE="${KB_AGENT}"; _LSRC="KB_AGENT env (explicit pin)"
+else
+  AG=""; SRC=""
+  . "${TOOLS_DIR}/skills/kb-memory/agent-id.sh" 2>/dev/null || true
+  _LANE="${AG:-}"; _LSRC="${SRC:-repo resolver}"
+fi
+case " ${KB_VALID} " in
+  *" ${_LANE} "*)
+    printf '%s\n' "${_LANE}" > "$KB_MARK" 2>/dev/null
+    echo "[octools] Lane identity: ${_LANE}  (source: ${_LSRC})"
+    ;;
+  *)
+    echo "==================================================================================="
+    echo "[octools] WARN: lane identity UNRESOLVED${_LANE:+ (got invalid '${_LANE}')} — kb-memory + gateway lane can't self-scope."
+    echo "          Not guessing on purpose (a wrong lane, esp. a privileged one, is worse than none). Set it either way:"
+    echo "            • env:    add KB_AGENT=<lane> to this session's environment variables (best on the shared env), or"
+    echo "            • marker: echo <lane> > ~/.claude/.kb-agent"
+    echo "          Valid lanes: ${KB_VALID}"
+    echo "==================================================================================="
+    ;;
+esac
+
 # ─── System deps: document pipeline (LibreOffice + poppler-utils + weasyprint) ─
 # The remote container base image ships only libreoffice-core + libreoffice-common
 # (the Writer/Calc/Impress MODULES libswlo.so etc. are MISSING), NO poppler-utils,
