@@ -27,6 +27,32 @@
 import crypto from "node:crypto";
 
 const SM = "otchealth-shared-prod";
+// ---- Azure Key Vault (fleet secret store; GCP Secret Manager retired, billing off) ----
+// Inlined (not imported) because this skill documents itself as dependency-free above; mirrors the
+// shared skills/kb-memory/azure-secret.mjs helper 1:1.
+let _kvTok = null, _kvExp = 0;
+async function kvToken() {
+  const t = process.env.AZURE_SP_TENANT_ID, c = process.env.AZURE_SP_CLIENT_ID, s = process.env.AZURE_SP_CLIENT_SECRET;
+  if (!t || !c || !s) return null;
+  const now = Date.now();
+  if (_kvTok && _kvExp - now > 60000) return _kvTok;
+  try {
+    const r = await fetch(`https://login.microsoftonline.com/${t}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "client_credentials", client_id: c, client_secret: s, scope: "https://vault.azure.net/.default" }) });
+    const j = await r.json();
+    if (!j.access_token) return null;
+    _kvTok = j.access_token; _kvExp = now + (Number(j.expires_in) || 3600) * 1000; return _kvTok;
+  } catch { return null; }
+}
+async function kvRead(name) {
+  const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
+  const tok = await kvToken(); if (!tok) return null;
+  try {
+    const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, { headers: { Authorization: `Bearer ${tok}` } });
+    if (!r.ok) return null;
+    const v = (await r.json()).value;
+    return v == null ? null : String(v).trim() || null;
+  } catch { return null; }
+}
 async function smToken() {
   const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
   const now = Math.floor(Date.now() / 1000);
@@ -38,6 +64,10 @@ async function smToken() {
   return (await r.json()).access_token;
 }
 async function smRead(id) {
+  // Azure Key Vault FIRST (GCP Secret Manager retired). Secret names are identical.
+  const kv = await kvRead(id);
+  if (kv != null) return kv;
+  // Legacy GCP fallback ONLY if a claude-driver SA is present (else smToken's JSON.parse would throw).
   if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null;
   try {
     const t = await smToken();

@@ -25,6 +25,7 @@
 
 import crypto from "node:crypto";
 import { writeFileSync, mkdirSync } from "node:fs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const argv = process.argv.slice(2);
 const flag = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
@@ -48,6 +49,10 @@ async function smToken() {
   return (await r.json()).access_token;
 }
 async function smRead(id) {
+  // Azure Key Vault FIRST (fleet secret store; GCP Secret Manager retired). Secret names unchanged.
+  const kv = await kvSecret(id);
+  if (kv != null) return kv;
+  // Legacy GCP fallback ONLY if a claude-driver SA is present (else smToken's JSON.parse would throw).
   if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null;
   try { const t = await smToken(); const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); } catch { return null; }
 }

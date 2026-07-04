@@ -18,6 +18,7 @@
 //   node m365-mail.mjs export <mailbox> <messageId> <dir>      # full email (headers+body html) + attachments, ready for the pdf skill
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import crypto from "node:crypto"; import os from "node:os"; import { execFileSync } from "node:child_process";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 // Creds: prefer the LEAST-PRIVILEGE read-only mail app (graph-mail-ro-*, innd.com tenant 9acb23d0;
 // roles Mail.Read+User.Read.All+Files.Read.All -> ~2KB token that passes the egress proxy). Fall back
@@ -30,8 +31,13 @@ async function _sm(t,id){ const r=await fetch(`https://secretmanager.googleapis.
 let T,CID,SEC;
 async function resolveCreds(){
   T=process.env.GRAPH_MAIL_TENANT_ID; CID=process.env.GRAPH_MAIL_CLIENT_ID; SEC=process.env.GRAPH_MAIL_CLIENT_SECRET;
+  // Azure Key Vault FIRST (fleet secret store; GCP Secret Manager retired). Same ro-first-then-legacy
+  // secret-name preference as the GCP fallback below.
+  if(!CID||!SEC||!T){ T=T||await kvSecret("graph-mail-ro-tenant-id")||await kvSecret("graph-mail-tenant-id"); CID=CID||await kvSecret("graph-mail-ro-client-id")||await kvSecret("graph-mail-client-id"); SEC=SEC||await kvSecret("graph-mail-ro-client-secret")||await kvSecret("graph-mail-client-secret"); }
+  // Legacy GCP fallback ONLY if a claude-driver SA is actually present/parseable (_gcp() already
+  // returns null rather than throwing when no SA is found).
   if(!CID||!SEC||!T){ const g=await _gcp(); if(g){ T=T||await _sm(g,"graph-mail-ro-tenant-id")||await _sm(g,"graph-mail-tenant-id"); CID=CID||await _sm(g,"graph-mail-ro-client-id")||await _sm(g,"graph-mail-client-id"); SEC=SEC||await _sm(g,"graph-mail-ro-client-secret")||await _sm(g,"graph-mail-client-secret"); } }
-  if(!T||!CID||!SEC){ console.error("Missing Graph mail creds (env or SM graph-mail-ro-*/graph-mail-*)."); process.exit(2); }
+  if(!T||!CID||!SEC){ console.error("Missing Graph mail creds (env, Key Vault graph-mail-ro-*/graph-mail-*, or GCP SM fallback)."); process.exit(2); }
 }
 
 async function token() {

@@ -20,6 +20,7 @@ import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from 
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
 import { TIERS, chatBody } from "../../setup/model-routing.mjs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const argv = process.argv.slice(2);
@@ -30,8 +31,18 @@ const ROUND = parseInt(val("--round", "1"), 10) || 1;
 const PASS = 9.0; // 90% = avg rating >= 9.0/10 per group
 const CATALOG = argv.includes("--catalog");
 
+function hasSA() { if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return false; try { JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); return true; } catch { return false; } }
 function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
-async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
+async function smGcp(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; if (!t) return null; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
+async function sm(id) {
+  // Azure Key Vault FIRST (fleet secret store; GCP Secret Manager retired). Same secret names.
+  const kv = await kvSecret(id);
+  if (kv != null) return kv;
+  // Legacy GCP fallback ONLY if a claude-driver SA is actually present/parseable (guards saJwt's
+  // unconditional JSON.parse from throwing when the SA is absent; the Azure path is the norm now).
+  if (!hasSA()) return null;
+  try { return await smGcp(id); } catch { return null; }
+}
 
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
