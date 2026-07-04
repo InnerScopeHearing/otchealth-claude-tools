@@ -400,6 +400,22 @@ for PROFILE in "${HOME}/.bashrc" "${HOME}/.profile"; do
   fi
 done
 
+# ─── Install the `octsync` helper: one word to catch a stale session up to origin/main ──────────────
+# repo-freshen won't touch a dirty branch, so a long-lived session goes stale. `octsync` is the manual,
+# work-preserving catch-up (stash -> fetch -> merge -> restore). Named octsync (NOT `sync`) so it never
+# shadows the coreutils `sync`. Idempotent per profile.
+for PROFILE in "${HOME}/.bashrc" "${HOME}/.profile"; do
+  [ -e "$PROFILE" ] || continue
+  if ! grep -qF 'octsync()' "$PROFILE"; then
+    {
+      echo ''
+      echo '# octools: octsync — catch this session'"'"'s repo up to origin/main without losing work (added by session-start.sh)'
+      echo 'octsync() { bash /tmp/octools/setup/sync.sh || echo "[octsync] toolkit not at /tmp/octools"; }'
+    } >> "$PROFILE"
+    echo "[octools] Wired octsync helper into $PROFILE."
+  fi
+done
+
 # Fleet rollout of the in-session live-sync hook: install the octools-sync UserPromptSubmit hook into
 # the user-scope ~/.claude/settings.json once. Because session-start runs in every app session (and is
 # itself live-synced from main), this propagates the live-pull to the whole fleet with NO per-app edits.
