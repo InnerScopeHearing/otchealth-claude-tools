@@ -207,17 +207,28 @@ FETCHED=""
 # Azure Key Vault, read via an Entra service principal supplied in the environment. The
 # Key Vault secret NAMES are a 1:1 mirror of the old Secret Manager ids, so nothing
 # downstream changes — only the fetch mechanism. The client_secret is never logged.
+#
+# Retry a few times on transient failure: on a fresh container the Environment's
+# AZURE_SP_* vars can occasionally not yet be visible to this hook's first pass, or
+# the vault.azure.net call can hit a cold-start blip. Without a retry, that one bad
+# beat leaves credentials.env fully blank (all secrets empty) for the rest of the
+# session, which is silent and easy to miss (only the fetch-time WARN reveals it).
 if [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
-  echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT)..."
-  FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
-    node "${TOOLS_DIR}/setup/fetch-secrets-azure.mjs" 2>/dev/null || true)"
+  for attempt in 1 2 3; do
+    echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT), attempt $attempt/3..."
+    FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
+      node "${TOOLS_DIR}/setup/fetch-secrets-azure.mjs" 2>/dev/null || true)"
+    [ -n "$FETCHED" ] && break
+    [ "$attempt" -lt 3 ] && sleep 2
+  done
   if [ -n "$FETCHED" ]; then
     echo "[octools] Key Vault OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
   else
     echo "==================================================================================="
-    echo "[octools] WARN: Key Vault returned nothing. kb-memory + API keys may be OFF."
+    echo "[octools] WARN: Key Vault returned nothing after 3 attempts. kb-memory + API keys may be OFF."
     echo "          Check AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID, and"
     echo "          that the SP holds 'Key Vault Secrets User' (or Officer) on $KEYVAULT."
+    echo "          Re-hydrate later in-session with: bash setup/session-start.sh"
     echo "==================================================================================="
   fi
 else
