@@ -8,15 +8,19 @@
 #     2>/dev/null || (cd /tmp/octools && git pull --ff-only)
 #   bash /tmp/octools/setup/session-start.sh
 #
-# Secrets model: ONE environment secret bootstraps everything.
-#   GCP_CLAUDE_DRIVER_SA_JSON  full JSON of the non-PHI claude-driver SA key
-# Using that SA, this script pulls the API keys from GCP Secret Manager
-# (secrets: openai-api-key, elevenlabs-api-key, optional recraft-api-key).
-# OPENAI_API_KEY / ELEVENLABS_API_KEY may still be passed directly as env
-# vars to override Secret Manager (useful for local dev).
-# Optional:
-#   GOOGLE_CLOUD_PROJECT (default otchealth-shared-prod),
-#   VERTEX_DEFAULT_IMAGEN_MODEL / _VIDEO_MODEL / _LLM_MODEL
+# Secrets model (Azure-first, 2026-07): a service principal bootstraps everything
+# from Azure Key Vault. Set these four in the cloud environment's .env box:
+#   AZURE_SP_CLIENT_ID       the fleet service-principal app (client) id
+#   AZURE_SP_CLIENT_SECRET   its client secret
+#   AZURE_SP_TENANT_ID       the Entra tenant id
+#   AZURE_KEYVAULT_NAME      vault name (default kv-otc-55c84f6bef)
+# Using that SP, this script pulls all API keys from Key Vault (secret NAMES are a
+# 1:1 mirror of the retired GCP Secret Manager ids). OPENAI_API_KEY etc. may still
+# be passed directly as env vars to override the vault (useful for local dev).
+#
+# LEGACY (retired, GCP billing off): GCP_CLAUDE_DRIVER_SA_JSON + GOOGLE_CLOUD_PROJECT
+# are still honored as a fallback only if the Azure creds are absent AND a GCP SA
+# key is present. This path is expected to fail; Azure Key Vault is the source.
 
 set -euo pipefail
 
@@ -195,48 +199,52 @@ CRED="${HOME}/.designer/credentials.env"
 SA_PATH="${HOME}/.gcp_claude_driver_sa.json"
 PROJECT="${GOOGLE_CLOUD_PROJECT:-otchealth-shared-prod}"
 
-# ─── Write the GCP SA key from the one env secret ───────────────────
-if [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ]; then
-  # VALIDATE before trusting it. The #1 cause of "memory is off" (no kb-memory, no Vertex, no
-  # Secret Manager) is a malformed value in the environment's .env box: wrapping quotes, backslash
-  # escaped quotes, or a multi-line paste the .env parser truncated. Writing that as the SA file
-  # makes every JSON.parse downstream fail. So only write it if it actually parses as JSON.
-  if printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' 2>/dev/null; then
-    printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" > "$SA_PATH"
-    chmod 600 "$SA_PATH"
-    echo "[octools] GCP SA key written to $SA_PATH"
+KEYVAULT="${AZURE_KEYVAULT_NAME:-kv-otc-55c84f6bef}"
+FETCHED=""
+
+# ─── PRIMARY: pull fleet secrets from Azure Key Vault ───────────────
+# GCP Secret Manager is RETIRED (billing off, 2026-07). The fleet secret store is now
+# Azure Key Vault, read via an Entra service principal supplied in the environment. The
+# Key Vault secret NAMES are a 1:1 mirror of the old Secret Manager ids, so nothing
+# downstream changes — only the fetch mechanism. The client_secret is never logged.
+if [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+  echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT)..."
+  FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
+    node "${TOOLS_DIR}/setup/fetch-secrets-azure.mjs" 2>/dev/null || true)"
+  if [ -n "$FETCHED" ]; then
+    echo "[octools] Key Vault OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
   else
     echo "==================================================================================="
-    echo "[octools] ERROR: GCP_CLAUDE_DRIVER_SA_JSON is SET but is NOT valid JSON."
-    echo "          kb-memory, Vertex AI, and Secret Manager will be OFF this session."
-    echo "          In the cloud environment's Environment variables (.env format), the value must be:"
-    echo "            * the RAW service-account JSON, starting with a brace, with NO wrapping quotes"
-    echo "            * ONE line (private_key newlines as literal backslash-n, not real line breaks)"
-    echo "            * plain double-quotes inside the JSON, not backslash-escaped quotes"
-    echo "            * named exactly GCP_CLAUDE_DRIVER_SA_JSON (leading G)"
-    echo "          Save, then start a NEW session (env changes apply to new sessions only)."
+    echo "[octools] WARN: Key Vault returned nothing. kb-memory + API keys may be OFF."
+    echo "          Check AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID, and"
+    echo "          that the SP holds 'Key Vault Secrets User' (or Officer) on $KEYVAULT."
     echo "==================================================================================="
-    [ -f "$SA_PATH" ] && echo "[octools] keeping the existing key on disk at $SA_PATH (not overwriting it with the bad value)."
   fi
-elif [ -f "$SA_PATH" ]; then
-  echo "[octools] Using existing SA key at $SA_PATH"
 else
   echo "==================================================================================="
-  echo "[octools] WARN: GCP_CLAUDE_DRIVER_SA_JSON not set and no key on disk."
-  echo "          kb-memory, Vertex AI, and Secret Manager are OFF this session."
-  _maybe="$(env 2>/dev/null | sed -n 's/=.*//; /CLAUDE_DRIVER_SA_JSON$/p' | grep -v '^GCP_CLAUDE_DRIVER_SA_JSON$' | head -1)"
-  [ -n "$_maybe" ] && echo "          Found a variable named '$_maybe' - did you mean GCP_CLAUDE_DRIVER_SA_JSON (leading G)?"
-  echo "          Set GCP_CLAUDE_DRIVER_SA_JSON (raw JSON, one line, no quotes) in the environment's"
-  echo "          Environment variables (.env format), then start a NEW session."
+  echo "[octools] WARN: Azure Key Vault creds not set — fleet secrets are OFF this session."
+  echo "          Set these in the cloud environment's Environment variables (.env format):"
+  echo "            AZURE_SP_CLIENT_ID      the service-principal app (client) id"
+  echo "            AZURE_SP_CLIENT_SECRET  its client secret"
+  echo "            AZURE_SP_TENANT_ID      the Entra tenant id"
+  echo "            AZURE_KEYVAULT_NAME     vault name (default kv-otc-55c84f6bef)"
+  echo "          Save, then start a NEW session (env changes apply to new sessions only)."
   echo "==================================================================================="
 fi
 
-# ─── Pull API keys from GCP Secret Manager (override with direct env vars) ──
-FETCHED=""
-if [ -f "$SA_PATH" ]; then
-  echo "[octools] Fetching API keys from Secret Manager (project: $PROJECT)..."
-  FETCHED="$(GOOGLE_APPLICATION_CREDENTIALS="$SA_PATH" GOOGLE_CLOUD_PROJECT="$PROJECT" \
-    node "${TOOLS_DIR}/setup/fetch-secrets.mjs" 2>/dev/null || true)"
+# ─── LEGACY FALLBACK: GCP Secret Manager (RETIRED; only if Azure gave nothing) ──
+# Kept for backward-compat on any Desktop still carrying the old SA env; GCP billing is
+# off, so this path is expected to fail silently. Azure above is the supported source.
+if [ -z "$FETCHED" ]; then
+  if [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ] && \
+     printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' 2>/dev/null; then
+    printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" > "$SA_PATH"; chmod 600 "$SA_PATH"
+  fi
+  if [ -f "$SA_PATH" ]; then
+    echo "[octools] (legacy) Attempting GCP Secret Manager fallback (expected to be retired)..."
+    FETCHED="$(GOOGLE_APPLICATION_CREDENTIALS="$SA_PATH" GOOGLE_CLOUD_PROJECT="$PROJECT" \
+      node "${TOOLS_DIR}/setup/fetch-secrets.mjs" 2>/dev/null || true)"
+  fi
 fi
 # Direct env vars win over Secret Manager (handy for local dev).
 get_key() {  # $1=env name
@@ -295,16 +303,21 @@ FOURVAULT_NEON_DIRECT_V="$(get_key FOURVAULT_NEON_DATABASE_URL_DIRECT)"
 ( umask 077; : > "$CRED" )
 {
   echo "# Auto-generated by otchealth-claude-tools/setup/session-start.sh"
-  echo "# Secrets sourced from GCP Secret Manager via the claude-driver SA."
-  echo "# RING: NON-PHI ONLY. This SA must never touch a PHI project."
+  echo "# Secrets sourced from Azure Key Vault (${KEYVAULT}) via the fleet service principal."
+  echo "# RING: NON-PHI ONLY. This SP must never touch a PHI project."
   echo "OPENAI_API_KEY=${OPENAI_KEY}"
   echo "ELEVENLABS_API_KEY=${ELEVEN_KEY}"
-  echo "GOOGLE_CLOUD_PROJECT=${PROJECT}"
-  echo "GOOGLE_APPLICATION_CREDENTIALS=${SA_PATH}"
-  echo "VERTEX_DEFAULT_IMAGEN_MODEL=${VERTEX_DEFAULT_IMAGEN_MODEL:-imagen-4.0-generate-001}"
-  echo "VERTEX_DEFAULT_VIDEO_MODEL=${VERTEX_DEFAULT_VIDEO_MODEL:-veo-2.0-generate-001}"
-  echo "VERTEX_DEFAULT_LLM_MODEL=${VERTEX_DEFAULT_LLM_MODEL:-gemini-2.5-flash}"
   echo "RECRAFT_API_KEY=${RECRAFT_KEY}"
+  # GCP is retired; only emit the SA path/project if a key actually exists on disk
+  # (legacy Desktops). Otherwise these point at nothing and break JSON.parse downstream.
+  if [ -f "$SA_PATH" ]; then
+    echo "# (legacy GCP — key present on disk)"
+    echo "GOOGLE_CLOUD_PROJECT=${PROJECT}"
+    echo "GOOGLE_APPLICATION_CREDENTIALS=${SA_PATH}"
+    echo "VERTEX_DEFAULT_IMAGEN_MODEL=${VERTEX_DEFAULT_IMAGEN_MODEL:-imagen-4.0-generate-001}"
+    echo "VERTEX_DEFAULT_VIDEO_MODEL=${VERTEX_DEFAULT_VIDEO_MODEL:-veo-2.0-generate-001}"
+    echo "VERTEX_DEFAULT_LLM_MODEL=${VERTEX_DEFAULT_LLM_MODEL:-gemini-2.5-flash}"
+  fi
   echo "# Azure (optional; blank until provisioned + secrets added to the vault)"
   echo "AZURE_OPENAI_ENDPOINT=${AZ_OAI_ENDPOINT}"
   echo "AZURE_OPENAI_API_KEY=${AZ_OAI_KEY}"
@@ -319,6 +332,7 @@ FOURVAULT_NEON_DIRECT_V="$(get_key FOURVAULT_NEON_DATABASE_URL_DIRECT)"
   echo "AZURE_SP_CLIENT_SECRET=${AZ_SP_CLIENT_SECRET}"
   echo "AZURE_SP_TENANT_ID=${AZ_SP_TENANT_ID}"
   echo "AZURE_SUBSCRIPTION_ID=${AZ_SUBSCRIPTION_ID}"
+  echo "AZURE_KEYVAULT_NAME=${KEYVAULT}"
 } > "$CRED"
 
 # ─── Append platform/service tokens that are actually provisioned ───
@@ -359,7 +373,8 @@ if command -v claude >/dev/null 2>&1; then
   MCP_LIST="$(claude mcp list 2>/dev/null || true)"
   if ! printf '%s' "$MCP_LIST" | grep -q "context7"; then
     C7TMP="$(mktemp)"
-    if node "${TOOLS_DIR}/setup/get-secret.mjs" context7-api-key "$C7TMP" >/dev/null 2>&1 && [ -s "$C7TMP" ]; then
+    if { AZURE_KEYVAULT_NAME="$KEYVAULT" node "${TOOLS_DIR}/setup/get-secret-azure.mjs" context7-api-key "$C7TMP" >/dev/null 2>&1 \
+         || node "${TOOLS_DIR}/setup/get-secret.mjs" context7-api-key "$C7TMP" >/dev/null 2>&1; } && [ -s "$C7TMP" ]; then
       claude mcp add --transport http --scope user context7 https://mcp.context7.com/mcp \
         --header "Authorization: Bearer $(cat "$C7TMP")" >/dev/null 2>&1 \
         && echo "[octools] MCP added: context7 (authenticated)" || echo "[octools] WARN: context7 MCP add failed."
