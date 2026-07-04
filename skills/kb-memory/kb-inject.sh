@@ -70,6 +70,18 @@ case "$MODE" in
     # Auto-delivered here so a human never relays between agents. Shows once, then acks. Fail-open.
     DISPATCH="$DIR/../fleet-dispatch/dispatch.mjs"
     [ -f "$DISPATCH" ] && timeout 12 node "$DISPATCH" check --agent "$AG" 2>/dev/null || true
+    # WAKE FIRST-DUTY — CROSS-AGENT INBOUND. Another exec agent may have written on THIS agent's ledger
+    # (an info hand-off or a suggested correction, always attributed by=<writer>, append-only). Surface it
+    # at wake with an explicit RECONCILE directive, so the first thing this session does is take in its own
+    # ledger (the pack above) and then ingest + reconcile what other agents left. Off the hot path, fail-open.
+    INB="$(timeout 12 node "$MEM" inbound --agent "$AG" 2>/dev/null)"
+    if printf '%s' "$INB" | grep -q '\[by '; then
+      echo ""
+      echo "📥 WAKE FIRST-DUTY — INBOUND FROM OTHER AGENTS on your ($AG) ledger:"
+      printf '%s\n' "$INB"
+      echo "ACTION (do this now): review each note; fold anything valid into YOUR ledger with mem.mjs (--agent $AG);"
+      echo "       then ACK so it stops re-surfacing:  node $MEM reconcile --agent $AG"
+    fi
     # Warm the hot-path semantic cred-cache (read-only query key) in the background, so the per-prompt
     # semantic tier is ready without ever resolving Secret Manager inline on the prompt path. Fail-open.
     (node "$MEM" sem-refresh >/dev/null 2>&1 &) || true

@@ -538,7 +538,7 @@ async function runPack() {
   try {
     let marker = ""; try { marker = (readFileSync(RECON_LOCAL(kb), "utf8") || "").trim(); } catch {}
     const inb = rows.filter((r) => r.by && r.by !== AGENT && (!marker || (r.ts || "") > marker)).slice(-6);
-    if (inb.length) { out.push(`## 📥 INBOUND (${inb.length}) - other agents wrote on your ledger; reconcile: mem.mjs inbound --agent ${AGENT}`); for (const r of inb) out.push(`- [by ${r.by}/${r.type}] ${clip(r.text, 140)}`); }
+    if (inb.length) { out.push(`## 📥 INBOUND (${inb.length}) - other agents wrote on your ledger [review: mem.mjs inbound --agent ${AGENT} | ack: mem.mjs reconcile --agent ${AGENT}]:`); for (const r of inb) out.push(`- [by ${r.by}/${r.type}] ${clip(r.text, 140)}`); }
   } catch {}
   if (ranked.length) { out.push("## RELEVANT TO THIS PROMPT:"); for (const r of ranked) out.push(L(r)); }
   if (entities.length) { out.push("## CURRENT VALUES (latest wins; deterministic):"); for (const r of entities) out.push(`- ${r.ekey} = ${clip(r.evalue, 120)}`); }
