@@ -1,0 +1,18 @@
+{
+  "_comment": "Default entrypoint manifest for setup/deploy-gate-check.mjs — the doc-indexer-image-family job entrypoints, so a pre-rollout run of `node setup/deploy-gate-check.mjs` (no trailing args) checks the real fleet without needing to type every file by hand. Update this list when a job's entrypoint changes or a new one joins the doc-indexer image.",
+  "entrypoints": [
+    "skills/doc-indexer/indexer.mjs",
+    "skills/doc-indexer/deep-pass.mjs",
+    "skills/kb-memory/semantic.mjs",
+    "skills/kb-memory/memory-librarian.mjs",
+    "skills/kb-memory/mem.mjs",
+    "skills/daily-digest/digest.mjs",
+    "skills/cfo-store/store.mjs",
+    "skills/vault-sync/vault-registry.mjs",
+    "skills/ledger-compaction/job/run-compaction.mjs",
+    "skills/fleet-medic/medic.mjs",
+    "skills/signal-radar/common.mjs",
+    "skills/decision-clock/decision.mjs",
+    "skills/ring-memory-index/index-ring-memory.mjs"
+  ]
+}
