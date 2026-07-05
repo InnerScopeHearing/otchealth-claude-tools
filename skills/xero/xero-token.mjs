@@ -7,7 +7,7 @@
  * concurrently => one gets invalid_grant and the org's token DIES (forcing a manual re-consent).
  *
  * FIX: an access-token CACHE (Xero access tokens live ~30 min) + a cross-process refresh LOCK, both in
- * GCS so they are shared across engines and jobs:
+ * Azure Blob (migrated 2026-07-05, was GCS) so they are shared across engines and jobs:
  *   - getAccessContext(org) returns a cached access token if one is still valid (NO refresh, NO rotation).
  *   - Only when the cache is stale does ONE process (lock holder) refresh + rotate-persist + re-cache;
  *     everyone else reads the freshly-written cache. Rotations drop from per-call to ~1 per 30 min/org.
@@ -15,16 +15,22 @@
  *     XERO_DISCONNECTED:<org> that callers/monitor surface) rather than a confusing downstream "no tenant".
  *
  * Fail-open: any error in the cache/lock layer degrades to a direct refresh so posting is never blocked.
+ * INCIDENT NOTE (2026-07-05): while this lock's backend was silently on dead GCS, every call fell
+ * through the fail-open path (direct refresh, no lock) — reintroducing the exact concurrent-refresh
+ * race this file exists to prevent, and root-causing the "refresh token has been consumed" failures
+ * across all 4 orgs that day. Now on Azure Blob (If-None-Match: * gives the same atomic
+ * create-only-if-absent lock semantics GCS's ifGenerationMatch=0 provided).
  *
  * Library:  import { getAccessContext } from "./xero-token.mjs"  ->  { access_token, tenantId, source }
  * CLI:      node xero-token.mjs check <org>        # one org, prints health, exit!=0 if unhealthy
- *           node xero-token.mjs monitor [orgs...]  # all (or listed) orgs; writes GCS health snapshot + alerts
+ *           node xero-token.mjs monitor [orgs...]  # all (or listed) orgs; writes Azure Blob health snapshot + alerts
  */
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
 import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
-const BUCKET = "otchealth-cfo-source-docs";
+const BUCKET = "otchealth-cfo-source-docs"; // legacy GCS name, kept as the object-path namespace
+const BUCKET_CONTAINER = "cfo-source-docs"; // Azure Blob container (account azure-cfo-storage-account)
 const CACHE = (org) => `xero-token-cache/${org}.json`;
 const LOCK = (org) => `xero-token-cache/${org}.lock`;
 const HEALTH = "xero-token-cache/health.json";
@@ -42,7 +48,7 @@ function loadSA() {
   for (const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`, "/agent/.gcp_claude_driver_sa.json"]) {
     try { if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
   }
-  throw new Error("no GCP SA (GCP_CLAUDE_DRIVER_SA_JSON or ~/.gcp_claude_driver_sa.json)");
+  return null; // fail-open: this is now only a dead-GCP fallback inside smRead/smWrite, which already try Azure Key Vault first
 }
 let _gt = null;
 async function gcp() {
@@ -66,25 +72,41 @@ async function smWrite(id, val) { const _ok = await kvSecretSet(id, val); if (_o
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ payload: { data: Buffer.from(val, "utf8").toString("base64") } }) });
   return r.status;
 }
-// ---- GCS cache/lock primitives ----
+// ---- Blob cache/lock primitives (migrated off GCS 2026-07-05 — root cause of today's
+// "refresh token has been consumed" incident: this file's WHOLE cross-process lock, the mechanism
+// that exists specifically to PREVENT concurrent refreshes, was silently degrading to "fail-open:
+// direct refresh" on every call once GCS went dead, because the lock/cache backend itself was
+// unreachable. That reintroduced the exact race this file was built to eliminate. Azure Blob's
+// `If-None-Match: *` on PUT gives the same atomic create-only-if-absent semantics GCS's
+// ifGenerationMatch=0 provided, so the lock is a true fix, not just a credential swap. Same
+// account+container as xero-run's migration (azure-cfo-storage-account / cfo-source-docs — 1:1 path
+// parity with the old GCS bucket otchealth-cfo-source-docs). ----
+let _bAcct, _bKey;
+async function blobCreds() { if (_bAcct && _bKey) return; _bAcct = await smRead("azure-cfo-storage-account"); _bKey = await smRead("azure-cfo-storage-key"); if (!_bAcct || !_bKey) throw new Error("missing azure-cfo-storage-account/key"); }
+function buildBlobSas(acct, key) { const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co"; const st = new Date(Date.now() - 3e5).toISOString().slice(0, 19) + "Z"; const se = new Date(Date.now() + 36e5).toISOString().slice(0, 19) + "Z"; const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n"; const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64"); return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString(); }
+const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
 async function gcsGetJson(name) {
-  const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${encodeURIComponent(name)}?alt=media`, { headers: { Authorization: `Bearer ${await gcp()}` } });
+  await blobCreds(); const sas = buildBlobSas(_bAcct, _bKey);
+  const r = await fetch(`https://${_bAcct}.blob.core.windows.net/${BUCKET_CONTAINER}/${encPath(name)}?${sas}`);
   if (r.status === 404) return null;
-  if (!r.ok) throw new Error("gcsGet " + r.status);
-  try { return JSON.parse(Buffer.from(await r.arrayBuffer()).toString("utf8")); } catch { return null; }
+  if (!r.ok) throw new Error("blobGet " + r.status);
+  try { return JSON.parse(await r.text()); } catch { return null; }
 }
 async function gcsPutJson(name, obj) {
-  const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}`, { method: "POST", headers: { Authorization: `Bearer ${await gcp()}`, "Content-Type": "application/json" }, body: JSON.stringify(obj) });
-  if (!r.ok) throw new Error("gcsPut " + r.status);
+  await blobCreds(); const sas = buildBlobSas(_bAcct, _bKey);
+  const r = await fetch(`https://${_bAcct}.blob.core.windows.net/${BUCKET_CONTAINER}/${encPath(name)}?${sas}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/json" }, body: JSON.stringify(obj) });
+  if (!r.ok) throw new Error("blobPut " + r.status);
 }
 async function gcsCreateIfAbsent(name, obj) { // returns true if WE created it (lock acquired), false if it already exists
-  const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}&ifGenerationMatch=0`, { method: "POST", headers: { Authorization: `Bearer ${await gcp()}`, "Content-Type": "application/json" }, body: JSON.stringify(obj) });
-  if (r.status === 200) return true;
-  if (r.status === 412) return false; // already exists
-  throw new Error("gcsCreate " + r.status);
+  await blobCreds(); const sas = buildBlobSas(_bAcct, _bKey);
+  const r = await fetch(`https://${_bAcct}.blob.core.windows.net/${BUCKET_CONTAINER}/${encPath(name)}?${sas}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/json", "If-None-Match": "*" }, body: JSON.stringify(obj) });
+  if (r.status === 201) return true;
+  if (r.status === 409) return false; // BlobAlreadyExists — already locked by someone else
+  throw new Error("blobCreate " + r.status);
 }
 async function gcsDelete(name) {
-  await fetch(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${encodeURIComponent(name)}`, { method: "DELETE", headers: { Authorization: `Bearer ${await gcp()}` } }).catch(() => {});
+  await blobCreds(); const sas = buildBlobSas(_bAcct, _bKey);
+  await fetch(`https://${_bAcct}.blob.core.windows.net/${BUCKET_CONTAINER}/${encPath(name)}?${sas}`, { method: "DELETE" }).catch(() => {});
 }
 // ---- Xero refresh (single source of truth for rotation + persist + disconnect detection) ----
 async function clientBasic() {
