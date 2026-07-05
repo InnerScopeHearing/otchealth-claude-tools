@@ -90,7 +90,12 @@ case "$MODE" in
     # THE critical anti-forgetting moment: capture the full journal + distill durable facts to the
     # ledger BEFORE the window compacts. Automatic now (was just a reminder). Fail-open.
     INPUT="$(timeout 5 cat 2>/dev/null)"
+    # CBP-1 (Checkpoint Bridge Protocol, 2026-07-05): best-effort session_id extraction from the
+    # already-captured hook stdin payload (reuse $INPUT, never re-read stdin). Never crash the hook.
+    SESSION_ID="$(printf '%s' "$INPUT" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{try{const o=JSON.parse(d||"{}");process.stdout.write(String(o.session_id||""))}catch(e){}})' 2>/dev/null || true)"
     if [ -n "$AG" ]; then
+      export KB_SYNC_SOURCE=precompact
+      export KB_SESSION_ID="$SESSION_ID"
       printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/kb-journal.mjs" capture --agent "$AG" >/dev/null 2>&1 || true
       printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit --min-tools 4 --prefer-fallback >/dev/null 2>&1 || true
       echo "[kb-memory] PreCompact: journal captured + durable facts distilled to the $AG ledger before compaction."
@@ -101,6 +106,10 @@ case "$MODE" in
   stop)
     [ -z "$AG" ] && exit 0
     INPUT="$(timeout 5 cat 2>/dev/null)"
+    # CBP-1 (Checkpoint Bridge Protocol, 2026-07-05): best-effort session_id extraction from the
+    # already-captured hook stdin payload (reuse $INPUT, never re-read stdin). Never crash the hook.
+    SESSION_ID="$(printf '%s' "$INPUT" | node -e 'let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{try{const o=JSON.parse(d||"{}");process.stdout.write(String(o.session_id||""))}catch(e){}})' 2>/dev/null || true)"
+    export KB_SESSION_ID="$SESSION_ID"
     # Tier-1: capture every input+output this turn (cheap, no LLM, always).
     printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/kb-journal.mjs" capture --agent "$AG" >/dev/null 2>&1 || true
     # Tier-2: distill to the ledger, THROTTLED to ~15 min (reflect spawns an LLM call; Stop fires every
@@ -109,11 +118,30 @@ case "$MODE" in
     NOW="$(date +%s 2>/dev/null || echo 0)"; LAST="$(stat -c %Y "$THROT" 2>/dev/null || echo 0)"
     if [ "$((NOW - LAST))" -gt 900 ]; then
       mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null
+      export KB_SYNC_SOURCE=stop
       printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit >/dev/null 2>&1 && touch "$THROT" || true
     fi
     # Emit the memory-health beacon to PostHog (self-throttled ~10min, BACKGROUNDED so it never blocks
     # the Stop hook). This is the real-time signal source for the operator dashboard + the auto-medic.
     [ -f "$DIR/beacon.mjs" ] && (node "$DIR/beacon.mjs" --agent "$AG" >/dev/null 2>&1 &) || true
+    ;;
+  periodic-check)
+    # CBP-1 (Checkpoint Bridge Protocol, 2026-07-05): PostToolUse safety net for long single-turn
+    # tool-call sequences that never hit Stop naturally. Cheap stat/date elapsed-time check, NO
+    # network/LLM call on the common (not-yet-due) path — only fires the capture+reflect sequence
+    # once per 900s (15 min), matching the existing Stop-hook throttle. Fail-open throughout.
+    [ -z "$AG" ] && exit 0
+    PTHROT="$HOME/.claude/kb-journal/.last-periodic-checkpoint"
+    NOW="$(date +%s 2>/dev/null || echo 0)"; LAST="$(stat -c %Y "$PTHROT" 2>/dev/null || echo 0)"
+    if [ "$((NOW - LAST))" -lt 900 ] && [ -f "$PTHROT" ]; then
+      exit 0
+    fi
+    mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null
+    touch "$PTHROT" 2>/dev/null
+    INPUT="$(timeout 5 cat 2>/dev/null)"
+    export KB_SYNC_SOURCE=periodic
+    printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/kb-journal.mjs" capture --agent "$AG" >/dev/null 2>&1 || true
+    printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit --min-tools 4 >/dev/null 2>&1 || true
     ;;
 esac
 exit 0

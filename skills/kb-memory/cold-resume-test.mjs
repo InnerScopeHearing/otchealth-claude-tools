@@ -36,6 +36,16 @@ else {
   if (ageH > MAX_AGE_H) problems.push(`stale: last updated ${ageH.toFixed(1)}h ago (> ${MAX_AGE_H}h) — may not reflect current reality`);
 }
 if (!st.last_state) problems.push("no last_state — a fresh instance would not know what was happening when the previous session ended");
+// CBP-1 (Checkpoint Bridge Protocol, 2026-07-05): additive checks for the automatic hook-sync path
+// (mem.mjs state-sync, wired from reflect.mjs via kb-inject.sh's precompact/stop/periodic-check
+// cases). These do NOT replace the existing goal/updated_at/last_state checks above.
+if (!st.session_facts || !st.session_facts.length) problems.push("no session_facts — the PreCompact/Stop/periodic hook path is not syncing distilled facts to _STATE");
+if (!st.checkpoint || !st.checkpoint.as_of) {
+  problems.push("no checkpoint — automatic hook sync has never run for this agent");
+} else {
+  const cpAgeH = (Date.now() - Date.parse(st.checkpoint.as_of)) / 36e5;
+  if (cpAgeH > MAX_AGE_H) problems.push(`checkpoint stale: last hook sync ${cpAgeH.toFixed(1)}h ago (> ${MAX_AGE_H}h) — automatic checkpointing may not be running`);
+}
 
 console.log(`# COLD RESUME BRIEF — ${AGENT} (reading ONLY _STATE/${AGENT}.json, nothing else)`);
 console.log(`\nIf I were a brand-new instance with zero chat history, this is everything I'd know:\n`);

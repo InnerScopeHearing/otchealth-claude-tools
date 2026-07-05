@@ -93,6 +93,16 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/skills/kb-memory/kb-inject.sh\" periodic-check"
+          }
+        ]
+      }
     ]
   }
 }

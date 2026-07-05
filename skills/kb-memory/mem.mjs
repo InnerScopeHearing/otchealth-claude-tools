@@ -29,6 +29,8 @@
 //   tail     --agent cfo [--n 40]               # YOUR pitfalls/recent + the TEAM feed (company-wide)
 //   team     [--agent x] [--n 60]               # the whole exec team feed: who is working on what
 //   render   --agent cfo  |  list-agents
+//   state    --get [--json] --agent cfo | --set [--goal ..] [--constraints a;b;c] [--decisions a;b;c] [--last ..]
+//   state-sync --agent cfo --facts '["..."]' [--source precompact|stop|periodic] [--session-id id]  # CBP-1 hook path, additive-only
 import crypto from "node:crypto";
 import { readFileSync, existsSync, writeFileSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
@@ -746,6 +748,39 @@ async function runPack() {
     }
     throw new Error("state --set: too many concurrent-write conflicts, give up after 4 attempts");
   }
-  console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | inbound | reconcile | render | whoami | use | list-agents | state\n  cross-lane: add --on <lane> to write on ANOTHER agent's ledger (append-only, attributed by=<--agent>); the owner sees it via 'inbound' / 'tail' on wake and 'reconcile' to ack.\n  state --get [--json] | state --set [--goal \"...\"] [--constraints \"a;b;c\"] [--decisions \"a;b;c\"] [--last \"...\"]  (typed current-state handoff doc)");
+  // ── CBP-1 (Checkpoint Bridge Protocol, 2026-07-05): ADDITIVE-ONLY extension of the same
+  // _STATE/<agent>.json doc, written by the PreCompact/Stop/periodic hook path (never by hand).
+  // Unlike `state --set`, this NEVER touches goal/constraints/open_decisions — it only appends a
+  // capped, deduped `session_facts` list (the last few distilled reflect.mjs items) and stamps a
+  // `checkpoint` marker so cold-resume-test.mjs can tell whether the automatic hook sync has ever
+  // run for this agent. Same 4-attempt ETag-conditional retry as `state --set`.
+  if (cmd === "state-sync") {
+    const STATE_KEY = `_STATE/${AGENT}.json`;
+    const DEFAULT_STATE = { agent: AGENT, goal: "", constraints: [], open_decisions: [], last_state: "", updated_at: null, updated_by: null, version: 0 };
+    const SYNC_SOURCE = takeVal("--source", "periodic");
+    const SESSION_ID = takeVal("--session-id", "");
+    let newFacts = [];
+    try { const parsed = JSON.parse(takeVal("--facts", "[]") || "[]"); if (Array.isArray(parsed)) newFacts = parsed.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()); } catch {}
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { text, etag } = await getTextMeta(STATE_KEY);
+      const st = text ? JSON.parse(text) : { ...DEFAULT_STATE };
+      const existing = Array.isArray(st.session_facts) ? st.session_facts : [];
+      const seen = new Set(existing.map((f) => String(f).slice(0, 64).toLowerCase()));
+      const toAdd = [];
+      for (const f of newFacts) { const k = f.slice(0, 64).toLowerCase(); if (!seen.has(k)) { seen.add(k); toAdd.push(f); } }
+      st.session_facts = [...toAdd.reverse(), ...existing].slice(0, 10); // newest unshifted to front, capped 10
+      st.checkpoint = { as_of: new Date().toISOString(), source: SYNC_SOURCE, session_id: SESSION_ID };
+      st.updated_at = new Date().toISOString();
+      st.updated_by = "hook:" + SYNC_SOURCE;
+      st.version = (st.version || 0) + 1;
+      const res = await putTextCond(STATE_KEY, JSON.stringify(st, null, 2), "application/json", etag);
+      if (isConflict(res.status)) continue; // someone else wrote between our read and write; retry
+      if (!res.ok) throw new Error(`state-sync failed: ${res.status}`);
+      console.log(`[kb-memory] state-sync -> ${AGENT} v${st.version} (source=${SYNC_SOURCE}, facts=${st.session_facts.length})`);
+      return;
+    }
+    throw new Error("state-sync: too many concurrent-write conflicts, give up after 4 attempts");
+  }
+  console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | inbound | reconcile | render | whoami | use | list-agents | state | state-sync\n  cross-lane: add --on <lane> to write on ANOTHER agent's ledger (append-only, attributed by=<--agent>); the owner sees it via 'inbound' / 'tail' on wake and 'reconcile' to ack.\n  state --get [--json] | state --set [--goal \"...\"] [--constraints \"a;b;c\"] [--decisions \"a;b;c\"] [--last \"...\"]  (typed current-state handoff doc)\n  state-sync --agent <a> --facts '[\"...\"]' [--source precompact|stop|periodic] [--session-id <id>]  (CBP-1: additive session_facts + checkpoint, never touches goal/constraints/open_decisions)");
   process.exit(2);
 })().catch((e) => { console.error("ERROR: " + e.message); process.exit(1); });

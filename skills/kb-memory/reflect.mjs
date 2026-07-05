@@ -124,6 +124,19 @@ async function main() {
     console.log(`  [${it.type}${it.share ? ",share" : ""}] ${it.text}`);
     if (COMMIT) { try { const a = [join(HERE, "mem.mjs"), it.type, it.text, "--agent", AGENT, "--tags", it._fallback ? "auto-extract-fallback" : "auto-reflect"]; if (it.share) a.push("--share"); execFileSync("node", a, { stdio: "ignore" }); } catch (e) { console.error("  write failed: " + e.message); } }
   }
+  // ── CBP-1 (Checkpoint Bridge Protocol, 2026-07-05): after the existing per-item commit loop
+  // above, ALSO sync the distilled item texts + a checkpoint marker into _STATE/<agent>.json via
+  // mem.mjs state-sync, so cold-resume-test.mjs / any fresh instance can see what was just learned
+  // without replaying the whole ledger. Wrapped in try/catch so a failure here never breaks the
+  // existing commit behavior above (fail-open, matches this script's exit-0-always contract).
+  if (COMMIT && items.length) {
+    try {
+      const factsJson = JSON.stringify(items.map((it) => it.text));
+      const syncSource = process.env.KB_SYNC_SOURCE || "stop";
+      const sessionId = process.env.KB_SESSION_ID || "";
+      execFileSync("node", [join(HERE, "mem.mjs"), "state-sync", "--agent", AGENT, "--facts", factsJson, "--source", syncSource, "--session-id", sessionId], { stdio: "ignore" });
+    } catch (e) { console.error("  state-sync failed (non-fatal): " + e.message); }
+  }
   process.exit(0);
 }
 main().catch((e) => { console.error("reflect ERROR: " + e.message); process.exit(0); });
