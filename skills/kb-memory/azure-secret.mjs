@@ -49,3 +49,38 @@ export async function kvSecret(name) {
     return null;
   }
 }
+
+// ── FAIL-LOUD startup guard (P0 stability, 2026-07-04) ──────────────────────
+// Convergent-P0 #1: never run silently without required credentials. The GCP path
+// fails OPEN (kvSecret returns null, never throws) so the LIVE Azure path always runs;
+// this guard is where a TOTAL creds failure fails LOUD instead of silent-nulling.
+// Call at the top of any job/skill: `await requireSecrets(["azure-cfo-storage-key", ...])`.
+// Returns { name: value } for the resolved set; on ANY miss it names the missing keys
+// and exits non-zero (78 = EX_CONFIG) so the failure is impossible to miss.
+export async function requireSecrets(names) {
+  const out = {};
+  const missing = [];
+  for (const n of names) {
+    const v = await kvSecret(n);
+    if (v == null) missing.push(n);
+    else out[n] = v;
+  }
+  if (missing.length) {
+    const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
+    const spOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
+    console.error("==================================================================================");
+    console.error(`[FATAL] Required secret(s) UNAVAILABLE from Key Vault (${vault}): ${missing.join(", ")}`);
+    console.error(`        AZURE_SP_* creds present: ${spOk ? "yes" : "NO — set AZURE_SP_CLIENT_ID/SECRET/TENANT_ID"}.`);
+    console.error("        Refusing to run with missing credentials (fail-loud, not silent). GCP Secret Manager is retired.");
+    console.error("==================================================================================");
+    process.exit(78);
+  }
+  return out;
+}
+
+// Non-exiting variant: throw (for callers that want to catch). Never returns null.
+export async function kvSecretOrThrow(name) {
+  const v = await kvSecret(name);
+  if (v == null) throw new Error(`required secret '${name}' unavailable from Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"})`);
+  return v;
+}

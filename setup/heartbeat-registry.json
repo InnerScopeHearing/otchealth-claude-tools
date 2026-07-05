@@ -1,0 +1,10 @@
+{
+  "ring-memory-index-daily": { "interval_min": 1440, "owner": "cto" },
+  "daily-digest":            { "interval_min": 1560, "owner": "coo" },
+  "brain-reindex":           { "interval_min": 480,  "owner": "cto" },
+  "librarian-finance":       { "interval_min": 480,  "owner": "cfo" },
+  "librarian-legal-company": { "interval_min": 480,  "owner": "clo" },
+  "librarian-commerce":      { "interval_min": 120,  "owner": "cro" },
+  "signal-radar":            { "interval_min": 60,   "owner": "cto" },
+  "decision-clock":          { "interval_min": 1560, "owner": "coo" }
+}
