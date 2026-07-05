@@ -47,6 +47,36 @@ async function listBeats() {
 }
 function loadRegistry() { try { return JSON.parse(readFileSync(join(HERE, "heartbeat-registry.json"), "utf8")); } catch { return {}; } }
 
+// ── Control-plane liveness (P0 stability, HB-EXTEND 2026-07-04) ──────────────
+// Jobs on public base images we can't wrap (no in-image beat) are monitored via ARM: read the
+// last Container Apps Job execution. This is a STRONGER dead-man's-switch than a self-beat — it
+// catches a job that can't even START. Fail-open: if ARM is unreachable the job shows NO-ARM
+// (unknown), never a false DEAD.
+const SUB = process.env.AZURE_SUBSCRIPTION_ID || "55c84f6b-ef90-4259-a58b-50835cc4cab4";
+let _armTok;
+async function armToken() {
+  if (_armTok !== undefined) return _armTok;
+  const t = process.env.AZURE_SP_TENANT_ID, c = process.env.AZURE_SP_CLIENT_ID, s = process.env.AZURE_SP_CLIENT_SECRET;
+  if (!t || !c || !s) { _armTok = null; return null; }
+  try {
+    const r = await fetch(`https://login.microsoftonline.com/${t}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "client_credentials", client_id: c, client_secret: s, scope: "https://management.azure.com/.default" }) });
+    _armTok = (await r.json()).access_token || null;
+  } catch { _armTok = null; }
+  return _armTok;
+}
+async function armLastExec(rg, job) {
+  const tok = await armToken(); if (!tok) return null;
+  try {
+    const r = await fetch(`https://management.azure.com/subscriptions/${SUB}/resourceGroups/${rg}/providers/Microsoft.App/jobs/${job}/executions?api-version=2024-03-01`, { headers: { Authorization: "Bearer " + tok } });
+    if (!r.ok) return null;
+    const v = ((await r.json()).value || []).map((e) => ({ status: e.properties?.status, startMs: Date.parse(e.properties?.startTime || 0) || null }));
+    if (!v.length) return { status: "None", startMs: null, lastOkMs: null };
+    const latest = v.slice().sort((a, b) => (b.startMs || 0) - (a.startMs || 0))[0];
+    const lastOk = v.filter((e) => e.status === "Succeeded").sort((a, b) => (b.startMs || 0) - (a.startMs || 0))[0];
+    return { status: latest.status, startMs: latest.startMs, lastOkMs: lastOk ? lastOk.startMs : null };
+  } catch { return null; }
+}
+
 (async () => {
   if (cmd === "beat") {
     const job = argv[1], event = argv[2];
@@ -73,22 +103,37 @@ function loadRegistry() { try { return JSON.parse(readFileSync(join(HERE, "heart
     for (const job of jobs) {
       const hb = (await getJson(`${job}.json`)) || {};
       const intervalMin = (reg[job] && reg[job].interval_min) || null;
-      const lastOk = hb.last_ok ? Date.parse(hb.last_ok) : null;
+      const rg = reg[job] && reg[job].rg;
+      let lastOk = hb.last_ok ? Date.parse(hb.last_ok) : null;
+      let src = lastOk ? "beat" : "";
+      let armRunning = false, armFailed = false, armUnknown = false;
+      if (rg) {
+        const a = await armLastExec(rg, job);
+        if (a === null) armUnknown = true;                       // ARM unreachable -> don't false-alarm
+        else {
+          if (a.lastOkMs && (!lastOk || a.lastOkMs > lastOk)) { lastOk = a.lastOkMs; src = "arm"; }
+          if (a.status === "Running" || a.status === "Processing") armRunning = true;
+          if (a.status === "Failed" || a.status === "Degraded") armFailed = true;
+        }
+      }
       const ageMin = lastOk ? Math.round((now - lastOk) / 60000) : null;
       let status;
-      if (!intervalMin && !lastOk) status = "NO-DATA";
-      else if (!lastOk) status = "DEAD";                                  // expected but never succeeded
-      else if (intervalMin && ageMin > intervalMin * 3) status = "DEAD";  // 3x = alert
-      else if (intervalMin && ageMin > intervalMin) status = "LATE";      // 1x = missing
+      if (armRunning) status = "LIVE";                                   // currently executing
+      else if (!intervalMin && !lastOk) status = rg && armUnknown ? "NO-ARM" : "NO-DATA";
+      else if (!lastOk) status = rg && armUnknown ? "NO-ARM" : "DEAD";   // expected but never succeeded
+      else if (intervalMin && ageMin > intervalMin * 3) status = "DEAD"; // 3x = alert
+      else if (intervalMin && ageMin > intervalMin) status = "LATE";     // 1x = missing
       else status = "LIVE";
-      rows.push({ job, status, ageMin, intervalMin, owner: (reg[job] || {}).owner || "", last_event: hb.last_event || "", consecutive_fail: hb.consecutive_fail || 0 });
+      const last_event = hb.last_event || (armFailed ? "fail(arm)" : src === "arm" ? "ok(arm)" : "");
+      rows.push({ job, status, ageMin, intervalMin, owner: (reg[job] || {}).owner || "", last_event, consecutive_fail: hb.consecutive_fail || 0, src, armFailed });
     }
     if (argv.includes("--json")) { console.log(JSON.stringify(rows, null, 2)); return; }
-    const bad = rows.filter((r) => r.status === "DEAD" || r.status === "LATE" || r.consecutive_fail > 0);
+    const bad = rows.filter((r) => r.status === "DEAD" || r.status === "LATE" || r.consecutive_fail > 0 || r.armFailed);
     console.log(`# FLEET HEARTBEAT — ${rows.length} job(s); ${bad.length} needing attention`);
     for (const r of rows) {
       const age = r.ageMin == null ? "never" : r.ageMin < 60 ? `${r.ageMin}m` : `${Math.round(r.ageMin / 60)}h`;
-      console.log(`[${r.status.padEnd(7)}] ${r.job.padEnd(30)} last-ok ${age.padEnd(6)} ${r.intervalMin ? "(expect ≤" + r.intervalMin + "m)" : ""}${r.consecutive_fail ? "  FAILS×" + r.consecutive_fail : ""}${r.owner ? "  -> " + r.owner : ""}`);
+      const via = r.src === "arm" ? " via arm" : "";
+      console.log(`[${r.status.padEnd(7)}] ${r.job.padEnd(26)} last-ok ${age.padEnd(6)}${via.padEnd(8)} ${r.intervalMin ? "(expect ≤" + r.intervalMin + "m)" : ""}${r.armFailed ? "  LAST-RUN-FAILED" : ""}${r.consecutive_fail ? "  FAILS×" + r.consecutive_fail : ""}${r.owner ? "  -> " + r.owner : ""}`);
     }
     if (bad.length) console.log(`\nSILENCE = FAILURE: ${bad.map((r) => r.job).join(", ")} need attention.`);
     return;
