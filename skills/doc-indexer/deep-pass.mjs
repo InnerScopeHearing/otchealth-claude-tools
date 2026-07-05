@@ -27,7 +27,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { kvSecret, requireSecrets } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 const argv = process.argv.slice(2);
@@ -231,7 +231,10 @@ let flushing = false;
 async function flush(rows) { if (flushing) return; flushing = true; try { await putBuf(CATALOG, Buffer.from(rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8'), 'application/x-ndjson'); } finally { flushing = false; } }
 
 async function main() {
-  if (!SA) { console.error('Missing GCP_CLAUDE_DRIVER_SA_JSON / SA file'); process.exit(2); }
+  // Fail-LOUD on the Azure secrets this run actually needs (names the real missing key), not the
+  // vestigial GCP-SA precondition (removed 2026-07-05 — it was a leftover pre-migration gate that
+  // no longer reflects how credentials are resolved; AKEY/FEP/FKEY below are Azure-first via sm()).
+  if (KEYSECRET) await requireSecrets([KEYSECRET, 'azure-foundry-key']);
   AKEY = (KEYSECRET ? await sm(KEYSECRET) : null); if (!AKEY) { console.error('Missing storage key ' + KEYSECRET); process.exit(2); }
   SAS = buildSas();
   FEP = (await sm('azure-foundry-openai-endpoint') || '').replace(/\/$/, ''); FKEY = await sm('azure-foundry-key');
