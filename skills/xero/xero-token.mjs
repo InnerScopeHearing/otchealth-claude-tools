@@ -21,6 +21,7 @@
  *           node xero-token.mjs monitor [orgs...]  # all (or listed) orgs; writes GCS health snapshot + alerts
  */
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
 const BUCKET = "otchealth-cfo-source-docs";
@@ -46,19 +47,19 @@ function loadSA() {
 let _gt = null;
 async function gcp() {
   if (_gt) return _gt;
-  const sa = loadSA(); const now = Math.floor(Date.now() / 1000);
+  const sa = loadSA(); if (!sa || !sa.private_key) return null; const now = Math.floor(Date.now() / 1000);
   const cl = { iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3500 };
   const i = `${b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.${b64url(JSON.stringify(cl))}`;
   const s = crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key);
   const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${i}.${Buffer.from(s).toString("base64url")}` }) });
   return (_gt = (await r.json()).access_token);
 }
-async function smRead(id) {
+async function smRead(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${await gcp()}` } });
   if (!r.ok) return null;
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
 }
-async function smWrite(id, val) {
+async function smWrite(id, val) { const _ok = await kvSecretSet(id, val); if (_ok) return true;
   const t = await gcp();
   const e = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}`, { headers: { Authorization: `Bearer ${t}` } });
   if (e.status === 404) await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) });
@@ -115,6 +116,7 @@ async function refreshAndPersist(org) {
 }
 // ---- public: cached + locked access context ----
 export async function getAccessContext(org, opts = {}) {
+  await requireSecrets(["xero-client-id", "xero-client-secret"]);
   const now = Date.now();
   // 1) fast path: a still-valid cached access token
   try {

@@ -1,10 +1,11 @@
 import crypto from "node:crypto"; import fs from "node:fs";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 const P="otchealth-shared-prod"; const b=x=>Buffer.from(x).toString("base64url");
 const HA_TENANT="72841086-a2ef-4758-80a8-3b71a98d440a"; const REDIRECT="https://localhost/callback";
 function sa(){return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON||fs.readFileSync("/agent/.gcp_claude_driver_sa.json","utf8"));}
 async function gt(){const s=sa();const n=Math.floor(Date.now()/1e3);const c={iss:s.client_email,scope:"https://www.googleapis.com/auth/cloud-platform",aud:"https://oauth2.googleapis.com/token",iat:n,exp:n+3500};const i=`${b(JSON.stringify({alg:"RS256",typ:"JWT"}))}.${b(JSON.stringify(c))}`;const g=crypto.createSign("RSA-SHA256").update(i).sign(s.private_key);const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:`${i}.${Buffer.from(g).toString("base64url")}`})});return (await r.json()).access_token;}
-async function sm(t,id){const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${P}/secrets/${id}/versions/latest:access`,{headers:{Authorization:"Bearer "+t}});if(r.status!==200)return null;const j=await r.json();return Buffer.from(j.payload.data,"base64").toString("utf8").trim();}
-async function smWrite(t,id,val){
+async function sm(t,id){ const _kv = await kvSecret(id); if (_kv != null) return _kv;const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${P}/secrets/${id}/versions/latest:access`,{headers:{Authorization:"Bearer "+t}});if(r.status!==200)return null;const j=await r.json();return Buffer.from(j.payload.data,"base64").toString("utf8").trim();}
+async function smWrite(t,id,val){ const _ok = await kvSecretSet(id, val); if (_ok) return true;
   // ensure secret exists
   await fetch(`https://secretmanager.googleapis.com/v1/projects/${P}/secrets?secretId=${id}`,{method:"POST",headers:{Authorization:"Bearer "+t,"Content-Type":"application/json"},body:JSON.stringify({replication:{automatic:{}}})}).catch(()=>{});
   const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${P}/secrets/${id}:addVersion`,{method:"POST",headers:{Authorization:"Bearer "+t,"Content-Type":"application/json"},body:JSON.stringify({payload:{data:Buffer.from(val,"utf8").toString("base64")}})});

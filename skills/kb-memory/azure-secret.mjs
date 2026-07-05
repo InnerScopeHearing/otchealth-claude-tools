@@ -35,6 +35,25 @@ async function vaultToken() {
   }
 }
 
+/** Write/overwrite a secret in Key Vault (SP needs "Key Vault Secrets Officer"). Returns true on
+ *  success, false otherwise. Never throws. This is the Azure replacement for the retired GCP
+ *  Secret Manager addVersion() path used by OAuth token-rotation persistence (Xero/Gmail/OneDrive/QBO). */
+export async function kvSecretSet(name, value) {
+  const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
+  const tok = await vaultToken();
+  if (!tok) return false;
+  try {
+    const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ value: String(value) }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** Fetch one secret from Key Vault. Returns the trimmed value, or null if unavailable. Never throws. */
 export async function kvSecret(name) {
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";

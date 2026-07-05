@@ -23,6 +23,7 @@
 //   node cfo-sharepoint.mjs whoami                          # verify the app-only token + permission
 
 import crypto from "node:crypto";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import { writeFileSync, mkdirSync } from "node:fs";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -32,7 +33,7 @@ const cmd = argv[0];
 const pos = argv.slice(1).filter((a) => !a.startsWith("--"));
 
 async function smToken() {
-  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON; if(!__r){return null;} let sa; try{sa=JSON.parse(__r);}catch{return null;} if(!sa||!sa.private_key){return null;}
   const now = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
@@ -41,7 +42,7 @@ async function smToken() {
   if (!r.ok) throw new Error("SM auth " + r.status);
   return (await r.json()).access_token;
 }
-async function smRead(id) {
+async function smRead(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null;
   try { const t = await smToken(); const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); } catch { return null; }
 }

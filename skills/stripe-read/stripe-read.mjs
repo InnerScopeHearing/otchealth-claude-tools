@@ -8,14 +8,16 @@
  * READ-ONLY by design: only GET calls. It never creates, charges, refunds, or modifies anything.
  */
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 const P="otchealth-shared-prod"; const b=x=>Buffer.from(x).toString("base64url");
-function loadSA(){ if(process.env.GCP_CLAUDE_DRIVER_SA_JSON){try{return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);}catch{}} for(const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`,"/agent/.gcp_claude_driver_sa.json"]){try{if(fs.existsSync(p))return JSON.parse(fs.readFileSync(p,"utf8"));}catch{}} throw new Error("no GCP SA"); }
-async function gcp(){const s=loadSA();const n=Math.floor(Date.now()/1e3);const c={iss:s.client_email,scope:"https://www.googleapis.com/auth/cloud-platform",aud:"https://oauth2.googleapis.com/token",iat:n,exp:n+3500};const i=`${b(JSON.stringify({alg:"RS256",typ:"JWT"}))}.${b(JSON.stringify(c))}`;const g=crypto.createSign("RSA-SHA256").update(i).sign(s.private_key);const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:`${i}.${Buffer.from(g).toString("base64url")}`})});return (await r.json()).access_token;}
-async function sm(t,id){const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${P}/secrets/${id}/versions/latest:access`,{headers:{Authorization:"Bearer "+t}});if(r.status!==200)throw new Error("SM "+id+" "+r.status);const j=await r.json();return Buffer.from(j.payload.data,"base64").toString("utf8").trim();}
+function loadSA(){ if(process.env.GCP_CLAUDE_DRIVER_SA_JSON){try{return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);}catch{}} for(const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`,"/agent/.gcp_claude_driver_sa.json"]){try{if(fs.existsSync(p))return JSON.parse(fs.readFileSync(p,"utf8"));}catch{}} return null; }
+async function gcp(){const s=loadSA(); if(!s||!s.private_key)return null;const n=Math.floor(Date.now()/1e3);const c={iss:s.client_email,scope:"https://www.googleapis.com/auth/cloud-platform",aud:"https://oauth2.googleapis.com/token",iat:n,exp:n+3500};const i=`${b(JSON.stringify({alg:"RS256",typ:"JWT"}))}.${b(JSON.stringify(c))}`;const g=crypto.createSign("RSA-SHA256").update(i).sign(s.private_key);const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:`${i}.${Buffer.from(g).toString("base64url")}`})});return (await r.json()).access_token;}
+async function sm(t,id){ const _kv = await kvSecret(id); if (_kv != null) return _kv;const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${P}/secrets/${id}/versions/latest:access`,{headers:{Authorization:"Bearer "+t}});if(r.status!==200)throw new Error("SM "+id+" "+r.status);const j=await r.json();return Buffer.from(j.payload.data,"base64").toString("utf8").trim();}
 async function S(key,path){const r=await fetch("https://api.stripe.com/v1/"+path,{headers:{Authorization:"Bearer "+key}});return {status:r.status,j:await r.json().catch(()=>({}))};}
 const money=(c,cur)=>`${(c/100).toFixed(2)} ${(cur||"usd").toUpperCase()}`;
 (async()=>{
   const cmd=(process.argv[2]||"scoreboard").toLowerCase();
+  await requireSecrets(["stripe-secret-key"]);
   const key=await sm(await gcp(),"stripe-secret-key");
   const mode=/_live_/.test(key)?"LIVE":(/_test_/.test(key)?"TEST":"?");
   if(cmd==="account"||cmd==="scoreboard"){

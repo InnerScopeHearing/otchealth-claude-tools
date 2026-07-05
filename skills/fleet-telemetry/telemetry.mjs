@@ -29,7 +29,7 @@ const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i +
 function readStdin() { try { return readFileSync(0, "utf8"); } catch { return ""; } }
 
 function saJwt(scope) {
-  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;}
   const now = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;

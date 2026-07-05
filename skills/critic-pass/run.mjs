@@ -29,7 +29,7 @@ const CRITIC_SYSTEM =
 // ---- creds (same JWT-SA -> Secret Manager pattern the rest of the toolkit uses) ----
 function resolveSa() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; }
+  try { try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; } } catch { return null; }
 }
 function saJwt(saRaw) {
   const sa = JSON.parse(saRaw);

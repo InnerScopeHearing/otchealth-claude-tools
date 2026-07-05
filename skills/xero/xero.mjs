@@ -15,6 +15,7 @@
 //   node xero.mjs <org> request <METHOD> <Endpoint>    # JSON body on stdin for writes
 //   <org> = otchealth | innd | hearingassist | personal (or a name substring)
 import crypto from "node:crypto";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import { getAccessContext } from "./xero-token.mjs";
 
 const TOKEN_URL = "https://identity.xero.com/connect/token";
@@ -37,9 +38,9 @@ function orgKeyFrom(sel) {
   return s;
 }
 
-function smAvailable() { return !!process.env.GCP_CLAUDE_DRIVER_SA_JSON; }
+function smAvailable() { return !!(process.env.GCP_CLAUDE_DRIVER_SA_JSON || process.env.AZURE_SP_CLIENT_ID); }
 async function smToken() {
-  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON; if(!__r){return null;} let sa; try{sa=JSON.parse(__r);}catch{return null;} if(!sa||!sa.private_key){return null;}
   const now = Math.floor(Date.now() / 1000);
   const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
@@ -48,12 +49,12 @@ async function smToken() {
   if (!r.ok) throw new Error("SM token " + r.status);
   return (await r.json()).access_token;
 }
-async function smReadLatest(t, id) {
+async function smReadLatest(t, id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
   if (!r.ok) return null;
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
 }
-async function smAddVersion(t, id, v) {
+async function smAddVersion(t, id, v) { const _ok = await kvSecretSet(id, v); if (_ok) return true;
   const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } });
   const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body });
   let r = await add();
@@ -70,7 +71,7 @@ async function smAddVersion(t, id, v) {
 // kb-memory wrapper provides only the GCP SA, not XERO_*). Makes the skill portable across engines.
 async function clientBasic(smTok) {
   let id = process.env.XERO_CLIENT_ID, sec = process.env.XERO_CLIENT_SECRET;
-  if ((!id || !sec) && smTok) {
+  if (!id || !sec) {
     try {
       id = id || await smReadLatest(smTok, "xero-client-id");
       sec = sec || await smReadLatest(smTok, "xero-client-secret");

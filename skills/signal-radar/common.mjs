@@ -13,22 +13,22 @@ export const SM = "otchealth-shared-prod";
 // ---------------------------- GCP Secret Manager (claude-driver SA) ----------------------------
 function resolveSaRaw() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; }
+  try { try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; } } catch { return null; }
 }
 export const SA_RAW = resolveSaRaw();
 
 let _gcpToken = null, _gcpTokenExp = 0;
 async function gcpToken() {
   if (_gcpToken && Date.now() < _gcpTokenExp - 30000) return _gcpToken;
-  if (!SA_RAW) throw new Error("no GCP service account (GCP_CLAUDE_DRIVER_SA_JSON unset)");
-  const sa = JSON.parse(SA_RAW);
+  if (!SA_RAW) return null;
+  const __r=SA_RAW;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;}
   const n = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: n, exp: n + 3600 })}`;
   const jwt = i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
   const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}` });
   const j = await r.json();
-  if (!j.access_token) throw new Error("GCP token exchange failed: " + JSON.stringify(j).slice(0, 200));
+  if (!j.access_token) return null;
   _gcpToken = j.access_token; _gcpTokenExp = Date.now() + 3500 * 1000;
   return _gcpToken;
 }
@@ -37,7 +37,7 @@ const _smCache = new Map();
 /** Fetch a secret's latest version. Returns null (not an error) on 404/missing so callers can feature-detect. */
 export async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   if (_smCache.has(id)) return _smCache.get(id);
-  const t = await gcpToken();
+  const t = await gcpToken(); if(!t)return null;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } });
   const val = r.ok ? Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim() : null;
   _smCache.set(id, val);

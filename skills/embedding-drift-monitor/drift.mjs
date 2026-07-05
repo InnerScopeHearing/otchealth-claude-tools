@@ -57,10 +57,10 @@ const COVERAGE_DROP = Number(takeVal("--coverage-drop", "")) || 0.2;
 
 function saRaw() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8");
+  try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; }
 }
 function saJwt(scope) {
-  const sa = JSON.parse(saRaw());
+  const __r=saRaw();if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;}
   const now = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;

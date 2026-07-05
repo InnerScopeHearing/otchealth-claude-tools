@@ -127,14 +127,17 @@ async function compactOneAgent(sa, agent, cfg) {
 
 async function main() {
   const raw = resolveSaJson();
-  if (!raw) {
-    console.error("[ledger-compaction] no service account available (GCP_CLAUDE_DRIVER_SA_JSON unset and ~/.gcp_claude_driver_sa.json missing). Fail-open: exiting 0, nothing compacted this run.");
+  const azureOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
+  if (!raw && !azureOk) {
+    console.error("[ledger-compaction] no credentials (neither Azure SP nor GCP SA). Fail-open: exiting 0, nothing compacted this run.");
     return;
   }
-  let sa;
-  try { sa = JSON.parse(raw); } catch (e) {
-    console.error(`[ledger-compaction] service account JSON unparseable: ${e.message}. Fail-open: exiting 0.`);
-    return;
+  let sa = null;
+  if (raw) {
+    try { sa = JSON.parse(raw); } catch (e) {
+      console.error(`[ledger-compaction] SA JSON unparseable: ${e.message}; continuing on Azure Key Vault.`);
+      sa = null;
+    }
   }
 
   const targets = ONLY.length ? ONLY.filter((a) => AGENTS[a]) : Object.keys(AGENTS);

@@ -17,6 +17,7 @@
 //   node m365-mail.mjs attachments <mailbox> <messageId> <dir> # download a message's attachments
 //   node m365-mail.mjs export <mailbox> <messageId> <dir>      # full email (headers+body html) + attachments, ready for the pdf skill
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import crypto from "node:crypto"; import os from "node:os"; import { execFileSync } from "node:child_process";
 
 // Creds: prefer the LEAST-PRIVILEGE read-only mail app (graph-mail-ro-*, innd.com tenant 9acb23d0;
@@ -26,11 +27,11 @@ import crypto from "node:crypto"; import os from "node:os"; import { execFileSyn
 const _P="otchealth-shared-prod"; const _b=(x)=>Buffer.from(x).toString("base64url");
 function _loadSA(){ if(process.env.GCP_CLAUDE_DRIVER_SA_JSON){try{return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);}catch{}} for(const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`,"/agent/.gcp_claude_driver_sa.json"]){try{if(existsSync(p))return JSON.parse(readFileSync(p,"utf8"));}catch{}} return null; }
 async function _gcp(){ const sa=_loadSA(); if(!sa) return null; const n=Math.floor(Date.now()/1000); const c={iss:sa.client_email,scope:"https://www.googleapis.com/auth/cloud-platform",aud:"https://oauth2.googleapis.com/token",iat:n,exp:n+3500}; const i=`${_b(JSON.stringify({alg:"RS256",typ:"JWT"}))}.${_b(JSON.stringify(c))}`; const s=crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key); const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:`${i}.${Buffer.from(s).toString("base64url")}`})}); return (await r.json()).access_token; }
-async function _sm(t,id){ const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${_P}/secrets/${id}/versions/latest:access`,{headers:{Authorization:`Bearer ${t}`}}); if(r.status!==200) return null; const j=await r.json(); return j.payload?Buffer.from(j.payload.data,"base64").toString("utf8").trim():null; }
+async function _sm(t,id){ const _kv = await kvSecret(id); if (_kv != null) return _kv; const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${_P}/secrets/${id}/versions/latest:access`,{headers:{Authorization:`Bearer ${t}`}}); if(r.status!==200) return null; const j=await r.json(); return j.payload?Buffer.from(j.payload.data,"base64").toString("utf8").trim():null; }
 let T,CID,SEC;
 async function resolveCreds(){
   T=process.env.GRAPH_MAIL_TENANT_ID; CID=process.env.GRAPH_MAIL_CLIENT_ID; SEC=process.env.GRAPH_MAIL_CLIENT_SECRET;
-  if(!CID||!SEC||!T){ const g=await _gcp(); if(g){ T=T||await _sm(g,"graph-mail-ro-tenant-id")||await _sm(g,"graph-mail-tenant-id"); CID=CID||await _sm(g,"graph-mail-ro-client-id")||await _sm(g,"graph-mail-client-id"); SEC=SEC||await _sm(g,"graph-mail-ro-client-secret")||await _sm(g,"graph-mail-client-secret"); } }
+  if(!CID||!SEC||!T){ const g=await _gcp(); T=T||await _sm(g,"graph-mail-ro-tenant-id")||await _sm(g,"graph-mail-tenant-id"); CID=CID||await _sm(g,"graph-mail-ro-client-id")||await _sm(g,"graph-mail-client-id"); SEC=SEC||await _sm(g,"graph-mail-ro-client-secret")||await _sm(g,"graph-mail-client-secret"); }
   if(!T||!CID||!SEC){ console.error("Missing Graph mail creds (env or SM graph-mail-ro-*/graph-mail-*)."); process.exit(2); }
 }
 

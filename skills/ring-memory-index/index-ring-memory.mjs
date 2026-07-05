@@ -113,7 +113,7 @@ export const RINGS = [
 // there's no GCP SA available, gtoken() resolves to null and sm() just skips the GCP fallback.
 function saRaw() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; }
+  try { try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; } } catch { return null; }
 }
 function saJwt(scope) {
   const raw = saRaw();

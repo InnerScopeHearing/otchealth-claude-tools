@@ -43,6 +43,7 @@
 //                                       <INCOMING>/Version Reports/ (the per-batch close).
 //   dataroom-init [parent]             scaffold an audit data room (per-company + _Duplicates)
 import crypto from "node:crypto";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { basename } from "node:path";
 
@@ -65,8 +66,8 @@ async function smToken() {
   if (!r.ok) throw new Error("SM auth " + r.status);
   return (await r.json()).access_token;
 }
-async function smRead(t, id) { const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
-async function smWrite(t, id, v) { const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); let r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); } if (!r.ok) throw new Error("SM write " + r.status); }
+async function smRead(t, id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
+async function smWrite(t, id, v) { const _ok = await kvSecretSet(id, v); if (_ok) return true; const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); let r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); } if (!r.ok) throw new Error("SM write " + r.status); }
 
 async function accessToken(user) {
   const smt = await smToken();
