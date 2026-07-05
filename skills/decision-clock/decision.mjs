@@ -51,6 +51,37 @@ export const SEVERE_OVERDUE_MULTIPLE = 3;
 
 export const TERMINAL_POLICIES = new Set(["block", "escalate", "proceed"]);
 
+// ── C4-TIER-GATING (2026-07-05) ──────────────────────────────────────────────────────────────
+// "Tier gating so only genuine judgment reaches Matt (vigilance collapses into rubber-stamping
+// far below queue saturation)." Before this, sweep --dispatch nudged an item's owner immediately
+// for EVERY overdue/near-due row regardless of stakes — for owner=matt that means a routine
+// stab-p2 backlog item pings him exactly as loudly as a securities/PHI-adjacent gate, which is
+// the vigilance-collapse risk this item exists to prevent.
+//
+// Tier 1 = genuinely needs Matt's judgment NOW (matt-gate). Tier 2 = normal operational item,
+// batched into the daily digest (see digest-section.mjs) rather than pinged live. Tier 3 = low-
+// stakes backlog, visible via `list`/`metrics` on demand, never pushed at anyone.
+// NOTE: found while wiring this up live — the 4 real items currently owned by matt (the wave-4
+// policy decisions C1/C3/C5/B4) are tagged category="stab-p0"/"stab-p1" (inherited from the
+// stability-roadmap's wave categorization), not literally "matt-gate", even though they are
+// genuinely his to decide. P0/P1 SEVERITY is itself a tier-1 signal independent of category
+// naming — only P2 (genuinely low-stakes backlog) and routine ops categories are tier-2/3. This
+// was verified against live data before shipping: with this mapping, none of Matt's 4 current
+// real items are wrongly suppressed from the direct-nudge path.
+export const TIER_BY_CATEGORY = {
+  "matt-gate": 1,
+  "security-finding": 1,
+  "stab-p0": 1,
+  "stab-p1": 1,
+  "rotate-secret": 2,
+  review: 2,
+  "stab-p2": 3,
+  default: 2,
+};
+export function tierOf(category) {
+  return TIER_BY_CATEGORY[category] ?? TIER_BY_CATEGORY.default;
+}
+
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -106,13 +137,26 @@ export function classifyRow(row, now, opts = {}) {
  *                 (auto-resolving items don't also need a "please look at this" nudge).
  * Rows with terminal !== true behave exactly as before (no behavior change for non-terminal rows).
  */
-export function batchNudges(rowsWithClassification) {
+export function batchNudges(rowsWithClassification, opts = {}) {
+  // C4-TIER-GATING: owners in `tier1OnlyOwners` (default: just "matt") only get an immediate,
+  // live nudge for Tier-1 items. Their Tier 2/3 items are silently excluded HERE (never dropped
+  // from the system — they remain fully visible via `list`/`metrics` and the daily digest's
+  // batched section) so routine backlog can never crowd out a genuine matt-gate signal in the
+  // one channel that pages a human directly. Other owners are unaffected (opt back out by
+  // passing `tier1OnlyOwners: []`).
+  const tier1OnlyOwners = new Set(opts.tier1OnlyOwners ?? ["matt"]);
   const byOwner = {};
   const blockingByOwner = {};
   for (const r of rowsWithClassification) {
     const isNudgeWorthy = r._class.status === "overdue" || r._class.status === "near-due";
     if (r._class.terminal && r.terminal_policy === "proceed") continue; // auto-closed by the caller, not nudged
     if (!isNudgeWorthy) continue;
+    // A terminal_policy=block row ALWAYS bypasses the tier gate — it's already proven itself
+    // severely overdue AND unacknowledged (see classifyRow), which is precisely the class of thing
+    // C2's "never silently miss a blocking item" guarantee exists for. Tier-gating a block row would
+    // reintroduce the exact silent-miss failure mode this whole mechanism was built to prevent.
+    const isBlocking = r._class.terminal && r.terminal_policy === "block";
+    if (tier1OnlyOwners.has(r.owner) && tierOf(r.category) !== 1 && !isBlocking) continue; // batched into the digest instead, not pinged live
     (byOwner[r.owner] = byOwner[r.owner] || []).push(r);
     if (r._class.terminal && r.terminal_policy === "block") (blockingByOwner[r.owner] = blockingByOwner[r.owner] || []).push(r);
   }
