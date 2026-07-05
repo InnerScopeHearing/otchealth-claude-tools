@@ -106,22 +106,35 @@ export const RINGS = [
   },
 ];
 
+// GCP Secret Manager is retired (billing off, 2026-07). Key Vault (kvSecret) is the fleet secret
+// store now and is tried FIRST for every id in sm(). The GCP path below is a legacy fallback only —
+// it must never throw or block the Key Vault path when GCP creds are absent (fresh containers have
+// neither GCP_CLAUDE_DRIVER_SA_JSON nor the old ~/.gcp_claude_driver_sa.json file). Fail-open: if
+// there's no GCP SA available, gtoken() resolves to null and sm() just skips the GCP fallback.
 function saRaw() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8");
+  try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; }
 }
 function saJwt(scope) {
-  const sa = JSON.parse(saRaw());
+  const raw = saRaw();
+  if (!raw) return null;
+  const sa = JSON.parse(raw);
   const now = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
   return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
 }
 async function gtoken() {
-  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` });
-  return (await r.json()).access_token;
+  const jwt = saJwt("https://www.googleapis.com/auth/cloud-platform");
+  if (!jwt) return null; // no GCP SA available (expected post-migration) — Key Vault covers all secrets
+  try {
+    const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}` });
+    const j = await r.json();
+    return j.access_token || null;
+  } catch { return null; }
 }
 async function sm(id, tok) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
+  if (!tok) return null; // no GCP fallback available; Key Vault is authoritative post-migration
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + tok } });
   if (!r.ok) return null;
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
