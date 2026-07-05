@@ -1,0 +1,40 @@
+{
+  "_comment": "Declarative manifest of Azure resources this fleet's infra code ASSUMES exist. Consumed by setup/resource-reconcile.mjs. Populated by grepping actual references in setup/heartbeat-registry.json, setup/deploy-gate-check.mjs, and skills/decision-clock/cosmos-client.mjs -- every name below is something live code already calls by that exact name, not an invented target. If you add a new job/vault/registry/identity/storage-account reference anywhere in this repo, add it here too, or resource-reconcile.mjs cannot catch it going absent.",
+  "subscriptionId": "55c84f6b-ef90-4259-a58b-50835cc4cab4",
+  "resources": [
+    { "name": "ring-memory-index-daily",  "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json", "note": "THE incident resource -- provision-ring-memory-job.yml is workflow_dispatch-only; if nobody clicks Run this job silently does not exist. This is exactly the failure mode A6-RESOURCE-CI exists to catch." },
+    { "name": "memory-librarian",         "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "daily-digest",             "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "brain-reindex",            "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "librarian-finance",        "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "librarian-commerce",       "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "librarian-legal-company",  "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "librarian-legal-personal", "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "deep-finance",             "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "deep-legal-company",       "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "deep-legal-personal",      "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "innd-stock-daily",         "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "signal-radar",             "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "decision-clock",           "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "docintel-ocr-sweep",       "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+    { "name": "os-healthz-monitor",       "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+    { "name": "os-anomaly-watch",         "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+    { "name": "os-morning-brief",         "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+    { "name": "os-reflective-memory",     "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+    { "name": "sentinel-os-eval",         "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+    { "name": "token-keeper",             "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+    { "name": "xero-health",              "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+    { "name": "xero-run",                 "type": "containerAppJob", "resourceGroup": "rg-otchealth-apps-prod",  "source": "setup/heartbeat-registry.json" },
+
+    { "name": "kv-otc-55c84f6bef", "type": "keyVault", "resourceGroup": "rg-otchealth-shared-prod", "source": "setup/deploy-gate-check.mjs (DEFAULT_VAULT_NAME / DEFAULT_VAULT_RESOURCE_GROUP)", "note": "every job's runtime secrets (Cosmos, storage, Xero, OpenAI, etc.) resolve from this vault via skills/kb-memory/azure-secret.mjs. If it goes missing, effectively every job breaks." },
+    { "name": "otchealthacr",       "type": "containerRegistry", "resourceGroup": "otchealth-automation-rg", "source": "setup/deploy-gate-check.mjs (DEFAULT_ACR_NAME), setup/drift-recon.mjs (DEFAULT_REGISTRY)" },
+    { "name": "id-otc-jobs-kv",     "type": "userAssignedIdentity", "resourceGroup": "otchealth-automation-rg", "source": "setup/deploy-gate-check.mjs (DEFAULT_IDENTITY_NAME)", "note": "grants jobs Key Vault Secrets User + AcrPull; jobs authenticate at runtime via this identity (see skills/kb-memory/azure-secret.mjs identityToken() path)." },
+
+    { "name": "otchealthcommons",    "type": "storageAccount", "resourceGroup": null, "source": "skills/kb-memory/mem.mjs, setup/heartbeat.mjs", "note": "fleet commons blob store (heartbeat beats, company-journal, shared memory). Resource group not referenced anywhere in this repo's ARM calls (only data-plane blob URLs are used) -- REVIEWER: fill in resourceGroup once confirmed, or resource-reconcile.mjs will do a subscription-wide resource search instead of an RG-scoped GET for this entry." },
+    { "name": "otchealthcfodata",    "type": "storageAccount", "resourceGroup": null, "source": "skills/kb-memory/mem.mjs (cfo ring)", "note": "resourceGroup unconfirmed, same caveat as otchealthcommons." },
+    { "name": "otchealthlegalstore", "type": "storageAccount", "resourceGroup": null, "source": "skills/kb-memory/mem.mjs (clo / clo-personal / exec rings)", "note": "resourceGroup unconfirmed, same caveat as otchealthcommons." },
+    { "name": "otchealthcommerce",   "type": "storageAccount", "resourceGroup": null, "source": "setup/fetch-secrets-azure.mjs (azure-commerce-storage-account comment)", "note": "resourceGroup unconfirmed, same caveat as otchealthcommons." },
+
+    { "name": "cosmos-otc-agentstate-55c84", "type": "cosmosAccount", "resourceGroup": null, "source": "skills/decision-clock/cosmos-client.mjs, skills/decision-clock/SKILL.md", "note": "shared agent-state Cosmos account (db 'agent-state', container 'decisions_pending' among others) used by decision-clock and the gateway. resourceGroup not referenced in this repo -- REVIEWER: fill in once confirmed." }
+  ]
+}
