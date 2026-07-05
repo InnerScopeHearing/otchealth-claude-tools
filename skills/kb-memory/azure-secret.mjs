@@ -1,9 +1,21 @@
-// azure-secret.mjs — fetch a secret from Azure Key Vault via an Entra service principal
-// (client_credentials). This is the fleet secret store after the GCP Secret Manager retirement
-// (billing off, 2026-07). Returns the secret value (string) or null; NEVER throws (fail-open).
+// azure-secret.mjs — fetch a secret from Azure Key Vault. This is the fleet secret store after the
+// GCP Secret Manager retirement (billing off, 2026-07). Returns the secret value (string) or null;
+// NEVER throws (fail-open).
 //
-// Env (populated by session-start.sh / the Claude Cloud environment):
-//   AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID   (required)
+// TWO auth paths, tried in order (2026-07-05, A3-KV-REFERENCES / A9-MANAGED-IDENTITY groundwork):
+//   1. MANAGED IDENTITY (preferred, no stored secret at all): if the container has IDENTITY_ENDPOINT
+//      + IDENTITY_HEADER env vars (Azure Container Apps injects these automatically whenever a
+//      user/system-assigned identity is attached — see
+//      https://learn.microsoft.com/en-us/azure/container-apps/managed-identity#rest-endpoint-reference),
+//      mint a Key Vault token from that sidecar endpoint. This eliminates the "one shared SP
+//      client_secret baked into every job spec" bootstrap problem entirely: the identity's own
+//      grant on the vault (Key Vault Secrets User RBAC role) IS the credential; nothing to leak,
+//      nothing to rotate, nothing circular (unlike trying to store the SP's own secret IN the vault
+//      it authenticates to, which is impossible by construction).
+//   2. SP client_credentials (legacy fallback): AZURE_SP_CLIENT_ID/SECRET/TENANT_ID, still needed on
+//      any job not yet migrated to managed identity. Migrate a job by: attach a user-assigned
+//      identity, grant it Key Vault Secrets User on the vault, remove AZURE_SP_CLIENT_SECRET from
+//      the job spec — no code change needed, this file picks the identity path automatically.
 //   AZURE_KEYVAULT_NAME   vault name (default kv-otc-55c84f6bef)
 //
 // Key Vault secret NAMES are a 1:1 mirror of the old GCP Secret Manager ids, so callers pass the
@@ -11,14 +23,33 @@
 
 let _tok = null;
 let _exp = 0;
+let _authMode = null; // "identity" | "sp" | null — set on first successful mint, for diagnostics only
 
-async function vaultToken() {
+/** Container Apps managed-identity token, via the platform-injected sidecar endpoint. Returns null
+ *  (never throws) if the container has no identity attached (IDENTITY_ENDPOINT unset) or the call
+ *  fails for any reason — callers fall through to the SP path. */
+async function identityToken() {
+  const endpoint = process.env.IDENTITY_ENDPOINT;
+  const header = process.env.IDENTITY_HEADER;
+  if (!endpoint || !header) return null;
+  try {
+    const clientIdQS = process.env.AZURE_UAMI_CLIENT_ID ? `&client_id=${encodeURIComponent(process.env.AZURE_UAMI_CLIENT_ID)}` : "";
+    const r = await fetch(`${endpoint}?resource=${encodeURIComponent("https://vault.azure.net")}&api-version=2019-08-01${clientIdQS}`, {
+      headers: { "x-identity-header": header },
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.access_token || null;
+  } catch {
+    return null;
+  }
+}
+
+async function spToken() {
   const tenant = process.env.AZURE_SP_TENANT_ID;
   const cid = process.env.AZURE_SP_CLIENT_ID;
   const csec = process.env.AZURE_SP_CLIENT_SECRET;
   if (!tenant || !cid || !csec) return null;
-  const now = Date.now();
-  if (_tok && _exp - now > 60_000) return _tok; // reuse a still-valid token across calls in this process
   try {
     const r = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
       method: "POST",
@@ -26,14 +57,26 @@ async function vaultToken() {
       body: new URLSearchParams({ grant_type: "client_credentials", client_id: cid, client_secret: csec, scope: "https://vault.azure.net/.default" }),
     });
     const j = await r.json();
-    if (!j.access_token) return null;
-    _tok = j.access_token;
-    _exp = now + (Number(j.expires_in) || 3600) * 1000;
-    return _tok;
+    return j.access_token || null;
   } catch {
     return null;
   }
 }
+
+async function vaultToken() {
+  const now = Date.now();
+  if (_tok && _exp - now > 60_000) return _tok; // reuse a still-valid token across calls in this process
+  let tok = await identityToken();
+  let mode = "identity";
+  if (!tok) { tok = await spToken(); mode = "sp"; }
+  if (!tok) return null;
+  _tok = tok; _authMode = mode;
+  _exp = now + 3600_000; // conservative fixed TTL; both paths' real tokens outlive this, and re-minting early is cheap and safe
+  return _tok;
+}
+
+/** For diagnostics/logging only — which path actually authenticated last (or null if never minted). */
+export function authMode() { return _authMode; }
 
 /** Write/overwrite a secret in Key Vault (SP needs "Key Vault Secrets Officer"). Returns true on
  *  success, false otherwise. Never throws. This is the Azure replacement for the retired GCP
