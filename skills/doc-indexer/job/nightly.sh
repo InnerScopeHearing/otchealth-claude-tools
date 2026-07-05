@@ -23,4 +23,9 @@ echo "[nightly] refreshing the company-brain memory index (memory-exec)"
 # entries (lessons, decisions, focus-group/shark catalog) into memory-exec. Resumable + cheap
 # when nothing is new. The dedicated brain-reindex job runs this every 6h; this is the nightly belt.
 node "$ROOT/skills/kb-memory/semantic.mjs" reindex || echo "[nightly] memory reindex non-fatal: $?"
-echo "[nightly] done: $DATE digest indexed + cloud-searchable + brain memory refreshed"
+# ── Fleet watcher (P0 stability): dead-man's-switch check + image-drift, staged to commons so the
+# daily digest / COO surfaces silent job failures + mutable-tag drift. Fail-open; never blocks.
+echo "[nightly] fleet watcher: heartbeat check + image-drift -> commons"
+{ echo "# Fleet Watch $DATE (UTC)"; echo; echo "## Heartbeat (silence = failure)"; node "$ROOT/setup/heartbeat.mjs" check 2>&1; echo; echo "## Image drift (mutable tag = risk)"; node "$ROOT/setup/image-drift.mjs" 2>&1; } > "/tmp/fleet-watch-$DATE.md" 2>&1 || true
+node "$ROOT/skills/cfo-store/store.mjs" --azure --account otchealthcommons --key-secret azure-commons-storage-key --container company-journal put "/tmp/fleet-watch-$DATE.md" "_FLEET-WATCH/$DATE.md" || echo "[nightly] fleet-watch stage non-fatal: $?"
+echo "[nightly] done: $DATE digest indexed + cloud-searchable + brain memory refreshed + fleet-watch staged"
