@@ -1,5 +1,6 @@
 {
   "ring-memory-index-daily":  { "interval_min": 1440, "owner": "cto", "rg": "otchealth-automation-rg" },
+  "memory-librarian":         { "interval_min": 1560, "owner": "cto", "rg": "otchealth-automation-rg" },
   "daily-digest":             { "interval_min": 1560, "owner": "coo", "rg": "otchealth-automation-rg" },
   "brain-reindex":            { "interval_min": 480,  "owner": "cto", "rg": "otchealth-automation-rg" },
   "librarian-finance":        { "interval_min": 480,  "owner": "cfo", "rg": "otchealth-automation-rg" },
