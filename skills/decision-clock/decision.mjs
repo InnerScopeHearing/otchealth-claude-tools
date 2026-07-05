@@ -15,10 +15,12 @@
 // Verbs:
 //   node decision.mjs open --category <rotate-secret|matt-gate|review|...> --owner <cto|cfo|clo|...>
 //                          --expected-by <ISO date> [--evidence <link>] [--innd] [--text "<description>"]
+//                          [--terminal-policy <block|escalate|proceed>]
 //   node decision.mjs ack <id> --owner <a>
 //   node decision.mjs close <id> --owner <a>
 //   node decision.mjs list [--owner <a>] [--overdue] [--json]
 //   node decision.mjs sweep [--dispatch] [--json]     # daily Tier-1 job entrypoint
+//   node decision.mjs metrics [--json]                # queue-depth / oldest-wait monitoring entrypoint
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -39,6 +41,16 @@ export const DEFAULT_SLA_DAYS = {
   default: 7,
 };
 
+// A row is "severely" overdue (genuinely stale, not just past due) once daysOverdue exceeds this
+// multiple of `nearDueDays` (the same near-due window classify() already uses as its overdue/near-due
+// scale). 2 was "due soon", so 3x that window past the due date (i.e. ~3x the near-due horizon) is a
+// deliberately generous bar: an item has to be OVERDUE for a while, not just tip over the line, before
+// the terminal_policy mechanism engages. Kept as a multiple of nearDueDays (not a fixed day count) so it
+// stays consistent if nearDueDays is ever tuned, matching the order-of-magnitude classify() already uses.
+export const SEVERE_OVERDUE_MULTIPLE = 3;
+
+export const TERMINAL_POLICIES = new Set(["block", "escalate", "proceed"]);
+
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -51,40 +63,76 @@ function daysBetween(a, b) { return (Date.parse(b) - Date.parse(a)) / 86400000; 
 // ============================ PURE CORE (hermetically tested) ============================
 /**
  * Classify one decision row against `now`. Pure, no I/O -> unit-testable without Cosmos.
- * Returns { status: "open"|"overdue"|"near-due"|"ack"|"closed", daysOverdue, daysUntilDue }.
+ * Returns { status: "open"|"overdue"|"near-due"|"ack"|"closed", daysOverdue, daysUntilDue, terminal }.
  * `near-due` = open, not yet overdue, but due within `nearDueDays` (default 2). This is the signal the
  * sweep uses to nudge BEFORE something actually blows its SLA, not just after.
+ *
+ * `terminal` flags whether this row has blown through its terminal-timeout threshold: true when the row
+ * is still "open" (status never moved past open to "ack" — i.e. no human has acknowledged it) AND
+ * daysOverdue exceeds `nearDueDays * severeMultiple` AND the row carries a `terminal_policy`. Rows with
+ * no `terminal_policy` set always get terminal: false (today's existing behavior is preserved exactly;
+ * the whole mechanism is opt-in per row, no forced default). `ack`'d rows never go terminal — an
+ * acknowledgment IS the human action the timeout exists to force, so once seen, the timeout no longer
+ * applies even if the item later drifts further overdue before being closed.
  */
 export function classifyRow(row, now, opts = {}) {
   const nearDueDays = opts.nearDueDays ?? 2;
-  if (row.status === "closed") return { status: "closed", daysOverdue: 0, daysUntilDue: null };
+  const severeMultiple = opts.severeMultiple ?? SEVERE_OVERDUE_MULTIPLE;
+  if (row.status === "closed") return { status: "closed", daysOverdue: 0, daysUntilDue: null, terminal: false };
   const dueMs = Date.parse(row.expected_by);
   const diffDays = daysBetween(now, row.expected_by); // positive = still time left; negative = overdue
-  if (!Number.isFinite(dueMs)) return { status: row.status === "ack" ? "ack" : "open", daysOverdue: 0, daysUntilDue: null };
-  if (diffDays < 0) return { status: "overdue", daysOverdue: Math.abs(diffDays), daysUntilDue: 0 };
-  if (diffDays <= nearDueDays) return { status: "near-due", daysOverdue: 0, daysUntilDue: diffDays };
-  return { status: row.status === "ack" ? "ack" : "open", daysOverdue: 0, daysUntilDue: diffDays };
+  if (!Number.isFinite(dueMs)) return { status: row.status === "ack" ? "ack" : "open", daysOverdue: 0, daysUntilDue: null, terminal: false };
+  if (diffDays < 0) {
+    const daysOverdue = Math.abs(diffDays);
+    const severeThreshold = nearDueDays * severeMultiple;
+    const terminal = row.status === "open" && !!row.terminal_policy && TERMINAL_POLICIES.has(row.terminal_policy) && daysOverdue > severeThreshold;
+    return { status: "overdue", daysOverdue, daysUntilDue: 0, terminal };
+  }
+  if (diffDays <= nearDueDays) return { status: "near-due", daysOverdue: 0, daysUntilDue: diffDays, terminal: false };
+  return { status: row.status === "ack" ? "ack" : "open", daysOverdue: 0, daysUntilDue: diffDays, terminal: false };
 }
 
 /**
  * Group a set of rows (already classified) into ONE batched nudge line per owner, so the sweep never
  * fires one dispatch per overdue item ("never one-per-item spam" per the spec). Only overdue + near-due
  * rows are nudge-worthy. Pure; the caller does the actual fleet-dispatch send.
+ *
+ * Terminal-timeout rows (r._class.terminal === true) are folded into the SAME per-owner batched message
+ * (never a separate dispatch) but their line and the row itself are tagged per the row's terminal_policy:
+ *   - "escalate": line is prefixed CRITICAL/ESCALATED, still just a nudge.
+ *   - "block":    line is prefixed BLOCKING, and the row is surfaced on the returned nudge object via
+ *                 `blocking: [...]` so the caller (sweep) can flag it and set a non-zero exit code.
+ *   - "proceed":  NOT included as a nudge line here — the caller auto-closes it and logs that separately
+ *                 (auto-resolving items don't also need a "please look at this" nudge).
+ * Rows with terminal !== true behave exactly as before (no behavior change for non-terminal rows).
  */
 export function batchNudges(rowsWithClassification) {
   const byOwner = {};
+  const blockingByOwner = {};
   for (const r of rowsWithClassification) {
-    if (r._class.status !== "overdue" && r._class.status !== "near-due") continue;
+    const isNudgeWorthy = r._class.status === "overdue" || r._class.status === "near-due";
+    if (r._class.terminal && r.terminal_policy === "proceed") continue; // auto-closed by the caller, not nudged
+    if (!isNudgeWorthy) continue;
     (byOwner[r.owner] = byOwner[r.owner] || []).push(r);
+    if (r._class.terminal && r.terminal_policy === "block") (blockingByOwner[r.owner] = blockingByOwner[r.owner] || []).push(r);
   }
   const out = [];
   for (const [owner, rows] of Object.entries(byOwner)) {
     rows.sort((a, b) => (b._class.daysOverdue || 0) - (a._class.daysOverdue || 0));
     const lines = rows.map((r) => {
       const tag = r._class.status === "overdue" ? `OVERDUE ${Math.round(r._class.daysOverdue)}d` : `due in ${Math.ceil(r._class.daysUntilDue)}d`;
-      return `  [${r.category}] ${r.id} (${tag}): ${r.text || "(no description)"}${r.evidence_link ? ` -> ${r.evidence_link}` : ""}`;
+      const prefix = r._class.terminal && r.terminal_policy === "block" ? "BLOCKING — exceeded terminal timeout with no human action — "
+        : r._class.terminal && r.terminal_policy === "escalate" ? "CRITICAL/ESCALATED (terminal timeout) — "
+        : "";
+      return `  ${prefix}[${r.category}] ${r.id} (${tag}): ${r.text || "(no description)"}${r.evidence_link ? ` -> ${r.evidence_link}` : ""}`;
     });
-    out.push({ owner, count: rows.length, message: `Decision Clock: ${rows.length} item(s) need attention:\n${lines.join("\n")}` });
+    const blocking = blockingByOwner[owner] || [];
+    out.push({
+      owner,
+      count: rows.length,
+      blocking: blocking.map((r) => r.id),
+      message: `Decision Clock: ${rows.length} item(s) need attention:\n${lines.join("\n")}`,
+    });
   }
   return out;
 }
@@ -97,7 +145,12 @@ async function open() {
   const evidence = val("--evidence", "");
   const text = val("--text", positional.join(" ") || "");
   const innd = FLAG("--innd");
-  if (!category || !owner) { console.error('usage: decision.mjs open --category <cat> --owner <a> [--expected-by <ISO>] [--evidence <link>] [--text "..."] [--innd]'); process.exit(2); }
+  const terminalPolicyRaw = val("--terminal-policy", "");
+  if (!category || !owner) { console.error('usage: decision.mjs open --category <cat> --owner <a> [--expected-by <ISO>] [--evidence <link>] [--text "..."] [--innd] [--terminal-policy <block|escalate|proceed>]'); process.exit(2); }
+  if (terminalPolicyRaw && !TERMINAL_POLICIES.has(terminalPolicyRaw)) {
+    console.error(`usage: --terminal-policy must be one of: ${[...TERMINAL_POLICIES].join(", ")}`);
+    process.exit(2);
+  }
   const now = new Date().toISOString();
   const slaDays = DEFAULT_SLA_DAYS[category] ?? DEFAULT_SLA_DAYS.default;
   const expected_by = expectedByRaw ? new Date(expectedByRaw).toISOString() : isoAddDays(now, slaDays);
@@ -111,6 +164,10 @@ async function open() {
     status: "open",
     evidence_link: evidence || undefined,
     innd: innd || undefined, // MNPI/INND-gate flag: CFO/CLO-visible only in list filters
+    // Terminal-timeout policy for "what if no human ever looks": optional, no forced default. Rows
+    // created before this field existed (or that simply never set it) have terminal_policy === undefined
+    // and the sweep's terminal-timeout mechanism never applies to them — same as today, unconditionally.
+    terminal_policy: terminalPolicyRaw || undefined,
   };
   if (!(await cosmos.isConfigured())) {
     console.log(`[decision-clock] DRY-RUN (Cosmos not reachable in this sandbox): would open ${JSON.stringify(doc)}`);
@@ -159,6 +216,17 @@ async function list() {
 // Daily Tier-1 sweep entrypoint (see job/decision-clock-sweep.sh): compute overdue/near-due rows and
 // fleet-dispatch ONE batched per-owner nudge (reuses fleet-medic's cooldown discipline via a small
 // per-owner cooldown state blob so re-running the sweep does not re-spam within the window).
+//
+// Terminal-timeout handling ("what if no human ever looks"): rows classified `_class.terminal === true`
+// (severely overdue, still "open"/never ack'd, and carrying a terminal_policy) are handled per policy:
+//   - "escalate": folded into the normal batched nudge, but the line is CRITICAL/ESCALATED-tagged
+//     (see batchNudges). No separate I/O needed here.
+//   - "proceed":  auto-closed right here (real write to Cosmos) with a clearly logged note; NOT included
+//     in the nudge (batchNudges already excludes proceed rows from nudge lines).
+//   - "block":    NOT auto-resolved. Surfaced prominently in the dispatched message (batchNudges tags it
+//     BLOCKING) AND makes the sweep process exit non-zero, so a CI/CD or heartbeat check consuming this
+//     exit code can treat "a gate blew its terminal timeout with zero human action" as a real failure.
+// Rows with no terminal_policy (`_class.terminal` is always false for them) are completely unaffected.
 async function sweep() {
   if (!(await cosmos.isConfigured())) { console.log("[decision-clock] sweep: Cosmos not reachable in this sandbox (dry-run; nothing to sweep)."); return; }
   const rows = await queryAllRows();
@@ -166,20 +234,86 @@ async function sweep() {
   const withClass = rows.map((r) => ({ ...r, _class: classifyRow(r, now) }));
   const nudges = batchNudges(withClass);
   const dispatching = FLAG("--dispatch");
-  if (FLAG("--json")) { console.log(JSON.stringify({ ts: now, nudges }, null, 2)); }
-  else {
+  const toAutoClose = withClass.filter((r) => r._class.terminal && r.terminal_policy === "proceed");
+  const anyBlocking = nudges.some((n) => n.blocking && n.blocking.length > 0);
+
+  if (FLAG("--json")) {
+    console.log(JSON.stringify({ ts: now, nudges, autoClosed: toAutoClose.map((r) => r.id), blocking: anyBlocking }, null, 2));
+  } else {
     console.log(`# decision-clock sweep ${now}  (${nudges.length} owner(s) with attention items; ${dispatching ? "DISPATCH" : "dry-run"})`);
-    for (const n of nudges) console.log(`- ${n.owner}: ${n.count} item(s)`);
+    for (const n of nudges) console.log(`- ${n.owner}: ${n.count} item(s)${n.blocking && n.blocking.length ? ` [BLOCKING: ${n.blocking.join(", ")}]` : ""}`);
+    if (toAutoClose.length) console.log(`- terminal_policy=proceed auto-close candidates: ${toAutoClose.map((r) => r.id).join(", ")}`);
   }
-  if (!dispatching) return;
-  for (const n of nudges) {
-    // INND-gated rows are CFO/CLO-visible only: never dispatch an innd item's detail to a non-CFO/CLO
-    // owner lane (an owner should only ever be its own row's owner, but this is a defense-in-depth check).
+
+  // proceed: auto-close by policy timeout, unconditionally (not gated on --dispatch — this is a state
+  // change driven by the timeout itself, distinct from "should we also ping someone about other rows").
+  for (const r of toAutoClose) {
+    const note = `auto-resolved by terminal_policy=proceed after exceeding its terminal timeout (daysOverdue=${Math.round(r._class.daysOverdue)}, never ack'd)`;
+    console.log(`[decision-clock] AUTO-CLOSE ${r.id} owner=${r.owner}: ${note}`);
     try {
-      const dispatch = join(HERE, "..", "fleet-dispatch", "dispatch.mjs");
-      execFileSync("node", [dispatch, "send", n.owner, n.message, "--from", "decision-clock"], { stdio: "inherit" });
-    } catch (e) { console.error(`  dispatch to ${n.owner} failed: ${e.message}`); }
+      const found = await cosmos.readDoc(CONTAINER, r.owner, r.id);
+      if (!found) { console.error(`  auto-close ${r.id} failed: not found under owner=${r.owner}`); continue; }
+      const doc = { ...found.doc, status: "closed", closed_at: now, closed_by: "decision-clock-sweep-terminal-policy", closed_note: note };
+      await cosmos.replaceDoc(CONTAINER, r.owner, r.id, doc, found.etag);
+    } catch (e) { console.error(`  auto-close ${r.id} failed: ${e.message}`); }
   }
+
+  if (dispatching) {
+    for (const n of nudges) {
+      // INND-gated rows are CFO/CLO-visible only: never dispatch an innd item's detail to a non-CFO/CLO
+      // owner lane (an owner should only ever be its own row's owner, but this is a defense-in-depth check).
+      try {
+        const dispatch = join(HERE, "..", "fleet-dispatch", "dispatch.mjs");
+        execFileSync("node", [dispatch, "send", n.owner, n.message, "--from", "decision-clock"], { stdio: "inherit" });
+      } catch (e) { console.error(`  dispatch to ${n.owner} failed: ${e.message}`); }
+    }
+  }
+
+  if (anyBlocking) {
+    console.error("[decision-clock] sweep: one or more items are BLOCKING — exceeded terminal timeout with no human action.");
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Queue-depth / oldest-wait monitoring entrypoint: aggregate across ALL open + near-due + overdue rows
+ * (never filtered to one owner — the point is a fleet-wide health signal). Pure aggregation over already
+ * classified rows so the shape is easy to eyeball/test; the Cosmos fetch is the only I/O.
+ */
+export function computeMetrics(rowsWithClassification) {
+  const active = rowsWithClassification.filter((r) => r._class.status === "open" || r._class.status === "near-due" || r._class.status === "overdue" || r._class.status === "ack");
+  const byStatus = { open: 0, "near-due": 0, overdue: 0, ack: 0 };
+  const byOwner = {};
+  let oldestWaitDays = 0;
+  let blockingCount = 0;
+  for (const r of active) {
+    byStatus[r._class.status] = (byStatus[r._class.status] || 0) + 1;
+    const ownerBucket = (byOwner[r.owner] = byOwner[r.owner] || { total: 0, open: 0, "near-due": 0, overdue: 0, ack: 0 });
+    ownerBucket.total += 1;
+    ownerBucket[r._class.status] = (ownerBucket[r._class.status] || 0) + 1;
+    if (r._class.daysOverdue > oldestWaitDays) oldestWaitDays = r._class.daysOverdue;
+    if (r._class.terminal && r.terminal_policy === "block") blockingCount += 1;
+  }
+  return { totalOpen: active.length, byStatus, byOwner, oldestWaitDays, blockingCount };
+}
+
+async function metrics() {
+  if (!(await cosmos.isConfigured())) { console.log("[decision-clock] metrics: Cosmos not reachable in this sandbox (dry-run; nothing to compute)."); return; }
+  const rows = await queryAllRows();
+  const now = new Date().toISOString();
+  const withClass = rows.map((r) => ({ ...r, _class: classifyRow(r, now) }));
+  const m = computeMetrics(withClass);
+  if (FLAG("--json")) { console.log(JSON.stringify({ ts: now, ...m }, null, 2)); return; }
+  console.log(`# decision-clock metrics ${now}`);
+  console.log(`total open (open+near-due+overdue+ack): ${m.totalOpen}`);
+  console.log(`  by status: open=${m.byStatus.open} near-due=${m.byStatus["near-due"]} overdue=${m.byStatus.overdue} ack=${m.byStatus.ack}`);
+  console.log(`oldest wait time (max daysOverdue): ${Math.round(m.oldestWaitDays)}d`);
+  if (m.blockingCount) console.log(`BLOCKING items (terminal_policy=block, timeout exceeded, no human action): ${m.blockingCount}`);
+  console.log("by owner:");
+  for (const [owner, b] of Object.entries(m.byOwner)) {
+    console.log(`  ${owner}: total=${b.total} open=${b.open} near-due=${b["near-due"]} overdue=${b.overdue} ack=${b.ack}`);
+  }
+  if (m.blockingCount) process.exitCode = 1;
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
@@ -191,7 +325,8 @@ if (isMain) {
       else if (cmd === "close") await setStatus("closed");
       else if (cmd === "list") await list();
       else if (cmd === "sweep") await sweep();
-      else { console.error('usage: decision.mjs open --category <c> --owner <a> [--expected-by <ISO>] [--evidence <link>] | ack <id> --owner <a> | close <id> --owner <a> | list [--owner <a>] [--overdue] [--json] | sweep [--dispatch] [--json]'); process.exit(2); }
+      else if (cmd === "metrics") await metrics();
+      else { console.error('usage: decision.mjs open --category <c> --owner <a> [--expected-by <ISO>] [--evidence <link>] [--terminal-policy <block|escalate|proceed>] | ack <id> --owner <a> | close <id> --owner <a> | list [--owner <a>] [--overdue] [--json] | sweep [--dispatch] [--json] | metrics [--json]'); process.exit(2); }
     } catch (e) { console.error("decision-clock ERROR: " + e.message); process.exit(1); }
   })();
 }
