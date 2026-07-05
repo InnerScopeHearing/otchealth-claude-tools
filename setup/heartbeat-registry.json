@@ -17,7 +17,7 @@
   "os-reflective-memory":     { "interval_min": 1440, "owner": "cto", "rg": "rg-otchealth-apps-prod" },
   "sentinel-os-eval":         { "interval_min": 1440, "owner": "cto", "rg": "rg-otchealth-apps-prod" },
   "token-keeper":             { "interval_min": 1440, "owner": "cto", "rg": "rg-otchealth-apps-prod" },
-  "xero-health":              { "interval_min": 60,   "owner": "cfo", "rg": "rg-otchealth-apps-prod" },
+  "xero-health":              { "interval_min": 60,   "owner": "cfo", "rg": "rg-otchealth-apps-prod", "note": "monitor exits 1 by DESIGN when a Xero org connection is unhealthy (not a bug/migration issue) — see decision-clock category=matt-gate owner=cfo (Xero refresh-token re-consent, opened 2026-07-05)" },
   "xero-run":                 { "interval_min": 1440, "owner": "cfo", "rg": "rg-otchealth-apps-prod" },
   "signal-radar":             { "interval_min": 60,   "owner": "cto", "rg": "otchealth-automation-rg" },
   "decision-clock":           { "interval_min": 1560, "owner": "coo", "rg": "otchealth-automation-rg" }
