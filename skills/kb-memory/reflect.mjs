@@ -96,7 +96,9 @@ function recentMemory() { try { return execFileSync("node", [join(HERE, "mem.mjs
 
 async function main() {
   if (!AGENT) { console.error("no KB_AGENT; skipping reflect"); process.exit(0); }
-  if (!_SA) { console.error("no claude-driver SA; skipping reflect"); process.exit(0); }
+  // FIX 2026-07-05 (FAILLOUD-ADOPT): same vestigial GCP-only gate found in kb-journal.mjs — fired
+  // unconditionally once GCP retired, silently disabling the memory distiller fleet-wide. Removed;
+  // sm() below is Azure-first and already fails loud with a named message if truly unavailable.
   let stdin = {}; try { stdin = JSON.parse(readFileSync(0, "utf8") || "{}"); } catch {}
   const path = val("--transcript", "") || stdin.transcript_path;
   if (!path) { console.error("no transcript_path; skipping"); process.exit(0); }

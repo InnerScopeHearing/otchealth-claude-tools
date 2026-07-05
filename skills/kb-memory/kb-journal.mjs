@@ -59,7 +59,12 @@ function parseTurns(path) {
 
 async function main() {
   if (!AGENT) { console.error("[kb-journal] no agent; skipping"); process.exit(0); }
-  if (!SA) { console.error("[kb-journal] no claude-driver SA; skipping (journal off)"); process.exit(0); }
+  // FIX 2026-07-05 (FAILLOUD-ADOPT): `if (!SA) exit(0)` fired UNCONDITIONALLY once GCP retired (SA
+  // is the dead GCP fallback, always null now) — before ever reaching the Azure-first sm() calls
+  // below. Session journaling (this hook, fired on every Stop/PreCompact) has been silently a no-op
+  // fleet-wide since GCP went dark, which is also why memory-librarian found nothing to catalog.
+  // Kept fail-open (exit 0, never block a session) per this file's own design, but now actually
+  // TRIES Azure first and only skips if genuinely unavailable — logged loudly, not silently.
   let stdin = {}; try { stdin = JSON.parse(readFileSync(0, "utf8") || "{}"); } catch {}
   const path = val("--transcript", "") || stdin.transcript_path;
   if (!path || !existsSync(path)) { console.error("[kb-journal] no transcript; skipping"); process.exit(0); }
@@ -72,7 +77,7 @@ async function main() {
   const fresh = turns.filter((t) => t.idx > lastIdx);
   if (!fresh.length) { process.exit(0); }
   ACCT = await sm("azure-commons-storage-account"); AKEY = await sm("azure-commons-storage-key");
-  if (!ACCT || !AKEY) { console.error("[kb-journal] no commons storage creds; skipping"); process.exit(0); }
+  if (!ACCT || !AKEY) { console.error("[kb-journal] FATAL: no commons storage creds available (Azure Key Vault AND GCP both failed) — journal entry LOST for this turn. Check AZURE_SP_* env."); process.exit(0); }
   SAS = buildSas();
   // bucket the new turns by their UTC date and append each date's lines to that day's session journal
   const byDate = {};

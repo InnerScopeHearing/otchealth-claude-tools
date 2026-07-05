@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { kvSecret } from "./azure-secret.mjs";
+import { kvSecret, requireSecrets } from "./azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -87,9 +87,13 @@ async function processAgentDay(agent, date) {
 }
 
 async function main() {
-  if (!SA) { console.error("[memory-librarian] no SA; abort"); process.exit(0); }
+  // FIX 2026-07-05 (FAILLOUD-ADOPT): this job was silently exiting 0 (fake success) on EVERY run
+  // since GCP retirement — `if (!SA) exit(0)` fired unconditionally (SA is the dead GCP fallback,
+  // always null now) before ever reaching the Azure-first sm() calls below. It's a scheduled daily
+  // cron (0 8 * * *); the heartbeat/execution history showed it "Succeeded" while doing nothing.
+  // requireSecrets() now fails LOUD (exit 78, names the missing key) instead of a fake-success no-op.
+  await requireSecrets(["azure-commons-storage-account", "azure-commons-storage-key"]);
   ACCT = await sm("azure-commons-storage-account"); AKEY = await sm("azure-commons-storage-key");
-  if (!ACCT || !AKEY) { console.error("[memory-librarian] no commons creds; abort"); process.exit(0); }
   SAS = buildSas(); await initModel();
   // discover agents from the journal tree
   const names = await list("_JOURNAL/");

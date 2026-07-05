@@ -141,7 +141,10 @@ async function send() {
 
 async function check() {
   const agent = (val("--agent", "") || process.env.KB_AGENT || "").toLowerCase();
-  if (!agent || !_saRaw) process.exit(0);
+  // FIX 2026-07-05 (FAILLOUD-ADOPT): `!_saRaw` fires unconditionally now GCP is dead; commonsInit()
+  // below is already Azure-first and fails loud on its own with a clear message, so this vestigial
+  // gate only served to silently hide every inbox check (agents never saw "you have mail").
+  if (!agent) process.exit(0);
   try {
     await commonsInit();
     const rows = fromNd(await cGet(inboxKey(agent)));
@@ -156,7 +159,8 @@ async function check() {
 }
 
 async function list() {
-  if (!_saRaw) { console.error("no SA"); process.exit(0); }
+  // FIX 2026-07-05 (FAILLOUD-ADOPT): same vestigial GCP-only gate as check() above; commonsInit()
+  // is Azure-first and fails loud on its own.
   await commonsInit();
   const only = (val("--agent", "") || "").toLowerCase();
   const blobs = (await cList()).filter((b) => b.endsWith(".jsonl"));
