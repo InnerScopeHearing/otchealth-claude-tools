@@ -702,6 +702,50 @@ async function runPack() {
     } catch (e) { console.log("## TEAM - (feed unavailable: " + e.message + ")"); }
     return;
   }
-  console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | inbound | reconcile | render | whoami | use | list-agents\n  cross-lane: add --on <lane> to write on ANOTHER agent's ledger (append-only, attributed by=<--agent>); the owner sees it via 'inbound' / 'tail' on wake and 'reconcile' to ack.");
+  // ── P0-DURABLE-HANDOFF (2026-07-05): a TYPED current-state doc, distinct from the append-only
+  // JSONL ledger above. The ledger is a HISTORY (every remember/decision/status ever written); this
+  // is the single, always-current snapshot a fresh cold instance should read FIRST: goal, standing
+  // constraints, open decisions awaiting resolution, and a one-line last_state. Sessions are meant to
+  // be disposable workers against this doc — the doc, not the chat, is what survives a compaction or
+  // a brand-new instance picking up the work. One blob per agent: _STATE/<agent>.json (same
+  // account/container as the ledger, via url()). ETag optimistic concurrency (read-modify-write,
+  // retry on 412) so two concurrent `state --set` calls never lose one's update to the other's.
+  if (cmd === "state") {
+    const STATE_KEY = `_STATE/${AGENT}.json`;
+    const DEFAULT_STATE = { agent: AGENT, goal: "", constraints: [], open_decisions: [], last_state: "", updated_at: null, updated_by: null, version: 0 };
+    const splitList = (s) => (s || "").split(";").map((x) => x.trim()).filter(Boolean);
+    if (argv.includes("--get") || argv[1] === "get" || (!argv.includes("--set") && argv[1] !== "set")) {
+      const { text } = await getTextMeta(STATE_KEY);
+      const st = text ? JSON.parse(text) : DEFAULT_STATE;
+      if (argv.includes("--json")) { console.log(JSON.stringify(st, null, 2)); return; }
+      console.log(`# ${AGENT} — current state (typed handoff, v${st.version})`);
+      console.log(`GOAL: ${st.goal || "(not set)"}`);
+      console.log(`CONSTRAINTS:${st.constraints.length ? "" : " (none)"}`); for (const c of st.constraints) console.log(`  - ${c}`);
+      console.log(`OPEN DECISIONS:${st.open_decisions.length ? "" : " (none)"}`); for (const d of st.open_decisions) console.log(`  - ${d}`);
+      console.log(`LAST STATE: ${st.last_state || "(not set)"}`);
+      console.log(`updated ${st.updated_at || "never"} by ${st.updated_by || "-"}`);
+      return;
+    }
+    // --set: read-modify-write with ETag retry. Each field is REPLACED if passed, left as-is otherwise
+    // (so `state --set --last "..."` alone doesn't clobber goal/constraints).
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { text, etag } = await getTextMeta(STATE_KEY);
+      const st = text ? JSON.parse(text) : { ...DEFAULT_STATE };
+      if (takeVal("--goal", null) !== null) st.goal = takeVal("--goal", "");
+      if (takeVal("--constraints", null) !== null) st.constraints = splitList(takeVal("--constraints", ""));
+      if (takeVal("--decisions", null) !== null) st.open_decisions = splitList(takeVal("--decisions", ""));
+      if (takeVal("--last", null) !== null) st.last_state = takeVal("--last", "");
+      st.updated_at = new Date().toISOString();
+      st.updated_by = process.env.KB_ENGINE || "cli";
+      st.version = (st.version || 0) + 1;
+      const res = await putTextCond(STATE_KEY, JSON.stringify(st, null, 2), "application/json", etag);
+      if (isConflict(res.status)) continue; // someone else wrote between our read and write; retry
+      if (!res.ok) throw new Error(`state --set failed: ${res.status}`);
+      console.log(`[kb-memory] state -> ${AGENT} v${st.version} (goal="${st.goal.slice(0, 60)}")`);
+      return;
+    }
+    throw new Error("state --set: too many concurrent-write conflicts, give up after 4 attempts");
+  }
+  console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | inbound | reconcile | render | whoami | use | list-agents | state\n  cross-lane: add --on <lane> to write on ANOTHER agent's ledger (append-only, attributed by=<--agent>); the owner sees it via 'inbound' / 'tail' on wake and 'reconcile' to ack.\n  state --get [--json] | state --set [--goal \"...\"] [--constraints \"a;b;c\"] [--decisions \"a;b;c\"] [--last \"...\"]  (typed current-state handoff doc)");
   process.exit(2);
 })().catch((e) => { console.error("ERROR: " + e.message); process.exit(1); });
