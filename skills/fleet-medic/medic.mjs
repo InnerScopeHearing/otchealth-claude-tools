@@ -165,6 +165,8 @@ async function cDel(name) { const r = await fetch(cUrl(name), { method: "DELETE"
 
 // ================================== commands ==================================
 async function scan() {
+  // lint-silent-success: ok (checks BOTH Azure SP and dead GCP path before exiting 0 — genuinely no
+  // creds available anywhere, not the vestigial-single-path bug this lint hunts for)
   if (!_saRaw && !process.env.AZURE_SP_CLIENT_ID) { console.error("fleet-medic: no credentials (neither Azure SP nor GCP SA); cannot scan."); process.exit(0); }
   const health = readHealth();
   const beacons = await readBeacons();
