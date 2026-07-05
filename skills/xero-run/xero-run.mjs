@@ -8,9 +8,9 @@
  * remaining is lower than our counter expects, it trusts the header. Never exceeds 1,000 -> never forces
  * a paid-tier upgrade.
  *
- * QUEUE-DRIVEN + RESUMABLE: each org has a work queue (JSONL in GCS) of self-describing ops; a checkpoint
- * cursor records the next line. Daily cron drains up to the budget, checkpoints, exits; resumes next day
- * until the queue is done. Per-org state is independent (parallel-safe).
+ * QUEUE-DRIVEN + RESUMABLE: each org has a work queue (JSONL in Azure Blob) of self-describing ops; a
+ * checkpoint cursor records the next line. Daily cron drains up to the budget, checkpoints, exits;
+ * resumes next day until the queue is done. Per-org state is independent (parallel-safe).
  *
  * CONFIG-GATED (safety): processes ONLY orgs the CFO has explicitly enabled in xero-run/config.json.
  * Default = nothing enabled -> the job is INERT until the CFO flips an org on AFTER the pilot+reconcile.
@@ -20,16 +20,18 @@
  *   {"op":"post","endpoint":"ManualJournals","body":{"ManualJournals":[...<=50...]}}
  *   {"op":"attach","objectType":"Invoices","objectId":"<xeroGuid>","gcs":"path/in/cfo-store","filename":"x.pdf","contentType":"application/pdf"}
  *
- * STATE/IO (GCS bucket otchealth-cfo-source-docs): xero-run/queue/<org>.jsonl (CFO-produced),
- *   xero-run/state/<org>.json {date,used,cursor,lastRemaining}, xero-run/results/<org>-<date>.jsonl.
- * CREDS (GCP SM via claude-driver SA): xero-client-id/secret, xero-refresh-token-<org>.
+ * STATE/IO (Azure Blob azure-cfo-storage-account / container cfo-source-docs — migrated 2026-07-05,
+ *   was GCS bucket otchealth-cfo-source-docs, same path layout): xero-run/queue/<org>.jsonl
+ *   (CFO-produced), xero-run/state/<org>.json {date,used,cursor,lastRemaining},
+ *   xero-run/results/<org>-<date>.jsonl.
+ * CREDS (Azure Key Vault, GCP SM fallback): xero-client-id/secret, xero-refresh-token-<org>.
  * ENV: DRYRUN=1 (no Xero writes; simulate budget/cursor), DAILY_CAP, RESERVE, ORGS (override config).
  * PHI/MNPI: INND/personal data internal-only.
  */
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
 import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import { getAccessContext } from "../xero/xero-token.mjs";
-const SM_PROJECT="otchealth-shared-prod"; const BUCKET="otchealth-cfo-source-docs";
+const SM_PROJECT="otchealth-shared-prod"; const CONTAINER="cfo-source-docs"; // was GCS bucket otchealth-cfo-source-docs; migrated to Azure Blob 2026-07-05
 const XTOKEN="https://identity.xero.com/connect/token"; const XCONN="https://api.xero.com/connections"; const XAPI="https://api.xero.com/api.xro/2.0";
 const DAILY_CAP=parseInt(process.env.DAILY_CAP||"900",10); const RESERVE=parseInt(process.env.RESERVE||"100",10);
 const DRY=process.env.DRYRUN==="1"; const ORGS_ALL=["otchealth","innd","hearingassist","personal"];
@@ -39,9 +41,15 @@ function loadSA(){ if(process.env.GCP_CLAUDE_DRIVER_SA_JSON){try{return JSON.par
 let _GT=null; async function gcp(){ if(_GT)return _GT; const sa=loadSA(); if(!sa||!sa.private_key)return null; const now=Math.floor(Date.now()/1000); const cl={iss:sa.client_email,scope:"https://www.googleapis.com/auth/cloud-platform",aud:"https://oauth2.googleapis.com/token",iat:now,exp:now+3500}; const i=`${b64url(JSON.stringify({alg:"RS256",typ:"JWT"}))}.${b64url(JSON.stringify(cl))}`; const s=crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key); const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({grant_type:"urn:ietf:params:oauth:grant-type:jwt-bearer",assertion:`${i}.${Buffer.from(s).toString("base64url")}`})}); return _GT=(await r.json()).access_token; }
 async function sm(id){ const _kv = await kvSecret(id); if (_kv != null) return _kv; const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`,{headers:{Authorization:`Bearer ${await gcp()}`}}); if(r.status!==200)return null; const j=await r.json(); return j.payload?Buffer.from(j.payload.data,"base64").toString("utf8").trim():null; }
 async function smWrite(id,val){ const _ok = await kvSecretSet(id, val); if (_ok) return true; const t=await gcp(); let e=await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}`,{headers:{Authorization:`Bearer ${t}`}}); if(e.status===404){await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets?secretId=${id}`,{method:"POST",headers:{Authorization:`Bearer ${t}`,"Content-Type":"application/json"},body:JSON.stringify({replication:{automatic:{}}})});} const r=await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`,{method:"POST",headers:{Authorization:`Bearer ${t}`,"Content-Type":"application/json"},body:JSON.stringify({payload:{data:Buffer.from(val,"utf8").toString("base64")}})}); return r.status; }
-// ---- GCS helpers ----
-async function gcsGet(name){ const r=await fetch(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${encodeURIComponent(name)}?alt=media`,{headers:{Authorization:`Bearer ${await gcp()}`}}); if(r.status===404)return null; if(!r.ok)throw new Error("gcsGet "+r.status); return Buffer.from(await r.arrayBuffer()); }
-async function gcsPut(name,buf,ct){ const r=await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}`,{method:"POST",headers:{Authorization:`Bearer ${await gcp()}`,"Content-Type":ct||"application/octet-stream"},body:buf}); if(!r.ok)throw new Error("gcsPut "+r.status); }
+// ---- Blob helpers (Azure Blob, account azure-cfo-storage-account / container cfo-source-docs — the
+// same account+container ledger-compaction's cfo entry uses; 1:1 path parity with the old GCS bucket
+// otchealth-cfo-source-docs, so xero-run/queue/<org>.jsonl etc. resolve identically post-migration) ----
+let _bAcct, _bKey;
+async function blobCreds(){ if(_bAcct&&_bKey) return; _bAcct=await sm("azure-cfo-storage-account"); _bKey=await sm("azure-cfo-storage-key"); if(!_bAcct||!_bKey) throw new Error("missing azure-cfo-storage-account/key"); }
+function buildBlobSas(acct,key){ const sv="2021-12-02",sp="rwlc",ss="b",srt="co"; const st=new Date(Date.now()-3e5).toISOString().slice(0,19)+"Z"; const se=new Date(Date.now()+36e5).toISOString().slice(0,19)+"Z"; const sts=[acct,sp,ss,srt,st,se,"","https",sv,""].join("\n")+"\n"; const sig=crypto.createHmac("sha256",Buffer.from(key,"base64")).update(sts,"utf8").digest("base64"); return new URLSearchParams({sv,ss,srt,sp,st,se,spr:"https",sig}).toString(); }
+const encPath=(name)=>name.split("/").map(encodeURIComponent).join("/");
+async function gcsGet(name){ await blobCreds(); const sas=buildBlobSas(_bAcct,_bKey); const r=await fetch(`https://${_bAcct}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${sas}`); if(r.status===404)return null; if(!r.ok)throw new Error("blobGet "+r.status); return Buffer.from(await r.arrayBuffer()); }
+async function gcsPut(name,buf,ct){ await blobCreds(); const sas=buildBlobSas(_bAcct,_bKey); const r=await fetch(`https://${_bAcct}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${sas}`,{method:"PUT",headers:{"x-ms-blob-type":"BlockBlob","Content-Type":ct||"application/octet-stream"},body:buf}); if(!r.ok)throw new Error("blobPut "+r.status); }
 async function gcsAppend(name,line){ const prev=await gcsGet(name); const buf=Buffer.concat([prev||Buffer.alloc(0),Buffer.from(line+"\n","utf8")]); await gcsPut(name,buf,"application/x-ndjson"); }
 // ---- Xero auth (per-org refresh + re-persist; client creds self-hydrated) ----
 // Token + tenant via the shared broker (access-token cache + cross-process refresh lock + disconnect
