@@ -123,10 +123,11 @@ async function azureDownload(){
   return Buffer.from(await r.arrayBuffer());
 }
 
-// ---- storage backend switch (STORAGE_BACKEND = gcs | azure; default gcs) ----
-// The Azure Container Apps Job sets STORAGE_BACKEND=azure (+ MIRROR_GCS=1 to keep the
-// legacy GCS copy fresh during the transition).
-const BACKEND = (process.env.STORAGE_BACKEND || "gcs").toLowerCase();
+// ---- storage backend switch (STORAGE_BACKEND = gcs | azure; default azure — GCS/GCP retired) ----
+// The job already sets STORAGE_BACKEND=azure explicitly (+ MIRROR_GCS=1, itself inert unless
+// GCP_CLAUDE_DRIVER_SA_JSON is also present, which it isn't on this job); the default is hardened
+// here too so a future bare invocation or job re-provision that forgets the env var stays on Azure.
+const BACKEND = (process.env.STORAGE_BACKEND || "azure").toLowerCase();
 function storageURI(){ return BACKEND==="azure" ? `azure://${AZ_ACCT}/${AZ_CONTAINER}/${AZ_BLOB}` : `gs://${BUCKET}/${OBJECT}`; }
 async function storageDownload(){
   if(BACKEND==="azure"){ if(!azureConfigured()){ console.error("STORAGE_BACKEND=azure but AZURE_STORAGE_* unset"); process.exit(2);} return await azureDownload(); }

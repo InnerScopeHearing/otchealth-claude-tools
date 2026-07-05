@@ -58,7 +58,7 @@ const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.CU_MAX_MINUTES || 
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help"; // require an explicit command; no-arg must NOT silently start a run
-const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "gcs").toLowerCase();
+const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "azure").toLowerCase(); // default azure (GCS/GCP retired); every current job invocation already passes --azure explicitly
 const REINDEX = flags.has("--reindex");
 const NO_OCR = flags.has("--no-ocr");
 const NO_TEXT = flags.has("--no-text");
