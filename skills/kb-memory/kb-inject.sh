@@ -114,12 +114,24 @@ case "$MODE" in
     printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/kb-journal.mjs" capture --agent "$AG" >/dev/null 2>&1 || true
     # Tier-2: distill to the ledger, THROTTLED to ~15 min (reflect spawns an LLM call; Stop fires every
     # turn). PreCompact + the nightly memory-librarian backstop anything a throttled window skips.
+    #
+    # CBP-1a (tool-call-count OR-trigger, 2026-07-05): fire ALSO if ~100 tool calls have happened
+    # since the last checkpoint, using the SAME shared counter file as periodic-check) above (one
+    # "activity since last checkpoint" count, reset by whichever hook fires first — avoids two
+    # independent counters drifting out of sync). This is a PROXY FOR ACTIVITY VOLUME, NOT a token
+    # count — Claude Code's JSONL token-usage fields are known-unreliable (see
+    # anthropics/claude-code#25941, #27361, #28197), so we count tool calls, not tokens.
     THROT="$HOME/.claude/kb-journal/.last-reflect"
+    CALLCOUNT="$HOME/.claude/kb-journal/.checkpoint-call-count"
+    mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null
     NOW="$(date +%s 2>/dev/null || echo 0)"; LAST="$(stat -c %Y "$THROT" 2>/dev/null || echo 0)"
-    if [ "$((NOW - LAST))" -gt 900 ]; then
-      mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null
+    ELAPSED_DUE=0; [ "$((NOW - LAST))" -gt 900 ] && ELAPSED_DUE=1
+    CALLS="$(cat "$CALLCOUNT" 2>/dev/null || echo 0)"
+    case "$CALLS" in *[!0-9]*|"") CALLS=0 ;; esac
+    CALLS_DUE=0; [ "$CALLS" -ge 100 ] && CALLS_DUE=1
+    if [ "$ELAPSED_DUE" -eq 1 ] || [ "$CALLS_DUE" -eq 1 ]; then
       export KB_SYNC_SOURCE=stop
-      printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit >/dev/null 2>&1 && touch "$THROT" || true
+      printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/reflect.mjs" --commit >/dev/null 2>&1 && { touch "$THROT"; printf '%s' 0 > "$CALLCOUNT" 2>/dev/null; } || true
     fi
     # Emit the memory-health beacon to PostHog (self-throttled ~10min, BACKGROUNDED so it never blocks
     # the Stop hook). This is the real-time signal source for the operator dashboard + the auto-medic.
@@ -130,14 +142,33 @@ case "$MODE" in
     # tool-call sequences that never hit Stop naturally. Cheap stat/date elapsed-time check, NO
     # network/LLM call on the common (not-yet-due) path — only fires the capture+reflect sequence
     # once per 900s (15 min), matching the existing Stop-hook throttle. Fail-open throughout.
+    #
+    # CBP-1a (tool-call-count OR-trigger, 2026-07-05): this fires on EVERY PostToolUse event, so we
+    # also maintain a cheap call-count file as a SECOND, independent trigger alongside the 900s
+    # elapsed-time backstop above. ~100 tool calls since last checkpoint is a PROXY FOR ACTIVITY
+    # VOLUME, NOT a token count — Claude Code's JSONL token-usage fields are known-unreliable (see
+    # anthropics/claude-code#25941, #27361, #28197: usage fields off by 4x-170x in some cases), so we
+    # count tool calls instead of attempting to derive real token usage. The counter file is SHARED
+    # with the stop) case below (one "activity since last checkpoint" counter, reset by whichever
+    # trigger fires first) so the two hooks can never drift out of sync with independent counts.
     [ -z "$AG" ] && exit 0
     PTHROT="$HOME/.claude/kb-journal/.last-periodic-checkpoint"
+    CALLCOUNT="$HOME/.claude/kb-journal/.checkpoint-call-count"
+    mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null
+    # Cheap read-increment-write, no parsing of hook payload needed. Fail-open: a bad/missing counter
+    # file is just treated as zero, never blocks the hook.
+    CALLS="$(cat "$CALLCOUNT" 2>/dev/null || echo 0)"
+    case "$CALLS" in *[!0-9]*|"") CALLS=0 ;; esac
+    CALLS=$((CALLS + 1))
+    printf '%s' "$CALLS" > "$CALLCOUNT" 2>/dev/null || true
     NOW="$(date +%s 2>/dev/null || echo 0)"; LAST="$(stat -c %Y "$PTHROT" 2>/dev/null || echo 0)"
-    if [ "$((NOW - LAST))" -lt 900 ] && [ -f "$PTHROT" ]; then
+    ELAPSED_DUE=0; [ -f "$PTHROT" ] || ELAPSED_DUE=1; [ "$((NOW - LAST))" -ge 900 ] && ELAPSED_DUE=1
+    CALLS_DUE=0; [ "$CALLS" -ge 100 ] && CALLS_DUE=1
+    if [ "$ELAPSED_DUE" -eq 0 ] && [ "$CALLS_DUE" -eq 0 ]; then
       exit 0
     fi
-    mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null
     touch "$PTHROT" 2>/dev/null
+    printf '%s' 0 > "$CALLCOUNT" 2>/dev/null || true
     INPUT="$(timeout 5 cat 2>/dev/null)"
     export KB_SYNC_SOURCE=periodic
     printf '%s' "$INPUT" | KB_AGENT="$AG" node "$DIR/kb-journal.mjs" capture --agent "$AG" >/dev/null 2>&1 || true
