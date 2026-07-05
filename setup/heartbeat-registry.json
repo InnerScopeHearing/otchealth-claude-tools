@@ -21,5 +21,7 @@
   "xero-health":              { "interval_min": 60,   "owner": "cfo", "rg": "rg-otchealth-apps-prod", "note": "monitor exits 1 by DESIGN when a Xero org connection is unhealthy (not a bug/migration issue) — see decision-clock category=matt-gate owner=cfo (Xero refresh-token re-consent, opened 2026-07-05)" },
   "xero-run":                 { "interval_min": 1440, "owner": "cfo", "rg": "rg-otchealth-apps-prod" },
   "signal-radar":             { "interval_min": 60,   "owner": "cto", "rg": "otchealth-automation-rg" },
-  "decision-clock":           { "interval_min": 1560, "owner": "coo", "rg": "otchealth-automation-rg" }
+  "decision-clock":           { "interval_min": 1560, "owner": "coo", "rg": "otchealth-automation-rg" },
+  "gateway-canary":           { "interval_min": 60,   "owner": "cto", "note": "A11-CANARY: setup/gateway-canary.mjs — /health + /health/deep + real tools/call end-to-end through the live gateway. No ARM job backing (invoke via with-heartbeat.sh from wherever it's scheduled), so no 'rg' -> tracked via self-beat only." },
+  "drift-sentinel":           { "interval_min": 1440, "owner": "cto", "note": "A12-DRIFT-SENTINEL: setup/drift-sentinel.mjs — combined heartbeat.mjs+image-drift.mjs+drift-recon.mjs verdict. No ARM job backing, self-beat only." }
 }
