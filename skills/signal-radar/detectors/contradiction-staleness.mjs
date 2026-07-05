@@ -34,6 +34,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { makeSignal, isMnpiSubject, isPhiExcluded } from "../schema.mjs";
 import { TIERS, chatBody } from "../../../setup/model-routing.mjs";
+import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 export const NAME = "contradiction-staleness";
 export const OWNER = "cto"; // memory-integrity is an infra/portfolio concern; MNPI rows still hard-route to cfo centrally.
@@ -250,7 +251,7 @@ function resolveSaRaw() {
   try { const p = `${homedir()}/.gcp_claude_driver_sa.json`; if (existsSync(p)) return readFileSync(p, "utf8"); } catch {}
   return null;
 }
-async function smGet(id) {
+async function smGet(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const raw = resolveSaRaw();
   if (!raw) return null;
   const sa = JSON.parse(raw);

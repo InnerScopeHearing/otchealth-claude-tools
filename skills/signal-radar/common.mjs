@@ -6,6 +6,7 @@
 import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 export const SM = "otchealth-shared-prod";
 
@@ -34,7 +35,7 @@ async function gcpToken() {
 
 const _smCache = new Map();
 /** Fetch a secret's latest version. Returns null (not an error) on 404/missing so callers can feature-detect. */
-export async function sm(id) {
+export async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   if (_smCache.has(id)) return _smCache.get(id);
   const t = await gcpToken();
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } });

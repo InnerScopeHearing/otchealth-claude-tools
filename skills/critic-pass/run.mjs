@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { buildCriticPrompt, parseCriticVerdict, shouldRevise } from "./critic.mjs";
 import { chatBody, resolveTier } from "../../setup/model-routing.mjs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const SM = "otchealth-shared-prod";
 const CRITIC_SYSTEM =
@@ -37,7 +38,7 @@ function saJwt(saRaw) {
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
   return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
 }
-async function sm(id, saRaw) {
+async function sm(id, saRaw) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const t = (await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt(saRaw))}` })).json()).access_token;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } });
   if (!r.ok) return null;

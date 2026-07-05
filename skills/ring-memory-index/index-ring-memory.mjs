@@ -23,6 +23,7 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const SM = "otchealth-shared-prod";
 const API = "2023-11-01";
@@ -120,7 +121,7 @@ async function gtoken() {
   const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` });
   return (await r.json()).access_token;
 }
-async function sm(id, tok) {
+async function sm(id, tok) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + tok } });
   if (!r.ok) return null;
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();

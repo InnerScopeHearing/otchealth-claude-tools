@@ -27,6 +27,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compactLedger, parseLedgerText, renderMarkdown } from "../compact.mjs";
+import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -68,7 +69,7 @@ async function gtoken(sa) {
   });
   return (CACHED_TOKEN = (await r.json()).access_token);
 }
-async function sm(sa, id) {
+async function sm(sa, id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const t = await gtoken(sa);
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } });
   if (!r.ok) return null;
