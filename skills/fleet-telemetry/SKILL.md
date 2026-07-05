@@ -16,7 +16,20 @@ measurable system: cost, tokens, model, tool usage, errors, and duration per age
 
 `callsite_id` is the join key against `agent-evals`' `eval_result.callsite_id` (same default: the agent
 role). It is substrate for a future quality-per-dollar router that would join eval scores to real
-production model/cost by callsite; that router is NOT built here.
+production model/cost by callsite; that full router (a live PostHog query wired into dispatch) is NOT
+built here.
+
+## Model routing: `task-router.mjs`
+`classifyTask(text, hints?)` is the pure text-based model/budget classifier (opus/sonnet/haiku) that
+`compute-allocator` already calls on every fan-out dispatch. `classifyTaskWithHistory(text, hints?)`
+is a small superset that adds the ONE thing pure text can't see: this callsite's own recent track
+record. Pass `hints.priorFailureRate` (e.g. `1 - passed/total` for this `callsite_id` from an
+agent-evals scorecard or `eval-gate.mjs`'s `baseline.json`) and/or `hints.lastRunFailed` (bool); a bad
+rate or a failed last run escalates one tier above whatever `classifyTask` picked (never downgrades,
+never exceeds opus, `forceModel` still wins). No network, no PostHog query — the caller supplies the
+history as plain data, same fail-open/pure discipline `compute-allocator` uses for `recentSignals`.
+Self-test: `node skills/fleet-telemetry/task-router.mjs --test` (7 example (task, history) pairs, no
+live LLM calls). Unit tests: `tests/task-router.test.mjs`.
 
 ## Automatic
 Wired as a **Stop hook** (`.claude/settings.json`) so every agent session auto-reports on end.
