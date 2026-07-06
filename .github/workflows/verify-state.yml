@@ -60,10 +60,11 @@ jobs:
           cat "$OUT"
 
           set -e
+          BR="verify/state-${{ github.run_id }}"
           git config user.name "otchealth-fleet-bot"
           git config user.email "noreply@otchealth.app"
+          git switch -c "$BR"
           git add "$OUT"
           git commit -m "verify: post-fix container app state"
-          git pull --rebase origin main
-          git push origin HEAD:main
-          echo "PUSHED TO MAIN OK"
+          git push origin "HEAD:$BR"
+          echo "PUSHED_BRANCH=$BR"
