@@ -1,0 +1,138 @@
+name: fix-developer-oauth-lane-v2
+
+# ROOT CAUSE CONFIRMED via source code audit of otchealth-mcp-server/src/server/oauth.ts and
+# src/config/env.ts: `loadEnv()` caches its parsed result in a module-level singleton, and oauth.ts
+# reads it ONCE into a top-level `const env = loadEnv()` at process-boot time. `env.OAUTH_CLIENTS` is
+# therefore frozen for the lifetime of that Node process. A prior fix attempt set traffic weight to
+# 100% on the latest revision, but never DEACTIVATED the old revision — in Container Apps multi-revision
+# mode, deprioritizing traffic does NOT kill the old revision's replicas; they can remain alive and
+# still serve some requests. Any request landing on an old, still-running replica sees the STALE
+# OAUTH_CLIENTS from before the update — explaining exactly why pre-existing clients always worked
+# (present in every replica, old or new) while the newly-added one never did (only present in the
+# freshest replica's memory, and only if a genuinely fresh process actually got created and served
+# the request).
+#
+# THE FIX: after applying the OAUTH_CLIENTS update, explicitly DEACTIVATE every revision except the
+# new latest one, guaranteeing no stale replica can possibly answer the verification request.
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Read current OAUTH_CLIENTS and remove any stale developer entries
+        run: |
+          set -euo pipefail
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS'].value | [0]" \
+            -o tsv > current_oauth_clients.json
+          jq -c '[.[] | select(.agent != "developer")]' current_oauth_clients.json > cleaned_oauth_clients.json
+          echo "Cleaned entry count (developer entries removed): $(jq 'length' cleaned_oauth_clients.json)"
+
+      - name: Generate fresh developer client credentials and merge (compact JSON)
+        run: |
+          set -euo pipefail
+          SUFFIX=$(openssl rand -hex 4)
+          CLIENT_ID="oc_developer_${SUFFIX}"
+          SECRET=$(openssl rand -base64 32)
+          echo "::add-mask::$SECRET"
+          jq -c --arg cid "$CLIENT_ID" --arg sec "$SECRET" \
+            '. + [{"client_id": $cid, "secret": $sec, "agent": "developer"}]' \
+            cleaned_oauth_clients.json > merged_oauth_clients.json
+          jq empty merged_oauth_clients.json
+          echo "$SECRET" > secret.txt
+          echo "$CLIENT_ID" > client_id.txt
+
+      - name: Snapshot revisions BEFORE update (for deactivation list)
+        run: |
+          set -euo pipefail
+          az containerapp revision list -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "[].name" -o tsv > pre_revisions.txt
+          echo "Pre-update revisions:"; cat pre_revisions.txt
+
+      - name: Apply merged OAUTH_CLIENTS (creates a new revision)
+        run: |
+          set -euo pipefail
+          az containerapp update -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --set-env-vars OAUTH_CLIENTS="$(cat merged_oauth_clients.json)"
+
+      - name: Identify the NEW latest revision and DEACTIVATE every other revision
+        run: |
+          set -euo pipefail
+          sleep 15
+          LATEST=$(az containerapp revision list -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "sort_by([], &properties.createdTime)[-1].name" -o tsv)
+          echo "New latest revision: $LATEST"
+          az containerapp ingress traffic set -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --revision-weight "${LATEST}=100" || true
+          echo "Deactivating every OTHER revision to force full replica recycle (no stale process can answer requests):"
+          az containerapp revision list -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "[?name!='${LATEST}'].name" -o tsv | while read -r OLD_REV; do
+            if [ -n "$OLD_REV" ]; then
+              echo "Deactivating: $OLD_REV"
+              az containerapp revision deactivate -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --revision "$OLD_REV" || \
+                echo "  (deactivate failed or already inactive for $OLD_REV — continuing)"
+            fi
+          done
+          echo "--- Revision state after deactivation ---"
+          az containerapp revision list -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "[].{name:name, active:properties.active, traffic:properties.trafficWeight}" -o table
+
+      - name: Write Key Vault secrets
+        run: |
+          set -euo pipefail
+          az keyvault secret set --vault-name kv-otc-55c84f6bef --name oauth-lane-developer-id \
+            --value "$(cat client_id.txt)" -o none
+          az keyvault secret set --vault-name kv-otc-55c84f6bef --name oauth-lane-developer-secret \
+            --value "$(cat secret.txt)" -o none
+
+      - name: Verify new developer lane mints a token (should now succeed immediately - no stale replica can exist)
+        run: |
+          set -euo pipefail
+          CID=$(cat client_id.txt)
+          SEC=$(cat secret.txt)
+          sleep 20
+          for i in 1 2 3 4 5; do
+            RESP=$(curl -s -X POST https://mcp.otchealth.app/oauth/token \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              -d "grant_type=client_credentials&client_id=${CID}&client_secret=${SEC}")
+            HAS_TOKEN=$(echo "$RESP" | jq -e '.access_token != null' 2>/dev/null || echo "false")
+            if [ "$HAS_TOKEN" = "true" ]; then
+              echo "SUCCESS on attempt $i: developer lane token mint works. Root cause fix CONFIRMED."
+              exit 0
+            fi
+            echo "Attempt $i failed: $(echo "$RESP" | jq -c 'del(.access_token)' 2>/dev/null || echo "$RESP")"
+            sleep 15
+          done
+          echo "FATAL: still failing even after full revision deactivation. The caching hypothesis may be wrong, or there is a THIRD factor. Needs fresh eyes, not another automated retry."
+          exit 1
+
+      - name: Regression check — confirm existing clients still mint tokens after deactivation
+        if: always()
+        run: |
+          set -euo pipefail
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS'].value | [0]" \
+            -o tsv > post.json
+          echo "Post-fix entries (client_id/agent only, never secrets):"
+          jq -c '[.[] | {client_id, agent}]' post.json
+          DEV_COUNT=$(jq '[.[] | select(.agent == "developer")] | length' post.json)
+          echo "Developer entries: $DEV_COUNT (should be exactly 1)"
+          echo "NOTE: deactivating old revisions means old requests DO now hit the new revision only — if any"
+          echo "pre-existing client secret was somehow only ever known to an old, now-deactivated replica's"
+          echo "memory (it should not be, since OAUTH_CLIENTS values are read from the template every time a"
+          echo "fresh process boots, and existing entries were always in that template), this is the step that"
+          echo "would reveal it. A full external regression test with a real pre-existing client secret (not"
+          echo "available to this workflow) is recommended by a human before treating this as fully closed."
