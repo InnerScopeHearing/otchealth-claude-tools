@@ -5,12 +5,16 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
   fix:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: diag/secret-remove-error
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -18,48 +22,17 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Snapshot current env array before touching anything (for regression comparison)
+      - name: Attempt secret remove, capture full error to a file
         run: |
-          set -euo pipefail
-          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
-            --query "properties.template.containers[0].env" -o json > /tmp/env_before.json
-          echo "Entries before: $(jq 'length' /tmp/env_before.json)"
-
-      - name: Remove the orphaned, unresolvable graph-drive-user Key Vault secretref
-        run: |
-          set -euo pipefail
+          set +e
+          mkdir -p diagnostics
           az containerapp secret remove -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
-            --secret-names graph-drive-user
-
-      - name: Set GRAPH_DRIVE_USER as a plain literal value (it's a username, not a secret)
-        run: |
-          set -euo pipefail
-          az containerapp update -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
-            --set-env-vars "GRAPH_DRIVE_USER=matthew@innd.com"
-
-      - name: Regression check - every OTHER key must be byte-for-byte unchanged
-        run: |
-          set -euo pipefail
-          sleep 15
-          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
-            --query "properties.template.containers[0].env" -o json > /tmp/env_after.json
-          echo "Entries after: $(jq 'length' /tmp/env_after.json)"
-
-          NEW_VAL=$(jq -r '.[] | select(.name=="GRAPH_DRIVE_USER") | .value' /tmp/env_after.json)
-          if [ "$NEW_VAL" != "matthew@innd.com" ]; then
-            echo "FATAL: GRAPH_DRIVE_USER value mismatch, got: $NEW_VAL"
-            exit 1
-          fi
-          echo "GRAPH_DRIVE_USER correctly set to matthew@innd.com"
-
-          jq 'map(select(.name != "GRAPH_DRIVE_USER"))' /tmp/env_before.json > /tmp/before_others.json
-          jq 'map(select(.name != "GRAPH_DRIVE_USER"))' /tmp/env_after.json > /tmp/after_others.json
-          if ! diff -q <(jq -S . /tmp/before_others.json) <(jq -S . /tmp/after_others.json) > /dev/null; then
-            echo "FATAL REGRESSION: some other env var changed. Manual review required."
-            diff <(jq -S . /tmp/before_others.json) <(jq -S . /tmp/after_others.json) || true
-            exit 1
-          fi
-          echo "REGRESSION CHECK PASSED: every other env var byte-for-byte unchanged."
-
-          echo "--- OAUTH_CLIENTS specific check ---"
-          jq '.[] | select(.name=="OAUTH_CLIENTS")' /tmp/env_after.json
+            --secret-names graph-drive-user > diagnostics/secret-remove-error.md 2>&1
+          echo "exit code: $?" >> diagnostics/secret-remove-error.md
+          cat diagnostics/secret-remove-error.md
+          git config user.name "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+          git add diagnostics/secret-remove-error.md
+          git commit -m "chore: capture secret remove error" || true
+          git push origin HEAD:diag/secret-remove-error
+          exit 0
