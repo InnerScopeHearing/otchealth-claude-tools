@@ -38,6 +38,15 @@ jobs:
           az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
             --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS'].value | [0]" \
             -o tsv > current_oauth_clients.json
+          # Normalize: if OAUTH_CLIENTS is unset/empty/not a JSON array, treat as []
+          if [ ! -s current_oauth_clients.json ]; then
+            echo "OAUTH_CLIENTS is unset or empty — initializing as []"
+            echo '[]' > current_oauth_clients.json
+          elif ! jq -e 'type == "array"' current_oauth_clients.json > /dev/null 2>&1; then
+            ACTUAL_TYPE=$(jq -r 'type' current_oauth_clients.json 2>/dev/null || echo "invalid JSON")
+            echo "OAUTH_CLIENTS is not a JSON array (got: ${ACTUAL_TYPE}) — initializing as []"
+            echo '[]' > current_oauth_clients.json
+          fi
           jq -c '[.[] | select(.agent != "developer")]' current_oauth_clients.json > cleaned_oauth_clients.json
           echo "Cleaned entry count (developer entries removed): $(jq 'length' cleaned_oauth_clients.json)"
 
@@ -51,7 +60,14 @@ jobs:
           jq -c --arg cid "$CLIENT_ID" --arg sec "$SECRET" \
             '. + [{"client_id": $cid, "secret": $sec, "agent": "developer"}]' \
             cleaned_oauth_clients.json > merged_oauth_clients.json
-          jq empty merged_oauth_clients.json
+          # Validate merged output is a non-empty JSON array before touching production
+          MERGED_TYPE=$(jq -r 'type' merged_oauth_clients.json 2>/dev/null || echo "invalid JSON")
+          MERGED_LEN=$(jq 'length' merged_oauth_clients.json 2>/dev/null || echo "0")
+          if ! jq -e 'type == "array" and length > 0' merged_oauth_clients.json > /dev/null; then
+            echo "FATAL: merged_oauth_clients.json is not a valid non-empty array (type=${MERGED_TYPE}, length=${MERGED_LEN}) — aborting to avoid clearing OAUTH_CLIENTS"
+            exit 1
+          fi
+          echo "Merged JSON byte length: $(wc -c < merged_oauth_clients.json)"
           echo "$SECRET" > secret.txt
           echo "$CLIENT_ID" > client_id.txt
 
