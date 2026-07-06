@@ -21,22 +21,30 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Check CONNECTOR_TOOLSET env var and write findings
+      - name: Check CONNECTOR_TOOLSET env var, revision split, and image tags
         run: |
           set -euo pipefail
           mkdir -p diagnostics
-          echo "# CONNECTOR_TOOLSET diagnostic - $(date -u)" > diagnostics/connector-toolset.md
-          echo "" >> diagnostics/connector-toolset.md
-          echo '```json' >> diagnostics/connector-toolset.md
-          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
-            --query "properties.template.containers[0].env[?name=='CONNECTOR_TOOLSET']" -o json >> diagnostics/connector-toolset.md
-          echo '```' >> diagnostics/connector-toolset.md
-          echo "" >> diagnostics/connector-toolset.md
-          echo "## Full env var name list (names only, no values)" >> diagnostics/connector-toolset.md
-          echo '```' >> diagnostics/connector-toolset.md
-          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
-            --query "properties.template.containers[0].env[].name" -o tsv >> diagnostics/connector-toolset.md
-          echo '```' >> diagnostics/connector-toolset.md
+          {
+            echo "# Gateway diagnostic - $(date -u)"
+            echo ""
+            echo "## CONNECTOR_TOOLSET env var"
+            echo '```json'
+            az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+              --query "properties.template.containers[0].env[?name=='CONNECTOR_TOOLSET']" -o json
+            echo '```'
+            echo ""
+            echo "## ALL active revisions + traffic weight + image + created time"
+            echo '```json'
+            az containerapp revision list -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+              --query "[].{name:name, active:properties.active, traffic:properties.trafficWeight, createdTime:properties.createdTime, replicas:properties.replicas, image:properties.template.containers[0].image}" -o json
+            echo '```'
+            echo ""
+            echo "## Ingress traffic config (source of truth for routing split)"
+            echo '```json'
+            az containerapp ingress traffic show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod -o json
+            echo '```'
+          } > diagnostics/connector-toolset.md
           cat diagnostics/connector-toolset.md
 
       - name: Commit findings to a FIXED branch (force-push, overwritten each run)
@@ -47,6 +55,6 @@ jobs:
           BRANCH="diag-connector-toolset-latest"
           git checkout -B "$BRANCH"
           git add diagnostics/connector-toolset.md
-          git commit -m "Diagnostic: CONNECTOR_TOOLSET env var check"
+          git commit -m "Diagnostic: revision split + CONNECTOR_TOOLSET check"
           git push origin "$BRANCH" --force
           echo "Pushed to fixed branch: $BRANCH"
