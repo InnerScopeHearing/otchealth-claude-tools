@@ -1,0 +1,127 @@
+name: provision-developer-oauth-lane
+
+# One-off, manually-dispatched job to close a real gap: the Developer agent's gateway OAuth client
+# was never provisioned (LANES/DCR_LANES reference it in code, but no oc_developer_* entry exists in
+# OAUTH_CLIENTS on otchealth-mcp-gateway, and no oauth-lane-developer-id/-secret exist in Key Vault).
+# See task t_idem_69332c65 on the fleet work-ledger for full acceptance criteria.
+#
+# Reuses the SAME OIDC federated identity as provision-ring-memory-job.yml (azure/login@v2 via
+# vars.AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_SUBSCRIPTION_ID) — confirmed 2026-07-06 to resolve to the
+# azure-sp service principal (matching appId 34a7326b-5ed0-4f6c-b5b4-483772a15a69), which independently-
+# verified usage-inventory evidence (otchealth-cto PR#32, azure-migration-runbook.md) already documents
+# as holding subscription-scope Owner on 55c84f6b-ef90-4259-a58b-50835cc4cab4. No new credential needed.
+#
+# SAFETY: this workflow does a real read-current -> merge-additively -> write pattern on the shared
+# OAUTH_CLIENTS blob (every agent lane authenticates through this — a malformed write breaks ALL of
+# them, not just developer). It never hand-constructs the JSON; it always parses the live current value
+# first. It logs only client_id/agent pairs (never secret values) for a rollback reference. It verifies
+# BOTH the new developer token mint AND that a static count of pre-existing entries is unchanged.
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Read current OAUTH_CLIENTS (backup reference, redacted log)
+        id: read
+        run: |
+          set -euo pipefail
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS'].value | [0]" \
+            -o tsv > current_oauth_clients.json
+          echo "Current entry count: $(jq 'length' current_oauth_clients.json)"
+          echo "Current client_id/agent pairs (secrets never logged):"
+          jq '[.[] | {client_id, agent}]' current_oauth_clients.json
+          echo "count=$(jq 'length' current_oauth_clients.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate developer client credentials and merge additively
+        id: merge
+        run: |
+          set -euo pipefail
+          SUFFIX=$(openssl rand -hex 4)
+          CLIENT_ID="oc_developer_${SUFFIX}"
+          SECRET=$(openssl rand -base64 32)
+          jq --arg cid "$CLIENT_ID" --arg sec "$SECRET" \
+            '. + [{"client_id": $cid, "secret": $sec, "agent": "developer"}]' \
+            current_oauth_clients.json > merged_oauth_clients.json
+          NEW_COUNT=$(jq 'length' merged_oauth_clients.json)
+          OLD_COUNT=$(jq 'length' current_oauth_clients.json)
+          if [ "$NEW_COUNT" -ne "$((OLD_COUNT + 1))" ]; then
+            echo "FATAL: expected exactly one new entry, got old=$OLD_COUNT new=$NEW_COUNT — aborting, nothing applied."
+            exit 1
+          fi
+          echo "::add-mask::$SECRET"
+          echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
+          echo "$SECRET" > secret.txt
+          echo "$CLIENT_ID" > client_id.txt
+
+      - name: Apply merged OAUTH_CLIENTS to the live gateway
+        run: |
+          set -euo pipefail
+          az containerapp update -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --set-env-vars OAUTH_CLIENTS="$(cat merged_oauth_clients.json)"
+
+      - name: Write Key Vault secrets
+        run: |
+          set -euo pipefail
+          az keyvault secret set --vault-name kv-otc-55c84f6bef --name oauth-lane-developer-id \
+            --value "$(cat client_id.txt)" -o none
+          az keyvault secret set --vault-name kv-otc-55c84f6bef --name oauth-lane-developer-secret \
+            --value "$(cat secret.txt)" -o none
+          echo "Key Vault secrets written: oauth-lane-developer-id, oauth-lane-developer-secret"
+
+      - name: Verify new developer lane mints a token
+        run: |
+          set -euo pipefail
+          sleep 20
+          RESP=$(curl -s -X POST https://mcp.otchealth.app/oauth/token \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials&client_id=$(cat client_id.txt)&client_secret=$(cat secret.txt)")
+          HAS_TOKEN=$(echo "$RESP" | jq -e '.access_token != null' 2>/dev/null || echo "false")
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "FATAL: developer lane token mint failed. Response (no secrets in it): $(echo "$RESP" | jq 'del(.access_token)')"
+            exit 1
+          fi
+          echo "Developer lane token mint: SUCCESS"
+
+      - name: Regression check — confirm existing entries are untouched
+        run: |
+          set -euo pipefail
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS'].value | [0]" \
+            -o tsv > post_update.json
+          POST_COUNT=$(jq 'length' post_update.json)
+          EXPECTED=$(( $(jq 'length' current_oauth_clients.json) + 1 ))
+          if [ "$POST_COUNT" -ne "$EXPECTED" ]; then
+            echo "FATAL REGRESSION: expected $EXPECTED entries post-update, found $POST_COUNT. Manual review required immediately."
+            exit 1
+          fi
+          # Confirm every pre-existing client_id is still present (structural, not just count-based).
+          MISSING=$(jq -n --slurpfile old current_oauth_clients.json --slurpfile new post_update.json \
+            '($old[0] | map(.client_id)) - ($new[0] | map(.client_id)) | length')
+          if [ "$MISSING" -ne "0" ]; then
+            echo "FATAL REGRESSION: $MISSING pre-existing client_id(s) missing after update. Manual review required immediately."
+            exit 1
+          fi
+          echo "Regression check PASSED: all pre-existing entries intact, exactly one new entry added."
+
+      - name: Summary
+        run: |
+          echo "### Developer OAuth lane provisioned" >> "$GITHUB_STEP_SUMMARY"
+          echo "- New client_id: \`$(cat client_id.txt)\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Key Vault secrets written: oauth-lane-developer-id, oauth-lane-developer-secret" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Token mint verified for new lane" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Regression check passed: all pre-existing OAUTH_CLIENTS entries intact" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Closes fleet work-ledger task t_idem_69332c65" >> "$GITHUB_STEP_SUMMARY"
