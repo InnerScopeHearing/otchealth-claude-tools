@@ -1,0 +1,60 @@
+name: check-graph-tenant-domain-v2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run checks and write results to a file
+        run: |
+          set -euo pipefail
+          OUT=diagnostics/graph-tenant-check.md
+          mkdir -p diagnostics
+          echo "# Graph tenant/domain check ($(date -u +%Y-%m-%dT%H:%M:%SZ))" > "$OUT"
+          echo "" >> "$OUT"
+
+          TID=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-tenant-id --query value -o tsv 2>&1) || TID="NOTFOUND"
+          if [ "$TID" = "NOTFOUND" ]; then
+            echo "graph-tenant-id secret: NOT FOUND in Key Vault" >> "$OUT"
+          else
+            echo "graph-tenant-id secret: found (value not written to this file)" >> "$OUT"
+            echo "" >> "$OUT"
+            echo "## Issuer" >> "$OUT"
+            ISSUER=$(curl -s "https://login.microsoftonline.com/${TID}/v2.0/.well-known/openid-configuration" | python3 -c "import json,sys; print(json.load(sys.stdin).get('issuer','?'))")
+            echo "issuer: $ISSUER" >> "$OUT"
+            echo "" >> "$OUT"
+            echo "## Candidate domain resolution (public info, not sensitive)" >> "$OUT"
+            for DOMAIN in innd.com otchealth.app otchealthmart.com; do
+              RESULT=$(curl -s "https://login.microsoftonline.com/common/GetUserRealm.srf?login=test@${DOMAIN}&xml=1")
+              NS=$(echo "$RESULT" | grep -oP '(?<=<NameSpaceType>)[^<]+' || echo "unknown")
+              echo "- $DOMAIN -> NameSpaceType: $NS" >> "$OUT"
+            done
+          fi
+          echo "" >> "$OUT"
+          DU=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-drive-user --query value -o tsv 2>&1) || DU="NOTSET"
+          if [ "$DU" = "NOTSET" ]; then
+            echo "graph-drive-user secret: DOES NOT EXIST YET" >> "$OUT"
+          else
+            echo "graph-drive-user secret: EXISTS (length ${#DU}, value not written to this file)" >> "$OUT"
+          fi
+
+          git config user.name "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+          git add "$OUT"
+          git commit -m "chore: graph tenant/domain check results" || echo "nothing to commit"
+          git push
