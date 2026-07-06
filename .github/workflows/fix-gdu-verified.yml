@@ -1,0 +1,139 @@
+name: fix-gdu-verified
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fix and verify (self-contained, evidence to new branch)
+        run: |
+          set +e
+          APP=otchealth-mcp-gateway
+          RG=rg-otchealth-apps-prod
+          VAULT=kv-otc-55c84f6bef
+          LOG=/tmp/log.txt
+          : > "$LOG"
+          run() { echo "### \$ $*" >> "$LOG"; "$@" >> "$LOG" 2>&1; echo "[exit $?]" >> "$LOG"; echo "" >> "$LOG"; }
+
+          echo "===== STAGE 0: snapshot BEFORE =====" >> "$LOG"
+          az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json > /tmp/env_before.json 2>>"$LOG"
+          echo "env_before count: $(jq 'length' /tmp/env_before.json 2>/dev/null)" >> "$LOG"
+          cp /tmp/env_before.json /tmp/env_before_copy.json
+          az containerapp show -n "$APP" -g "$RG" --query "properties.configuration.secrets[].name" -o json > /tmp/secrets_before.json 2>>"$LOG"
+          echo "secrets_before:" >> "$LOG"; cat /tmp/secrets_before.json >> "$LOG"; echo "" >> "$LOG"
+          run az containerapp show -n "$APP" -g "$RG" --query identity -o json
+          GDU_SECRET_BEFORE=$(jq -r '.[]? | select(.=="graph-drive-user")' /tmp/secrets_before.json 2>/dev/null)
+          echo "graph-drive-user secret present BEFORE: [$GDU_SECRET_BEFORE]" >> "$LOG"
+
+          echo "===== STAGE 1: ensure system-assigned identity =====" >> "$LOG"
+          run az containerapp identity assign -n "$APP" -g "$RG" --system-assigned
+          PRINCIPAL_ID=$(az containerapp identity show -n "$APP" -g "$RG" --query principalId -o tsv 2>>"$LOG")
+          echo "PRINCIPAL_ID=$PRINCIPAL_ID" >> "$LOG"
+          VAULT_ID=$(az keyvault show --name "$VAULT" --query id -o tsv 2>>"$LOG")
+
+          echo "===== STAGE 2: ensure Key Vault Secrets User role (idempotent) =====" >> "$LOG"
+          EXISTING_ROLE=$(az role assignment list --assignee-object-id "$PRINCIPAL_ID" --scope "$VAULT_ID" --query "[?roleDefinitionName=='Key Vault Secrets User'] | length(@)" -o tsv 2>>"$LOG")
+          echo "existing KV Secrets User assignments: $EXISTING_ROLE" >> "$LOG"
+          if [ "${EXISTING_ROLE:-0}" = "0" ]; then
+            run az role assignment create --role "Key Vault Secrets User" --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --scope "$VAULT_ID"
+            echo "waiting 45s for RBAC propagation" >> "$LOG"; sleep 45
+          else
+            echo "role already present, skipping create" >> "$LOG"
+          fi
+
+          echo "===== STAGE 3: remove graph-drive-user secret if present =====" >> "$LOG"
+          # re-check current secrets right now
+          az containerapp show -n "$APP" -g "$RG" --query "properties.configuration.secrets[].name" -o json > /tmp/secrets_now.json 2>>"$LOG"
+          GDU_NOW=$(jq -r '.[]? | select(.=="graph-drive-user")' /tmp/secrets_now.json 2>/dev/null)
+          echo "graph-drive-user present now: [$GDU_NOW]" >> "$LOG"
+          if [ -n "$GDU_NOW" ]; then
+            run az containerapp secret remove -n "$APP" -g "$RG" --secret-names graph-drive-user
+          else
+            echo "graph-drive-user secret NOT present; nothing to remove" >> "$LOG"
+          fi
+
+          echo "===== STAGE 4: set GRAPH_DRIVE_USER literal =====" >> "$LOG"
+          run az containerapp update -n "$APP" -g "$RG" --set-env-vars "GRAPH_DRIVE_USER=matthew@innd.com"
+
+          echo "===== STAGE 5: cleanup - remove role + identity (restore original: app had NO identity) =====" >> "$LOG"
+          PID2=$(az containerapp identity show -n "$APP" -g "$RG" --query principalId -o tsv 2>/dev/null)
+          if [ -n "${PID2:-}" ]; then
+            run az role assignment delete --assignee-object-id "$PID2" --role "Key Vault Secrets User" --scope "$VAULT_ID"
+          fi
+          run az containerapp identity remove -n "$APP" -g "$RG" --system-assigned
+
+          echo "===== STAGE 6: verify AFTER =====" >> "$LOG"
+          sleep 15
+          az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json > /tmp/env_after.json 2>>"$LOG"
+          echo "env_after count: $(jq 'length' /tmp/env_after.json 2>/dev/null)" >> "$LOG"
+          az containerapp show -n "$APP" -g "$RG" --query "properties.configuration.secrets[].name" -o json > /tmp/secrets_after.json 2>>"$LOG"
+          echo "secrets_after:" >> "$LOG"; cat /tmp/secrets_after.json >> "$LOG"; echo "" >> "$LOG"
+          run az containerapp show -n "$APP" -g "$RG" --query identity -o json
+
+          NEW_VAL=$(jq -r '.[] | select(.name=="GRAPH_DRIVE_USER") | .value' /tmp/env_after.json 2>/dev/null)
+          echo "GRAPH_DRIVE_USER value AFTER: [$NEW_VAL]" >> "$LOG"
+          VERDICT="UNKNOWN"
+          if [ "$NEW_VAL" = "matthew@innd.com" ]; then VERDICT="VALUE_OK"; else VERDICT="VALUE_FAIL"; fi
+
+          # regression: every other env var unchanged
+          jq -S 'map(select(.name != "GRAPH_DRIVE_USER"))' /tmp/env_before_copy.json > /tmp/bo.json 2>/dev/null
+          jq -S 'map(select(.name != "GRAPH_DRIVE_USER"))' /tmp/env_after.json > /tmp/ao.json 2>/dev/null
+          if diff -q /tmp/bo.json /tmp/ao.json > /dev/null 2>&1; then
+            REG="REGRESSION_PASS"
+          else
+            REG="REGRESSION_FAIL"
+            echo "--- DIFF of other env vars ---" >> "$LOG"
+            diff /tmp/bo.json /tmp/ao.json >> "$LOG" 2>&1
+          fi
+          echo "VERDICT=$VERDICT REG=$REG" >> "$LOG"
+          echo "OAUTH_CLIENTS after:" >> "$LOG"
+          jq '.[] | select(.name=="OAUTH_CLIENTS")' /tmp/env_after.json >> "$LOG" 2>&1
+          echo "graph-drive-user secret present AFTER: [$(jq -r '.[]? | select(.=="graph-drive-user")' /tmp/secrets_after.json 2>/dev/null)]" >> "$LOG"
+
+          # Write evidence to a NEW branch (new branches push reliably)
+          BR="fix/gdu-evidence-$(date +%s)"
+          OUT="diagnostics/gdu-fix-result.md"
+          mkdir -p diagnostics
+          {
+            echo "# graph-drive-user fix result"
+            echo "Run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "VERDICT: $VERDICT / $REG"
+            echo ""
+            echo "## before env (others) sha-sorted"
+            echo '```json'; cat /tmp/bo.json; echo '```'
+            echo "## after env (others) sha-sorted"
+            echo '```json'; cat /tmp/ao.json; echo '```'
+            echo "## GRAPH_DRIVE_USER after"
+            echo '```'; echo "[$NEW_VAL]"; echo '```'
+            echo "## full env_after"
+            echo '```json'; cat /tmp/env_after.json; echo '```'
+            echo "## full action log"
+            echo '```'; cat "$LOG"; echo '```'
+          } > "$OUT"
+
+          git config user.name "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+          git switch -c "$BR"
+          git add "$OUT"
+          git commit -m "fix: gdu result evidence"
+          git push origin "HEAD:$BR"
+          echo "EVIDENCE_BRANCH=$BR"
