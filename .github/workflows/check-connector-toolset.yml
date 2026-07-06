@@ -39,15 +39,14 @@ jobs:
           echo '```' >> diagnostics/connector-toolset.md
           cat diagnostics/connector-toolset.md
 
-      - name: Commit findings to a new branch
+      - name: Commit findings to a FIXED branch (force-push, overwritten each run)
         run: |
           set -euo pipefail
           git config user.name "cto-diagnostic-bot"
           git config user.email "cto-bot@otchealth.app"
-          BRANCH="diag/connector-toolset-$(date +%s)"
-          git checkout -b "$BRANCH"
+          BRANCH="diag-connector-toolset-latest"
+          git checkout -B "$BRANCH"
           git add diagnostics/connector-toolset.md
           git commit -m "Diagnostic: CONNECTOR_TOOLSET env var check"
-          git push origin "$BRANCH"
-          echo "BRANCH=$BRANCH" >> "$GITHUB_STEP_SUMMARY"
-          echo "Pushed to branch: $BRANCH"
+          git push origin "$BRANCH" --force
+          echo "Pushed to fixed branch: $BRANCH"
