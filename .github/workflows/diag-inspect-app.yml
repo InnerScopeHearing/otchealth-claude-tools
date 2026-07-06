@@ -1,0 +1,66 @@
+name: diag-inspect-app
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main explicitly
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Inspect identity and secrets (read-only), commit to new branch
+        run: |
+          set +e
+          az containerapp identity show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod -o json > /tmp/identity.json 2>/tmp/identity_err.txt
+          echo "identity exit: $?"
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query "properties.configuration.secrets" -o json > /tmp/secrets.json 2>/tmp/secrets_err.txt
+          echo "secrets exit: $?"
+
+          set -euo pipefail
+          BR="diag/inspect-app"
+          OUT="diagnostics/inspect-app.md"
+          mkdir -p diagnostics
+          {
+            echo "# Container app identity + secrets inspection"
+            echo "Run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "## identity show (stdout)"
+            echo '```'
+            cat /tmp/identity.json
+            echo '```'
+            echo "## identity show (stderr)"
+            echo '```'
+            cat /tmp/identity_err.txt
+            echo '```'
+            echo "## secrets (names + keyvault refs; values are redacted by az)"
+            echo '```'
+            cat /tmp/secrets.json
+            echo '```'
+            echo "## secrets (stderr)"
+            echo '```'
+            cat /tmp/secrets_err.txt
+            echo '```'
+          } > "$OUT"
+          cat "$OUT"
+          git config user.name "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+          git switch -c "$BR"
+          git add "$OUT"
+          git commit -m "diag: inspect container app identity and secrets"
+          git push origin "HEAD:$BR"
