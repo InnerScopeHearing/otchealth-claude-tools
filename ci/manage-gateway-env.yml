@@ -1,0 +1,232 @@
+name: manage-gateway-env
+
+# =============================================================================
+# THE standard, permanent way this fleet edits ONE environment variable on the
+# otchealth-mcp-gateway Azure Container App (and any sibling Container App).
+#
+# It NEVER builds a `--set-env-vars "KEY=value"` CLI string. It reads the full
+# resource as JSON, edits the env array as structured data in Python, and applies
+# it via `az containerapp update --yaml`. See scripts/manage_gateway_env.py for
+# the full rationale and the safety guarantees (secretRef preservation +
+# mandatory before/after regression diff of every other key).
+#
+# Triggers:
+#   * workflow_dispatch  -> the durable, parameterized interface for humans/agents.
+#   * push (sentinel)    -> a self-test that runs the real GRAPH_DRIVE_USER case
+#                           end-to-end whenever tests/gateway-env-selftest.trigger
+#                           changes on main. This is how the workflow proves itself.
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Env var name (e.g. GRAPH_DRIVE_USER)"
+        required: true
+        type: string
+      value:
+        description: "Literal value, OR the secret name when value_type=secretref"
+        required: true
+        type: string
+      value_type:
+        description: "literal = a plain value | secretref = bind to a Container App secret"
+        required: true
+        type: choice
+        options: [literal, secretref]
+        default: literal
+      operation:
+        description: "add (must not exist) | update (must exist) | upsert (either)"
+        required: true
+        type: choice
+        options: [upsert, add, update]
+        default: upsert
+      app_name:
+        description: "Container App name"
+        required: true
+        type: string
+        default: otchealth-mcp-gateway
+      resource_group:
+        description: "Resource group"
+        required: true
+        type: string
+        default: rg-otchealth-apps-prod
+      allow_type_change:
+        description: "Permit converting literal<->secretref for the target key (rare)"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "Validate + show diff but do NOT apply"
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "tests/gateway-env-selftest.trigger"
+
+permissions:
+  id-token: write      # OIDC login to Azure
+  contents: write      # create the proof branch
+  pull-requests: write # open the proof PR
+
+concurrency:
+  # Serialize all env edits to this app so two runs can't race the manifest.
+  group: manage-gateway-env-${{ github.event.inputs.app_name || 'otchealth-mcp-gateway' }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Manual / agent-driven single env-var change.
+  # ---------------------------------------------------------------------------
+  manage:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Apply env var change (structured, secretRef-safe, regression-guarded)
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --app "${{ github.event.inputs.app_name }}"
+            --resource-group "${{ github.event.inputs.resource_group }}"
+            --name "${{ github.event.inputs.name }}"
+            --value "${{ github.event.inputs.value }}"
+            --type "${{ github.event.inputs.value_type }}"
+            --operation "${{ github.event.inputs.operation }}"
+            --summary-file "$GITHUB_STEP_SUMMARY"
+          )
+          if [ "${{ github.event.inputs.allow_type_change }}" = "true" ]; then
+            ARGS+=(--allow-type-change)
+          fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python3 scripts/manage_gateway_env.py "${ARGS[@]}"
+
+  # ---------------------------------------------------------------------------
+  # Self-test: proves the mechanism end-to-end against the real app.
+  # Runs the exact GRAPH_DRIVE_USER=matthew@innd.com case, verifies the
+  # regression check, and records a persistent proof via a PR (never pushes to
+  # main directly, so it can't race other workflows).
+  # ---------------------------------------------------------------------------
+  selftest:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      APP: otchealth-mcp-gateway
+      RG: rg-otchealth-apps-prod
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Unit tests (pure logic — the 4 historical failure modes)
+        run: python3 tests/test_manage_gateway_env.py
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Capture FULL env BEFORE (for an independent byte-for-byte diff)
+        run: |
+          set -euo pipefail
+          az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env" -o json \
+            | jq -S 'sort_by(.name)' > env-before.json
+          echo "keys before: $(jq -r '.[].name' env-before.json | tr '\n' ' ')"
+
+      - name: Set GRAPH_DRIVE_USER=matthew@innd.com (literal) via the standard script
+        run: |
+          set -euo pipefail
+          python3 scripts/manage_gateway_env.py \
+            --app "$APP" --resource-group "$RG" \
+            --name GRAPH_DRIVE_USER --value "matthew@innd.com" \
+            --type literal --operation upsert \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture FULL env AFTER + independent regression diff
+        id: diff
+        run: |
+          set -euo pipefail
+          az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env" -o json \
+            | jq -S 'sort_by(.name)' > env-after.json
+
+          # Independent check (belt-and-suspenders vs the script's own guard):
+          # every key EXCEPT GRAPH_DRIVE_USER must be byte-for-byte identical.
+          jq -S 'map(select(.name!="GRAPH_DRIVE_USER")) | sort_by(.name)' env-before.json > others-before.json
+          jq -S 'map(select(.name!="GRAPH_DRIVE_USER")) | sort_by(.name)' env-after.json  > others-after.json
+
+          echo "## Independent regression diff (all keys except GRAPH_DRIVE_USER)" >> "$GITHUB_STEP_SUMMARY"
+          if diff -u others-before.json others-after.json > others.diff; then
+            echo "RESULT: PASS — every other env var is byte-for-byte unchanged." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "RESULT: FAIL — other env vars changed:" | tee -a "$GITHUB_STEP_SUMMARY"
+            sed 's/^/    /' others.diff | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "## GRAPH_DRIVE_USER after" >> "$GITHUB_STEP_SUMMARY"
+          GDU=$(jq -r '.[] | select(.name=="GRAPH_DRIVE_USER") | .value' env-after.json)
+          echo "value = '$GDU'" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$GDU" = "matthew@innd.com" ] || { echo "MISMATCH"; exit 1; }
+
+          echo "## OAUTH_CLIENTS after (must remain a secretRef binding)" >> "$GITHUB_STEP_SUMMARY"
+          jq -c '.[] | select(.name=="OAUTH_CLIENTS")' env-after.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Persist proof via a fresh branch + PR (no direct push to main -> no races)
+        if: always()
+        run: |
+          set -euo pipefail
+          # Start from a pristine main so we never inherit a detached-HEAD / stale tree.
+          git fetch origin main
+          git reset --hard origin/main
+
+          BR="gateway-env-selftest-proof-$(date +%s)-${GITHUB_RUN_ID}"
+          git switch -c "$BR"
+
+          mkdir -p diagnostics
+          {
+            echo "# manage-gateway-env self-test proof"
+            echo ""
+            echo "- run: ${GITHUB_RUN_ID} (${GITHUB_SHA})"
+            echo "- when: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "## env-before.json"; echo '```json'; cat env-before.json; echo '```'
+            echo "## env-after.json";  echo '```json'; cat env-after.json;  echo '```'
+          } > diagnostics/gateway-env-selftest-proof.md
+
+          git config user.name  "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+          git add diagnostics/gateway-env-selftest-proof.md
+          git commit -m "chore(gateway-env): self-test proof for run ${GITHUB_RUN_ID}"
+          git push origin "$BR"
+
+          gh pr create --base main --head "$BR" \
+            --title "gateway-env self-test proof (run ${GITHUB_RUN_ID})" \
+            --body "Automated proof artifact from manage-gateway-env self-test. Env before/after attached; regression check in the run summary."
+        env:
+          GH_TOKEN: ${{ github.token }}
