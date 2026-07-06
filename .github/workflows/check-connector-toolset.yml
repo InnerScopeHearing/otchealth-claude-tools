@@ -5,12 +5,15 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -18,8 +21,33 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Check CONNECTOR_TOOLSET env var
+      - name: Check CONNECTOR_TOOLSET env var and write findings
         run: |
           set -euo pipefail
+          mkdir -p diagnostics
+          echo "# CONNECTOR_TOOLSET diagnostic - $(date -u)" > diagnostics/connector-toolset.md
+          echo "" >> diagnostics/connector-toolset.md
+          echo '```json' >> diagnostics/connector-toolset.md
           az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
-            --query "properties.template.containers[0].env[?name=='CONNECTOR_TOOLSET']" -o json
+            --query "properties.template.containers[0].env[?name=='CONNECTOR_TOOLSET']" -o json >> diagnostics/connector-toolset.md
+          echo '```' >> diagnostics/connector-toolset.md
+          echo "" >> diagnostics/connector-toolset.md
+          echo "## Full env var name list (names only, no values)" >> diagnostics/connector-toolset.md
+          echo '```' >> diagnostics/connector-toolset.md
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "properties.template.containers[0].env[].name" -o tsv >> diagnostics/connector-toolset.md
+          echo '```' >> diagnostics/connector-toolset.md
+          cat diagnostics/connector-toolset.md
+
+      - name: Commit findings to a new branch
+        run: |
+          set -euo pipefail
+          git config user.name "cto-diagnostic-bot"
+          git config user.email "cto-bot@otchealth.app"
+          BRANCH="diag/connector-toolset-$(date +%s)"
+          git checkout -b "$BRANCH"
+          git add diagnostics/connector-toolset.md
+          git commit -m "Diagnostic: CONNECTOR_TOOLSET env var check"
+          git push origin "$BRANCH"
+          echo "BRANCH=$BRANCH" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pushed to branch: $BRANCH"
