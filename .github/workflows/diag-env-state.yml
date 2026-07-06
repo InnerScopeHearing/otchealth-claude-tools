@@ -44,8 +44,12 @@ jobs:
           az containerapp update -n "$APP" -g "$RG" --revision-suffix "diagprobe$(date +%s)" > /tmp/probe.txt 2>&1
           echo "probe exit: $?" >> /tmp/probe.txt
 
-          BR="diag/env-state"
+          BR="diag/kv-network"
           OUT="diagnostics/env-state.md"
+          git config user.name "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+          git fetch origin "$BR" 2>/dev/null || true
+          git switch -c "$BR" origin/"$BR" 2>/dev/null || git switch "$BR" 2>/dev/null || git switch -c "$BR"
           mkdir -p diagnostics
           {
             echo "# Env + secret state diagnostic"
@@ -70,10 +74,7 @@ jobs:
           } > "$OUT"
           cat "$OUT"
 
-          git config user.name "otchealth-fleet-bot"
-          git config user.email "noreply@otchealth.app"
-          git switch -c "$BR" 2>/dev/null || git switch "$BR"
           git add "$OUT"
           git commit -m "diag: env + secret state" || echo "nothing to commit"
-          git push -f origin "HEAD:$BR" || echo "push failed"
+          git push origin "HEAD:$BR" || echo "push failed"
           echo "DIAG STEP DONE"
