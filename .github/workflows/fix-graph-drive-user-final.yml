@@ -18,35 +18,49 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Snapshot current env array before touching anything
+      - name: Snapshot current env array and identity before touching anything
         run: |
           set -euo pipefail
           az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
             --query "properties.template.containers[0].env" -o json > /tmp/env_before.json
           echo "Entries before: $(jq 'length' /tmp/env_before.json)"
-          echo "Identity before:"
           az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query identity -o json
 
-      - name: Step 1 - assign a temporary system-assigned managed identity (satisfies the identity-existence validation gate; no Key Vault RBAC needed since we are only removing the secret, not reading it)
+      - name: Step 1 - ensure system-assigned identity exists (idempotent - may already be assigned from prior run)
         run: |
           set -euo pipefail
           az containerapp identity assign -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --system-assigned
 
-      - name: Step 2 - remove the orphaned, unresolvable graph-drive-user secret
+      - name: Step 2 - grant the identity Key Vault Secrets User on kv-otc-55c84f6bef (fallback per research findings - identity existence alone was insufficient)
+        run: |
+          set -euo pipefail
+          PRINCIPAL_ID=$(az containerapp identity show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query principalId -o tsv)
+          echo "Principal ID obtained (not sensitive, an object id): $PRINCIPAL_ID"
+          VAULT_ID=$(az keyvault show --name kv-otc-55c84f6bef --query id -o tsv)
+          az role assignment create --role "Key Vault Secrets User" --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --scope "$VAULT_ID"
+          echo "Role assigned, waiting 60s for RBAC propagation"
+          sleep 60
+
+      - name: Step 3 - remove the orphaned graph-drive-user secret (retry with real KV access this time)
         run: |
           set -euo pipefail
           az containerapp secret remove -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
             --secret-names graph-drive-user
 
-      - name: Step 3 - set GRAPH_DRIVE_USER as a plain literal value
+      - name: Step 4 - set GRAPH_DRIVE_USER as a plain literal value
         run: |
           set -euo pipefail
           az containerapp update -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
             --set-env-vars "GRAPH_DRIVE_USER=matthew@innd.com"
 
-      - name: Step 4 - remove the temporary identity again (it was only needed to clear the validation gate)
+      - name: Step 5 - revoke the temporary role assignment and remove the identity
         run: |
           set -euo pipefail
+          PRINCIPAL_ID=$(az containerapp identity show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query principalId -o tsv) || true
+          if [ -n "${PRINCIPAL_ID:-}" ]; then
+            VAULT_ID=$(az keyvault show --name kv-otc-55c84f6bef --query id -o tsv)
+            az role assignment delete --assignee-object-id "$PRINCIPAL_ID" --role "Key Vault Secrets User" --scope "$VAULT_ID" || echo "role delete failed or already gone"
+          fi
           az containerapp identity remove -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --system-assigned || \
             echo "identity remove failed or already gone - non-fatal, continuing to verification"
 
@@ -77,5 +91,5 @@ jobs:
           echo "--- OAUTH_CLIENTS specific check ---"
           jq '.[] | select(.name=="OAUTH_CLIENTS")' /tmp/env_after.json
 
-          echo "--- Final identity state (should be back to None or whatever it started as) ---"
+          echo "--- Final identity state ---"
           az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query identity -o json
