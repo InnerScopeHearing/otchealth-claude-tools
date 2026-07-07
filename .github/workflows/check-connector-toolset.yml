@@ -21,56 +21,17 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Pull sample text sidecars and catalog rows for quality inspection
-        if: always()
+      - name: List oauth-lane-clo* and legal/graph related secret NAMES only (never values)
         run: |
           set -uo pipefail
           mkdir -p diagnostics
-          ACCT=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-account --query value -o tsv)
-          KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-key --query value -o tsv)
-
           {
-            echo "# Digest quality check - $(date -u)"
+            echo "# CLO gateway lane secret inventory (names only) - $(date -u)"
             echo ""
-
-            echo "## Catalog rows for the two new summary PDFs + the 68MB largest filing"
-            az storage blob download --account-name "$ACCT" --account-key "$KEY" \
-              --container-name personal --name "_CATALOG/catalog.jsonl" --file /tmp/catalog.jsonl 2>&1
-            echo "catalog download exit: $?"
             echo '```'
-            grep "Summary of All Divorce Documents" /tmp/catalog.jsonl 2>&1 | head -1
-            grep "Summary of All Divorce Hearings" /tmp/catalog.jsonl 2>&1 | head -1
-            grep "7957093_S_DR_0067153" /tmp/catalog.jsonl 2>&1 | head -1
-            grep "8166260_S_DR_0067153" /tmp/catalog.jsonl 2>&1 | head -1
-            echo '```'
-            echo ""
-
-            echo "## Text sidecar: Summary of All Divorce Documents (first 3000 chars)"
-            echo '```'
-            az storage blob download --account-name "$ACCT" --account-key "$KEY" \
-              --container-name personal \
-              --name "_TEXT/clo-outgoing/Divorce Case Summary and ALL Filings/Summary of All Divorce Documents as of 7.6.26.pdf.txt" \
-              --file /tmp/summary_docs.txt 2>&1
-            echo "download exit: $?"
-            head -c 3000 /tmp/summary_docs.txt 2>&1
-            echo ""
-            echo "total chars: $(wc -c < /tmp/summary_docs.txt 2>/dev/null || echo 0)"
-            echo '```'
-            echo ""
-
-            echo "## Text sidecar: 68MB Statement of Issues and Contentions (first 2000 chars + total length)"
-            echo '```'
-            az storage blob download --account-name "$ACCT" --account-key "$KEY" \
-              --container-name personal \
-              --name "_TEXT/clo-outgoing/Divorce Case Summary and ALL Filings/7957093_S_DR_0067153_01_30_2026_Statement_of_Issues_and_Contentions.pdf.txt" \
-              --file /tmp/big_file.txt 2>&1
-            echo "download exit: $?"
-            head -c 2000 /tmp/big_file.txt 2>&1
-            echo ""
-            echo "total chars: $(wc -c < /tmp/big_file.txt 2>/dev/null || echo 0)"
+            az keyvault secret list --vault-name kv-otc-55c84f6bef --query "[].name" -o tsv | grep -i "clo\|legal\|gateway-oauth" | sort
             echo '```'
           } > diagnostics/pull-log.md 2>&1
-
           cat diagnostics/pull-log.md
 
       - name: Commit findings
@@ -81,5 +42,5 @@ jobs:
           git config user.email "cto-bot@otchealth.app"
           git checkout -B diag-connector-toolset-latest
           git add diagnostics/pull-log.md
-          git commit -m "Diagnostic: divorce filings digest quality check v2"
+          git commit -m "Diagnostic: CLO gateway lane secret name inventory"
           git push origin diag-connector-toolset-latest --force
