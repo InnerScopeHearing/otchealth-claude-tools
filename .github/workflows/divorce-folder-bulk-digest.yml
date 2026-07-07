@@ -58,102 +58,100 @@ jobs:
           GRAPH_RO_TENANT_ID: ${{ env.GRAPH_RO_TENANT_ID }}
         run: |
           cat > /tmp/pull.mjs << 'NODEEOF'
+          const https = require('https');
 
-const https = require('https');
+          const TENANT = process.env.GRAPH_RO_TENANT_ID;
+          const CLIENT_ID = process.env.GRAPH_RO_CLIENT_ID;
+          const CLIENT_SECRET = process.env.GRAPH_RO_CLIENT_SECRET;
+          const USER = "matthew@innd.com";
+          const ROOT_PATH = "CLO Outgoing/Divorce Case Summary and ALL Filings";
+          const OUT_DIR = "/tmp/onedrive_pull";
 
-const TENANT = process.env.GRAPH_RO_TENANT_ID;
-const CLIENT_ID = process.env.GRAPH_RO_CLIENT_ID;
-const CLIENT_SECRET = process.env.GRAPH_RO_CLIENT_SECRET;
-const USER = "matthew@innd.com";
-const ROOT_PATH = "CLO Outgoing/Divorce Case Summary and ALL Filings";
-const OUT_DIR = "/tmp/onedrive_pull";
+          const fs = require('fs');
+          const path = require('path');
 
-const fs = require('fs');
-const path = require('path');
+          function req(method, url, headers, body) {
+            return new Promise((resolve, reject) => {
+              const u = new URL(url);
+              const opts = { method, hostname: u.hostname, path: u.pathname + u.search, headers };
+              const r = https.request(opts, (res) => {
+                const chunks = [];
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+              });
+              r.on('error', reject);
+              if (body) r.write(body);
+              r.end();
+            });
+          }
 
-function req(method, url, headers, body) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const opts = { method, hostname: u.hostname, path: u.pathname + u.search, headers };
-    const r = https.request(opts, (res) => {
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
-    });
-    r.on('error', reject);
-    if (body) r.write(body);
-    r.end();
-  });
-}
+          async function getToken() {
+            const body = new URLSearchParams({
+              grant_type: 'client_credentials',
+              client_id: CLIENT_ID,
+              client_secret: CLIENT_SECRET,
+              scope: 'https://graph.microsoft.com/.default',
+            }).toString();
+            const r = await req('POST', `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Content-Length': Buffer.byteLength(body),
+            }, body);
+            const j = JSON.parse(r.body.toString());
+            if (!j.access_token) throw new Error('token mint failed: ' + r.body.toString().slice(0, 300));
+            return j.access_token;
+          }
 
-async function getToken() {
-  const body = new URLSearchParams({
-    grant_type: 'client_credentials',
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
-    scope: 'https://graph.microsoft.com/.default',
-  }).toString();
-  const r = await req('POST', `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    'Content-Length': Buffer.byteLength(body),
-  }, body);
-  const j = JSON.parse(r.body.toString());
-  if (!j.access_token) throw new Error('token mint failed: ' + r.body.toString().slice(0, 300));
-  return j.access_token;
-}
+          async function listChildren(token, itemPath) {
+            const encoded = encodeURIComponent(itemPath);
+            const url = `https://graph.microsoft.com/v1.0/users/${USER}/drive/root:/${encoded}:/children?$top=200`;
+            const r = await req('GET', url, { Authorization: `Bearer ${token}` });
+            if (r.status !== 200) throw new Error(`list failed ${r.status} for ${itemPath}: ${r.body.toString().slice(0, 300)}`);
+            return JSON.parse(r.body.toString()).value || [];
+          }
 
-async function listChildren(token, itemPath) {
-  const encoded = encodeURIComponent(itemPath);
-  const url = `https://graph.microsoft.com/v1.0/users/${USER}/drive/root:/${encoded}:/children?$top=200`;
-  const r = await req('GET', url, { Authorization: `Bearer ${token}` });
-  if (r.status !== 200) throw new Error(`list failed ${r.status} for ${itemPath}: ${r.body.toString().slice(0, 300)}`);
-  return JSON.parse(r.body.toString()).value || [];
-}
+          async function downloadFile(token, itemPath, destPath) {
+            const encoded = encodeURIComponent(itemPath);
+            const url = `https://graph.microsoft.com/v1.0/users/${USER}/drive/root:/${encoded}:/content`;
+            const r = await req('GET', url, { Authorization: `Bearer ${token}` });
+            if (r.status !== 200) throw new Error(`download failed ${r.status} for ${itemPath}`);
+            fs.mkdirSync(path.dirname(destPath), { recursive: true });
+            fs.writeFileSync(destPath, r.body);
+            return r.body.length;
+          }
 
-async function downloadFile(token, itemPath, destPath) {
-  const encoded = encodeURIComponent(itemPath);
-  const url = `https://graph.microsoft.com/v1.0/users/${USER}/drive/root:/${encoded}:/content`;
-  const r = await req('GET', url, { Authorization: `Bearer ${token}` });
-  if (r.status !== 200) throw new Error(`download failed ${r.status} for ${itemPath}`);
-  fs.mkdirSync(path.dirname(destPath), { recursive: true });
-  fs.writeFileSync(destPath, r.body);
-  return r.body.length;
-}
+          async function walk(token, remotePath, localDir, stats) {
+            const children = await listChildren(token, remotePath);
+            for (const c of children) {
+              const childRemote = `${remotePath}/${c.name}`;
+              if (c.folder) {
+                await walk(token, childRemote, path.join(localDir, c.name), stats);
+              } else {
+                const dest = path.join(localDir, c.name);
+                try {
+                  const bytes = await downloadFile(token, childRemote, dest);
+                  stats.count++;
+                  stats.bytes += bytes;
+                  console.log(`  OK  ${childRemote} (${bytes} bytes)`);
+                } catch (e) {
+                  stats.errors.push({ path: childRemote, error: e.message });
+                  console.error(`  FAIL ${childRemote}: ${e.message}`);
+                }
+              }
+            }
+          }
 
-async function walk(token, remotePath, localDir, stats) {
-  const children = await listChildren(token, remotePath);
-  for (const c of children) {
-    const childRemote = `${remotePath}/${c.name}`;
-    if (c.folder) {
-      await walk(token, childRemote, path.join(localDir, c.name), stats);
-    } else {
-      const dest = path.join(localDir, c.name);
-      try {
-        const bytes = await downloadFile(token, childRemote, dest);
-        stats.count++;
-        stats.bytes += bytes;
-        console.log(`  OK  ${childRemote} (${bytes} bytes)`);
-      } catch (e) {
-        stats.errors.push({ path: childRemote, error: e.message });
-        console.error(`  FAIL ${childRemote}: ${e.message}`);
-      }
-    }
-  }
-}
+          async function main() {
+            const token = await getToken();
+            console.log('Graph token minted, len=' + token.length);
+            const stats = { count: 0, bytes: 0, errors: [] };
+            await walk(token, ROOT_PATH, OUT_DIR, stats);
+            console.log(JSON.stringify({ downloaded: stats.count, totalBytes: stats.bytes, errorCount: stats.errors.length, errors: stats.errors }, null, 2));
+            fs.writeFileSync('/tmp/pull_report.json', JSON.stringify(stats, null, 2));
+            if (stats.count === 0) { console.error('FATAL: zero files downloaded'); process.exit(1); }
+          }
 
-async function main() {
-  const token = await getToken();
-  console.log('Graph token minted, len=' + token.length);
-  const stats = { count: 0, bytes: 0, errors: [] };
-  await walk(token, ROOT_PATH, OUT_DIR, stats);
-  console.log(JSON.stringify({ downloaded: stats.count, totalBytes: stats.bytes, errorCount: stats.errors.length, errors: stats.errors }, null, 2));
-  fs.writeFileSync('/tmp/pull_report.json', JSON.stringify(stats, null, 2));
-  if (stats.count === 0) { console.error('FATAL: zero files downloaded'); process.exit(1); }
-}
-
-main().catch((e) => { console.error('FATAL: ' + e.stack); process.exit(1); });
-
-NODEEOF
+          main().catch((e) => { console.error('FATAL: ' + e.stack); process.exit(1); });
+          NODEEOF
           node /tmp/pull.mjs
 
       - name: Upload pulled files into Azure Blob (personal container, single batch)
