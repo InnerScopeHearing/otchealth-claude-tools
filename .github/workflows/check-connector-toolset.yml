@@ -1,4 +1,4 @@
-name: diag-kb-memory-secret
+name: check-connector-toolset
 
 on:
   workflow_dispatch:
@@ -21,33 +21,28 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Check azure-commons-storage-key secret existence + metadata (no value)
+      - name: Check id-otc-jobs-kv RBAC across vault, ACR, and legal storage account
         run: |
           set -euo pipefail
           mkdir -p diagnostics
           {
-            echo "# kb-memory secret diagnostic - $(date -u)"
+            echo "# doc-indexer RBAC diagnostic - $(date -u)"
             echo ""
-            echo "## Secret: azure-commons-storage-key"
-            echo '```json'
-            az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-commons-storage-key \
-              --query "{enabled:attributes.enabled, created:attributes.created, updated:attributes.updated, expires:attributes.expires}" -o json 2>&1 || echo '"NOT FOUND OR ERROR"'
+            SUB="55c84f6b-ef90-4259-a58b-50835cc4cab4"
+            PID=$(az identity show -n id-otc-jobs-kv -g otchealth-automation-rg --query principalId -o tsv 2>&1) || PID="ERROR: $PID"
+            echo "## id-otc-jobs-kv principalId"
+            echo '```'
+            echo "$PID"
             echo '```'
             echo ""
-            echo "## Secret: azure-commons-storage-account (if separate)"
+            echo "## All role assignments for this identity"
             echo '```json'
-            az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-commons-storage-account \
-              --query "{enabled:attributes.enabled, created:attributes.created, updated:attributes.updated}" -o json 2>&1 || echo '"NOT FOUND OR ERROR"'
+            az role assignment list --assignee "$PID" --all -o json 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps([{'role':a['roleDefinitionName'],'scope':a['scope']} for a in d], indent=2))" 2>&1 || echo "ERROR parsing"
             echo '```'
             echo ""
-            echo "## RBAC check - does azure-sp have Key Vault Secrets User/Officer role"
+            echo "## Legal storage account (otchealthlegalstore) - does it exist, what RG"
             echo '```json'
-            az role assignment list --assignee 34a7326b-5ed0-4f6c-b5b4-483772a15a69 --scope /subscriptions/55c84f6b-ef90-4259-a58b-50835cc4cab4/resourceGroups/rg-otchealth-shared-prod/providers/Microsoft.KeyVault/vaults/kv-otc-55c84f6bef --query "[].roleDefinitionName" -o json 2>&1 || echo '"ERROR"'
-            echo '```'
-            echo ""
-            echo "## Storage account otchealthcommons - does the actual storage account key match?"
-            echo '```json'
-            az storage account keys list --account-name otchealthcommons --query "[0].{keyName:keyName, lastCreated:creationTime}" -o json 2>&1 || echo '"NOT FOUND OR ERROR (may be in different RG/subscription)"'
+            az storage account show -n otchealthlegalstore --query "{name:name, rg:resourceGroup, id:id}" -o json 2>&1 || echo "NOT FOUND"
             echo '```'
           } > diagnostics/connector-toolset.md
           cat diagnostics/connector-toolset.md
@@ -60,5 +55,5 @@ jobs:
           BRANCH="diag-connector-toolset-latest"
           git checkout -B "$BRANCH"
           git add diagnostics/connector-toolset.md
-          git commit -m "Diagnostic: kb-memory azure-commons-storage-key check"
+          git commit -m "Diagnostic: doc-indexer identity RBAC check"
           git push origin "$BRANCH" --force
