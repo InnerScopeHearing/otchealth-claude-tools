@@ -82,6 +82,16 @@ jobs:
             });
           }
 
+          async function reqFollowRedirects(method, url, headers, body, maxRedirects) {
+            if (maxRedirects === undefined) maxRedirects = 5;
+            const r = await req(method, url, headers, body);
+            if ((r.status === 301 || r.status === 302 || r.status === 303 || r.status === 307 || r.status === 308) && r.headers.location && maxRedirects > 0) {
+              // Redirect target (pre-authenticated CDN URL) must NOT carry the original Authorization header.
+              return reqFollowRedirects('GET', r.headers.location, {}, undefined, maxRedirects - 1);
+            }
+            return r;
+          }
+
           async function getToken() {
             const body = new URLSearchParams({
               grant_type: 'client_credentials',
@@ -109,8 +119,8 @@ jobs:
           async function downloadFile(token, itemPath, destPath) {
             const encoded = encodeURIComponent(itemPath);
             const url = `https://graph.microsoft.com/v1.0/users/${USER}/drive/root:/${encoded}:/content`;
-            const r = await req('GET', url, { Authorization: `Bearer ${token}` });
-            if (r.status !== 200) throw new Error(`download failed ${r.status} for ${itemPath}`);
+            const r = await reqFollowRedirects('GET', url, { Authorization: `Bearer ${token}` });
+            if (r.status !== 200) throw new Error(`download failed ${r.status} for ${itemPath}: ${r.body.toString().slice(0, 200)}`);
             fs.mkdirSync(path.dirname(destPath), { recursive: true });
             fs.writeFileSync(destPath, r.body);
             return r.body.length;
@@ -201,22 +211,22 @@ jobs:
           {
             echo "# Bulk digest pipeline logs - $(date -u)"
             echo ""
-            echo "## Pull log"
+            echo "## Pull log (tail 100 lines)"
             echo '```'
-            cat /tmp/pull.log 2>/dev/null || echo "(no pull.log)"
+            tail -100 /tmp/pull.log 2>/dev/null || echo "(no pull.log)"
             echo '```'
             echo ""
             echo "## File count pulled"
             find /tmp/onedrive_pull -type f 2>/dev/null | wc -l || echo 0
             echo ""
-            echo "## Upload log"
+            echo "## Upload log (tail 60 lines)"
             echo '```'
-            cat /tmp/upload.log 2>/dev/null || echo "(no upload.log - step may not have run)"
+            tail -60 /tmp/upload.log 2>/dev/null || echo "(no upload.log - step may not have run)"
             echo '```'
             echo ""
-            echo "## Index output log"
+            echo "## Index output log (tail 100 lines)"
             echo '```'
-            cat /tmp/index_output.log 2>/dev/null || echo "(no index_output.log)"
+            tail -100 /tmp/index_output.log 2>/dev/null || echo "(no index_output.log)"
             echo '```'
           } > diagnostics/pull-log.md
           git config user.name "cto-diagnostic-bot"
