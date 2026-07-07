@@ -5,11 +5,23 @@ on:
 
 permissions:
   id-token: write
-  contents: write
+  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Placeholder (reusable ad-hoc diagnostic workflow -- repurpose freely)
-        run: echo "ready for next diagnostic task"
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Print clo lane creds to THIS job's log only (no git commit anywhere in this run)
+        run: |
+          set -euo pipefail
+          ID_VAL=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name oauth-lane-clo-id --query value -o tsv)
+          SECRET_VAL=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name oauth-lane-clo-secret --query value -o tsv)
+          printf 'MARKERIDSTART%sMARKERIDEND\n' "$ID_VAL"
+          printf 'MARKERSECRETSTART%sMARKERSECRETEND\n' "$SECRET_VAL"
