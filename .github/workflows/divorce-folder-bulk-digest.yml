@@ -148,7 +148,22 @@ jobs:
 
           main().catch((e) => { console.error('FATAL: ' + e.stack); process.exit(1); });
           NODEEOF
-          node /tmp/pull.mjs
+          node /tmp/pull.mjs 2>&1 | tee /tmp/pull.log
+
+      - name: Publish pull log for debugging (always runs)
+        if: always()
+        working-directory: octools
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          cp /tmp/pull.log diagnostics/pull-log.md 2>/dev/null || echo "no pull.log" > diagnostics/pull-log.md
+          find /tmp/onedrive_pull -type f 2>/dev/null | head -50 >> diagnostics/pull-log.md || true
+          git config user.name "cto-diagnostic-bot"
+          git config user.email "cto-bot@otchealth.app"
+          git checkout -B diag-connector-toolset-latest
+          git add diagnostics/pull-log.md
+          git commit -m "Diagnostic: OneDrive pull log" || echo "nothing to commit"
+          git push origin diag-connector-toolset-latest --force || echo "push failed"
 
       - name: Upload pulled files into Azure Blob (personal container, single batch)
         run: |
