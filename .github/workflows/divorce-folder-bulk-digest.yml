@@ -28,10 +28,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq poppler-utils libreoffice tesseract-ocr
 
-      - name: npm ci (doc-indexer deps)
-        working-directory: octools
-        run: npm ci --omit=dev || npm install --omit=dev
-
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
