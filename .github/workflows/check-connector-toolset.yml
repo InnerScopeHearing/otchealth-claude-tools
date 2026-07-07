@@ -27,55 +27,45 @@ jobs:
           mkdir -p diagnostics
           ACCT=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-account --query value -o tsv)
           KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-key --query value -o tsv)
+          az storage blob download --account-name "$ACCT" --account-key "$KEY" \
+            --container-name personal --name "_CATALOG/catalog.jsonl" --file /tmp/catalog.jsonl
           {
             echo "# Digest quality check - $(date -u)"
             echo ""
-            echo "## Download catalog.jsonl and grep for the divorce filings prefix"
-            az storage blob download --account-name "$ACCT" --account-key "$KEY" \
-              --container-name personal --name "_CATALOG/catalog.jsonl" --file /tmp/catalog.jsonl
             echo "Total catalog rows: $(wc -l < /tmp/catalog.jsonl)"
-            grep -c "clo-outgoing/Divorce Case Summary" /tmp/catalog.jsonl || echo 0
             echo ""
-            echo "## Sample catalog rows (3 filings: small, medium, the 68MB largest one)"
-            echo '```json'
-            grep "clo-outgoing/Divorce Case Summary" /tmp/catalog.jsonl | grep "Summary_of_All_Divorce\|Summary of All Divorce" | head -2 || true
-            grep "clo-outgoing/Divorce Case Summary" /tmp/catalog.jsonl | grep "7957093" | head -1 || true
-            grep "clo-outgoing/Divorce Case Summary" /tmp/catalog.jsonl | grep "8166260" | head -1 || true
-            echo '```'
-            echo ""
-            echo "## Full catalog row count check - any err field populated (extraction failures)?"
-            python3 -c "
-import json
-errs = []
-divorce_rows = []
-with open('/tmp/catalog.jsonl') as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except Exception:
-            continue
-        if 'clo-outgoing/Divorce Case Summary' in row.get('path',''):
-            divorce_rows.append(row)
-            if row.get('err'):
-                errs.append(row)
-print('divorce rows found:', len(divorce_rows))
-print('rows with err set:', len(errs))
-for e in errs[:10]:
-    print('  ERR:', e.get('path'), '->', e.get('err'))
-print()
-print('text_chars distribution (sorted, first 20 smallest):')
-sorted_rows = sorted(divorce_rows, key=lambda r: r.get('text_chars') or 0)
-for r in sorted_rows[:20]:
-    print(f"  {r.get('text_chars')} chars | {r.get('size')} bytes | ocr={r.get('ocr')} | {r.get('path').split('/')[-1]}")
-print()
-print('largest files text_chars:')
-sorted_rows_desc = sorted(divorce_rows, key=lambda r: r.get('size') or 0, reverse=True)
-for r in sorted_rows_desc[:5]:
-    print(f"  {r.get('text_chars')} chars extracted | {r.get('size')} bytes original | ocr={r.get('ocr')} | {r.get('path').split('/')[-1]}")
-"
+            python3 << 'PYEOF'
+            import json
+            errs = []
+            divorce_rows = []
+            with open('/tmp/catalog.jsonl') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if 'clo-outgoing/Divorce Case Summary' in row.get('path',''):
+                        divorce_rows.append(row)
+                        if row.get('err'):
+                            errs.append(row)
+            print('divorce rows found:', len(divorce_rows))
+            print('rows with err set:', len(errs))
+            for e in errs[:10]:
+                print('  ERR:', e.get('path'), '->', e.get('err'))
+            print()
+            print('text_chars distribution (sorted, first 20 smallest):')
+            sorted_rows = sorted(divorce_rows, key=lambda r: r.get('text_chars') or 0)
+            for r in sorted_rows[:20]:
+                print(f"  {r.get('text_chars')} chars | {r.get('size')} bytes | ocr={r.get('ocr')} | {r.get('path').split('/')[-1]}")
+            print()
+            print('largest files text_chars:')
+            sorted_rows_desc = sorted(divorce_rows, key=lambda r: r.get('size') or 0, reverse=True)
+            for r in sorted_rows_desc[:5]:
+                print(f"  {r.get('text_chars')} chars extracted | {r.get('size')} bytes original | ocr={r.get('ocr')} | {r.get('path').split('/')[-1]}")
+          PYEOF
           } > diagnostics/pull-log.md
           cat diagnostics/pull-log.md
 
