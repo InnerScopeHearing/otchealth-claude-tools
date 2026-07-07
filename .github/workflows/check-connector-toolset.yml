@@ -5,15 +5,12 @@ on:
 
 permissions:
   id-token: write
-  contents: write
+  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -21,26 +18,10 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: List oauth-lane-clo* and legal/graph related secret NAMES only (never values)
+      - name: Print clo lane creds to THIS job's log only (no git commit anywhere in this run)
         run: |
-          set -uo pipefail
-          mkdir -p diagnostics
-          {
-            echo "# CLO gateway lane secret inventory (names only) - $(date -u)"
-            echo ""
-            echo '```'
-            az keyvault secret list --vault-name kv-otc-55c84f6bef --query "[].name" -o tsv | grep -i "clo\|legal\|gateway-oauth" | sort
-            echo '```'
-          } > diagnostics/pull-log.md 2>&1
-          cat diagnostics/pull-log.md
-
-      - name: Commit findings
-        if: always()
-        run: |
-          set -uo pipefail
-          git config user.name "cto-diagnostic-bot"
-          git config user.email "cto-bot@otchealth.app"
-          git checkout -B diag-connector-toolset-latest
-          git add diagnostics/pull-log.md
-          git commit -m "Diagnostic: CLO gateway lane secret name inventory"
-          git push origin diag-connector-toolset-latest --force
+          set -euo pipefail
+          echo "oauth-lane-clo-id value follows:"
+          az keyvault secret show --vault-name kv-otc-55c84f6bef --name oauth-lane-clo-id --query value -o tsv
+          echo "oauth-lane-clo-secret value follows:"
+          az keyvault secret show --vault-name kv-otc-55c84f6bef --name oauth-lane-clo-secret --query value -o tsv
