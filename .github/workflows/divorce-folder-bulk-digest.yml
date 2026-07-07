@@ -53,7 +53,8 @@ jobs:
           GRAPH_RO_CLIENT_SECRET: ${{ env.GRAPH_RO_CLIENT_SECRET }}
           GRAPH_RO_TENANT_ID: ${{ env.GRAPH_RO_TENANT_ID }}
         run: |
-          cat > /tmp/pull.mjs << 'NODEEOF'
+          set -euo pipefail
+          cat > /tmp/pull.cjs << 'NODEEOF'
           const https = require('https');
 
           const TENANT = process.env.GRAPH_RO_TENANT_ID;
@@ -148,7 +149,7 @@ jobs:
 
           main().catch((e) => { console.error('FATAL: ' + e.stack); process.exit(1); });
           NODEEOF
-          node /tmp/pull.mjs 2>&1 | tee /tmp/pull.log
+          node /tmp/pull.cjs 2>&1 | tee /tmp/pull.log
 
       - name: Upload pulled files into Azure Blob (personal container, single batch)
         run: |
