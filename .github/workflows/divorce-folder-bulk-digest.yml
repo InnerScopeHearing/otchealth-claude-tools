@@ -150,24 +150,9 @@ jobs:
           NODEEOF
           node /tmp/pull.mjs 2>&1 | tee /tmp/pull.log
 
-      - name: Publish pull log for debugging (always runs)
-        if: always()
-        working-directory: octools
-        run: |
-          set -euo pipefail
-          mkdir -p diagnostics
-          cp /tmp/pull.log diagnostics/pull-log.md 2>/dev/null || echo "no pull.log" > diagnostics/pull-log.md
-          find /tmp/onedrive_pull -type f 2>/dev/null | head -50 >> diagnostics/pull-log.md || true
-          git config user.name "cto-diagnostic-bot"
-          git config user.email "cto-bot@otchealth.app"
-          git checkout -B diag-connector-toolset-latest
-          git add diagnostics/pull-log.md
-          git commit -m "Diagnostic: OneDrive pull log" || echo "nothing to commit"
-          git push origin diag-connector-toolset-latest --force || echo "push failed"
-
       - name: Upload pulled files into Azure Blob (personal container, single batch)
         run: |
-          set -euo pipefail
+          set -uo pipefail
           ACCT=$(cat /tmp/legal_acct.txt)
           KEY=$(cat /tmp/legal_key.txt)
           COUNT=$(find /tmp/onedrive_pull -type f | wc -l)
@@ -177,8 +162,11 @@ jobs:
             --destination "personal" \
             --destination-path "clo-outgoing/Divorce Case Summary and ALL Filings" \
             --source /tmp/onedrive_pull \
-            --overwrite true
-          echo "Upload complete."
+            --overwrite true > /tmp/upload.log 2>&1
+          UPSTATUS=$?
+          cat /tmp/upload.log
+          echo "Upload exit status: $UPSTATUS"
+          exit $UPSTATUS
 
       - name: Run doc-indexer against the newly-uploaded prefix
         working-directory: octools
@@ -202,3 +190,38 @@ jobs:
           set -euo pipefail
           export AZURE_LEGAL_STORAGE_KEY=$(cat /tmp/legal_key.txt)
           node skills/doc-indexer/indexer.mjs status --profile legal --azure --container personal | tee /tmp/status_output.log
+
+      - name: Publish all logs for debugging (always runs, end of job)
+        if: always()
+        working-directory: octools
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          {
+            echo "# Bulk digest pipeline logs - $(date -u)"
+            echo ""
+            echo "## Pull log"
+            echo '```'
+            cat /tmp/pull.log 2>/dev/null || echo "(no pull.log)"
+            echo '```'
+            echo ""
+            echo "## File count pulled"
+            find /tmp/onedrive_pull -type f 2>/dev/null | wc -l || echo 0
+            echo ""
+            echo "## Upload log"
+            echo '```'
+            cat /tmp/upload.log 2>/dev/null || echo "(no upload.log - step may not have run)"
+            echo '```'
+            echo ""
+            echo "## Index output log"
+            echo '```'
+            cat /tmp/index_output.log 2>/dev/null || echo "(no index_output.log)"
+            echo '```'
+          } > diagnostics/pull-log.md
+          git config user.name "cto-diagnostic-bot"
+          git config user.email "cto-bot@otchealth.app"
+          git fetch origin diag-connector-toolset-latest 2>/dev/null || true
+          git checkout -B diag-connector-toolset-latest
+          git add diagnostics/pull-log.md
+          git commit -m "Diagnostic: bulk digest pipeline logs" || true
+          git push origin diag-connector-toolset-latest --force
