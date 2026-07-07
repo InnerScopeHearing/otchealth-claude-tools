@@ -29,11 +29,21 @@ jobs:
       - name: Fetch credentials from Key Vault
         run: |
           set -euo pipefail
+          ACCT=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-account --query value -o tsv)
+          KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-key --query value -o tsv)
+          DI_EP=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-docintel-endpoint --query value -o tsv)
+          DI_KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-docintel-key --query value -o tsv)
+
+          # Mask BEFORE these values ever land in GITHUB_ENV, so no later step's auto-printed
+          # "env:" block (or any accidental echo) can leak them in plaintext to the job log.
+          echo "::add-mask::${KEY}"
+          echo "::add-mask::${DI_KEY}"
+
           {
-            echo "AZURE_LEGAL_STORAGE_ACCOUNT=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-account --query value -o tsv)"
-            echo "AZURE_LEGAL_STORAGE_KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-key --query value -o tsv)"
-            echo "AZURE_DOCINTEL_ENDPOINT=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-docintel-endpoint --query value -o tsv)"
-            echo "AZURE_DOCINTEL_KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-docintel-key --query value -o tsv)"
+            echo "AZURE_LEGAL_STORAGE_ACCOUNT=${ACCT}"
+            echo "AZURE_LEGAL_STORAGE_KEY=${KEY}"
+            echo "AZURE_DOCINTEL_ENDPOINT=${DI_EP}"
+            echo "AZURE_DOCINTEL_KEY=${DI_KEY}"
           } >> "$GITHUB_ENV"
 
       - name: Run targeted OCR force-fix (2 files only)
@@ -54,6 +64,6 @@ jobs:
           git config user.name "cto-diagnostic-bot"
           git config user.email "cto-bot@otchealth.app"
           git checkout -B diag-connector-toolset-latest
-          git add diagnostics/force-ocr-two-summaries.log
+          git add -f diagnostics/force-ocr-two-summaries.log
           git commit -m "Diagnostic: force-OCR output for the 2 garbled divorce summary PDFs" || echo "nothing to commit"
           git push origin diag-connector-toolset-latest --force
