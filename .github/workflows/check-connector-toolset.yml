@@ -21,60 +21,65 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Inspect catalog entries + text sidecar quality for the divorce filings
+      - name: Pull sample text sidecars and catalog rows for quality inspection
+        if: always()
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p diagnostics
           ACCT=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-account --query value -o tsv)
           KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-key --query value -o tsv)
-          az storage blob download --account-name "$ACCT" --account-key "$KEY" \
-            --container-name personal --name "_CATALOG/catalog.jsonl" --file /tmp/catalog.jsonl
+
           {
             echo "# Digest quality check - $(date -u)"
             echo ""
-            echo "Total catalog rows: $(wc -l < /tmp/catalog.jsonl)"
+
+            echo "## Catalog rows for the two new summary PDFs + the 68MB largest filing"
+            az storage blob download --account-name "$ACCT" --account-key "$KEY" \
+              --container-name personal --name "_CATALOG/catalog.jsonl" --file /tmp/catalog.jsonl 2>&1
+            echo "catalog download exit: $?"
+            echo '```'
+            grep "Summary of All Divorce Documents" /tmp/catalog.jsonl 2>&1 | head -1
+            grep "Summary of All Divorce Hearings" /tmp/catalog.jsonl 2>&1 | head -1
+            grep "7957093_S_DR_0067153" /tmp/catalog.jsonl 2>&1 | head -1
+            grep "8166260_S_DR_0067153" /tmp/catalog.jsonl 2>&1 | head -1
+            echo '```'
             echo ""
-            python3 << 'PYEOF'
-            import json
-            errs = []
-            divorce_rows = []
-            with open('/tmp/catalog.jsonl') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except Exception:
-                        continue
-                    if 'clo-outgoing/Divorce Case Summary' in row.get('path',''):
-                        divorce_rows.append(row)
-                        if row.get('err'):
-                            errs.append(row)
-            print('divorce rows found:', len(divorce_rows))
-            print('rows with err set:', len(errs))
-            for e in errs[:10]:
-                print('  ERR:', e.get('path'), '->', e.get('err'))
-            print()
-            print('text_chars distribution (sorted, first 20 smallest):')
-            sorted_rows = sorted(divorce_rows, key=lambda r: r.get('text_chars') or 0)
-            for r in sorted_rows[:20]:
-                print(f"  {r.get('text_chars')} chars | {r.get('size')} bytes | ocr={r.get('ocr')} | {r.get('path').split('/')[-1]}")
-            print()
-            print('largest files text_chars:')
-            sorted_rows_desc = sorted(divorce_rows, key=lambda r: r.get('size') or 0, reverse=True)
-            for r in sorted_rows_desc[:5]:
-                print(f"  {r.get('text_chars')} chars extracted | {r.get('size')} bytes original | ocr={r.get('ocr')} | {r.get('path').split('/')[-1]}")
-          PYEOF
-          } > diagnostics/pull-log.md
+
+            echo "## Text sidecar: Summary of All Divorce Documents (first 3000 chars)"
+            echo '```'
+            az storage blob download --account-name "$ACCT" --account-key "$KEY" \
+              --container-name personal \
+              --name "_TEXT/clo-outgoing/Divorce Case Summary and ALL Filings/Summary of All Divorce Documents as of 7.6.26.pdf.txt" \
+              --file /tmp/summary_docs.txt 2>&1
+            echo "download exit: $?"
+            head -c 3000 /tmp/summary_docs.txt 2>&1
+            echo ""
+            echo "total chars: $(wc -c < /tmp/summary_docs.txt 2>/dev/null || echo 0)"
+            echo '```'
+            echo ""
+
+            echo "## Text sidecar: 68MB Statement of Issues and Contentions (first 2000 chars + total length)"
+            echo '```'
+            az storage blob download --account-name "$ACCT" --account-key "$KEY" \
+              --container-name personal \
+              --name "_TEXT/clo-outgoing/Divorce Case Summary and ALL Filings/7957093_S_DR_0067153_01_30_2026_Statement_of_Issues_and_Contentions.pdf.txt" \
+              --file /tmp/big_file.txt 2>&1
+            echo "download exit: $?"
+            head -c 2000 /tmp/big_file.txt 2>&1
+            echo ""
+            echo "total chars: $(wc -c < /tmp/big_file.txt 2>/dev/null || echo 0)"
+            echo '```'
+          } > diagnostics/pull-log.md 2>&1
+
           cat diagnostics/pull-log.md
 
       - name: Commit findings
+        if: always()
         run: |
-          set -euo pipefail
+          set -uo pipefail
           git config user.name "cto-diagnostic-bot"
           git config user.email "cto-bot@otchealth.app"
           git checkout -B diag-connector-toolset-latest
           git add diagnostics/pull-log.md
-          git commit -m "Diagnostic: divorce filings digest quality check"
+          git commit -m "Diagnostic: divorce filings digest quality check v2"
           git push origin diag-connector-toolset-latest --force
