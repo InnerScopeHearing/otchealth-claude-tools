@@ -21,32 +21,25 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Check id-otc-jobs-kv RBAC across vault, ACR, and legal storage account
+      - name: Grant Storage Blob Data Contributor to id-otc-jobs-kv on otchealthlegalstore
         run: |
           set -euo pipefail
-          mkdir -p diagnostics
           PID="29f8b1b3-d293-43bf-8e3a-093ee4007a90"
+          SCOPE="/subscriptions/55c84f6b-ef90-4259-a58b-50835cc4cab4/resourceGroups/otchealth-automation-rg/providers/Microsoft.Storage/storageAccounts/otchealthlegalstore"
+          mkdir -p diagnostics
           {
-            echo "# doc-indexer RBAC diagnostic v2 - $(date -u)"
+            echo "# Grant doc-indexer identity write access to legal storage - $(date -u)"
             echo ""
-            echo "## Raw role assignment list for id-otc-jobs-kv (principalId $PID)"
+            echo "## Creating role assignment: Storage Blob Data Contributor"
             echo '```json'
-            az role assignment list --assignee "$PID" --all -o json || echo "CLI_ERROR_EXIT_$?"
+            az role assignment create --assignee-object-id "$PID" --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Contributor" --scope "$SCOPE" -o json
             echo '```'
             echo ""
-            echo "## Role assignments scoped just at the legal storage account"
+            echo "## Verify: role assignments now at this scope"
             echo '```json'
-            az role assignment list --assignee "$PID" --scope /subscriptions/55c84f6b-ef90-4259-a58b-50835cc4cab4/resourceGroups/otchealth-automation-rg/providers/Microsoft.Storage/storageAccounts/otchealthlegalstore -o json || echo "CLI_ERROR_EXIT_$?"
-            echo '```'
-            echo ""
-            echo "## Role assignments scoped just at the vault"
-            echo '```json'
-            az role assignment list --assignee "$PID" --scope /subscriptions/55c84f6b-ef90-4259-a58b-50835cc4cab4/resourceGroups/rg-otchealth-shared-prod/providers/Microsoft.KeyVault/vaults/kv-otc-55c84f6bef -o json || echo "CLI_ERROR_EXIT_$?"
-            echo '```'
-            echo ""
-            echo "## Role assignments scoped just at the ACR"
-            echo '```json'
-            az role assignment list --assignee "$PID" --scope /subscriptions/55c84f6b-ef90-4259-a58b-50835cc4cab4/resourceGroups/otchealth-automation-rg/providers/Microsoft.ContainerRegistry/registries/otchealthacr -o json || echo "CLI_ERROR_EXIT_$?"
+            sleep 10
+            az role assignment list --assignee "$PID" --scope "$SCOPE" -o json
             echo '```'
           } > diagnostics/connector-toolset.md
           cat diagnostics/connector-toolset.md
@@ -59,5 +52,5 @@ jobs:
           BRANCH="diag-connector-toolset-latest"
           git checkout -B "$BRANCH"
           git add diagnostics/connector-toolset.md
-          git commit -m "Diagnostic v2: doc-indexer identity RBAC raw dump"
+          git commit -m "Grant: id-otc-jobs-kv Storage Blob Data Contributor on otchealthlegalstore"
           git push origin "$BRANCH" --force
