@@ -52,6 +52,13 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 function resolveSaJson() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
+  // This job's Container Apps spec passes the SA as GCP_CLAUDE_DRIVER_SA_JSON_B64 (secretRef "sab64")
+  // and runs `node` directly with no shell wrapper to decode it first (unlike decision-clock-sweep.sh
+  // / librarian.sh, which do `export GCP_CLAUDE_DRIVER_SA_JSON=$(... | base64 -d)` before invoking
+  // node) -- decode it here instead of requiring a job-spec change.
+  if (process.env.GCP_CLAUDE_DRIVER_SA_JSON_B64) {
+    try { return Buffer.from(process.env.GCP_CLAUDE_DRIVER_SA_JSON_B64, "base64").toString("utf8"); } catch {}
+  }
   const p = `${homedir()}/.gcp_claude_driver_sa.json`;
   try { if (existsSync(p)) return readFileSync(p, "utf8"); } catch {}
   return null;
