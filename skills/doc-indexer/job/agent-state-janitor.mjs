@@ -29,7 +29,7 @@
 //   - Fails LOUD: any credential/network/query error throws and exits non-zero, so the Container Apps
 //     Job's own retry/alerting reflects a real failure instead of a green checkmark over broken state.
 import crypto from "node:crypto";
-import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
 const COSMOS_API_VERSION = "2018-12-31";
