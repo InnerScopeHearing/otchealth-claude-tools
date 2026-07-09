@@ -14,6 +14,17 @@
 // skills/decision-clock/cosmos-client.mjs and skills/signal-radar/common.mjs (master-key HMAC auth,
 // creds self-resolved via kvSecret -- Key Vault first, GCP Secret Manager fallback).
 //
+// CREDENTIAL PATH (fixed 2026-07-09): this job predates the fleet's managed-identity-for-Key-Vault
+// pattern (established 2026-07-05, see azure-secret.mjs's A9-MANAGED-IDENTITY note) and originally
+// shipped with identity:None, relying only on the legacy GCP-Secret-Manager fallback -- which is
+// silently dead now that the fleet has moved its secrets to Azure Key Vault (confirmed live: the SA
+// key decodes fine but the resulting GCP token mint/Secret Manager call never succeeds). Fixed by
+// attaching a SystemAssigned identity to the job (principalId 1e711cfe-584e-4d48-931a-a84b20c62fcd)
+// and granting it "Key Vault Secrets User" on kv-otc-55c84f6bef -- kvSecret()'s identity path now
+// resolves cosmos-agent-state-endpoint/key/db directly, no GCP round-trip needed. The GCP fallback
+// stays in this file for now (harmless, matches every other doc-indexer-family job's code shape) but
+// is not the path this job actually uses.
+//
 // SAFETY MODEL (read this before touching CLEANUP_RULES):
 //   - Hard allowlist: ONLY the containers listed in CLEANUP_RULES are eligible for deletion, ever.
 //     decisions_pending, tasks, and memory are load-bearing governance/ledger data (open decision
@@ -214,8 +225,6 @@ async function reportContainer(rule) {
 }
 
 async function main() {
-  console.log("[janitor] env keys present:", Object.keys(process.env).sort().join(","));
-  console.log("[janitor] GCP_CLAUDE_DRIVER_SA_JSON_B64 present:", Boolean(process.env.GCP_CLAUDE_DRIVER_SA_JSON_B64), "len:", (process.env.GCP_CLAUDE_DRIVER_SA_JSON_B64 || "").length);
   console.log(`[janitor] agent-state-janitor starting -- mode=${DRY_RUN ? "DRY_RUN" : "APPLY"} db=${(await cfg()).db}`);
   const results = { cleaned: [], reported: [], startedAt: new Date().toISOString() };
   for (const rule of CLEANUP_RULES) {
