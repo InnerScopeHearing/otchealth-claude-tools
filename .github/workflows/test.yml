@@ -34,3 +34,6 @@ jobs:
 
       - name: run-tests.sh
         run: bash run-tests.sh
+
+      - name: lint-silent-success
+        run: node setup/lint-silent-success.mjs --dir .
