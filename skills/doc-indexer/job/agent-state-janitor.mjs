@@ -214,6 +214,8 @@ async function reportContainer(rule) {
 }
 
 async function main() {
+  console.log("[janitor] env keys present:", Object.keys(process.env).sort().join(","));
+  console.log("[janitor] GCP_CLAUDE_DRIVER_SA_JSON_B64 present:", Boolean(process.env.GCP_CLAUDE_DRIVER_SA_JSON_B64), "len:", (process.env.GCP_CLAUDE_DRIVER_SA_JSON_B64 || "").length);
   console.log(`[janitor] agent-state-janitor starting -- mode=${DRY_RUN ? "DRY_RUN" : "APPLY"} db=${(await cfg()).db}`);
   const results = { cleaned: [], reported: [], startedAt: new Date().toISOString() };
   for (const rule of CLEANUP_RULES) {
