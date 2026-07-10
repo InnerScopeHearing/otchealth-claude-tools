@@ -5,6 +5,14 @@
 **Lane:** `coo` (write-through `--tags moore-playbook,capital`) · **Status:** v1 — internal working doc
 **Parent:** `projects/moore-playbook/MOORE-PLAYBOOK.md` (§6B the flywheel)
 
+> ## ⚠️ READ `INNERSCOPE-STANDALONE-PROFILE.md` FIRST (added 2026-07-10)
+> A same-day standalone review found the roll-up-with-stock thesis below currently rests on an
+> unstable foundation — an actively accelerating dilution mechanism (§3 of that doc) undermines
+> the "stock is a stable acquisition currency" assumption this document depends on, and the
+> underlying standalone financials are mid-reconstruction, not audit-ready. Treat this document
+> as the destination thesis, not something ready to act on, until the preconditions listed there
+> are met.
+>
 > ## ⛔ READ FIRST — what this is and the wall around it
 > This is an **internal planning framework**, NOT investor material, NOT an offer or
 > solicitation, and NOT legal or financial advice. **InnerScope (INND) is a public company.**

@@ -4,6 +4,14 @@
 **Author:** COO (The Quarterback) · **Sponsor:** Matthew Moore · **Date:** 2026-06-28
 **Lane:** `coo` (`--tags moore-playbook,capital`) · **Parent:** `INND-CAPITAL-FLYWHEEL.md` §4
 
+> ## ⚠️ READ `INNERSCOPE-STANDALONE-PROFILE.md` FIRST (added 2026-07-10)
+> The "pay in stock, re-rate at the public multiple" model in §5 assumes a stable acquisition
+> currency. A same-day standalone review found InnerScope's share count is currently being
+> diluted rapidly by an actively converting note — the opposite of stable. This doesn't
+> invalidate the category research below, but the multiple-arbitrage math should not be treated
+> as actionable until that's resolved. See that doc's §3 and §5 for the mechanism and the
+> preconditions.
+>
 > ## ⛔ READ FIRST
 > **This is research only. No company named below has been contacted, is being approached, or
 > is a confirmed target — inclusion is publicly-sourced market context illustrating a category,
