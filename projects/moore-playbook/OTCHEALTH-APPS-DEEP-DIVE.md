@@ -1,8 +1,19 @@
-# OTCHealth Portfolio — Deep Research Pass (v3, repo-verified, full catalog)
+# OTCHealth Portfolio — Deep Research Pass (v5, live-site-verified)
 ### Pricing, objectives, markets, comps, and opportunity — the PSAP, the OTC hearing aid line, the apps, and the sales channel, individually and as a group
 
-**Author:** COO (The Quarterback) · **Date:** 2026-07-10 · **Status:** v3 — corrects v2's device
-classification after Matt's second correction. Feeds the OTCHealth Playbook + Deck.
+**Author:** COO (The Quarterback) · **Date:** 2026-07-10 · **Status:** v5 — Matt asked to bypass
+async CFO/CRO dispatches and verify directly against the live storefront (otchealthmart.com).
+Browsed the actual live catalog and two product pages. Feeds the OTCHealth Playbook + Deck.
+**Live-site correction (round 3):** Matrix's live page correctly carries full FDA OTC hearing
+aid labeling and red-flag warnings — this is real and already implemented, not a future risk.
+TReO's live page correctly carries PSAP/not-a-hearing-aid disclaimer language — also already
+correct. **iHEAR Axis and iHEAR Linx are marked SOLD OUT on the live site, not "pre-launch
+waitlist"** as the repo-based v3 pass characterized them — the live site is more authoritative
+for current customer-facing status than the repo's own internal docs were. **The three
+"OTCHealth CareNow" membership products are live and purchasable — and their actual live
+product pages show no share/equity/INND-bundling language at all**, just a standard health
+membership ($99-189/yr, locking in $9.99-19.99/mo). This appears to resolve positively the 17(b)
+flag carried since §0.5 below — though only one of three tiers' full page was checked in detail.
 **Lane:** `coo` (`--tags moore-playbook,apps-deep-dive`) · **Scope:** OTCHealth entity ONLY per
 `RACI.md` §0 — FourVault/Flatstick/Fictionary/PlantID/HaulAI (personal projects) and InnerScope
 (INND) corporate content are excluded by design. `medreview` was researched at the market-category
@@ -54,16 +65,20 @@ deck needs to say so precisely, not blend them:**
   reignition-revenue trigger (from TReO sales) — **the registration itself is for the OTC line,
   not for TReO's own inventory**, which needs no such registration to sell or refurbish.
 
-### 0.3 Pricing — corrected, repo-verified, full catalog
-| Product | Layer | Status | Actual price (repo-verified) |
+### 0.3 Pricing — live-site-verified 2026-07-10 (supersedes repo-based estimates below where they differ)
+| Product | Layer | Status (live site) | Actual price (live site) |
 |---|---|---|---|
-| **iHEAR TReO** | **PSAP** | Live, dormant | Single $99/side; Pair $149 list → **$99 via PAIR99** (evergreen) |
-| **iHEAR Matrix** | OTC hearing aid | Pre-order, ships "late Aug 2026," gated on FDA OTC Establishment Registration | $349 list → **$174.50 via MATRIX50** |
-| **EAZE Classic** (BTE thin-tube) | OTC hearing aid | Currently unavailable/sold out | ~$399.99 (anchor $499.99) |
-| **STREAM RIC** (Bluetooth) | OTC hearing aid | Currently unavailable/sold out | ~$649.99 (anchor $799.99) |
-| **CONNECT ITE** (Bluetooth) | OTC hearing aid | Currently unavailable/sold out | ~$599.99 |
-| **iHEAR Linx** (earbud-style) | OTC hearing aid | Pre-launch waitlist, Q4 2026 | ~$239 (anchor $599) |
-| **iHEAR Axis** (BTE-style) | OTC hearing aid | Pre-launch waitlist, Q4 2026 | ~$599 (anchor $699) |
+| **iHEAR TReO — Personal (single)** | **PSAP** | Live, in stock | $99 (compare-at $299) |
+| **iHEAR TReO — Complete Pair** | **PSAP** | Live, in stock | $149 listed (compare-at $598); PAIR99 code drops further to $99 per repo — not re-verified at checkout this pass |
+| **iHEAR Matrix** | OTC hearing aid | Live, in stock, ships "late Aug 2026" (pre-order/reservation) | **$349** (compare-at $995, described as former CVS/retail price). Full FDA OTC labeling + red-flag warnings confirmed present on the live page. The MATRIX50→$174.50 code found in the repo was NOT visible as an on-page discount — unverified whether still active |
+| **iHEAR Axis** | OTC hearing aid | **SOLD OUT** (not "pre-launch" — corrects v3) | $329 listed (compare-at $699) |
+| **iHEAR Linx** | OTC hearing aid | **SOLD OUT** (not "pre-launch" — corrects v3) | $239 listed (compare-at $599) |
+| **EAZE Classic** | OTC hearing aid | SOLD OUT (confirmed) | $399.99 listed (compare-at $499.99) |
+| **STREAM RIC** | OTC hearing aid | SOLD OUT (confirmed) | $649.99 listed (compare-at $799.99) |
+| **CONNECT ITE** | OTC hearing aid | SOLD OUT (confirmed) | $599.99 (no compare-at shown) |
+| **OTCHealth CareNow — Founding 100** | Membership (not hardware) | Live, in stock (100 qty) | $99 first year (compare-at $228), locks $9.99/mo for life. No share/equity language on the page. |
+| **OTCHealth CareNow — Charter 500** | Membership (not hardware) | Live | $149 first year (compare-at $228), locks $14.99/mo for life |
+| **OTCHealth CareNow — Early Access** | Membership (not hardware) | Live | $189 first year (compare-at $228), locks $19.99/mo for life |
 | **iHEARtest** | App | Live | Free core; unshipped paywall stub ($4.99/mo) + a planned V1.3 tier ($9.99/$79.99/$149.99) |
 | **AWARE** | App | TestFlight only | **Decided and coded:** $9.99/mo, $79.99/yr, $149.99 lifetime |
 | **InnerEase** | App | Early build | SKU structure set, dollar amounts not yet decided |
@@ -81,14 +96,23 @@ instead of the current $349/$174.50 structure — a customer-facing pricing bug,
 Already dispatched to Commerce/CRO/CTO; repeating here because it's the single highest-priority
 item in this whole research thread.
 
-### 0.5 A compliance flag already known, reaffirmed here, not new
-The Shopify catalog also contains "OTCHealth CareNow" membership products that bundle INND
-shares — the repo's own `research/PHASE3_CATALOG_FIXES.md` already flags this as a Section 17(b)
-securities-compliance concern. This matches the standing gate already documented elsewhere
-(CareNow is "counsel-blocked, 17(b)" in `MOORE-PLAYBOOK-12MONTH.md` and `RACI.md`) — **not a new
-problem, just confirming the existing gate is correctly recognized in the actual product
-catalog too.** No action needed beyond continuing to keep CareNow off any live storefront path
-until counsel clears it.
+### 0.5 The CareNow flag — updated after live verification, needs a decision either way
+Earlier passes found the repo's own `research/PHASE3_CATALOG_FIXES.md` flagging "OTCHealth
+CareNow" as a Section 17(b) securities concern (bundling INND shares), consistent with the
+standing "CareNow is counsel-blocked, 17(b)" gate in `MOORE-PLAYBOOK-12MONTH.md`/`RACI.md`.
+**Live verification (2026-07-10) found something worth a direct decision, not just a reaffirm:**
+**CareNow is currently live, in stock, and purchasable on otchealthmart.com right now** — which
+on its face contradicts a gate that says it should stay off any live storefront path. The actual
+product page content itself (Founding 100 tier, checked in full) shows no share/equity/INND
+language at all — it reads as a plain $9.99-19.99/mo health membership. Two honest
+possibilities, not resolved here: (a) the share-bundling concern was already fixed before this
+went live, and what's live today is a clean, non-securities product — the gate's intent may
+already be satisfied; or (b) the gate is being bypassed and a live, real, purchasable product is
+currently exposed to the 17(b) concern regardless of what today's page copy shows (e.g. if the
+concern was about the underlying legal structure/terms, not the marketing copy). **Recommend
+CFO/CCO/Capital-IR confirm which is true before treating this as either a false alarm or a
+non-issue** — I did not check the checkout flow, terms of service, or fulfillment logic behind
+these products, only the two product pages themselves.
 
 ### 0.6 The bundle opportunity — unchanged from v2
 See v2 §0.5 — an "OTCHealth Plus" software bundle (AWARE + Companion + eventually InnerEase) is
