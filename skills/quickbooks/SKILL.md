@@ -1,6 +1,6 @@
 ---
 name: quickbooks
-description: Drive MULTIPLE QuickBooks Online company files (realms) from one place for the CFO data pipeline. One Intuit app authorized to many companies (OTCHealth, InnerScope/INND, HearingAssist, and Matthew's personal books), each with its own realmId + refresh token. Read (query) and write (bills, expenses, journal entries) per company. Wielded by the CFO / finance agent. Solves the single-company limit of the prebuilt QuickBooks connector. Entity scoping is HARD: OTCHealth writes open; INND + HearingAssist (INND subsidiary) writes gated + logged (public company, counsel); personal books carry the related-party / due-to-officer loans that must reconcile against the company side.
+description: Drive MULTIPLE QuickBooks Online company files (realms) from one place for the CFO data pipeline. One Intuit app authorized to many companies (OTCHealth, InnerScope/INND, HearingAssist, and Matthew's personal books), each with its own realmId + refresh token. Read (query) and write (bills, expenses, journal entries) per company. Wielded by the CFO / finance agent. Solves the single-company limit of the prebuilt QuickBooks connector. Entity scoping: all four orgs are in the CFO write lane. INND deregistered from SEC reporting in 2021 and self-discloses under the OTC Markets Alternative Reporting Standard with no counsel or accounting staff, so the CFO has full authority to prepare and post INND + HearingAssist books (Matt directive 2026-06-18); the money gate + securities firewall still apply. Personal books carry the related-party / due-to-officer loans that must reconcile against the company side.
 ---
 
 # QuickBooks Online, multi-company (CFO)
@@ -12,8 +12,10 @@ vault; this helper targets any company by key.
 
 ## The four companies (keys)
 - `otchealth` -> OTCHealth Inc. (writes OPEN)
-- `innd` -> InnerScope / INND (PUBLIC co; writes GATED + logged, counsel)
-- `hearingassist` -> HearingAssist (INND subsidiary; consolidates into INND; gated ring)
+- `innd` -> InnerScope / INND (non-SEC since 2021; OTC Markets ARS, self-prepared, no counsel;
+  CFO has FULL authority to prepare + post — Matt directive 2026-06-18)
+- `hearingassist` -> HearingAssist (INND subsidiary; consolidates into INND under ASC 810;
+  same full-authority CFO write lane as INND)
 - `personal` -> Matthew Moore personal books (the loans/payments back and forth book as
   due-to/due-from officer and reconcile against the company side)
 
@@ -56,9 +58,13 @@ echo '<json>' | node skills/quickbooks/qbo.mjs <company> request POST '/bill'   
 ```
 
 ## Guardrails (HARD)
-- **Entity scoping.** OTCHealth writes open. INND + HearingAssist writes GATED + logged
-  (public company; external financials need a human CPA + counsel). Never auto-post to INND
-  or HearingAssist's books.
+- **Entity scoping.** All four orgs are in the CFO write lane. INND deregistered from SEC
+  reporting in 2021 and self-discloses under the OTC Markets Alternative Reporting Standard
+  with no outside counsel or accounting staff, so the CFO holds FULL authority to prepare and
+  post INND + HearingAssist books (Matt directive 2026-06-18). The money gate (record, never
+  move money or commit the company) and the securities firewall (no INND stock promotion)
+  still apply; INND/HA financials are published to OTC Markets under ARS, so hold audit-grade
+  rigor and tie every entry to a source document.
 - **Source-of-truth.** Every posted entry ties to a real source document in the CFO Ledger.
   Ambiguous items go to Matt. Nothing fabricated.
 - **Stage, then post.** Transactions/bills stage in the Notion CFO Ledger for review; the
