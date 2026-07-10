@@ -170,7 +170,12 @@ async function mcpCall(bearer, toolName, args) {
   }
   if (!msg) throw new Error(`gateway call ${toolName}: could not parse response body (${bodyText.slice(0, 200)})`);
   if (msg.error) throw new Error(`gateway call ${toolName} error: ${JSON.stringify(msg.error).slice(0, 300)}`);
-  return msg.result || {};
+  const result = msg.result || {};
+  if (result.isError) {
+    const errText = ((result.content || [])[0] || {}).text || JSON.stringify(result).slice(0, 300);
+    throw new Error(`gateway call ${toolName} returned a tool-level error: ${errText.slice(0, 400)}`);
+  }
+  return result;
 }
 
 /** Pull the full payload for a JIT-offloaded result (see src/tools/result-store.ts on the gateway). */
@@ -239,9 +244,14 @@ async function exportLedger(bearer) {
 // through the gateway's read-only brain_search tool rather than holding a Search admin key in this
 // job, at the cost of only getting back whatever fields brain_search projects (not literally every
 // internal field) — that's an intentional least-privilege tradeoff documented here and in the PR.
-// pageSize kept modest (50, not 200) to stay comfortably under the gateway's JIT-offload threshold
-// on most pages, though fetchOffloaded() above handles the offloaded case either way.
-async function exportBrainIndex(bearer, { pageSize = 50 } = {}) {
+// pageSize is hard-capped at 25 by brain_search's own input schema (confirmed live: passing
+// top=50 returns an MCP tool-level error "Number must be less than or equal to 25" -- the ORIGINAL
+// version of this file used pageSize=200, then 50, both silently swallowed as "0 docs" because
+// mcpCall() below didn't check the tool-level `isError` flag on the response and instead tried to
+// JSON.parse the MCP error string as data, got {raw: "<error text>"}, and exportBrainIndex read an
+// absent `.matches` off that as an empty page. Both bugs are fixed here: the real page-size ceiling,
+// and mcpCall() now throws on `result.isError` instead of silently returning garbage.
+async function exportBrainIndex(bearer, { pageSize = 25 } = {}) {
   const rows = [];
   let skip = 0;
   for (;;) {
