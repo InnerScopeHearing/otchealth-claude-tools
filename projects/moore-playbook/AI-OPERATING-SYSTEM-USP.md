@@ -11,14 +11,34 @@ NOT yet cleared for external/investor use
 > to an underwriter.** It inherits the same accuracy flags as `MASTER-DATAROOM-INDEX.md` Store F
 > (the Tech Stack page) — do not treat anything here as final until CTO has verified the
 > underlying facts (dispatched 2026-07-10, response pending).
+>
+> **⚠️ NEW 2026-07-10 — read before deciding whether to keep the Medvi comparison at all.** A
+> freshness check on Medvi (the comparison this whole doc is built around) turned up two things:
+> (1) a factual correction to the FDA claim below (now fixed in §2/§4), and (2) a materially
+> worse pattern that has emerged SINCE that FDA letter — a RICO Act lawsuit, a CAN-SPAM class
+> action over mass affiliate spam, personal right-to-attach orders against Medvi's founder, a
+> fake-doctor/deepfake-ad scandal (800+ fabricated physician accounts), and a data breach at
+> Medvi's clinical partner exposing ~1.6M patient records. None of that is in this doc's
+> comparison — an investor who googles "Medvi" today gets a much darker picture than "one
+> compliance misstep we're structurally avoiding." **This is a business-judgment call for Matt,
+> not something to decide inside a doc:** keep Medvi as the named comparison with heavier
+> caveats and be ready for the fuller picture to come up, or drop the named comparison and use
+> the underlying operating-model argument (thin-human/AI-workforce/outsourced-atoms) without
+> naming Medvi at all. Full research logged to the `coo` ledger, decision
+> `20260710-medvi-freshness`.
 
 ---
 
 ## 1. The one-line USP (the headline)
 
 > **"OTCHealth runs on an AI Operating System that lets one operator do the work of a
-> department — the same operating leverage that took Medvi from zero to a $1.8B run-rate with
-> two people, applied to a structurally safer product with compliance enforced in code."**
+> department — the same operating leverage Medvi used to go from zero to $401M in year-one
+> revenue with two people, applied to a structurally safer product with compliance enforced in
+> code."**
+>
+> *(Note: use "$401M year-one revenue," not "$1.8B run-rate" — the $1.8B figure is a founder-
+> stated 2026 projection reported by the NYT, not audited/realized revenue. Citing it as fact is
+> a checkable overclaim.)*
 
 **Alternate, shorter version for a slide header:**
 > **The company of a thousand, run by one.**
@@ -33,14 +53,22 @@ built and running, not a roadmap slide:
 
 - **A live, working AI exec fleet** — the company's actual functional org chart (CFO, CTO, CRO,
   CCO, CPO, Capital, COO + App Leads) runs as software today, not a hiring plan.
-- **A real precedent at scale.** Medvi — two people, ~$401M revenue in year one, ~$1.8B run-rate,
-  16.2% net margin — proved this operating model works in a regulated consumer-health category.
-  We are running the *same playbook*, deliberately, on a *safer* product (a PSAP has no FDA
-  shortage clock, no pharmacy single point of failure, no prescribing liability, no PHI-breach
-  exposure the way Medvi's compounded-drug model did).
-- **Compliance enforced in code, not policy** — the exact failure point that got Medvi an FDA
-  warning letter (unsubstantiated claims at the ad/affiliate layer) is a gate our system enforces
-  automatically before anything publishes. This is the moat Medvi didn't have.
+- **A real precedent at scale.** Medvi — two people, ~$401M revenue in its first year, 16.2% net
+  margin (per NYT reporting; a further "$1.8B run-rate" figure is the founder's own unaudited
+  projection, not a verified fact — don't cite it as realized revenue) — proved this operating
+  model works in a regulated consumer-health category. We are running the *same playbook*,
+  deliberately, on a *safer* product (a PSAP has no FDA shortage clock, no pharmacy single point
+  of failure, no prescribing liability, no PHI-breach exposure the way Medvi's compounded-drug
+  model did).
+- **Compliance enforced in code, not policy** — Medvi's FDA warning letter (Feb 2026, #721455)
+  was a misbranding violation for website claims implying it compounded the drugs itself and
+  that they were "the same active ingredient as" branded GLP-1 drugs, falsely implying FDA
+  approval — **it was about Medvi's own website content, not ad/affiliate marketing.** (Separately,
+  and worse: a RICO suit, a CAN-SPAM class action over affiliate spam, a fake-doctor/deepfake-ad
+  scandal, and a data breach at Medvi's clinical partner have all surfaced since — see the gate
+  note at the top of this doc before using Medvi as a named comparison.) Our claims-compliance
+  gate is built to catch exactly the misbranding-style failure (unsubstantiated/approval-implying
+  product claims) automatically before anything publishes. This is the moat Medvi didn't have.
 - **Near-zero marginal cost to grow the "workforce."** ~90% of the infrastructure is credit-funded
   (Azure, AWS, GitHub, PostHog, and others — see the Tech Stack & Credibility page). Adding the
   next AI "employee" costs approximately nothing in cash.
@@ -81,9 +109,9 @@ public-company relationship — and even then, route through Capital/IR + counse
 
 | If asked... | Say... |
 |---|---|
-| "How can a team this small execute this much?" | "We built an AI operating system that runs the exec functions as software — the fleet, not headcount, is how we execute at this pace. It's the same model that took Medvi to a $1.8B run-rate with two people." |
+| "How can a team this small execute this much?" | "We built an AI operating system that runs the exec functions as software — the fleet, not headcount, is how we execute at this pace. It's the same model that took Medvi to $401M in year-one revenue with two people." |
 | "Isn't that just a chatbot / automation?" | "No — it's a governed fleet of specialized AI agents (finance, compliance, growth, tech, ops) with a shared memory and a single audited tool gateway. Compliance is enforced in code before anything ships, not reviewed after the fact." |
-| "What happened to Medvi — is that a risk for you?" | "Medvi's failure point was unsubstantiated claims reaching customers through ads and affiliates — a policy failure, not a technology failure. We built the claims-compliance gate specifically to prevent that exact failure mode, in code, before publish. We're also on a structurally safer product category — no FDA shortage clock, no pharmacy dependency." |
+| "What happened to Medvi — is that a risk for you?" | "Medvi's FDA letter was about unsubstantiated, approval-implying claims on their own website — a policy failure, not a technology failure. We built the claims-compliance gate specifically to catch that failure mode in code, before publish. We're also on a structurally safer product category — no FDA shortage clock, no pharmacy dependency." **(Prep note, not for the deck: more has come out about Medvi since that FDA letter — a RICO suit, a CAN-SPAM class action, a fake-doctor ad scandal, a partner data breach. If pressed further on Medvi specifically, don't overclaim familiarity with an ongoing legal situation — redirect to our own compliance architecture rather than defending or detailing theirs.)** |
 | "How much does this cost to run?" | "The infrastructure runs ~90% on credit-funded resources from major providers' startup programs (Microsoft, AWS, GitHub, PostHog, and others) — near-zero marginal cost to add the next AI 'employee' or capability." |
 | "Is this proprietary / defensible?" | "The specific integration — the governed gateway, the compliance-in-code moat, the shared memory across the exec fleet — is our build, not an off-the-shelf product. The AI models underneath are widely available; the operating system we've built around them for this specific regulated category is not." |
 
@@ -97,7 +125,10 @@ public-company relationship — and even then, route through Capital/IR + counse
    above that touches the public company and must never go out without that review.
 4. **CFO** confirms the credits/grants figures cited match the reconciled number (see the open
    item in RACI.md §5 — two unreconciled credit-grant lists currently exist).
-5. Once cleared, this becomes the reusable source for slide decks, one-pagers, and live Q&A —
+5. **Matt's call on the Medvi comparison itself** (see the gate note at the top, added
+   2026-07-10) — keep it with the corrections already applied here, or drop the named comparison
+   given what's surfaced since the FDA letter. This gate blocks external use independent of 1-4.
+6. Once cleared, this becomes the reusable source for slide decks, one-pagers, and live Q&A —
    maintained here as the single version of the story so every exec and every deck says the same
    thing.
 
