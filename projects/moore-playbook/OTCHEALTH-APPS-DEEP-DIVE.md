@@ -1,249 +1,219 @@
-# OTCHealth Portfolio — Deep Research Pass (v2, repo-verified)
-### Pricing, objectives, markets, comps, and opportunity — the PSAP hardware line, the apps, and the sales channel, individually and as a group
+# OTCHealth Portfolio — Deep Research Pass (v3, repo-verified, full catalog)
+### Pricing, objectives, markets, comps, and opportunity — the PSAP, the OTC hearing aid line, the apps, and the sales channel, individually and as a group
 
-**Author:** COO (The Quarterback) · **Date:** 2026-07-10 · **Status:** v2 — corrected against the
-actual repos after v1 relied too heavily on a summary doc. Feeds the OTCHealth Playbook + Deck.
+**Author:** COO (The Quarterback) · **Date:** 2026-07-10 · **Status:** v3 — corrects v2's device
+classification after Matt's second correction. Feeds the OTCHealth Playbook + Deck.
 **Lane:** `coo` (`--tags moore-playbook,apps-deep-dive`) · **Scope:** OTCHealth entity ONLY per
 `RACI.md` §0 — FourVault/Flatstick/Fictionary/PlantID/HaulAI (personal projects) and InnerScope
 (INND) corporate content are excluded by design. `medreview` was researched at the market-category
 level only — its repo, code, and data were never accessed, per the standing PHI wall.
 
-> **Correction from Matt (2026-07-10): iHEAR TReO is a PSAP — a physical hardware product — not
-> an app.** v1 of this doc implicitly grouped it with the apps. This version separates the
-> product line into three distinct layers: **(1) the PSAP hardware line** (TReO, and a second
-> product, Matrix, found this pass), **(2) the five software apps**, **(3) the AI voice sales
-> channel** (found this pass, previously undocumented in this doc).
->
-> This version also corrects two real pricing errors from v1: **AWARE's and OTCHealth
-> Companion's subscription pricing were NOT "unset" — both are fully decided and coded.** v1's
-> finding came from a stale summary doc; this pass went directly into each repo and found the
-> real numbers, sourced below with exact file paths.
+> **Correction from Matt (2026-07-10), round 2: "iHEAR Matrix is an OTC Hearing Aid. All of our
+> physical products are OTC Hearing Aids, except for TReO which is a PSAP."** v2 wrongly called
+> Matrix "a second PSAP product line." A full Shopify-catalog pass also found **five more
+> physical products v1/v2 missed entirely** — EAZE Classic, STREAM RIC, CONNECT ITE (a legacy
+> HearingAssist-branded line, currently unavailable), plus iHEAR Linx and iHEAR Axis
+> (pre-launch, Q4 2026). All five are OTC hearing aids, consistent with Matt's rule. **There are
+> 7 physical hearing products total, not 2** — TReO is the sole PSAP; everything else is an OTC
+> hearing aid. This also resolves a real error in v2: the FDA OTC Establishment Registration gate
+> belongs to the OTC hearing aid line (Matrix, and any relaunch of the legacy line), not to
+> TReO's PSAP inventory — the existing `MOORE-PLAYBOOK-12MONTH.md` already had this right
+> ("FDA-register and launch the **OTC** iHEAR Matrix"); this doc's v1/v2 had conflated the two.
 
 ---
 
 ## 0. The group-level view
 
-### 0.1 Three layers, not two
-- **Layer 1 — Hardware (PSAPs, sold via Shopify):** iHEAR TReO, iHEAR Matrix.
-- **Layer 2 — Software apps:** iHEARtest (free), AWARE (subscription), InnerEase (subscription,
-  early build), OTCHealth Companion (subscription, most sophisticated pricing in the portfolio).
-  MedReview sits apart — B2B/enterprise, PHI-walled, no consumer pricing.
-- **Layer 3 — AI voice sales channel:** three ElevenLabs/Twilio phone agents (Promo Sarah, Main
-  Sarah, Helen) that close TReO/Matrix sales by phone — a real, live commerce channel this doc
-  did not previously document at all.
+### 0.1 Four layers, not two
+- **Layer 1 — The PSAP:** iHEAR TReO. Unregulated as a medical device; cannot make hearing-loss
+  claims; this is the only product in the portfolio with that framing.
+- **Layer 2 — The OTC hearing aid line:** iHEAR Matrix (pre-order), plus three legacy
+  HearingAssist-branded devices — EAZE Classic, STREAM RIC, CONNECT ITE (currently unavailable) —
+  plus two pre-launch waitlist products, iHEAR Linx and iHEAR Axis (Q4 2026). All six are FDA
+  OTC-hearing-aid-category devices (21 CFR Part 800 Subpart E), a materially different compliance
+  regime than the PSAP: they're allowed — and in fact FDA-mandated — to carry hearing-aid
+  labeling, red-flag-condition warnings, and specific consumer disclosures; they are NOT allowed
+  to ship without FDA OTC Establishment Registration.
+- **Layer 3 — Software apps:** iHEARtest (free), AWARE (subscription), InnerEase (subscription,
+  early build), OTCHealth Companion (subscription). MedReview sits apart — B2B, PHI-walled.
+- **Layer 4 — AI voice sales channel:** three ElevenLabs/Twilio phone agents (Promo Sarah, Main
+  Sarah, Helen) that close hardware sales by phone.
 
-### 0.2 This is still two markets (unchanged from v1) — plus a hardware-only sub-note
-Hearing-health (TReO, Matrix, iHEARtest, AWARE, InnerEase) vs. senior AI companion/scam-protection
-(OTCHealth Companion, a different comp set entirely — SilverShield/SeniorSafe/Luna, not hearing
-brands). MedReview is a third, B2B category. Frame as diversification, not TAM-stitching.
+### 0.2 The regulatory line that matters most for the deck
+**TReO (PSAP) and the OTC hearing aid line are governed by opposite compliance rules, and the
+deck needs to say so precisely, not blend them:**
+- **TReO:** must never use "hearing aid," "treats/restores/cures hearing loss," or FDA/medical
+  device language. Marketing risk is *overclaiming*.
+- **Matrix + the legacy line + Linx/Axis:** as actual OTC hearing aids, they're required to carry
+  the FDA's mandated OTC hearing aid labeling (21 CFR 801.420 — the "hearing aid" term itself,
+  red-flag conditions requiring a physician referral, an adults-only statement, a return-policy
+  notice) and must complete **FDA OTC Establishment Registration (~$10K)** before shipping any
+  unit. Compliance risk here is *incomplete registration/labeling*, the opposite failure mode
+  from TReO's.
+- This FDA registration gate is sequenced in the existing Playbook to arm at the $25K NET
+  reignition-revenue trigger (from TReO sales) — **the registration itself is for the OTC line,
+  not for TReO's own inventory**, which needs no such registration to sell or refurbish.
 
-### 0.3 Pricing — corrected, repo-verified
+### 0.3 Pricing — corrected, repo-verified, full catalog
 | Product | Layer | Status | Actual price (repo-verified) |
 |---|---|---|---|
-| **iHEAR TReO** | Hardware | Live, dormant | Single $99/side; Pair $149 list → **$99 via code PAIR99** (evergreen, no expiry) |
-| **iHEAR Matrix** | Hardware | Pre-order, ships "late Aug 2026," gated on FDA OTC Establishment Registration | $349 list → **$174.50 via code MATRIX50** |
-| **iHEARtest** | App | Live | **Free** for core screening/simulator/PDF export. A "Sharpen Your Hearing" add-on has a real paywall UI stub (not yet purchasable) hardcoded at **$4.99/mo, $39/yr, 7-day trial**. A separate planned V1.3 RevenueCat tier is speced at **$9.99/mo, $79.99/yr, $149.99 lifetime** — neither is shipped yet. |
-| **AWARE** | App | TestFlight only | **DECIDED AND CODED: $9.99/mo, $79.99/yr (7-day trial), $149.99 lifetime.** Resolved in PR #31 (merged 2026-06-30). One real open item: App Store Connect backend pricing config not independently verified to match the client-side values yet. |
-| **InnerEase** | App | Early build (real code, not just docs) | SKU structure decided (`innerease_pro_monthly/annual/lifetime`, one "pro" entitlement) — **dollar amounts not yet set.** RevenueCat not yet integrated in code. |
-| **OTCHealth Companion** | App | Most sophisticated pricing in the portfolio, never built for iOS | **DECIDED AND CODED, 5 tiers:** Free (14-day trial) → Care $9.99/mo ($79.99/yr) → Voice $14.99/mo ($129.99/yr) → Family $24.99/mo ($219.99/yr, "most popular") → Legacy $39.99/mo ($359.99/yr) + $4.99 consumable overage. Apple product IDs defined but not yet created in App Store Connect (a pending human step, not a pricing gap). Internal code comment flags the Legacy tier as a margin trap at $39.99 (~20% net margin) and recommends repricing to $44.99 before any ad spend. |
-| **MedReview** | B2B, PHI-walled | Dev-gated | No consumer pricing; category benchmark $150-700/provider/month (external research only, no internal access) |
+| **iHEAR TReO** | **PSAP** | Live, dormant | Single $99/side; Pair $149 list → **$99 via PAIR99** (evergreen) |
+| **iHEAR Matrix** | OTC hearing aid | Pre-order, ships "late Aug 2026," gated on FDA OTC Establishment Registration | $349 list → **$174.50 via MATRIX50** |
+| **EAZE Classic** (BTE thin-tube) | OTC hearing aid | Currently unavailable/sold out | ~$399.99 (anchor $499.99) |
+| **STREAM RIC** (Bluetooth) | OTC hearing aid | Currently unavailable/sold out | ~$649.99 (anchor $799.99) |
+| **CONNECT ITE** (Bluetooth) | OTC hearing aid | Currently unavailable/sold out | ~$599.99 |
+| **iHEAR Linx** (earbud-style) | OTC hearing aid | Pre-launch waitlist, Q4 2026 | ~$239 (anchor $599) |
+| **iHEAR Axis** (BTE-style) | OTC hearing aid | Pre-launch waitlist, Q4 2026 | ~$599 (anchor $699) |
+| **iHEARtest** | App | Live | Free core; unshipped paywall stub ($4.99/mo) + a planned V1.3 tier ($9.99/$79.99/$149.99) |
+| **AWARE** | App | TestFlight only | **Decided and coded:** $9.99/mo, $79.99/yr, $149.99 lifetime |
+| **InnerEase** | App | Early build | SKU structure set, dollar amounts not yet decided |
+| **OTCHealth Companion** | App | Most launch-ready, never built for iOS | **Decided and coded, 5 tiers:** Free → Care $9.99 → Voice $14.99 → Family $24.99 → Legacy $39.99/mo |
+| **MedReview** | B2B, PHI-walled | Dev-gated | No consumer pricing; category benchmark $150-700/provider/month |
 
-**What this means for the deck:** two of the three "unresolved" pricing questions from v1 are
-actually resolved. Only InnerEase (early-stage, expected) and iHEARtest's paid tier (deliberately
-unshipped, funnel stays free) are genuinely open. AWARE and Companion can go into deck math with
-real numbers today.
+**Open question, not yet resolved:** are EAZE/STREAM/CONNECT genuinely discontinued, or paused
+inventory that could relist? This pass found live product pages with prices but "unavailable"
+status — worth a direct question to Commerce/CTO before the deck states anything about their
+future.
 
-### 0.4 URGENT — a live pricing bug on the phone sales channel, not just a documentation issue
-**Promo Sarah's live call script still quotes three legacy iHEAR Matrix tiers (Founding Backer
-$179, Early Bird $225, Pre-Sale $279) that were already consolidated to a single $349/$174.50
-tier in the Shopify repo weeks ago.** This isn't a stale doc sitting in a repo — it's a phone
-agent that could be actively quoting a real caller the wrong Matrix price *right now*. Source:
-`voice-agent-evals/prompts/promo_sarah/v6_8_LIVE.txt` vs. `otchealthmart-shopify/HANDOFF.md`.
-**Recommend fixing this before anything else in this doc** — it's the only finding here with
-live customer-facing exposure, everything else is planning/deck-readiness.
+### 0.4 URGENT — unchanged from the last pass, still needs a same-day fix
+Promo Sarah's live call script still quotes three superseded iHEAR Matrix tiers ($179/$225/$279)
+instead of the current $349/$174.50 structure — a customer-facing pricing bug, not a doc issue.
+Already dispatched to Commerce/CRO/CTO; repeating here because it's the single highest-priority
+item in this whole research thread.
 
-### 0.5 The bundle opportunity — now costed with real numbers
-With AWARE ($9.99/$79.99/$149.99) and Companion (5 tiers, $9.99-$39.99/mo) both now confirmed
-real, an "OTCHealth Plus" bundle is easier to model than in v1: e.g. a combined tier priced below
-AWARE-Care-equivalent + Companion-Care ($9.99+$9.99=$19.98/mo) at something like $14.99-16.99/mo
-once InnerEase also has real pricing. Still Matt's/CPO's call, not decided here.
+### 0.5 A compliance flag already known, reaffirmed here, not new
+The Shopify catalog also contains "OTCHealth CareNow" membership products that bundle INND
+shares — the repo's own `research/PHASE3_CATALOG_FIXES.md` already flags this as a Section 17(b)
+securities-compliance concern. This matches the standing gate already documented elsewhere
+(CareNow is "counsel-blocked, 17(b)" in `MOORE-PLAYBOOK-12MONTH.md` and `RACI.md`) — **not a new
+problem, just confirming the existing gate is correctly recognized in the actual product
+catalog too.** No action needed beyond continuing to keep CareNow off any live storefront path
+until counsel clears it.
 
-### 0.6 The one number that still matters most, unchanged from v1
-No repo, in either research pass, contains a measured iHEARtest→TReO conversion rate. The Moore
-Playbook's $1B bridge (200K subscribers ≈ $480M ARR) still rests on this unmeasured number. This
-finding is unaffected by today's repo-level corrections — still the top CFO/CRO priority.
+### 0.6 The bundle opportunity — unchanged from v2
+See v2 §0.5 — an "OTCHealth Plus" software bundle (AWARE + Companion + eventually InnerEase) is
+easier to cost now that two of three have real prices. Separately, on the hardware side, a
+TReO → Matrix upsell path (PSAP entry point, OTC hearing aid upgrade once FDA-registered) is a
+natural cross-sell the existing funnel logic doesn't yet explicitly model — worth adding to the
+funnel diagram once Matrix actually ships.
 
-### 0.7 Aggregate market opportunity — unchanged framing from v1, still no Frankenstein TAM
-See v1 §0.6 logic — TReO/Matrix's real US OTC hearing-aid/PSAP category (~$272M-$864M narrow,
-8-18% CAGR), the software apps sized as LTV-expansion on that customer base (not separate TAMs),
-MedReview sized only in its own B2B context ($1-3B today, $5-15B by 2030s).
+### 0.7 The one number that still matters most, unchanged
+No repo, in any research pass, contains a measured iHEARtest→TReO conversion rate. Still the top
+CFO/CRO priority before the $1B bridge math goes anywhere external.
 
-### 0.8 Documentation-drift — now a confirmed, recurring, three-instance pattern
-After GCP/credits (earlier tonight) and the AWARE/TReO status conflicts (v1), this pass found
-**four more**: (1) the Promo Sarah/Matrix pricing bug above — the most serious instance found
-yet since it's customer-facing; (2) iHEARtest's build number was stale in prior docs (actually
-Build 51/v1.5.21, not 50); (3) Companion's "2 open issues" turned out to be 0 issues/2 unrelated
-PRs; (4) AWARE's README still shows superseded $4.99/$39.99/$79 pricing that HANDOFF.md already
-corrected. **Recommend this become a standing CTO workstream** (a single source-of-truth status
-field per fact, checked by CI, not another one-off doc fix) — four separate document families
-have now shown the same failure mode.
+### 0.8 Aggregate market opportunity — reframed slightly for the corrected catalog
+TReO's PSAP category remains the primary proven revenue engine (~$272M-$864M US narrow market).
+**The OTC hearing aid line (Matrix + legacy + Linx/Axis) sits in a different, larger, and more
+regulated category** — the same global OTC hearing aid market cited in v1 (~$6.09B→$15.8B by
+2034 broad, including the narrower device-only slice) — but is pre-revenue today (nothing has
+shipped yet) and gated on FDA registration. Frame the OTC line as a real, sizeable, but
+not-yet-realized second act, not blended into TReO's current numbers.
+
+### 0.9 Documentation-drift — now five confirmed instances across this session
+Adding to the four found in v2: the FDA-registration-gate misattribution in v1/v2 of this very
+doc is itself a fifth instance of the same pattern this doc has been flagging all night (GCP,
+credits, AWARE/TReO status, and now this doc's own device classification). Recommend, again, a
+single source-of-truth field per fact rather than continuing to catch these one at a time.
 
 ---
 
-## 1. Hardware — iHEAR TReO and iHEAR Matrix (PSAPs, not apps)
-
-### 1.1 iHEAR TReO
+## 1. The PSAP — iHEAR TReO
 Personal sound amplification product, deliberately not marketed as a hearing aid. **Confirmed
-live pricing** (Shopify product config, `otchealthmart-shopify`): Single $99/side; Pair $149 list
-cut to **$99 via PAIR99** (fixed $50 off, evergreen, no expiry). Status: proven-but-dormant —
-$227,290 all-time / 1,484 orders, but ~$0 in the last 90 days; Stripe payout connect is still the
-live blocker per the most recent logs.
-**Comp table, market, opportunities, risk:** unchanged from v1 — see the archived detail in git
-history if needed; TReO undercuts every DTC competitor (Audien, MDHearing, Jabra, Eargo, Sony) at
-$99/pair, in a US OTC hearing-aid/PSAP market of roughly $272M-$864M (narrow) growing 8-18% CAGR.
+live pricing:** Single $99/side; Pair $149 list → **$99 via PAIR99** (evergreen). Status:
+proven-but-dormant — $227,290 all-time / 1,484 orders, ~$0 in the last 90 days; Stripe payout
+connect is still the live blocker. The 10,298-unit legacy pool (refurb/liquidation target,
+$199-299 resale) is TReO/PSAP inventory — **it requires no FDA registration to sell**, only a
+3PL/refurb partner (already scoped in `REFURB-3PL-RFQ.md`).
+**Comp table, market, opportunities:** unchanged from v1 — undercuts every DTC PSAP/OTC
+competitor at $99/pair; US OTC/PSAP category ~$272M-$864M narrow, growing 8-18% CAGR.
 
-### 1.2 iHEAR Matrix (new to this doc — found via the Shopify repo, not previously documented here)
-A second PSAP product line. **Confirmed pricing:** $349 list → **$174.50 via MATRIX50** (50%
-off). Status: **pre-order only**, targeting a "late August 2026" ship date, explicitly gated on
-completing FDA OTC Establishment Registration (~$10K, itself gated on hitting $25K in TReO
-reignition revenue first — see the existing sequencing in `MOORE-PLAYBOOK.md`). Sits at a higher
-price tier than TReO — likely a mid-tier positioning between TReO's rock-bottom price and the
-$499-$999+ premium competitors (Nuheara, Sony, Lexie).
+## 2. The OTC hearing aid line
+**iHEAR Matrix** — $349 list → $174.50 via MATRIX50, pre-order, ships "late Aug 2026," gated on
+FDA OTC Establishment Registration (~$10K) plus a named clinical reviewer sign-off, per the
+existing Playbook sequencing (arms at the $25K NET reignition-revenue trigger from TReO sales).
+**EAZE Classic / STREAM RIC / CONNECT ITE** — a legacy HearingAssist-branded sub-line, currently
+listed as unavailable in the Shopify catalog at $399.99-$649.99. Whether these relist under the
+same FDA registration or need their own separate registration/labeling review is an open
+question for CTO/Commerce — flag before assuming they simply "come back."
+**iHEAR Linx / iHEAR Axis** — pre-launch waitlist products (~$239-$599), targeting Q4 2026,
+presumably sequenced behind the same FDA registration gate as Matrix.
+**Positioning for the deck:** this line is the actual "hearing aid" business — TReO's PSAP
+framing deliberately avoids this category, so Matrix/Linx/Axis are where OTCHealth can make real
+hearing-related claims (under FDA's mandated labeling) that TReO legally cannot. This is a
+distinct, second product story worth its own deck section rather than folding into TReO's.
 
-### 1.3 The AI voice sales channel (new to this doc)
-Three ElevenLabs Conversational AI phone agents (Twilio-backed), each with a specific role:
-- **Promo Sarah** (800-520-7996) — outbound-style closing script for the TReO $99 promo; hides
-  Matrix unless asked. **Contains the live pricing bug in §0.4 — needs an urgent fix.**
-- **Main Sarah** (800-864-4337) — general inbound order-capture line, same underlying flow.
-- **Helen** (800-640-9731) — "iHEAR Specialist," repointed to Matrix sales after the tier
-  consolidation (but her *own* fallback script, per Promo Sarah's shared prompt family, may carry
-  the same staleness — worth checking Helen's specific prompt file too, not yet done in this
-  pass).
-All three follow the same core flow: caller-ID lookup → address/email reconfirm → order capture
-→ Shopify draft-order payment link → hangup — effectively a phone-assisted checkout layer built
-specifically for a senior demographic that may not complete an online checkout unassisted. This
-is a real, currently-active commerce channel and should be included in any deck discussion of
-TReO's go-to-market, not treated as a footnote.
-
----
-
-## 2. iHEARtest — the funnel magnet
-
-**What it is:** Free, self-administered at-home hearing screening app. **Confirmed current build:
-v1.5.21 / Build 51** (not 50 — corrected this pass). PHI-safe by design.
-**Monetization, corrected:** Core screening stays free by design — this remains the funnel
-strategy. But two real monetization artifacts exist in-repo that v1 missed entirely: (1) a
-"Sharpen Your Hearing" 28-day training add-on with a working paywall UI stub, hardcoded at
-$4.99/mo / $39/yr / 7-day trial, purchase path explicitly disabled — not live; (2) a fully speced
-V1.3 RevenueCat plan (`iheartest_pro_monthly $9.99`, `_annual $79.99`, `_lifetime $149.99`) — also
-not shipped. Zero RevenueCat/IAP dependency currently exists in `package.json` — both are
-roadmap, not reality, but the exact prices are already decided whenever the team is ready to flip
-the switch.
-**"Canonical shared engine" claim — flag:** other app repos show no evidence of actually
-consuming iHEARtest's hearing-test engine as a shared dependency. Treat this as an architectural
-goal, not a built fact, until verified against AWARE/InnerEase's actual audio/test code.
-**Comp table, market, funnel benchmarks, regulatory notes:** unchanged from v1 (Mimi, SonicCloud,
-Oto Health, Soundly's Feb 2026 acquisition as proof of screening-traffic value).
+## 3. The AI voice sales channel
+Three ElevenLabs Conversational AI phone agents (Twilio-backed): **Promo Sarah** (800-520-7996,
+TReO promo line — **currently has the stale Matrix-pricing bug, §0.4**), **Main Sarah**
+(800-864-4337, general inbound order capture), **Helen** (800-640-9731, repointed to Matrix
+sales). All three run caller-ID lookup → reconfirm → order capture → Shopify draft-order payment
+link → hangup — a phone-assisted checkout layer for a senior demographic. A real, active
+commerce channel; include it in any GTM discussion of the hardware line.
 
 ---
 
-## 3. AWARE — post-purchase auditory rehabilitation
+## 4. iHEARtest — the funnel magnet
+Free, self-administered hearing screening app, confirmed build v1.5.21/Build 51. Core stays free
+by design (the funnel strategy); two unshipped monetization artifacts exist in-repo (a $4.99/mo
+"Sharpen Your Hearing" paywall stub, and a fully speced but unbuilt V1.3 RevenueCat tier at
+$9.99/$79.99/$149.99). The "canonical shared engine" claim is unconfirmed — no other app repo
+shows it consuming iHEARtest's test engine as a dependency yet.
+**Comp table, market, funnel benchmarks:** unchanged from v1 — Mimi, SonicCloud, Oto Health,
+Soundly's Feb 2026 acquisition as proof of screening-traffic value.
 
-**Pricing — corrected, this is the headline finding for this app.** **$9.99/mo, $79.99/yr
-(7-day trial), $149.99 lifetime — already decided and coded**, not "pending Matt decision" as v1
-reported. Resolved in PR #31 (merged 2026-06-30). Two small open items: (1) the App Store
-Connect/RevenueCat dashboard backend hasn't been independently verified to match these
-client-side values yet; (2) a "$5/mo Supporter" tier is advertised in copy across four languages
-with no corresponding purchasable product — likely a real bug (an unbuyable advertised tier),
-worth a quick Developer fix.
-**PR #33 status — corrected:** cleanly merged 2026-06-30, no contradiction (v1's flagged conflict
-was resolved by the time of this pass). **PostHog ID — genuinely unconfirmable from the repo**
-(the real key is injected only at CI build time, never committed) — not a documentation gap, just
-not visible from source.
-**Comp table, market positioning, best-fit model, compliance guidance:** unchanged from v1 —
-LACE/clEAR/Angel Sound/manufacturer-bundled comps; recommend the hybrid bundled-plus-paid-tier
-model, now backed by AWARE's actual live prices instead of a recommendation.
+## 5. AWARE — post-purchase auditory rehabilitation
+**Pricing decided and coded:** $9.99/mo, $79.99/yr, $149.99 lifetime (PR #31, merged 2026-06-30).
+Two small open items: ASC/RevenueCat backend verification pending; a "$5/mo Supporter" tier is
+advertised in copy with no purchasable product behind it (likely a bug). PR #33 cleanly merged,
+no contradiction. PostHog ID unconfirmable from the repo (injected only at CI time).
+**Comp table, positioning:** unchanged from v1 — LACE/clEAR/Angel Sound/manufacturer-bundled
+comps; hybrid bundled-plus-paid-tier model, now backed by real prices.
 
----
+## 6. InnerEase — tinnitus relief / sound therapy
+**Real working code exists**, not doc-only — a shipped 5-tab structure, a minimal audio engine
+stub, 18 passing tests including an automated claims-firewall guard, merged as recently as
+2026-07-10. SKU structure is decided; **dollar amounts are not** — genuinely still open, unlike
+AWARE/Companion. Clinical CBT/ACT content is spec-only, correctly gated on CMO sign-off. A
+strategic note: Matt's actual plan may be to rebuild InnerEase on the new Standardized Premium
+App Template rather than keep extending this iHEARtest-forked codebase.
+**Comp table, positioning:** unchanged from v1 — hardware-agnostic tinnitus relief is the real
+differentiator versus every manufacturer-bundled comp.
 
-## 4. InnerEase — tinnitus relief / sound therapy
+## 7. OTCHealth Companion — senior AI companion
+**Pricing decided and coded, 5 tiers:** Free (14-day trial) → Care $9.99/mo ($79.99/yr) → Voice
+$14.99/mo ($129.99/yr) → Family $24.99/mo ($219.99/yr, "most popular") → Legacy $39.99/mo
+($359.99/yr), plus a $4.99 consumable overage. One live decision still open: the Legacy tier is
+flagged internally as a margin trap (~20% net at $39.99) with a recommended reprice to $44.99.
+**iOS build blocker, concrete:** 4 missing GitHub CI secrets (`ASC_KEY_ID`, `ASC_ISSUER_ID`,
+`ASC_P8_KEY`, `APPLE_TEAM_ID`) + a not-yet-created App Store Connect app record (bundle ID is
+registered, the app record is not). PostHog ID confirmed: 468389. A live unrevoked JWT sits in
+`.mcp.json` — part of the already-tracked fleet-wide 6-token JWT rotation issue.
+**Comp table, positioning:** unchanged — a different competitive category (SilverShield/
+SeniorSafe/Luna) from the hearing-health apps, not a hearing-aid companion app.
 
-**Build stage — corrected.** Not "documentation-only Phase-0 scaffold" as v1 reported. Real,
-working code exists and is merged to `main` (PR #6, merged 2026-07-07): a shipped 5-tab structure
-(Today/Relief/Flow/Program/Profile), a working (if minimal, "Phase 0 hello-tone stub") audio
-engine, and 18 passing unit tests including an automated claims-firewall keyword guard. 15
-commits, 8 PRs (0 open), most recent activity **today, 2026-07-10** — an active, not abandoned,
-repo.
-**Pricing — partially corrected.** SKU structure is decided (`innerease_pro_monthly/annual/
-lifetime`, one entitlement) — but **no dollar figures exist yet**, and RevenueCat isn't
-integrated in code. So: structure yes, price no — genuinely still open, unlike AWARE/Companion.
-**Clinical content:** not built — CBT/ACT program is spec-only, correctly gated on CMO sign-off
-before any code ships.
-**New strategic flag:** an internal Standardized Premium App Template decision indicates Matt's
-actual plan is to eventually rebuild InnerEase on the new template architecture rather than keep
-extending this iHEARtest-forked codebase — worth factoring into any roadmap slide before
-committing more engineering time to the current build.
-**Comp table, positioning:** unchanged from v1 — ReSound Relief/Starkey Relax/Widex Zen (all
-hardware-bundled) vs. Oto Health (independent); InnerEase's differentiator is being
-hardware-agnostic, a real gap in the comp set.
-
----
-
-## 5. OTCHealth Companion — senior AI companion
-
-**Pricing — corrected, second headline finding.** Not "unset/recommended only." **A real, fully
-coded 5-tier structure exists**, single-sourced in `packages/shared/src/pricing.ts`: Free
-(14-day trial) → **Care $9.99/mo ($79.99/yr)** → **Voice $14.99/mo ($129.99/yr, 1 voice clone)**
-→ **Family $24.99/mo ($219.99/yr, 3 clones, "most popular")** → **Legacy $39.99/mo ($359.99/yr,
-6 clones)**, plus a $4.99 consumable for cloned-speech overage. This is more sophisticated
-tiering than v1's generic $9.99-24.99/mo recommendation — use the real structure in the deck.
-**One live business decision still open:** an internal code comment flags the Legacy tier as a
-margin trap (~20% net margin at $39.99 given AI cost) and recommends repricing to $44.99 before
-any ad spend — Matt/CPO call, not yet actioned.
-**The iOS build blocker — now concrete, not vague.** v1 said "never had an iOS build" without a
-cause. The actual blockers: (1) the CI workflow (`ios-depot.yml`) hard-fails immediately unless
-four GitHub secrets are set (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_P8_KEY`, `APPLE_TEAM_ID`) — none
-are set; (2) the App Store Connect app record itself hasn't been created (Apple's API returns
-403 on the creation call) — bundle ID `com.otchealth.companion` is registered, but the app record
-is not. **This is now a two-item, named checklist CTO/Matt can execute directly**, not an open
-question.
-**PostHog ID — confirmed: 468389** (matches prior documentation; the real write key isn't set
-yet, a separate small follow-on).
-**Security flag:** a live, unrevoked cleartext Bearer JWT sits in `.mcp.json` — part of the
-already-tracked fleet-wide 6-token JWT rotation issue, not a new finding, but worth connecting to
-that existing workstream.
-**Comp table, positioning:** unchanged from v1 — this remains a different competitive category
-(SilverShield/SeniorSafe/Luna) from the hearing-health apps, not a hearing-aid companion app.
+## 8. MedReview — market context only (PHI wall respected, unchanged)
+Clinical documentation AI category: ~$1-3B today, 20-29% CAGR, $5-15B by 2030-35; US subset
+~$500-620M. Comps: Nuance DAX, Abridge, Ambience Healthcare, Suki AI, Nabla, $150-700/
+provider/month. Audiology-specific niche real but nascent.
 
 ---
 
-## 6. MedReview — market context only (unchanged from v1, PHI wall respected)
-No repo, code, or data access — pure external market research. Clinical documentation AI
-category: ~$1-3B today, 20-29% CAGR, $5-15B by 2030-35; US subset ~$500-620M. Comps: Nuance DAX,
-Abridge, Ambience Healthcare, Suki AI, Nabla, clustering $150-700/provider/month. Audiology-
-specific niche is real but nascent. BAA mandatory before any PHI touch (already the case).
+## 9. What's needed before this goes in a real deck (updated priority order)
+1. **URGENT, not deck-related:** fix Promo Sarah's stale Matrix pricing today (§0.4).
+2. **CRO/CFO:** measure or credibly estimate the iHEARtest→TReO conversion rate (§0.7) — still
+   the top deck-blocking item.
+3. **Commerce/CTO:** confirm whether EAZE/STREAM/CONNECT are truly discontinued or relaunchable,
+   and under what FDA registration path, before the deck says anything about them (§2).
+4. **Matt/CPO:** decide the Companion Legacy-tier reprice and the AWARE Supporter-tier bug.
+5. **CTO:** the Companion iOS-build checklist (4 secrets + ASC app record) is now concrete and
+   executable; also verify AWARE's backend ASC/RevenueCat config matches its client-side prices.
+6. **CCO/`claims_check`**: pass on every comp-derived claim, with special attention to keeping
+   TReO's PSAP framing and the OTC hearing aid line's claims strictly separated (§0.2) — this is
+   now the single most important compliance distinction in the whole hardware line.
 
 ---
-
-## 7. What's needed before this goes in a real deck (updated priority order)
-1. **URGENT, not deck-related:** fix Promo Sarah's stale Matrix pricing before another live call
-   goes out (§0.4) — flagging to Commerce/CRO/CTO now, this is a customer-facing bug today.
-2. **CRO/CFO** (unchanged from v1, still the top deck-blocking item): measure or credibly
-   estimate the iHEARtest→TReO conversion rate before the $1B bridge math appears externally.
-3. **Matt/CPO**: decide the Companion Legacy-tier repricing (§5) and the AWARE Supporter-tier bug
-   (§3) — both are small, live, actionable pricing decisions now that the real numbers are known.
-4. **CTO**: set the 4 missing GitHub secrets + create the Companion App Store Connect app record
-   (§5) — this specific, now-concrete checklist could put the most launch-ready app in the
-   portfolio into TestFlight quickly.
-5. **CTO**: verify AWARE's backend ASC/RevenueCat pricing config matches the client-side values
-   (§3); treat the four-instance documentation-drift pattern (§0.8) as a systemic fix, not another
-   one-off.
-6. **CCO/`claims_check`**: pass on every comp-derived claim, as before.
-
----
-*Living document. v2 supersedes v1's pricing/status claims for AWARE, OTCHealth Companion,
-iHEARtest, and InnerEase — those were repo-verified this pass. Source of truth = this file +
-`MOORE-PLAYBOOK.md` + `MOORE-PLAYBOOK-12MONTH.md` + `GAP-REVIEW.md` + the individual repos
-(`iheartest`, `aware-aural-rehab`, `innerease`, `otchealth-companion`, `otchealthmart-shopify`,
-`voice-agent-evals`) + the `coo` ledger (`--tags apps-deep-dive`). Scoped to OTCHealth only per
-`RACI.md` §0.*
+*Living document. v3 supersedes v1/v2's device-classification claims for Matrix and the newly
+found EAZE/STREAM/CONNECT/Linx/Axis line — all corrected and repo-verified this pass. Source of
+truth = this file + `MOORE-PLAYBOOK.md` + `MOORE-PLAYBOOK-12MONTH.md` + `GAP-REVIEW.md` +
+`REFURB-3PL-RFQ.md` + the individual repos + the `coo` ledger (`--tags apps-deep-dive`). Scoped
+to OTCHealth only per `RACI.md` §0.*
