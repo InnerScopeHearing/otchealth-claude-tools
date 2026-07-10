@@ -1,67 +1,75 @@
 # TODAY — the COO's directive (regenerate each morning; mark results through the day)
 
-Date: 2026-07-01 (Wednesday). Operating window 9am-5pm Mon-Fri PT.
-Morning brief for today: sending now (marker claimed in the coo ledger, id 20260701-004).
-Calendar read live: CLEAR today and for the next several days. Next events on calendar are
-Monday 2026-07-06 Therapy 3-4pm PT and Tuesday 2026-07-07 Mindful Health Solutions
-8:30-11:30am PT. CASH BLOCK booked today 12:00-2:00pm PT (19:00-21:00 UTC).
+Date: 2026-07-10 (Friday). Operating window 9am-5pm Mon-Fri PT.
 
-## The number
-Cash in bank: fleet total ~$30,467 (InnerScope ~$30,464.51, almost all Reg A capital, not
-working cash; OTCHealth operating cash ~$2.41 in Mercury). Revenue today: **$0**. Revenue
-last 90 days: **$0**. 2026 YTD: $736 (2 Shopify orders in February). Burn ~$50K/mo, ~0
-runway. **Day 22, zero cash moves CLOSED yet.** Both Matt-only gates are STILL open,
-unchanged since yesterday.
+> **⚠️ CONTINUITY GAP FLAGGED:** this file's last update before today was 2026-07-01 (Day 22).
+> Nine days passed with no refresh — the morning-brief/heartbeat routine either stopped running
+> or stopped writing here. This is the same documentation-drift pattern flagged repeatedly across
+> today's research (see `projects/moore-playbook/MOORE-PLAYBOOK-STATE-OF-THE-NARRATIVE-2026-07-10.md`
+> §7). The cash/gate figures below from 2026-07-01 were NOT re-verified live today — today's
+> session was almost entirely a deep research/correction day (see below), not a cash-gate
+> execution day. **Whoever picks this up next should live-verify Stripe payout status and
+> checkout-proof before assuming either gate has moved.**
 
-## The 2 gates (Matt-only, ~15 min combined, the whole game)
-1. **Connect the Stripe payout bank.** `payouts_enabled=FALSE` on acct_1SQyXZAwjS2xuomw.
-   CTO confirmed (2026-06-29 live read): charges_enabled=true, card_payments=active, zero
-   verification holds — the rail is fully live for taking a charge. The ONLY thing missing
-   is a linked payout bank account, which is a Stripe Dashboard action, not API-fixable.
-   Without it, a successful sale's cash sits trapped in Stripe and never reaches Mercury.
-   Status: **still open** (in progress per Matt as of 2026-06-30 — no confirmation posted
-   since).
-2. **Place ONE real, non-refunded, full-price TReO Pair order** (code PAIR99, nets $99) at
-   otchealthmart.com to clinch CHECKOUT-PROOF=PASS (CTO verifies: Shopify paid+fulfilled,
-   Stripe charge succeeded+unrefunded, payouts_enabled=true). Only one charge has ever hit
-   this account and it was an owner test that was refunded — that does not count as proof.
-   Status: **still open** (in progress per Matt as of 2026-06-30 — no confirmation posted
-   since).
+## The number (carried forward from 2026-07-01, NOT re-verified today)
+Cash in bank as of 2026-07-01: fleet total ~$30,467 (InnerScope ~$30,464.51, mostly Reg A
+capital, not working cash; OTCHealth operating cash ~$2.41 in Mercury). Revenue $0 last 90 days.
+Both Matt-only gates (Stripe payout bank connect; one real non-refunded TReO order) were "in
+progress" per Matt as of 2026-06-30, unconfirmed since. **Status today: unknown, needs a live
+check before the next move.**
 
-## Fires the instant both gates close — Send draft-141
-draft-141 is written, dash-clean, CCO-cleared (CAN-SPAM elements present), mailable count
-LOCKED = **66,224** valid HearingAssist contacts (Customer.io ws 193366). CTA points at
-/pages/treo-pair-offer (PAIR99). Runbook: seed wave (~5-10K), watch 20-30 min, then release
-the rest. Held awaiting both gates + Matt's explicit send-go (email only — no SMS, TCPA
-unverified).
-Status: staged, gated. Nothing to do here today except close the 2 gates above.
+## What actually happened today (2026-07-10) — a deep research and correction day
+Today was not a cash-gate execution day — it was a full-portfolio research and course-correction
+pass, triggered by Matt's own review requests. Durable outputs, all committed to
+`projects/moore-playbook/`:
+1. **AI-OPERATING-SYSTEM-USP.md** — the AI OS positioned as a USP for OTCHealth/InnerScope, with
+   a corrected Medvi comparison (the original FDA-claim framing was factually wrong; Medvi has
+   also accumulated a RICO suit, a CAN-SPAM class action, and a data-breach scandal since the
+   comparison was first drafted — whether to keep using Medvi as a named comparison is a live
+   decision for Matt, not resolved by the correction).
+2. **OTCHEALTH-APPS-DEEP-DIVE.md (v5, live-site-verified)** — full portfolio research across
+   TReO (PSAP), the OTC hearing aid line (Matrix + 5 more physical SKUs found that weren't
+   tracked before — EAZE/STREAM/CONNECT/Linx/Axis), all 5 apps, and a previously-undocumented AI
+   voice sales channel (Promo Sarah/Main Sarah/Helen). Found a live customer-facing pricing bug
+   (Promo Sarah quoting stale Matrix prices) and a probable live compliance issue (Matrix's
+   checkout may be collecting real payment before FDA OTC Establishment Registration is done).
+3. **INNERSCOPE-STANDALONE-PROFILE.md** — InnerScope's real legal/financial state. Key finding: an
+   actively accelerating dilutive note is expanding INND's share count on an ongoing basis, which
+   invalidates "stock as stable acquisition currency" for the roll-up thesis right now.
+   `INND-CAPITAL-FLYWHEEL.md` and `INND-ROLLUP-LANDSCAPE.md` were both revised substantively to
+   account for this, not just flagged with a banner.
+4. **MOORE-PLAYBOOK-STATE-OF-THE-NARRATIVE-2026-07-10.md** — capstone honest assessment: the
+   combined narrative is not deck-ready; both engines (OTCHealth and InnerScope) have live,
+   unresolved problems simultaneously. Names what's genuinely solid too.
+5. **DECK-DATA-VERIFICATION-2026-07-10.md + PART2** — Matt shared a real, ready-to-send investor
+   deck + underwriting package + loan repayment model headed to a real underwriter. Two research
+   swarms (12 subagents total) fact-checked and re-benchmarked the figures. **Two serious findings:
+   the "ShelfReady" distribution partner and the "PSAO auto-opt-in" GTM mechanism could not be
+   verified as real; the exit-multiple comps are mostly wrong; and — the most serious single
+   finding of the day — InnerScope's proposed 25%-of-gross-profit royalty + "spin-off platform
+   fees" revenue model has no legitimate precedent, and its closest real-world analogue (the Ault
+   Alliance/BitNile lineage) drew an actual SEC enforcement action for related-party fee opacity.**
 
-## Parallel, zero technical gates — Gumroad "From the Chair"
-The full manuscript is DONE: Foreword + 18 chapters + The Modern Layer + front/back matter,
-all dash-clean, all research-verified (CRO killed a bad ad-spend stat and re-sourced 6+
-claims to real citations). Gumroad account is fully stood up. The ONLY thing left is
-Matt's call: **pick the edition (A/B) and lock final pricing** so CRO can finish the
-fillable-PDF build and publish the listing. Zero gates once chosen — cash in days.
-Status: manuscript complete, awaiting Matt's pricing/edition decision with CRO.
+## Open items needing a human decision, in priority order
+1. **Has securities counsel reviewed the investor deck's InnerScope tranche?** Not confirmed
+   either way — asked directly, no answer yet as of this writing.
+2. **The InnerScope royalty/spin-off revenue model** — needs Matt + Capital/IR + counsel's real
+   judgment on whether this structure should exist as proposed, not just better sourcing.
+3. **Fix Promo Sarah's stale Matrix pricing** — live, customer-facing, should not wait.
+4. **Confirm or deny the Matrix pre-FDA-registration checkout issue** — CCO/CFO/CTO.
+5. **CareNow's live-vs-supposed-to-be-gated status** — CFO/CCO/Capital-IR.
+6. **Storage arrears/lien risk on the 10,298-unit inventory** — CFO, unconfirmed status.
+7. **The never-measured iHEARtest→TReO conversion rate** — CFO/CRO, still the single number the
+   whole $1B bridge depends on.
+8. **Verify "ShelfReady" and the PSAO mechanism** — Commerce.
+9. **CRO and CFO's direct-email answers to this morning's product/inventory questions** — not yet
+   received as of this writing.
 
-## Not a move today (resist it)
-- **More planning/building.** The Moore Playbook + 12-month plan + execution program are
-  DONE and durable on main. Today's only real work is closing the 2 gates and deciding
-  Gumroad pricing.
-- **FDA OTC Establishment Registration** (~$10K, <2wk) — funded AFTER first dollars.
-- **Amazon TReO** — blocked on the iHEAR trademark filing — also fund-after-first-dollars.
-
-## Standing hard gate (not a move, but it BLOCKS investor/public action)
-- **Rotate the GCP SA + PostHog keys** (28-cred ops leak, deferred since before 2026-06-14).
-  No investor or public exposure until done. Flagging again — this has been open for
-  weeks and quietly gates the whole capital lane whenever that becomes the focus.
-
-## Today's results so far
-- 2026-07-01 morning brief sent (Day 22). Calendar clear through 2026-07-05; CASH BLOCK
-  booked 12:00-2:00pm PT today. Both gates confirmed still open (no change from Matt since
-  2026-06-30). Gumroad manuscript confirmed complete and ready the moment pricing is set.
+## Not re-verified today, do not assume moved
+Both original cash gates (Stripe payout connect; the one proving TReO order) — carried forward
+from 2026-07-01 as "unknown," not "still open" and not "closed." Live-verify before quoting.
 
 ## Reconciled to the ledger
-This directive matches the `coo` ledger as of 2026-07-01 (entries through `20260701-004`).
-Confidential specifics live in the kb-memory `coo` private lane. The COO's hands are the
-n8n webhook paths coo-read-calendar / coo-send-email / coo-create-meeting.
+This directive matches the `coo` ledger through decision `20260710-021`. Confidential specifics
+live in the kb-memory `coo` private lane. Full session detail: decisions `20260710-005` through
+`20260710-021` and the docs listed above.

@@ -3,6 +3,35 @@
 Format: `YYYY-MM-DD HH:MM | move | result (done/partial/blocked) | note`
 
 ---
+2026-07-10 (full day) | deep research + correction pass, NOT a cash-gate execution day | done
+(research) / open (decisions) | Continuity gap noted: this file and today.md/PRIORITIES.md had
+not been touched since 2026-07-01 (Day 22) — 9 days silent. Today's arc, triggered by a series
+of Matt review/research requests, not a scheduled routine: (1) corrected the AI Operating System
+USP doc's Medvi comparison after a freshness check found the original FDA-claim framing wrong
+and found Medvi has since accumulated a RICO suit, a CAN-SPAM class action, and a data-breach
+scandal; (2) ran a 3-round OTCHealth app-portfolio deep dive (v1 through v5), correcting device
+classification twice (TReO=PSAP, Matrix and 5 more found SKUs=OTC hearing aids), finding AWARE
+and Companion pricing was already decided/coded (a positive surprise), and surfacing a live
+customer-facing pricing bug (Promo Sarah voice agent) plus a probable live FDA-registration
+compliance issue on Matrix's checkout; (3) built INNERSCOPE-STANDALONE-PROFILE.md after Matt
+asked for a full honest assessment, finding InnerScope's stock is currently unusable as roll-up
+acquisition currency due to an actively accelerating dilutive note, and revised
+INND-CAPITAL-FLYWHEEL.md + INND-ROLLUP-LANDSCAPE.md substantively to account for it; (4) built
+MOORE-PLAYBOOK-STATE-OF-THE-NARRATIVE-2026-07-10.md, a capstone assessment concluding the
+combined narrative is not deck-ready since both engines have live problems at once; (5) reviewed
+a real, ready-to-send investor deck + underwriting package + loan model Matt shared for an actual
+underwriter, running two 6-subagent research swarms (12 subagents total) that found the exit-
+multiple comps are mostly wrong, two named partners/mechanisms ("ShelfReady," PSAO auto-opt-in)
+could not be verified as real, and — the most serious finding of the day — InnerScope's proposed
+25%-of-gross-profit royalty + spin-off-platform-fee revenue model has no legitimate precedent and
+its closest real analogue drew SEC enforcement. Full detail, all sourced: decisions
+`20260710-005` through `20260710-021` in the coo ledger, and the docs now in
+`projects/moore-playbook/`. Refreshed today.md and PRIORITIES.md to reflect all of this and to
+flag that the original 2 cash gates (Stripe payout, the proving order) were NOT re-verified live
+today — their 2026-07-01 status should not be assumed current. Outstanding: direct emails sent
+to CRO and CFO on product/inventory questions, no reply yet; counsel-review status of the real
+deck unconfirmed; the InnerScope royalty-model question needs Matt + Capital/IR + counsel
+judgment, not just more research.
 2026-06-09 seed | COO initialized | n/a | Situation, priorities, and today's 3 moves
 seeded. North star: cash this week. Overdue: the Friday reactivation email. Pattern to
 break: building instead of executing.
