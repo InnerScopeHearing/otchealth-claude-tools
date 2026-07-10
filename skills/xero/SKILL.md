@@ -1,6 +1,6 @@
 ---
 name: xero
-description: Drive the CFO's Xero books across all entities (OTCHealth, InnerScope/INND, HearingAssist, Matthew personal) through ONE multi-tenant OAuth connection. Xero is multi-tenant, one app + one refresh token reaches many organizations; each API call sets a Xero-tenant-id. Read (get) and write (request) per org. Wielded by the CFO / finance agent. Entity scoping is HARD: OTCHealth + personal open; INND + HearingAssist gated + logged. Personal books carry the related-party / due-to-officer loans that must reconcile against the company side. INND is SELF-PREPARED (not audited), so no auditor-continuity constraint.
+description: Drive the CFO's Xero books across all entities (OTCHealth, InnerScope/INND, HearingAssist, Matthew personal) through ONE multi-tenant OAuth connection. Xero is multi-tenant, one app + one refresh token reaches many organizations; each API call sets a Xero-tenant-id. Read (get) and write (request) per org. Wielded by the CFO / finance agent. Entity scoping: all four orgs are in the CFO write lane. INND deregistered from SEC reporting in 2021 and self-discloses under the OTC Markets Alternative Reporting Standard with no counsel or accounting staff, so the CFO has full authority to prepare and post INND + HearingAssist books (Matt directive 2026-06-18); the money gate + securities firewall still apply. Personal books carry the related-party / due-to-officer loans that must reconcile against the company side. INND is SELF-PREPARED (not audited), so no auditor-continuity constraint.
 ---
 
 # Xero, multi-org (CFO)
@@ -59,7 +59,16 @@ and consistent intercompany + due-to/due-from-officer accounts across all four. 
 the moment to implement it.
 
 ## Guardrails (HARD)
-- Entity scoping: OTCHealth + personal open; INND + HearingAssist gated + logged. INND is
-  self-prepared (not audited) so no auditor constraint, but it is still the public-company ring.
-- Stage, then post; source-of-truth (every entry ties to a doc); money gate (record, never move
-  money); non-PHI ring. Secrets in the vault, refresh token flagged for rotation.
+- Entity scoping: ALL FOUR orgs (OTCHealth, INND, HearingAssist, personal) are in the CFO's
+  WRITE lane. **INND deregistered from SEC reporting in 2021 and self-discloses under the OTC
+  Markets Alternative Reporting Standard (ARS); there is NO outside counsel and NO accounting
+  staff, so the CFO agent holds FULL authority to prepare and POST INND + HearingAssist books**
+  (Matt directive 2026-06-18). The old "gated, route to counsel" rule is RETIRED — there is no
+  counsel to route to. INND is self-prepared (not audited), so no auditor-continuity constraint.
+- What STILL holds regardless: the **money gate** (record, never move money or commit the
+  company), the **securities firewall** (no INND stock promotion; the INND price workbook is
+  internal CFO record only), and the **DATA RULE** (securities-sensitive specifics live in the
+  data room, never in git). Accuracy is paramount: INND/HA financials are published to OTC
+  Markets investors under ARS, so hold the same audit-grade rigor used for OTCHealth.
+- Stage, then post; source-of-truth (every entry ties to a doc); non-PHI ring. Secrets in the
+  vault, refresh token flagged for rotation.
