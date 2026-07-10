@@ -246,7 +246,7 @@ async function exportBrainIndex(bearer, { pageSize = 50 } = {}) {
   let skip = 0;
   for (;;) {
     const page = await gatewayCall(bearer, "brain_search", { query: "*", top: pageSize, skip });
-    const docs = page.results || page.documents || page.value || [];
+    const docs = page.matches || page.results || page.documents || page.value || [];
     if (!docs.length) break;
     rows.push(...docs);
     skip += docs.length;
