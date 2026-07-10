@@ -39,6 +39,16 @@
  *     whatever the gateway already exposes read-only, which is strictly less privilege than a raw
  *     Cosmos "read" role or a Search "read" API key would be.
  *
+ *   GATEWAY PROTOCOL (fixed 2026-07-10): the gateway is an MCP server, not a plain REST API — it
+ *   exposes exactly GET /health, POST /mcp, GET /oauth/authorize, POST /oauth/token,
+ *   GET /.well-known/oauth-authorization-server, POST /admin/revoke. There is NO /tools/<name>
+ *   route. Every tool call goes through POST /mcp as an MCP JSON-RPC 2.0 "tools/call" request; the
+ *   real payload comes back nested at result.structuredContent.result (registry.ts's wrapper shape),
+ *   with an optional JIT-offload indirection (`{_jit_offloaded:true, result_id}`) for large payloads
+ *   that must be paged back via the `gateway_fetch_result` tool. See gatewayCall()/fetchOffloaded()
+ *   below — the original version of this file called a nonexistent `/tools/<name>` REST endpoint
+ *   and 404'd on every real run; this was only discovered on first live deploy.
+ *
  * REQUIRED SECRETS (Key Vault, names mirror existing SM->KV 1:1 convention):
  *   gateway-bearer-token       bearer/API token the job presents to mcp.otchealth.app (read-only scope)
  *
@@ -135,20 +145,67 @@ async function containerExists(account, container) {
   return r.status === 200;
 }
 
-// ---------- Gateway (read-only, bearer token) — the ONLY path to Cosmos work-ledger + AI Search ----------
+// ---------- Gateway (read-only, bearer token, MCP JSON-RPC) — the ONLY path to Cosmos work-ledger + AI Search ----------
 function gatewayBase() { return process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app"; }
 
-async function gatewayCall(bearer, toolName, params) {
-  const r = await fetch(`${gatewayBase()}/tools/${toolName}`, {
+/** Low-level: one MCP tools/call round-trip. Parses either a plain JSON body or an SSE stream. */
+async function mcpCall(bearer, toolName, args) {
+  const r = await fetch(`${gatewayBase()}/mcp`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json" },
-    body: JSON.stringify(params || {}),
+    headers: {
+      Authorization: `Bearer ${bearer}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: toolName, arguments: args || {} } }),
   });
-  if (!r.ok) {
-    const body = await r.text().catch(() => "");
-    throw new Error(`gateway call ${toolName} failed: ${r.status} ${body.slice(0, 300)}`);
+  const bodyText = await r.text();
+  if (!r.ok) throw new Error(`gateway call ${toolName} failed: ${r.status} ${bodyText.slice(0, 300)}`);
+  let msg = null;
+  try { msg = JSON.parse(bodyText); }
+  catch {
+    for (const line of bodyText.split("\n")) {
+      if (line.startsWith("data:")) { try { msg = JSON.parse(line.slice(5)); } catch { /* keep scanning */ } }
+    }
   }
-  return r.json();
+  if (!msg) throw new Error(`gateway call ${toolName}: could not parse response body (${bodyText.slice(0, 200)})`);
+  if (msg.error) throw new Error(`gateway call ${toolName} error: ${JSON.stringify(msg.error).slice(0, 300)}`);
+  return msg.result || {};
+}
+
+/** Pull the full payload for a JIT-offloaded result (see src/tools/result-store.ts on the gateway). */
+async function fetchOffloaded(bearer, resultId) {
+  const parts = [];
+  let page = 1;
+  for (;;) {
+    const chunk = await gatewayCall(bearer, "gateway_fetch_result", { result_id: resultId, page });
+    if (chunk == null) break;
+    if (typeof chunk === "string") { parts.push(chunk); break; }
+    const text = chunk.text ?? chunk.chunk ?? chunk.data ?? null;
+    if (text != null) parts.push(String(text));
+    const hasMore = chunk.has_more ?? chunk.hasMore ?? false;
+    if (!hasMore) break;
+    page = chunk.next_page ?? page + 1;
+  }
+  const combined = parts.join("");
+  try { return JSON.parse(combined); } catch { return combined; }
+}
+
+/** High-level: call a gateway tool and return its actual data (unwraps structuredContent + JIT offload). */
+async function gatewayCall(bearer, toolName, params) {
+  const result = await mcpCall(bearer, toolName, params);
+  const sc = result.structuredContent || {};
+  let payload = sc.result;
+  if (payload && typeof payload === "object" && payload._jit_offloaded && payload.result_id) {
+    payload = await fetchOffloaded(bearer, payload.result_id);
+  }
+  if (payload !== undefined && payload !== null) return payload;
+  // Fallback: no structuredContent (e.g. connector-curated toolset) — parse the text content block.
+  const textBlock = (result.content || [])[0];
+  if (textBlock && textBlock.text) {
+    try { return JSON.parse(textBlock.text); } catch { return { raw: textBlock.text }; }
+  }
+  return {};
 }
 
 // ---------- (a) Cosmos work-ledger export ----------
@@ -182,7 +239,9 @@ async function exportLedger(bearer) {
 // through the gateway's read-only brain_search tool rather than holding a Search admin key in this
 // job, at the cost of only getting back whatever fields brain_search projects (not literally every
 // internal field) — that's an intentional least-privilege tradeoff documented here and in the PR.
-async function exportBrainIndex(bearer, { pageSize = 200 } = {}) {
+// pageSize kept modest (50, not 200) to stay comfortably under the gateway's JIT-offload threshold
+// on most pages, though fetchOffloaded() above handles the offloaded case either way.
+async function exportBrainIndex(bearer, { pageSize = 50 } = {}) {
   const rows = [];
   let skip = 0;
   for (;;) {
