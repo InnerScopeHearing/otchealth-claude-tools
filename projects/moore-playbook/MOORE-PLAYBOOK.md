@@ -4,6 +4,12 @@
 **Author:** COO (The Quarterback) · **Sponsor:** Matthew Moore · **Date:** 2026-06-28
 **Lane:** `coo` (write-through `--tags moore-playbook`) · **Status:** v1 — living strategy doc
 
+> **⚠️ READ `MOORE-PLAYBOOK-STATE-OF-THE-NARRATIVE-2026-07-10.md` FIRST.** A full-day audit
+> across the OTCHealth product line, the InnerScope capital structure, and the AI OS positioning
+> found real, live, currently-unresolved problems on both engines described below at once — not
+> a reason to discard this plan, but a reason not to treat it as deck-ready or externally usable
+> until that doc's punch list clears. Read it before using anything in this document externally.
+>
 > **READ THIS FIRST — what this document is and isn't.** This is an **internal strategic
 > plan**, not investor material, not an offer to sell securities, and not financial advice.
 > Every dollar figure in the model section is an **illustrative planning assumption**, not a

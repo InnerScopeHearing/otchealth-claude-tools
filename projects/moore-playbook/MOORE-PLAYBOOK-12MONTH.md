@@ -2,6 +2,11 @@
 ### OTCHealth (cash engine) + InnerScope/INND (capital flywheel), run as one AI-operated machine, mirroring Medvi
 
 **Author:** COO (wearing all 9 executive hats internally) · **Date:** 2026-06-30 · **Status:** v1 long-range plan
+> ⚠️ **READ `MOORE-PLAYBOOK-STATE-OF-THE-NARRATIVE-2026-07-10.md` FIRST** — a full-day audit found
+> live, unresolved problems on both the OTCHealth and InnerScope sides of this plan; treat this
+> doc as the target-state arc, not something deck-ready today. Also note: this doc's own
+> Executive Summary below cites cash/store figures dated to an earlier session checkpoint — check
+> `coo/today.md` and the CFO's live scoreboard for current numbers before quoting anything here.
 > Internal strategy/execution doc. Not investor material, not an offer, not legal/financial advice. INND content is framework-level + MNPI-internal (counsel-gated); no share counts/prices. All dollar figures are ILLUSTRATIVE planning assumptions. TReO is a PSAP, never a hearing-aid/medical/FDA claim. Builds on the near-term EXECUTION-PROGRAM.md (weeks 1-26); this is the 12-month arc on top.
 
 
