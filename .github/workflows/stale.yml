@@ -1,0 +1,43 @@
+name: Close stale PRs and branches
+
+# GitHub is app-code-only now: the state of record lives in the agent work-ledger
+# (Cosmos, behind the gateway), not in open PRs. This job closes PRs that have gone
+# quiet and deletes their branches so PR/branch sprawl stops accumulating. Issues are
+# left untouched (PR hygiene only).
+
+on:
+  schedule:
+    - cron: '17 9 * * *' # daily 09:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: write # delete-branch needs contents:write
+
+concurrency:
+  group: stale
+  cancel-in-progress: false
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9
+        with:
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
+          stale-pr-label: stale
+          exempt-pr-labels: keep,security,release,pinned,dependencies
+          exempt-draft-pr: false
+          stale-pr-message: >
+            This PR has had no activity for 14 days and is now marked stale. It will be closed in
+            7 days unless there is new activity or it is labeled "keep". The fleet's state of record
+            lives in the agent work-ledger, not in open PRs.
+          close-pr-message: >
+            Closing this stale PR after ~21 days of inactivity and deleting its branch. Reopen or
+            branch fresh from main if the work is still needed.
+          delete-branch: true
+          days-before-issue-stale: -1 # never touch issues
+          days-before-issue-close: -1
+          operations-per-run: 200

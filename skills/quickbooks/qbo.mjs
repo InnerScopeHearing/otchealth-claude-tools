@@ -21,6 +21,7 @@
 //   node qbo.mjs <company> request <GET|POST|PUT> <path>   (JSON body on stdin for writes)
 
 import { mkdirSync, writeFileSync } from "node:fs";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import crypto from "node:crypto";
 
 const SM_PROJECT = "otchealth-shared-prod";
@@ -40,9 +41,9 @@ function need(name) {
 }
 
 // ── Secret Manager write (persist Intuit's rotated refresh token) ──
-function smAvailable() { return !!process.env.GCP_CLAUDE_DRIVER_SA_JSON; }
+function smAvailable() { return !!(process.env.GCP_CLAUDE_DRIVER_SA_JSON || process.env.AZURE_SP_CLIENT_ID); }
 async function smToken() {
-  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON; if(!__r){return null;} let sa; try{sa=JSON.parse(__r);}catch{return null;} if(!sa||!sa.private_key){return null;}
   const now = Math.floor(Date.now() / 1000);
   const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
@@ -51,7 +52,7 @@ async function smToken() {
   if (!r.ok) throw new Error("SM auth " + r.status);
   return (await r.json()).access_token;
 }
-async function smAddVersion(t, id, v) {
+async function smAddVersion(t, id, v) { const _ok = await kvSecretSet(id, v); if (_ok) return true;
   const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } });
   const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body });
   let r = await add();
@@ -63,7 +64,7 @@ async function smAddVersion(t, id, v) {
   if (!r.ok) throw new Error("SM addVersion " + r.status);
 }
 // Read the latest secret version (the live, rotated refresh token).
-async function smReadLatest(t, id) {
+async function smReadLatest(t, id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error("SM access " + r.status);

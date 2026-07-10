@@ -19,6 +19,7 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
+import { TIERS, chatBody } from "../../setup/model-routing.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const argv = process.argv.slice(2);
@@ -34,13 +35,17 @@ async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/to
 
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
-  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.FGL_MODEL || "gpt-4o";
-  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.FGL_FALLBACK_MODEL || "gpt-4.1-mini";
+  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.FGL_MODEL || TIERS.standard.deployment;
+  // FALLBACK: gpt-4.1-mini is BANNED for quality work (persona review IS the quality signal that
+  // feeds the 90% gate). Defaults to the shared 'quality' tier (gpt-5.1, reasoning-family) via
+  // setup/model-routing.mjs, the single source of truth for tier + body shape fleet-wide.
+  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.FGL_FALLBACK_MODEL || TIERS.quality.deployment;
   if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key");
 }
 async function callChat(ep, key, dep, system, content, maxTokens, tries) {
+  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content }], maxTokens, temperature: 0.5 });
   for (let a = 0; a < tries; a++) {
-    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content }], max_tokens: maxTokens, temperature: 0.5 }) });
+    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 140));
     return (await r.json()).choices[0].message.content;
@@ -48,7 +53,7 @@ async function callChat(ep, key, dep, system, content, maxTokens, tries) {
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
 async function ask(system, content, maxTokens = 1600) {
-  // primary gpt-4o (vision); fall back to the foundry gpt-4.1-mini deployment (separate quota, also
+  // primary gpt-4o (vision); fall back to the foundry gpt-5.1 deployment (separate quota, also
   // vision-capable) on sustained throttle so the autonomous QA loop never stalls (Fleet Intel #5).
   try { return await callChat(EP, KEY, DEP, system, content, maxTokens, 5); }
   catch (e) { if (e.throttled && FB_EP && FB_KEY) return await callChat(FB_EP, FB_KEY, FB_DEP, system, content, maxTokens, 5); throw e; }

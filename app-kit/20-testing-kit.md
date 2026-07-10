@@ -1,4 +1,4 @@
-# Testing Kit — make a green build trustworthy without a human checklist
+# Testing Kit -- make a green build trustworthy without a human checklist
 
 Goal: replace slow manual QA gating with fast automated gates, so changes ship
 confidently and quickly. Today most apps have no automated tests (iHEARtest:
@@ -11,10 +11,29 @@ confidently and quickly. Today most apps have no automated tests (iHEARtest:
 2. **End-to-end (Maestro).** Automate the critical user flows on a simulator.
    iHEARtest and AWARE already have `qa/maestro/flows/`. Standardize a flow set:
    onboarding, the core action (screening/test/review), paywall, export, settings.
-3. **Synthetic focus-group review (the AWARE pattern).** AWARE runs persona
-   reviews (`qa/focus-group-buyers/reviews/*.json`) that produce a `FIX_LIST`.
-   Generalize this: a set of senior personas review each build for UX and produce
-   a prioritized fix list. This catches usability bugs tests do not.
+3. **Synthetic focus-group pre-screening (the iHEARtest v1.5.19 pattern).**
+   A code-backed simulation that walks 5 representative buyer personas through a
+   32-item checklist for each release candidate. Generates `qa/focus-group-prescreening-X.Y.Z.html`
+   + PDF, commits both, and delivers the PDF to the stakeholder reviewer directly.
+   Items are PASS (code confirmed), DEVICE REQ (source looks correct, needs iPhone),
+   FLAG (blocker), or NOTE (minor concern). No FLAGs = developer gate passes.
+   See `FOCUS-GROUP-PRESCREENING-TEMPLATE.md` in this directory for the full template,
+   persona archetypes, checklist categories, and CSS structure.
+   Reference implementation: iHEARtest `qa/focus-group-prescreening-1.5.19.html`.
+
+## Dev/test data: synthetic by default (never real PHI)
+Test fixtures, seed data, focus-group inputs, and any records an agent builds
+against come from the `synthetic-health-data` skill, never from a real
+patient/customer roster. One command produces the canonical, reproducible bundle:
+
+```bash
+node skills/synthetic-health-data/seed-fixtures.mjs   # fixtures/synthetic/{hearing-screening,patient,customer,order}.json
+```
+
+A fixed seed gives byte-identical output, so commit the bundle (or the seed
+command) into the app repo and every contributor and CI run gets the same data.
+This is the fleet standard, see `app-kit/DEV-DATA-STANDARD.md` for the Iron Rule,
+the generator flags, and the (BAA-only) `deident.mjs` path for real extracts.
 
 ## Gate it in CI
 Wire unit + Maestro into the CI workflow so a red test blocks merge. Greptile

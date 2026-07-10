@@ -43,6 +43,8 @@ These run on credits that are **live today**; default to them and the skill just
 | **Background music / underscore** (app ambience, video bed, intro) | `gen-music.mjs` | ElevenLabs Music | ~$0.06/10s (grant) |
 | **Sound effects** (UI chime, notification, stinger, transition) | `gen-sfx.mjs` | ElevenLabs Sound Effects | ~$0.02 each (grant) |
 | **Art-director review** (brand-fit critique + refined prompt) | `review-asset.mjs` | OpenAI GPT-4o Vision | ~$0.01 each |
+| **$10M curation** (judge a SET head-to-head, pick the winner) | `art-director.mjs` | OpenAI GPT-4o Vision | ~$0.02 each |
+| **$10M design loop** (generate N → judge → winner, one command) | `art-direct.mjs` | gen-image + art-director | gen cost + ~$0.02 |
 | PNG → SVG vectorize | `vectorize.mjs` | Recraft API or local potrace | $0.04 or free |
 | Optimize / format assets | `optimize-asset.mjs` | sharp (local, free) | $0 |
 | Health-check all credentials / APIs | `healthcheck.mjs` | every provider (auth-only probes) | $0 |
@@ -59,6 +61,9 @@ produces the best result. The menu, by medium:
 - **Music** — ElevenLabs Music via `gen-music.mjs` (instrumental beds by default, `--vocal` for songs).
 - **Sound design** — ElevenLabs Sound Effects via `gen-sfx.mjs` (UI chimes, notifications, stingers).
 - **Quality control** — `review-asset.mjs` runs GPT-4o Vision as an art director: scores brand fit, flags `do_not` violations, and returns a refined prompt to regenerate from.
+- **The $10M design system** — two scripts make "make it look like a $10 million app" a repeatable loop instead of luck:
+  - `art-director.mjs --dir <folder>` (or `--images a,b,c`) judges a SET of candidates head to head against a fixed 6-dimension $10M rubric (finish/polish .25, cohesion .20, composition .18, premium_feel .17, on_brand .12, character_accuracy .08), computes a deterministic 0-100 "ten_million_score", ranks them, and picks a winner with per-image fix notes. Use it to auto-cull a batch down to the best one. (review-asset = ONE image vs brand; art-director = MANY images ranked.)
+  - `art-direct.mjs --brief "..." --intent "..." --variants N [--rounds R]` is the whole loop in one command: generate N candidates (gen-image), judge them (art-director), keep the winner, and on `--rounds 2+` fold the winner's fix notes back into the brief for another pass. Output lands at `<workdir>/<name>-WINNER.png`. This is the default way to produce any flagship hero/splash asset. PROVEN: produced FourVault's splash hero at 95/100 from a single brief.
 - **Vectors / cleanup** — `vectorize.mjs` (Recraft or local potrace), `optimize-asset.mjs` (sharp, free), `compose-screenshot.mjs` (device frames + headline overlay).
 - **Long-form lip-synced presenter video (real presenter + your ElevenLabs voice)** — NOT this skill. Use the sibling **`avatar-pipeline/`** in this repo: a cloud pipeline (GitHub Actions, GPU on Replicate or Azure) that relip-syncs a short presenter base video to a full script in your own ElevenLabs voice via LatentSync/MuseTalk/SadTalker. Trigger the `avatar-render` workflow (phone-friendly) or `python avatar-pipeline/quick_render.py`. The designer `gen-avatar.mjs` here is for short *generative* talking heads (Veo / Azure TTS-Avatar); the avatar-pipeline is for long, consistent presenter videos. See `avatar-pipeline/README.md`.
 

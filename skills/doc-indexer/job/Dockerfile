@@ -23,4 +23,33 @@ COPY skills/github-app/ /app/skills/github-app/
 # kb-memory: the brain-reindex job runs semantic.mjs reindex from this image to keep the
 # memory-exec AI Search index fresh (agent lessons/decisions + focus-group/shark catalog feed it).
 COPY skills/kb-memory/ /app/skills/kb-memory/
+# fleet-medic: the auto-dispatch memory medic job (fleet-medic.sh -> medic.mjs scan --dispatch).
+# medic.mjs execs kb-memory/mem.mjs team-health (copied above) for its deterministic health spine.
+COPY skills/fleet-medic/ /app/skills/fleet-medic/
+# decision-clock (cron daily): decision.mjs sweep --dispatch reads Cosmos decisions_pending and
+# execFileSync's fleet-dispatch/dispatch.mjs to send ONE batched per-owner overdue-gate nudge.
+COPY skills/decision-clock/ /app/skills/decision-clock/
+# signal-radar (cron ~30 min): radar.mjs scan --emit runs the 5 detectors and execFileSync's
+# fleet-dispatch/dispatch.mjs to route above-threshold signals to the owning agent's inbox.
+COPY skills/signal-radar/ /app/skills/signal-radar/
+# fleet-dispatch: the shared per-owner inbox dispatcher both decision-clock and signal-radar shell
+# out to (execFileSync node .../fleet-dispatch/dispatch.mjs send <owner> <msg> --from <src>).
+COPY skills/fleet-dispatch/ /app/skills/fleet-dispatch/
+# grant-tracker: signal-radar's grant-burn-expiry detector reads grant-tracker/grants.json to flag
+# grants whose term lapsed but still show status=active (may now be billing at full cash rate).
+COPY skills/grant-tracker/ /app/skills/grant-tracker/
+# ledger-compaction: the daily Container App Job (compaction.sh -> run-compaction.mjs) that reads each
+# agent's kb-memory ledger and writes a non-destructive compacted summary. Imports kb-memory (above).
+COPY skills/ledger-compaction/ /app/skills/ledger-compaction/
+# compute-allocator + fleet-telemetry: fleet-dispatch's send now consults compute-allocator on TASK
+# dispatches (fan-out/model/critic recommendation), and allocate.mjs resolves the model tier via
+# fleet-telemetry/task-router.mjs and live signals via signal-radar (copied above). The dispatch import
+# is dynamic + fail-open, so these are only needed when a JOB (signal-radar/decision-clock) shells a
+# --task dispatch; copying them lets that path produce the recommendation instead of silently skipping it.
+COPY skills/compute-allocator/ /app/skills/compute-allocator/
+COPY skills/fleet-telemetry/ /app/skills/fleet-telemetry/
+# ring-memory-index: the daily semantic reindex of each ring-ISOLATED agent memory ledger (CLO legal,
+# CFO finance) into its own AI Search index, so ring agents recall their OWN memory by meaning (the
+# per-ring equivalent of memory-exec). Self-resolves each ring store's creds from SM via the SA; ring-safe.
+COPY skills/ring-memory-index/ /app/skills/ring-memory-index/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]

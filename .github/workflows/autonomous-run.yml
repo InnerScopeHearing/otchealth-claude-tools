@@ -73,6 +73,9 @@ jobs:
           5. Each step: make ONE self-contained improvement toward the goal, run its tests, commit on a
              claude/* branch, update a draft PR, and briefly note what you did and what is next.
           6. If you complete the goal, do useful adjacent cleanup (tests, docs) or stop cleanly.
+          7. Your draft PR is AUTO-CRITIQUED: critic-pr.yml runs a real critic pass on your diff and posts
+             a verdict comment. If it says REVISE with a medium+ issue, fix it and re-push before the PR is
+             finalized. (You need not run the critic yourself; it runs on the credentialed CI runner.)
           RAILS
           RAILS_TEXT="$(cat /tmp/rails.txt)"
 

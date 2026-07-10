@@ -12,10 +12,14 @@
 //   node run-evals.mjs                 # run all tasks
 //   node run-evals.mjs --agent cto     # one role
 //   node run-evals.mjs --task cto-diagnose-failing-job --emit
+//   node run-evals.mjs --json out.json # also write a structured scorecard (for the CI prompt-regression
+//                                       # gate to diff base-vs-head; see .github/workflows/promptcheck.yml)
 import crypto from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { TIERS, chatBody } from "../../setup/model-routing.mjs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const argv = process.argv.slice(2);
@@ -23,6 +27,7 @@ const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i +
 const ONLY_AGENT = (takeVal("--agent", "") || "").toLowerCase();
 const ONLY_TASK = takeVal("--task", "");
 const EMIT = argv.includes("--emit");
+const JSON_OUT = takeVal("--json", "");
 const PASS_AT = 0.7;
 
 // short role briefs (v1). LATER: load the real dream-team agent definitions for full fidelity.
@@ -36,18 +41,23 @@ const PERSONA = {
 // live in evals/personas.json so the suite scales past cto/cfo/clo. Merged over the inline briefs.
 try { Object.assign(PERSONA, JSON.parse(readFileSync(join(HERE, "evals", "personas.json"), "utf8"))); } catch { /* optional */ }
 
-function saJwt(scope) { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
-async function sm(id) { const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
+function saJwt(scope) { const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;} const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
+async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
-  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.AGENT_MODEL || "gpt-4o";
-  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.AGENT_FALLBACK_MODEL || "gpt-4.1-mini";
+  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.AGENT_MODEL || TIERS.standard.deployment;
+  // FALLBACK: gpt-4.1-mini is BANNED for quality work. Both callsites here (running the agent persona
+  // AND the LLM-judge scoring against the rubric) are quality synthesis/evaluation, exactly the kind
+  // of work the ban targets, so the fallback defaults to the shared 'quality' tier (gpt-5.1,
+  // reasoning-family) via setup/model-routing.mjs, the single source of truth for tier + body shape.
+  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.AGENT_FALLBACK_MODEL || TIERS.quality.deployment;
   if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key");
 }
 async function callChat(ep, key, dep, system, user, maxTokens, tries) {
+  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens });
   for (let a = 0; a < tries; a++) {
-    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.2 }) });
+    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
     return (await r.json()).choices[0].message.content;
@@ -70,7 +80,7 @@ async function judge(task, rubric, answer) {
 }
 async function emit(results) {
   const key = await sm("posthog-fleet-ingest-key"); if (!key) return;
-  for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, score: r.score, pass: r.pass, judge_model: DEP } }) });
+  for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, callsite_id: r.callsite_id, score: r.score, pass: r.pass, model: DEP, judge_model: DEP } }) });
 }
 
 const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json") && f !== "personas.json").flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
@@ -85,7 +95,9 @@ for (const t of tasks) {
   try { answer = await chat((PERSONA[t.agent] || `You are the ${t.agent}.`) + " Answer concretely and completely: name the SPECIFIC tools, gates, thresholds, numbers, and rules you would apply and WHY, cover every relevant consideration explicitly rather than implying it, and whenever you refuse or block, also state the compliant path.", t.task); scored = await judge(t.task, t.rubric, answer); }
   catch (e) { console.error(` ERROR ${e.message}`); continue; }
   const pass = scored.score >= PASS_AT;
-  results.push({ id: t.id, agent: t.agent, score: scored.score, pass });
+  // callsite_id/prompt_file identify WHICH prompt surface this task exercises (default to the agent
+  // name when a task predates the tagging), the substrate a later quality-per-dollar router joins on.
+  results.push({ id: t.id, agent: t.agent, callsite_id: t.callsite_id || t.agent, prompt_file: t.prompt_file || null, score: scored.score, pass, notes: scored.notes, met: scored.met });
   process.stderr.write(` ${(scored.score * 100).toFixed(0)}%\n`);
   console.log(`[${pass ? "PASS" : "FAIL"}] ${t.agent}/${t.id}  ${(scored.score * 100).toFixed(0)}%  (${scored.met.filter(Boolean).length}/${t.rubric.length})  ${scored.notes}`);
 }
@@ -93,4 +105,8 @@ const avg = results.reduce((s, r) => s + r.score, 0) / (results.length || 1);
 const passed = results.filter(r => r.pass).length;
 console.log(`\nSCORECARD: ${passed}/${results.length} passed, avg ${(avg * 100).toFixed(0)}%`);
 if (EMIT) { await emit(results); console.log("emitted eval_result events -> PostHog Fleet Agents"); }
+if (JSON_OUT) {
+  writeFileSync(JSON_OUT, JSON.stringify({ model: DEP, passAt: PASS_AT, avg, passed, total: results.length, results }, null, 2));
+  console.log(`wrote scorecard json -> ${JSON_OUT}`);
+}
 process.exit(results.some(r => !r.pass) ? 1 : 0);

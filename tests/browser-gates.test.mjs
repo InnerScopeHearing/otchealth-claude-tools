@@ -50,3 +50,21 @@ test("allowed() rejects off-list and suffix-confusion hosts", () => {
   assert.ok(!allowed("notxero.com", ["xero.com"]), "suffix confusion must be rejected");
   assert.ok(!allowed("xero.com.evil.com", ["xero.com"]), "domain-in-prefix must be rejected");
 });
+
+test("HARD_GATE catches real-world payment/e-sign phrasings that slipped past the original rails", () => {
+  for (const s of [
+    "Enter your card #",
+    "Please provide your CC number",
+    "Agree & Sign to continue",
+    "Click here to e sign the document",
+  ]) assert.ok(HARD_GATE.test(s), `should HARD_GATE: ${s}`);
+});
+
+test("HARD_GATE still does not trip on 'we sign' style prose (no false pause)", () => {
+  assert.ok(!HARD_GATE.test("We sign our commit messages with a co-author trailer"));
+});
+
+test("TWOFA catches an n-digit code from a text message", () => {
+  assert.ok(TWOFA.test("Enter the 6-digit code from your text message"));
+  assert.ok(TWOFA.test("We sent an SMS code to your phone"));
+});

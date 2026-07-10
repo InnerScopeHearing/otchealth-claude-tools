@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>From the Chair — Master Outline (Book Bible)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#2b2622;--ink2:#5c5347;--line:#e4dac9;--paper:#f7f1e6;--card:#fffdf8;
+    --mark:#9a5b34;--kim:#3f7a6d;--gold:#b8862f;--ai:#7a5ea8;--rule:#d8cab2;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:880px;margin:0 auto;padding:0 6%}
+  .cover{padding:8vh 0 5vh;border-bottom:2px solid var(--ink)}
+  .kick{font-size:.72rem;letter-spacing:.3em;text-transform:uppercase;color:var(--mark);font-weight:700}
+  h1{font-family:'Fraunces';font-weight:500;font-size:clamp(2.8rem,8vw,5rem);line-height:.98;letter-spacing:-.02em;margin:.2em 0}
+  .cover .sub{font-family:'Fraunces';font-style:italic;font-size:clamp(1.2rem,3vw,1.7rem);color:var(--ink2);max-width:40ch}
+  .meta{margin-top:1.6rem;font-size:.85rem;color:var(--ink2)}
+  .meta b{color:var(--ink)}
+  h2{font-family:'Fraunces';font-weight:600;font-size:clamp(1.5rem,4vw,2.1rem);margin:2.6rem 0 .3rem;letter-spacing:-.01em}
+  .lead{font-size:1.05rem;color:#39322b;margin:.6rem 0 1.2rem}
+  section{padding:3rem 0;border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:.7rem;letter-spacing:.26em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:.6rem}
+  /* editions */
+  .ed{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem}
+  .ed .e{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.3rem 1.4rem}
+  .ed .e h3{font-family:'Fraunces';font-size:1.2rem;font-weight:600;margin-bottom:.2rem}
+  .ed .e .who{font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;font-weight:700;margin-bottom:.6rem}
+  .ed .e.pf .who{color:var(--kim)} .ed .e.pro .who{color:var(--mark)}
+  .ed .e p{font-size:.92rem;color:var(--ink2)}
+  .ed .e ul{margin:.5rem 0 0 1rem;font-size:.9rem;color:var(--ink2)} .ed .e li{margin:.25rem 0}
+  /* method pills */
+  .meth{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem}
+  .mcol{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1.2rem 1.4rem}
+  .mcol h3{font-family:'Fraunces';font-size:1.15rem;margin-bottom:.5rem}
+  .mcol.m h3{color:var(--mark)} .mcol.k h3{color:var(--kim)}
+  .mcol ol{margin-left:1.1rem;font-size:.9rem;color:#43392f} .mcol li{margin:.35rem 0}
+  /* chapter cards */
+  .part{font-family:'Fraunces';font-style:italic;font-size:1rem;color:var(--gold);margin:2.4rem 0 .4rem;letter-spacing:.02em;border-top:1px solid var(--rule);padding-top:1.4rem}
+  .ch{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--gold);border-radius:0 12px 12px 0;padding:1.3rem 1.5rem;margin:1rem 0}
+  .ch .num{font-family:'Fraunces';font-style:italic;color:var(--gold);font-size:.9rem}
+  .ch h3{font-family:'Fraunces';font-weight:600;font-size:1.35rem;line-height:1.1;margin:.1rem 0 .7rem}
+  .ch .row{display:flex;gap:.6rem;margin:.5rem 0;font-size:.9rem}
+  .ch .tag{flex:0 0 auto;font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;font-weight:700;padding:.18rem .5rem;border-radius:5px;height:fit-content;margin-top:.15rem}
+  .t-mark{background:#f3e3d6;color:var(--mark)} .t-kim{background:#dcebe6;color:var(--kim)}
+  .t-pf{background:#eef0d9;color:#6a7320} .t-pro{background:#efe2f2;color:var(--ai)}
+  .t-ai{background:#ece6f5;color:var(--ai)} .t-wb{background:#f6ead0;color:var(--gold)}
+  .ch .row .txt{color:#43392f}
+  .ch .row .txt b{color:var(--ink)}
+  .ai-note{border-left:3px solid var(--ai);background:#f6f2fb;padding:.5rem .8rem;border-radius:0 8px 8px 0;font-size:.88rem;color:#4a4035;margin-top:.5rem}
+  .note{background:#fff7ec;border:1px solid var(--rule);border-radius:10px;padding:1rem 1.2rem;font-size:.9rem;color:#5a4f3f;margin:.7rem 0}
+  .note b{color:var(--ink)}
+  .flag{border-left:4px solid #b4452f}
+  ul.clean{list-style:none} ul.clean li{padding:.3rem 0 .3rem 1.3rem;position:relative;font-size:.95rem;color:#43392f}
+  ul.clean li::before{content:'→';position:absolute;left:0;color:var(--gold)}
+  .foot{padding:3rem 0 5rem;text-align:center;color:var(--ink2);font-size:.85rem}
+  .foot .m{font-family:'Fraunces';font-style:italic;font-size:1.2rem;color:var(--mark)}
+  @media(max-width:680px){.ed,.meth{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header class="cover"><div class="wrap">
+  <span class="kick">Master Outline · Book Bible · Draft for Matt</span>
+  <h1>From the Chair</h1>
+  <p class="sub">Three generations of caring for people who couldn't hear — the Moore family method, told from two chairs.</p>
+  <p class="meta">One book · <b>two editions</b> (Patients &amp; Families · Hearing Professionals) · eBook + fillable Workbook · an <b>AI-Layer bridge</b> in every chapter.<br>Built from <b>Mark Moore</b>'s 3-part interview (sales &amp; ownership) + <b>Kim Moore</b>'s interview (care &amp; front desk). Both Licensed Hearing Aid Dispensers.</p>
+</div></header>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Concept</span>
+  <h2>Two chairs, one family</h2>
+  <p class="lead">Every patient in the Moores' world sat in two chairs: <b>the front-desk and testing chair</b>, where Kim made them feel safe and learned who they were — and <b>the sales chair</b>, where Mark earned their trust and helped them decide. <em>From the Chair</em> is the wisdom from both, woven into one narrative: part memoir, part method, all heart. The thesis that unites them — <strong>you don't sell a hearing aid, you help a person; people don't want to be sold, they want to be cared for.</strong></p>
+  <div class="note"><b>Why two editions of one book:</b> the stories and the spine are identical — only the framing changes. The <b>Patients &amp; Families</b> edition reads as reassurance and a roadmap ("here's what the journey feels like, and how to help someone you love"). The <b>Hearing Professionals</b> edition reads as a teachable system ("here's how to run a caring, profitable practice") and carries the Workbook exercises. Write once; frame twice.</p>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Two Editions</span>
+  <h2>Same soul, two readers</h2>
+  <div class="ed">
+    <div class="e pf"><div class="who">Edition A · Patients &amp; Families</div>
+      <h3>A Family's Guide to Hearing Again</h3>
+      <p>For the person who suspects they're missing things — and the spouse or grown child who loves them.</p>
+      <ul><li>Reassurance: the fear is normal; the journey is walkable</li><li>What each step feels like (test, first fit, the month of rewiring)</li><li>How to support a loved one without nagging</li><li>Closes each chapter with a gentle "If this is you / If this is someone you love"</li></ul>
+    </div>
+    <div class="e pro"><div class="who">Edition B · Hearing Professionals</div>
+      <h3>The Moore Method for Caring Practices</h3>
+      <p>For dispensers, front-desk staff, and practice owners who hate "selling" but love helping.</p>
+      <ul><li>The teachable method: modalities, the journey process, the close</li><li>Front-desk + culture playbook (hiring, environment, follow-up)</li><li>Carries the <b>fillable Workbook</b> exercises per chapter</li><li>Closes each chapter with "Put it to work Monday"</li></ul>
+    </div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Method, Combined</span>
+  <h2>The Moore Method</h2>
+  <p class="lead">The spine that runs beneath the stories — Mark's selling-as-serving and Kim's care-as-system.</p>
+  <div class="meth">
+    <div class="mcol m"><h3>Mark — Selling Is Serving</h3>
+      <ol>
+        <li>You sell <b>yourself</b>, not the device — the aid is just the tool</li>
+        <li>People don't want to be sold; they want to buy (and to be helped)</li>
+        <li>The four objections, <b>inverted</b>: denial → stigma → vanity → cost</li>
+        <li>Read the person: <b>Thinkers / Knowers / Feelers</b> — match their modality</li>
+        <li>"What brings you in today?" + repeat-back to draw out the real reason</li>
+        <li>Price = the device <em>plus me</em>; cost of inaction; today is the best day</li>
+        <li>A return isn't a returned aid — it's the patient returning <em>you</em></li>
+        <li>The duplicatable <b>patient journey process</b> + modified COSI (3 listening goals)</li>
+      </ol>
+    </div>
+    <div class="mcol k"><h3>Kim — Care Is the System</h3>
+      <ol>
+        <li>The caring starts on the <b>first phone call</b>, long before any sale</li>
+        <li><b>You are the business</b> — smile before you pick up the phone</li>
+        <li>You hear with your <b>brain, not your ears</b>; give the month, hold the hand</li>
+        <li>Rituals that signal care: the <b>Hershey bar</b>, the <b>gold stickers</b></li>
+        <li>The <b>loved-one demo</b> turns a skeptical family into allies</li>
+        <li>Saving a return: find the <b>one issue that actually matters</b></li>
+        <li>Hire for heart: "What's your relationship with your parents/grandparents?"</li>
+        <li>Treat every patient like your <b>own family</b> — and you're never pushy</li>
+      </ol>
+    </div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">Front Matter</span>
+  <h2>How the book opens</h2>
+  <ul class="clean">
+    <li><b>Prologue — "Two Chairs."</b> The family across three generations (Marvin → Mark &amp; Kim → Matt); the promise of the book. <em>(Re-anchor to the existing Prologue draft once Matt re-shares it.)</em></li>
+    <li><b>How to read this book</b> — orients each edition's reader (family vs professional).</li>
+    <li><b>A note on who we are</b> — the honest credential line: Licensed Hearing Aid Dispensers, 35+ years, 70+ clinics, 40,000+ patients, 10,000+ fittings each. <b>No "audiologist" claim.</b></li>
+  </ul>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Chapters · 18 across 9 parts</span>
+  <h2>Chapter-by-chapter map</h2>
+  <p class="lead">Each card shows the source (Mark / Kim), the two-edition lens, the AI-Layer bridge, and the Workbook exercise (Pro edition). The arc follows the patient's own journey — from the first ring of the phone to the granddaughter's wedding.</p>
+
+  <div class="part">Part I · How We Got Here</div>
+
+  <div class="ch"><span class="num">Chapter 1</span><h3>Two Chairs, One Family</h3>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">Meeting Kim; Marvin's 5 stores; "the hearing aid business has been very good to us."</span></div>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">Folding mailers at the kitchen table; Marilyn the receptionist; "everyone puts their pants on the same way."</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">You're in good hands — this family has done this a long time, with care.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Two roles, one mission: the desk and the sale are the same act of service.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> the family kitchen-table "mailroom" is now an automated acquisition funnel — same intent (bring the right person in, warmly), new tools.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 2</span><h3>Folding Mailers &amp; Building Hearing Aids</h3>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">The uncle's back-room builds; learning he couldn't <em>sell and manufacture</em> both — the funnel runs dry.</span></div>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">Mom's bookkeeping; "support work matters"; gravitating to the front desk.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">These devices are hand-crafted, human work — not vending-machine widgets.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Specialize the roles; protect the top of the funnel. Build a system, not a hero.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> "you can't sell and build both" is the modern lesson of automating the back office so the human stays in the relationship.</div>
+  </div>
+
+  <div class="part">Part II · Why This Work Matters (the heart)</div>
+
+  <div class="ch"><span class="num">Chapter 3</span><h3>Rain on the Roof</h3>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">The 75-year-old's first fit; she wept at hearing rain again. "From that day it was not a business — it was the gift of giving."</span></div>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">The life-change moments; "when you can't hear, it's a lonely, quiet world."</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">What's possible: the world comes back. Hope, set early.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Why you do this — the emotional engine that outlasts any quota.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> the moments worth capturing — real, consented testimonials — and how AI helps surface and (compliantly) share them.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 4</span><h3>You Hear With Your Brain, Not Your Ears</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">The brain loves the quiet world; the ~month of rewiring; "your own voice sounds like a barrel"; "I've got you."</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">A damaged auditory system is more sophisticated than any device; give it time; don't give up too soon.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">Why week two is hard — and normal. How to encourage, not pressure.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Set the adaptation expectation up front; it prevents most early returns.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> the month of hand-holding becomes a timed follow-up/lifecycle sequence so no one is alone in the hard weeks.</div>
+  </div>
+
+  <div class="part">Part III · The First Contact</div>
+
+  <div class="ch"><span class="num">Chapter 5</span><h3>You Are the Business</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">The mirror-smile phone trick; "I am the business"; coffee, cookies, a warm room; the selling starts when the phone rings.</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">First impressions set the trust that every later step draws on.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">What a good practice feels like — and that you deserve to be treated that way.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">The front desk is the highest-leverage role in the building. Staff it like it.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> "the smile you can hear" as a design spec for an AI/voice front desk — patient, unhurried, never a bad day.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 6</span><h3>What Brings You In Today?</h3>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">The opening question + <b>repeat-back pacing</b>; draw out objections early; "no one comes in to buy."</span></div>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">Putting the nervous patient at ease; reinforce their decision to walk in.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">What a first visit should sound like; you're allowed to just be curious.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Conversation before testing; never a canned pitch; mirror their words.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> intake that listens first — capturing the real "why" so every later touch is personalized, not scripted.</div>
+  </div>
+
+  <div class="part">Part IV · Understanding the Person</div>
+
+  <div class="ch"><span class="num">Chapter 7</span><h3>Denial, Stigma, Vanity, Cost</h3>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">The four objections <b>inverted</b> (denial #1, cost #4); men more vain, women buy solo; the Duke study (#1 most embarrassing product).</span></div>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">The deeper fear is <b>failure</b>; "be kind to yourself; let's travel this together."</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">Naming the real reason you (or Dad) keep saying "later."</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Stop answering cost; address the denial/stigma underneath it.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> messaging that meets denial/stigma with dignity (benefit-led, never "old/handicapped") — and stays inside the claims line.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 8</span><h3>Thinkers, Knowers, Feelers</h3>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">The decision-making modalities (~15/30/55%); be a chameleon; if you can't reach the dominant, reach the second; become a master communicator.</span></div>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">Reading the person by listening to their story (the same instinct, intuitively).</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">How your loved one actually makes decisions — and how to talk to them.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">The core trainable skill; works on patients, staff, and family alike.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> modality-matched communication — tailoring the message (data vs bullets vs story) at scale, the way Mark did by hand.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 9</span><h3>The Testing Chair</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">"Don't shoot the messenger"; the <b>Hershey-bar</b> welcome (the twin-brother story); 10,000+ tested; testing as the highlight, not the chore.</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">The audiogram as a teaching tool; what the numbers mean for the road ahead.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">Demystify the booth; the test is a kindness, not a judgment.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Rituals that signal care and convert; the test is relationship time.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> at-home screening (the iHEARtest spirit) as the no-pressure first step that gets people into the chair.</div>
+  </div>
+
+  <div class="part">Part V · The Family in the Room</div>
+
+  <div class="ch"><span class="num">Chapter 10</span><h3>When the Family Is in the Room</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">The <b>loved-one demo</b> (back turned, eyes closed); the daughter who came to get the refund and left in tears.</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">"Who wears the pants"; empathize with the spouse; the third-party tool turns no → yes.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">How to be in the room helpfully — proof, not pressure.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">The single most reliable close: make the family your ally.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> looping the family into the journey (consented updates, shared milestones) — the demo's spirit, extended past the visit.</div>
+  </div>
+
+  <div class="part">Part VI · The Honest Close</div>
+
+  <div class="ch"><span class="num">Chapter 11</span><h3>You're Not Selling a Hearing Aid — You're Selling Yourself</h3>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">Price = device <em>plus me</em>; cost of inaction; "today is the best day"; financing as a bridge; sincerity beats credentials.</span></div>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">"People only want to know they matter to you."</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">How to judge whether you trust the person, not just the price tag.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">The honest close: recommend the best, hold the standard, offer the bridge.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> where automation stops and the human must close — trust is the one thing you can't outsource.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 12</span><h3>The Honest Truth</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">Telling the truth even when it costs the sale; "I know the hearing aids work — they don't, yet."</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">Don't oversell the device; set honest expectations about adaptation.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">What honest guidance sounds like — and why to walk away from pressure.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Honesty compounds into referrals; integrity is the long game.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> compliance-as-care — honest claims aren't just legal, they're the brand (ties to our claims gate).</div>
+  </div>
+
+  <div class="part">Part VII · The Journey &amp; Coming Back</div>
+
+  <div class="ch"><span class="num">Chapter 13</span><h3>The Patient Journey</h3>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">The duplicatable <b>journey process</b> across offices CA→FL; the <b>modified COSI</b> — 3 listening goals; the British-PBS-accent return (align on what they <em>actually</em> want).</span></div>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">"Journey to better hearing" — the steps, the encouragement, the gold stickers.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">What "success" should be defined as — your goals, in your words.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">A repeatable journey + COSI is how you scale care without losing it.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> the journey as a managed lifecycle — goals captured, progress tracked, check-ins automated.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 14</span><h3>Saving the Return</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">The <b>white envelope</b> signal; find the one issue that matters; the 42-year-old (birds + the soda-can pop) who chose "being among the living."</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">"A return isn't a returned aid — it's the patient returning <em>you</em>"; change the tool, keep the trust.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">If it's not working, that's the start of a conversation, not the end.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">A return-save protocol: listen, isolate the one issue, re-fit the trust.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> early-warning signals (missed wear, a frustrated message) that trigger a save before the envelope comes back.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 15</span><h3>Why They Came Back</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">The gift of gab; the Colonel; the veterans; the coffee-and-donuts lobby; "they want to know their stories mattered."</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">40,000+ patients; recalls, upgrades, referrals built on the journey, not gimmicks.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">A practice that remembers you is one worth staying with.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Kindness is the marketing; retention &gt; acquisition.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> remembering every patient's story at scale — the CRM as Kim's memory, recall/upgrade cadences as her follow-up.</div>
+  </div>
+
+  <div class="part">Part VIII · Running a Caring Practice <span style="font-style:normal;color:var(--ink2);font-size:.8rem">(weighted to the Pro edition)</span></div>
+
+  <div class="ch"><span class="num">Chapter 16</span><h3>Hiring for Heart</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">"What was your relationship with your parents and grandparents?"; clean bathrooms; never ask staff to do what you won't.</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">Modalities for managing staff; running multiple offices with consistent culture.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">(Lighter) What to look for in a practice you trust.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">Hire the value, train the skill; the room is part of the care.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> encoding "hire for heart" into standards an AI front desk / new-hire playbook is held to.</div>
+  </div>
+
+  <div class="ch"><span class="num">Chapter 17</span><h3>Winning Without Selling</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">"Treat each patient like your parents, grandparents, or older friends — and you'll never be pushy."</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">"People don't want to be sold, they want to buy" — the whole philosophy in one line.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">What it feels like to be helped instead of sold.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">The synthesis: care <em>is</em> the close.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> the line every automated touch must pass — does this help, or does it sell?</div>
+  </div>
+
+  <div class="part">Part IX · What We Hope You Remember</div>
+
+  <div class="ch"><span class="num">Chapter 18</span><h3>The Gift of Hearing</h3>
+    <div class="row"><span class="tag t-kim">Kim</span><span class="txt">The grandmother who heard her granddaughter's whole wedding; the gold stickers; "thank you for choosing the gift of hearing."</span></div>
+    <div class="row"><span class="tag t-mark">Mark</span><span class="txt">The gift of giving; why he stayed 23+ years; the device was never the point.</span></div>
+    <div class="row"><span class="tag t-pf">Family lens</span><span class="txt">A closing letter of hope to the reader and their family.</span></div>
+    <div class="row"><span class="tag t-pro">Pro lens</span><span class="txt">A charge to the next generation of caring professionals.</span></div>
+    <div class="ai-note"><b>AI-Layer:</b> the throughline — technology should expand the gift of giving, never replace the human who gives it.</div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">Back Matter &amp; The Workbook</span>
+  <h2>What ships alongside</h2>
+  <ul class="clean">
+    <li><b>The Workbook (Pro edition):</b> one fillable exercise per chapter — the Mirror, Your Hershey Bar, the Loved-One Demo script, Find the One Issue, the Hiring Question, your COSI three goals, a modality self-test.</li>
+    <li><b>Quick-reference cards:</b> the four objections (inverted); Thinker/Knower/Feeler cheat-sheet; the return-save protocol.</li>
+    <li><b>Family appendix (Patients edition):</b> "How to talk to someone you love about their hearing" + what to expect month one.</li>
+    <li><b>About the Moores:</b> the honest credential page (experience, not titles).</li>
+  </ul>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">Production Notes</span>
+  <h2>Build sequence &amp; open items</h2>
+  <ul class="clean">
+    <li><b>Write once, frame twice:</b> draft the shared chapter core from the interviews, then add the per-edition lens boxes + Workbook call-outs.</li>
+    <li><b>Format:</b> eBook (PDF/EPUB) + fillable Workbook (PDF) → Gumroad. ~150–220 pp target.</li>
+    <li><b>Still needed from Matt:</b> the original <em>BOOK-PROJECT-OVERVIEW.md</em> + Prologue/Ch1 draft (to reconcile against this), and a price decision.</li>
+    <li><b>Voice:</b> keep Mark's and Kim's actual phrasing — lightly edited for readability, never sanitized.</li>
+  </ul>
+  <div class="note flag"><b>Compliance flags (route final copy through the CCO/claims gate before publish):</b> (1) This is a memoir/method about <b>traditional hearing aids</b> in the Moores' practice — keep it clearly separate from the iHEAR TReO PSAP; no cross-implication that the PSAP treats hearing loss. (2) Mark &amp; Kim are <b>Licensed Hearing Aid Dispensers</b> — never "audiologist." (3) Some of Mark's statements (e.g. hearing-loss/cognitive-decline links) are general health claims — add an editorial "personal experience / general education, not medical advice; consult a licensed professional" note. (4) INND is public — any heritage/track-record framing brushes the securities line; final sign-off = Matt + counsel. Publishing &amp; pricing remain Matt's gate.</div>
+</div></section>
+
+<footer class="foot"><div class="wrap">
+  <p class="m">From the Chair</p>
+  <p>Master outline · 18 chapters · 2 editions · AI-Layer bridges · built from Mark &amp; Kim's interviews</p>
+  <p style="margin-top:.6rem">Source saved: OneDrive › From the Chair - Book Source. Draft for Matt &amp; Mark's review.</p>
+</div></footer>
+
+</body>
+</html>

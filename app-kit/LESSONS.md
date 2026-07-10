@@ -76,3 +76,20 @@ don't burn macOS minutes (~10x Linux) discovering them one at a time:
   adds Capgo so those ship in minutes.
 
 > Rule: when a bug costs more than an hour, add a line here and a regression test.
+
+## Boot + render verification (2026-06-25, two incidents)
+- **"Compiles + unit-green" is NOT "app works."** FourVault shipped a splash that
+  composited a square vault over the hero (decapitated mascot) and PlantID build 1 is
+  stuck on a green screen (empty `VITE_API_BASE_URL`, baked at build time). BOTH
+  passed all CI. The only thing that catches this class is loading the real bundle in
+  WebKit at iPhone 16 Pro (402x874), asserting it reaches an interactive screen with
+  zero console errors, and LOOKING at it. The device-size walkthroughs we had were
+  capture-only (no assertions). FIX: the **`skills/boot-gate`** harness (boot-smoke +
+  visual/render + check-build-env + ErrorBoundary standard) is now mandatory before
+  any "ready to build". Full standard: `app-kit/AI-AGENT-APP-BUILDING-BIBLE.md`.
+- **Vite bakes `VITE_*` env at BUILD time; an empty value ships a dead app.** Never
+  assume a CI secret is set — gate it with `check-build-env.mjs` (prebuild + a CI step
+  before the Depot archive).
+- **Every app needs a top-level ErrorBoundary + `SplashScreen.hide()` in a `finally`
+  + `launchAutoHide:false`.** A boot crash must show a visible message, never a silent
+  green/white screen.

@@ -1,0 +1,186 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://otchealth.dev/schemas/agent-charter.schema.json",
+  "title": "OTCHealth Agent Charter",
+  "description": "Machine-readable governance contract for one fleet agent role. Read by three enforcement points: (1) the gateway (src/auth + a new src/charter module) at every tool call, rejecting a call a charter's prohibited_actions classifier matches; (2) CI (a charter-lint job) on every PR from that agent's lane, failing a diff that adds a banned token/pattern; (3) the human/Coach at onboarding and at each ROTATE-BEFORE-LAUNCH review. This schema is deliberately closer to a permissions manifest than a prose job description: every prohibited_actions entry MUST carry a classifier (a regex, a tool-name list, or a ring predicate) that a machine can evaluate without an LLM in the loop. Prose (business_objectives, notes) is for humans; classifiers are for enforcement. version bumps whenever objectives, rings, or classifiers change; charter_id is stable across versions so the ledger can show drift.",
+  "type": "object",
+  "required": [
+    "charter_id",
+    "version",
+    "agent_role",
+    "identity",
+    "business_objectives",
+    "rings",
+    "gateway_scopes",
+    "prohibited_actions",
+    "physical_gates",
+    "spend_authority",
+    "escalation",
+    "updated_at",
+    "updated_by"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "charter_id": {
+      "type": "string",
+      "pattern": "^charter-[a-z0-9-]+$",
+      "description": "Stable id, e.g. charter-cto. Never changes across versions of the same role."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic version. The gateway and CI always enforce the LATEST version; a superseded version is kept for audit (charter_history in Cosmos), never deleted."
+    },
+    "agent_role": {
+      "type": "string",
+      "description": "Human-readable role name matching the dream-team agents/<role>.md filename, e.g. cto, cfo, clo, commerce, growth-exposure."
+    },
+    "identity": {
+      "type": "object",
+      "description": "The agent's IDENTITY plane. In the current shared-bearer world every field here maps to ONE role-scoped bearer (auth/bearer.ts OAUTH_DEFAULT_AGENT convention). In the target-state world this maps 1:1 to an Entra Agent ID blueprint instance. Both representations coexist in this object so the charter is the single artifact that migrates the fleet from bearer-lanes to per-agent identity without a schema break.",
+      "required": ["auth_mode", "bearer_lane"],
+      "additionalProperties": false,
+      "properties": {
+        "auth_mode": {
+          "type": "string",
+          "enum": ["shared-bearer", "entra-agent-id", "entra-agent-id-obo"],
+          "description": "shared-bearer = current state (one static/OAuth-issued bearer per lane, src/auth/bearer.ts). entra-agent-id = target state, autonomous agent authenticates independently via its Agent ID blueprint credential (client_credentials-style). entra-agent-id-obo = target state, an interactive/user-delegated agent that acts on-behalf-of a human (token carries both user and agent context) -- use for agents a human directly supervises live (e.g. Capital/IR drafting under Matt)."
+        },
+        "bearer_lane": {
+          "type": "string",
+          "description": "The caller_agent value issued by src/server/oauth.ts / matched by src/auth/bearer.ts (e.g. 'cto', 'cfo', 'clo', 'clo-personal', 'copilot-agent'). This is the CURRENT enforcement key. Every gateway request's authContext.caller_agent must equal this value for gateway_scopes/prohibited_actions below to apply."
+        },
+        "entra_agent_id_blueprint": {
+          "type": ["string", "null"],
+          "description": "Once Layer D ships: the Entra Agent ID blueprint resource id (agent identity template) this role provisions from. null while auth_mode=shared-bearer. Filled in during the per-role Entra rollout; see DESIGN.md Section 3 for the sequencing and the licensing gate."
+        },
+        "conditional_access_group": {
+          "type": ["string", "null"],
+          "description": "Entra security group this agent's identity is a member of, for Conditional Access targeting (block non-prod agents from prod resources, block PHI-ring resources from non-PHI-lane agents at the IDENTITY layer as a second, independent enforcement point alongside the gateway's own ring check). null until Entra Agent ID + Conditional Access for agents (P1) is licensed and rolled out for this role."
+        }
+      }
+    },
+    "business_objectives": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Prose. What this agent is FOR -- read by humans and by the Coach when routing work, never evaluated as a classifier. Mirrors the agent's dream-team/agents/<role>.md Job section; this field should be a short summary, not a duplicate of the full agent definition."
+    },
+    "rings": {
+      "type": "object",
+      "description": "Declares which compliance rings (see app.manifest.json 'ring' enum, extended here with 'mnpi' and 'legal-personal' which have no per-app manifest equivalent) this agent may touch, and in what mode. This is the FIRST of the two independent enforcement points (the second is prohibited_actions.gateway_reject below): the gateway looks up the caller's charter by bearer_lane and refuses any tool call whose declared ring is not in allowed_read/allowed_write for that agent, before the tool handler ever runs.",
+      "required": ["allowed_read", "allowed_write"],
+      "additionalProperties": false,
+      "properties": {
+        "allowed_read": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["non-phi", "phi", "mnpi", "legal-personal"] },
+          "description": "Rings this agent may READ from (query, list, fetch tools)."
+        },
+        "allowed_write": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["non-phi", "phi", "mnpi", "legal-personal"] },
+          "description": "Rings this agent may WRITE to (create/update/delete/publish tools). write is always a subset of read; the schema does not auto-derive this, gateway-side charter validation (see gateway-sketch/charter-loader.ts) rejects a charter where write is not a subset of read."
+        }
+      }
+    },
+    "gateway_scopes": {
+      "type": "array",
+      "minItems": 1,
+      "description": "ALLOWLIST of gateway tool-name globs this agent may call at all (default-deny: a tool not matched by any entry here 403s regardless of ring). This is the coarse, cheap-to-evaluate first gate; prohibited_actions below is the fine-grained second gate that can still reject a call this allowlist would otherwise permit (e.g. github_* is scoped in, but prohibited_actions blocks github_actions_run_trigger against the 'production' environment for a non-CTO role).",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_*]*$",
+        "description": "A tool-name glob matching the gateway's flat tool namespace (e.g. 'github_*', 'posthog_read_*', 'depot_*', 'finance_*', 'catalog_*'). '*' alone means every tool (reserved for cto/coach roles only; CI lints non-cto/coach charters that use bare '*')."
+      }
+    },
+    "prohibited_actions": {
+      "type": "array",
+      "description": "The hard classifiers. Every entry MUST be independently machine-evaluable (no LLM judgment call in the gateway hot path). At least one entry with type=ring_gate is REQUIRED per the two hard limits (PHI ring, securities/MNPI firewall) -- CI's charter-lint (ci-sketch/charter-lint.mjs) fails a charter missing either, even if the role's rings block already excludes them, so the prohibition is explicit and auditable rather than implicit.",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "classifier", "reason", "enforcement_point"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "description": "Stable short id, e.g. no_phi_tool_access, no_mnpi_disclosure, no_fda_claims, no_payment_auth."
+          },
+          "type": {
+            "type": "string",
+            "enum": ["ring_gate", "regex_content", "tool_deny", "resource_deny", "spend_ceiling", "physical_gate_marker"],
+            "description": "ring_gate = block by rings declaration (redundant-on-purpose restatement of the rings block, for auditability). regex_content = scan outbound/inbound text for a banned pattern (reuses src/compliance/guardrail.ts TriggerDef shape). tool_deny = block specific tool names/globs even if gateway_scopes would allow them. resource_deny = block specific resource identifiers (a storage account name, an index name, a GitHub environment name) regardless of tool. spend_ceiling = numeric cap enforced by the propose-vs-commit spend primitive (see DESIGN.md Section 2). physical_gate_marker = documents a physical-gate boundary this agent must stop at; not independently enforceable by the gateway (no machine signal exists for 'a human clicked OAuth consent'), enforced by the browser-agent skill's HARD_GATE detector and by omitting the underlying credential from this agent's reachable secret set."
+          },
+          "classifier": {
+            "type": "object",
+            "description": "The actual machine-checkable rule. Shape depends on type; only the field matching `type` should be populated, the rest are null. This union-by-type-field design keeps the schema flat and greppable rather than nesting a oneOf per type.",
+            "additionalProperties": false,
+            "properties": {
+              "ring": { "type": ["string", "null"], "enum": ["non-phi", "phi", "mnpi", "legal-personal", null] },
+              "pattern": { "type": ["string", "null"], "description": "A regex (JS RegExp source, no flags beyond gi implied) matched against tool-call arguments AND tool-response payloads, mirroring src/compliance/guardrail.ts scanForCompliance. Reuse that engine; do not hand-roll a second regex scanner." },
+              "tool_names": { "type": ["array", "null"], "items": { "type": "string" } },
+              "resource_ids": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Exact resource identifiers, e.g. storage account 'otchealthlegalstore' container 'personal', AI Search index 'legal-personal', GitHub environment 'production'." },
+              "spend_ceiling_usd": { "type": ["number", "null"], "description": "Max USD this agent's PROPOSE step may attach to a single spend artifact before it requires escalation.spend_approver commit (see DESIGN.md Section 2)." }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable rationale, quoting the source-of-truth directive (e.g. 'PHI/HIPAA legal wall, MedReview BAA ring is absolute, otchealth-cto/CLAUDE.md Operating authority Matt directive 2026-06-13')."
+          },
+          "enforcement_point": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "enum": ["gateway", "ci", "browser_agent", "human_review"] },
+            "description": "Where this classifier is actually checked today. A prohibited_actions entry with only human_review is a FLAG not a HARD block -- CI's charter-lint requires every ring_gate and regex_content entry to list at least one of gateway/ci (a hard-limit prohibition that only human_review enforces it is treated as a design gap and fails the charter-lint's --strict mode)."
+          }
+        }
+      }
+    },
+    "physical_gates": {
+      "type": "array",
+      "description": "Documents the PHYSICAL GATES (hard limit #2: account signup/KYC, OAuth consent clicks, payment authorization, hardware) this agent may approach but never cross unattended. This block is the charter's explicit acknowledgment of what it CANNOT do even with full tool access, distinct from prohibited_actions (which are things it must not do that it otherwise COULD do). Consumed by the browser-agent skill's allowlist + HARD_GATE detector and by fleet-dispatch when routing a task that needs a human hand.",
+      "items": {
+        "type": "object",
+        "required": ["gate_type", "description", "escalate_to"],
+        "additionalProperties": false,
+        "properties": {
+          "gate_type": { "type": "string", "enum": ["account_signup", "kyc", "oauth_consent", "payment_authorization", "legal_esignature", "hardware", "two_factor_auth"] },
+          "description": { "type": "string" },
+          "escalate_to": { "type": "string", "description": "Who/what this stops at, e.g. 'matt', 'clo+matt' (e-signature), 'cfo+matt' (payment)." }
+        }
+      }
+    },
+    "spend_authority": {
+      "type": "object",
+      "description": "The generalized propose-vs-commit spend primitive (DESIGN.md Section 2b). This agent may PROPOSE a spend artifact of any size; it may COMMIT (self-approve) only up to propose_ceiling_usd. Above that, commit requires an identity in commit_approvers distinct from the proposer (separation of duties, mirroring the gateway deploy.yml 'production' Environment required-reviewer pattern).",
+      "required": ["propose_ceiling_usd", "commit_approvers"],
+      "additionalProperties": false,
+      "properties": {
+        "propose_ceiling_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "0 means this agent may never self-commit any spend (e.g. builder, growth). A non-zero value is the auto-commit ceiling for routine, budgeted, recurring spend this role owns (e.g. finance-ops auto-committing a sub-$50 grant-covered API overage)."
+        },
+        "commit_approvers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Agent roles or 'matt' who may COMMIT a spend artifact this agent PROPOSED above propose_ceiling_usd. Must not include this charter's own agent_role (self-approval is structurally impossible, enforced by ci-sketch/charter-lint.mjs)."
+        }
+      }
+    },
+    "escalation": {
+      "type": "object",
+      "description": "Who this agent hands off to at each of the two hard limits, mirroring the Coach/Interconnect handoff.json 'to' field so escalation is a first-class handoff, not an ad hoc chat message.",
+      "required": ["legal_wall_to", "physical_gate_to"],
+      "additionalProperties": false,
+      "properties": {
+        "legal_wall_to": { "type": "string", "description": "Who a PHI/securities/FDA-FTC flag-and-hold escalates to, e.g. 'clo+matt', 'compliance-officer+matt'." },
+        "physical_gate_to": { "type": "string", "description": "Who a physical-gate stop escalates to, e.g. 'matt'." },
+        "spend_gate_to": { "type": "string", "description": "Optional: who a spend_ceiling breach escalates to if different from commit_approvers." }
+      }
+    },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "updated_by": { "type": "string", "description": "Agent role or 'matt' that last edited this charter. Charter edits are themselves gated: only coach, guardian, or matt may write a charter file (enforced by CODEOWNERS on the charters/ path, see DESIGN.md Section 1c)." }
+  }
+}

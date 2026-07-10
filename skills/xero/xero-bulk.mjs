@@ -19,6 +19,8 @@
 //   node xero-bulk.mjs <org> limits          # show current rate-limit headroom (1 cheap call)
 // stdin JSON = an array of Xero objects WITHOUT the wrapper key (the tool wraps them).
 import crypto from "node:crypto";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
+import { getAccessContext } from "./xero-token.mjs";
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const CONN_URL = "https://api.xero.com/connections";
 const API = "https://api.xero.com/api.xro/2.0";
@@ -33,22 +35,19 @@ const MIN_SPACING_MS = 1150; // ~52 calls/min, safe margin under Xero's 60/min
 function need(n) { const v = process.env[n]; if (!v) throw new Error(`Missing env ${n}`); return v; }
 function orgKeyFrom(sel) { const s = (sel || "").toLowerCase().replace(/[^a-z0-9]/g, ""); if (s.includes("otchealth")) return "otchealth"; if (s.includes("innerscope") || s.includes("innd")) return "innd"; if (s.includes("hearing")) return "hearingassist"; if (s.includes("personal") || s.includes("matt")) return "personal"; return s; }
 function smAvailable() { return !!process.env.GCP_CLAUDE_DRIVER_SA_JSON; }
-async function smToken() { const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); const now = Math.floor(Date.now() / 1000); const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; const sig = crypto.createSign("RSA-SHA256").update(input).sign(sa.private_key, "base64url"); const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(input + "." + sig)}` }); if (!r.ok) throw new Error("SM token " + r.status); return (await r.json()).access_token; }
-async function smReadLatest(t, id) { const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
-async function smAddVersion(t, id, v) { const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); let r = await add(); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await add(); } if (!r.ok) throw new Error("SM addVersion " + r.status); }
+async function smToken() { const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON; if(!__r){return null;} let sa; try{sa=JSON.parse(__r);}catch{return null;} if(!sa||!sa.private_key){return null;} const now = Math.floor(Date.now() / 1000); const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; const sig = crypto.createSign("RSA-SHA256").update(input).sign(sa.private_key, "base64url"); const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(input + "." + sig)}` }); if (!r.ok) throw new Error("SM token " + r.status); return (await r.json()).access_token; }
+async function smReadLatest(t, id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
+async function smAddVersion(t, id, v) { const _ok = await kvSecretSet(id, v); if (_ok) return true; const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); let r = await add(); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await add(); } if (!r.ok) throw new Error("SM addVersion " + r.status); }
 
-async function accessToken(orgKey) {
-  const basic = Buffer.from(`${need("XERO_CLIENT_ID")}:${need("XERO_CLIENT_SECRET")}`).toString("base64");
-  const secretId = `xero-refresh-token-${orgKey}`; let smTok = null, refresh, persistId = secretId;
-  if (smAvailable()) { try { smTok = await smToken(); refresh = await smReadLatest(smTok, secretId); if (!refresh && orgKey === "otchealth") { const legacy = await smReadLatest(smTok, "xero-refresh-token"); if (legacy) { refresh = legacy; persistId = "xero-refresh-token"; } } } catch (e) { console.error("SM read failed: " + e.message); } }
-  if (!refresh) { refresh = process.env[`XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}`]; if (!refresh && orgKey === "otchealth") refresh = process.env.XERO_REFRESH_TOKEN; }
-  if (!refresh) throw new Error(`No refresh token for org '${orgKey}'. Run the OAuth consent first.`);
-  const r = await fetch(TOKEN_URL, { method: "POST", headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}` });
-  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(`token refresh ${r.status}: ${JSON.stringify(j).slice(0, 160)}`);
-  if (j.refresh_token && j.refresh_token !== refresh) { if (smTok) { try { await smAddVersion(smTok, persistId, j.refresh_token); console.error(`Xero rotated ${orgKey} token -> persisted.`); } catch (e) { console.error(`ROTATE PERSIST FAILED (${e.message})`); } } else console.error(`NOTE: ${orgKey} token rotated but no SA to persist.`); }
-  return j.access_token;
+// Token + tenant now come from the shared broker (access-token cache + cross-process refresh lock +
+// disconnect detection) — eliminates the per-invocation single-use rotation race. The legacy SM/refresh
+// helpers above remain for back-compat but are off the hot path.
+const _tenantByOrg = {};
+async function accessToken(orgKey) { const c = await getAccessContext(orgKey); _tenantByOrg[orgKey] = c.tenantId; return c.access_token; }
+async function resolveTenant(token, sel) {
+  const k = orgKeyFrom(sel); if (_tenantByOrg[k]) return _tenantByOrg[k];
+  const r = await fetch(CONN_URL, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }); if (!r.ok) throw new Error("connections " + r.status); const conns = await r.json(); const hit = conns.find((c) => (c.tenantName || "").toLowerCase().includes((sel || "").toLowerCase())) || conns[0]; if (!hit) throw new Error("no tenant"); return hit.tenantId;
 }
-async function resolveTenant(token, sel) { const r = await fetch(CONN_URL, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }); if (!r.ok) throw new Error("connections " + r.status); const conns = await r.json(); const hit = conns.find((c) => (c.tenantName || "").toLowerCase().includes((sel || "").toLowerCase())) || conns[0]; if (!hit) throw new Error("no tenant"); return hit.tenantId; }
 function readStdin() { return new Promise((res) => { let d = ""; if (process.stdin.isTTY) return res(""); process.stdin.on("data", (c) => (d += c)); process.stdin.on("end", () => res(d)); }); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

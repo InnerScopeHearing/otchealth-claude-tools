@@ -38,6 +38,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, extname } from "node:path";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const argv = process.argv.slice(2);
 function takeVal(name, def = null) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return def; }
@@ -49,6 +50,7 @@ const KEYSECRET_OV = takeVal("--key-secret");
 const idxOverride = takeVal("--index");
 const PREFIX = takeVal("--prefix", "");
 const LIMIT = parseInt(takeVal("--limit", "0"), 10) || 0;
+const SKIP = parseInt(takeVal("--skip", "0"), 10) || 0; // push-search: skip the first N filtered docs (targeted tail re-push after an interrupted reindex)
 const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
 const FLUSH_EVERY = parseInt(takeVal("--flush", "150"), 10) || 150;
 const CONCURRENCY = Math.max(1, parseInt(takeVal("--concurrency", process.env.CU_CONCURRENCY || "8"), 10) || 8);
@@ -56,7 +58,7 @@ const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.CU_MAX_MINUTES || 
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help"; // require an explicit command; no-arg must NOT silently start a run
-const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "gcs").toLowerCase();
+const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "azure").toLowerCase(); // default azure (GCS/GCP retired); every current job invocation already passes --azure explicitly
 const REINDEX = flags.has("--reindex");
 const NO_OCR = flags.has("--no-ocr");
 const NO_TEXT = flags.has("--no-text");
@@ -71,7 +73,7 @@ const TEXT_PREFIX = "_TEXT/";
 // document text anyway. Catalog them but skip extraction. Override with MAX_INDEX_MB.
 const MAX_INDEX_MB = parseInt(process.env.MAX_INDEX_MB || "200", 10);
 const MAX_INDEX_BYTES = MAX_INDEX_MB * 1024 * 1024;
-const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/"]; // our own artifacts
+const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/", "_DUPLICATES/", "_ARCHIVE/"]; // our own artifacts (incl. quarantined duplicates + archived/superseded content excluded from index/brain)
 const MAXTEXT = 400000; // chars persisted per doc
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (ext) => join(tmpdir(), `idx_${Date.now()}_${Math.random().toString(36).slice(2)}${ext || ""}`);
@@ -139,7 +141,7 @@ const P = PROFILES[PROFILE] || PROFILES.generic;
 
 // ---------------- Secret Manager (claude-driver SA) ----------------
 function saJwt(scope) {
-  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;}
   const now = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
@@ -151,7 +153,7 @@ async function gToken(scope) {
   if (!r.ok) throw new Error("SA auth " + r.status);
   return (await r.json()).access_token;
 }
-async function sm(id) {
+async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   if (!id) return null;
   try { const t = await gToken("https://www.googleapis.com/auth/cloud-platform"); const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); } catch { return null; }
 }
@@ -161,6 +163,10 @@ let GBUCKET, ACCT, CONTAINER, AKEY, _gtok = null, _gtokAt = 0;
 async function gAuth() { if (!_gtok || Date.now() - _gtokAt > 50 * 60 * 1000) { _gtok = await gToken("https://www.googleapis.com/auth/devstorage.read_write"); _gtokAt = Date.now(); } return _gtok; }
 const AVER = "2021-12-02";
 const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
+// List Blobs returns <Name> XML-escaped, so a blob literally named "Moore I&E.pdf" comes back as
+// "Moore I&amp;E.pdf". Capturing it raw stored the escaped form as the path, so every later getBuf
+// requested a non-existent blob -> "missing" errors for any name with & < > " '. Decode on capture.
+const xmlDec = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, "&");
 let AZ_SAS; // account SAS for blob ops: signs the SAS fields, not the blob path, so special-char
 // names (spaces, parens, +, &) work where per-request SharedKey canonicalization 403s.
 function buildAzSas() {
@@ -189,13 +195,16 @@ async function listAll(prefix) {
     while (url) { const r = await fetch(url, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (!r.ok) throw new Error("list " + r.status); const j = await r.json(); for (const o of j.items || []) out.push({ name: o.name, size: +o.size, mtime: o.updated }); url = j.nextPageToken ? `https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o?maxResults=1000&pageToken=${j.nextPageToken}${prefix ? `&prefix=${encodeURIComponent(prefix)}` : ""}` : null; }
   } else {
     let marker = "";
-    do { let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list&${AZ_SAS}`; if (prefix) url += `&prefix=${encodeURIComponent(prefix)}`; if (marker) url += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(url); if (!r.ok) throw new Error("list " + r.status); const xml = await r.text(); for (const m of xml.matchAll(/<Blob>([\s\S]*?)<\/Blob>/g)) { const b = m[1]; const name = (b.match(/<Name>([^<]+)<\/Name>/) || [])[1]; const size = +((b.match(/<Content-Length>([^<]+)<\/Content-Length>/) || [])[1] || 0); const mtime = (b.match(/<Last-Modified>([^<]+)<\/Last-Modified>/) || [])[1] || ""; if (name) out.push({ name, size, mtime }); } marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker);
+    do { let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list&${AZ_SAS}`; if (prefix) url += `&prefix=${encodeURIComponent(prefix)}`; if (marker) url += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(url); if (!r.ok) throw new Error("list " + r.status); const xml = await r.text(); for (const m of xml.matchAll(/<Blob>([\s\S]*?)<\/Blob>/g)) { const b = m[1]; const name = xmlDec((b.match(/<Name>([^<]+)<\/Name>/) || [])[1] || ""); const size = +((b.match(/<Content-Length>([^<]+)<\/Content-Length>/) || [])[1] || 0); const mtime = (b.match(/<Last-Modified>([^<]+)<\/Last-Modified>/) || [])[1] || ""; if (name) out.push({ name, size, mtime }); } marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker);
   }
   return out;
 }
+// Decode XML entities on 404: the List-Blobs parser captures escaped names (a blob "(L&C).pdf" comes
+// back as "(L&amp;C).pdf"), so source fetches by the stored name 404. Retry with the decoded name.
+const htmlEnt = (s) => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'");
 async function getBuf(name) {
-  if (BACKEND === "gcs") { const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(name)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer()); }
-  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer());
+  if (BACKEND === "gcs") { let r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(name)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(name)) { const d = htmlEnt(name); if (d !== name) r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(d)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); } if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer()); }
+  let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`); if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(name)) { const d = htmlEnt(name); if (d !== name) r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(d)}?${AZ_SAS}`); } if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer());
 }
 async function putBuf(name, buf, ct) {
   if (BACKEND === "gcs") { const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${GBUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}`, { method: "POST", headers: { Authorization: `Bearer ${await gAuth()}`, "Content-Type": ct || "application/octet-stream" }, body: buf }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 120)); return; }
@@ -433,13 +442,15 @@ async function aisInit() {
   if (!AOAI_EP || !AOAI_KEY) { console.error("Missing azure-openai-endpoint / azure-openai-key (needed for embeddings)."); process.exit(2); }
 }
 async function embed(texts) {
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) });
-    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await sleep((ra ? ra * 1000 : 0) + 1500 * (attempt + 1)); continue; }
-    if (!r.ok) throw new Error("embed " + r.status + " " + (await r.text()).slice(0, 120));
+  for (let attempt = 0; attempt < 9; attempt++) {
+    let r;
+    try { r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) }); }
+    catch (e) { await sleep(2000 * (attempt + 1)); continue; } // transient network -> retry
+    if (r.status === 429 || r.status === 503 || r.status === 500) { const ra = +(r.headers.get("retry-after") || 0); await sleep((ra ? ra * 1000 : 0) + 2000 * (attempt + 1) + Math.floor(Math.random() * 1000)); continue; }
+    if (!r.ok) { const b = await r.text(); if (attempt < 8 && /resolve_no_records|private\/reserved IP|Host resolves|EAI_AGAIN|ENOTFOUND|temporarily/i.test(b)) { await sleep(3000 * (attempt + 1)); continue; } throw new Error("embed " + r.status + " " + b.slice(0, 120)); } // proxy DNS blip -> retry
     return (await r.json()).data.map((d) => d.embedding);
   }
-  throw new Error("embed 429 exhausted");
+  throw new Error("embed retries exhausted");
 }
 async function aisCreateIndex() {
   const schema = {
@@ -450,8 +461,11 @@ async function aisCreateIndex() {
       { name: "entity", type: "Edm.String", filterable: true, facetable: true, searchable: true },
       { name: "category", type: "Edm.String", filterable: true, facetable: true, searchable: true },
       { name: "title", type: "Edm.String", searchable: true },
+      { name: "summary", type: "Edm.String", searchable: true, retrievable: true },
       { name: "content", type: "Edm.String", searchable: true },
       { name: "material", type: "Edm.Boolean", filterable: true },
+      { name: "execution_status", type: "Edm.String", filterable: true, facetable: true, retrievable: true },
+      { name: "signed", type: "Edm.Boolean", filterable: true },
       { name: "contentVector", type: "Collection(Edm.Single)", searchable: true, retrievable: false, dimensions: EMB_DIMS, vectorSearchProfile: "vp" },
     ],
     vectorSearch: {
@@ -459,7 +473,7 @@ async function aisCreateIndex() {
       vectorizers: [{ name: "aoai", kind: "azureOpenAI", azureOpenAIParameters: { resourceUri: AOAI_EP, deploymentId: AOAI_DEP, apiKey: AOAI_KEY, modelName: AOAI_MODEL } }],
       profiles: [{ name: "vp", algorithm: "hnsw", vectorizer: "aoai" }],
     },
-    semantic: { configurations: [{ name: "sem", prioritizedFields: { titleField: { fieldName: "title" }, prioritizedContentFields: [{ fieldName: "content" }], prioritizedKeywordsFields: [{ fieldName: "category" }] } }] },
+    semantic: { configurations: [{ name: "sem", prioritizedFields: { titleField: { fieldName: "title" }, prioritizedContentFields: [{ fieldName: "summary" }, { fieldName: "content" }], prioritizedKeywordsFields: [{ fieldName: "category" }] } }] },
   };
   const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}?api-version=${AIS_API}`, { method: "PUT", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(schema) });
   if (!r.ok) throw new Error("create index " + r.status + " " + (await r.text()).slice(0, 220));
@@ -467,6 +481,15 @@ async function aisCreateIndex() {
 async function aisPush(batch) {
   const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}/docs/index?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
   if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 220));
+}
+async function aisPushRetry(batch) {
+  // Retry transient failures incl. the agent-proxy's SSRF guard firing on a momentary DNS blip
+  // ("push 403 ... Host resolves to a private/reserved IP: resolve_no_records"), which killed a
+  // finance reindex one batch from done. 8 tries, longer backoff so DNS has time to recover.
+  for (let a = 0; a < 8; a++) {
+    try { await aisPush(batch); return; }
+    catch (e) { const m = String(e.message); if (a < 7 && /(429|503|500|408|throttl|timeout|ECONNRESET|fetch failed|resolve_no_records|private\/reserved IP|Host resolves|EAI_AGAIN|ENOTFOUND)/i.test(m)) { await sleep(3000 * (a + 1)); continue; } throw e; }
+  }
 }
 async function runSearchInit() { await aisInit(); await aisCreateIndex(); console.log(`Azure AI Search index ready: ${IDXNAME} (dims ${EMB_DIMS}, vectorizer ${AOAI_DEP})`); }
 async function aisExistingIds() {
@@ -488,20 +511,37 @@ async function aisExistingIds() {
 }
 async function runPushSearch() {
   await aisInit(); await aisCreateIndex();
-  const rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
   const existing = REINDEX ? new Set() : await aisExistingIds(); // --reindex forces a full re-push
   console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME}`);
-  let n = 0, skipped = 0, buf = [];
+  // Embed in BATCHES of 16 (the endpoint accepts an array): ~16x fewer requests than per-doc, which
+  // is what ends the 429-exhaustion death spiral on a 16k-doc room. Push to AI Search in 64-doc
+  // batches with retry. embErr docs are skipped (logged) so one bad doc never stalls the room.
+  const EMB_BATCH = 16, PUSH_BATCH = 64;
+  let n = 0, skipped = 0, embErr = 0, ready = [], pend = [], texts = [];
+  async function pushReady(force) {
+    while (ready.length >= PUSH_BATCH || (force && ready.length)) { const b = ready.splice(0, PUSH_BATCH); await aisPushRetry(b); n += b.length; console.error(`  pushed ${n} (skip ${skipped}${embErr ? `, embErr ${embErr}` : ""})`); }
+  }
+  async function flushEmb() {
+    if (!texts.length) return;
+    let vecs; try { vecs = await embed(texts); } catch (e) { embErr += pend.length; console.error(`  embed batch fail (${pend.length}): ${e.message}`); pend = []; texts = []; return; }
+    for (let i = 0; i < pend.length; i++) { pend[i].contentVector = vecs[i]; ready.push(pend[i]); }
+    pend = []; texts = [];
+    await pushReady(false);
+  }
   for (const r of rows) {
     const id = crypto.createHash("sha1").update(r.path).digest("hex");
     if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
-    let vec; try { vec = (await embed([(r.title + "\n" + txt).slice(0, 8000)]))[0]; } catch (e) { console.error("  embed fail " + r.path.slice(-40) + ": " + e.message); continue; }
-    buf.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), content: txt.slice(0, 32000), material: !!r.material, contentVector: vec });
-    if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  pushed ${n} (skip ${skipped})`); }
+    const summary = r.summary || "";
+    pend.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), summary: summary.slice(0, 16000), content: txt.slice(0, 32000), material: !!r.material, execution_status: r.execution_status || "", signed: !!r.has_signature });
+    texts.push(((r.title || "") + "\n" + summary + "\n" + txt).slice(0, 8000));
+    if (texts.length >= EMB_BATCH) await flushEmb();
   }
-  if (buf.length) { await aisPush(buf); n += buf.length; }
-  console.log(`pushed ${n} new docs (${skipped} already present) to Azure AI Search index ${IDXNAME}`);
+  await flushEmb();
+  await pushReady(true);
+  console.log(`pushed ${n} new docs (${skipped} already present${embErr ? `, ${embErr} embed-failed` : ""}) to Azure AI Search index ${IDXNAME}`);
 }
 async function runCloudSearch(q) {
   if (!q) { console.error('usage: cloud-search "<query>"'); process.exit(2); }

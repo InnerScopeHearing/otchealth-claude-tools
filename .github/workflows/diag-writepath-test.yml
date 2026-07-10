@@ -1,0 +1,36 @@
+name: diag-writepath-test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main explicitly
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Escape detached HEAD and write a trivial file, push to a NEW unprotected branch
+        run: |
+          set -euo pipefail
+          BR="diag/writepath-test"
+          mkdir -p diagnostics
+          echo "test $(date -u +%Y-%m-%dT%H:%M:%SZ)" > diagnostics/writepath-test.txt
+
+          git config user.name "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+
+          # Escape detached HEAD: create a local tracking branch for our new branch name
+          git switch -c "$BR"
+          git add diagnostics/writepath-test.txt
+          git commit -m "diag: write-path test file"
+
+          # Push to a brand-new unprotected branch (branch protection only covers main)
+          git push origin "HEAD:$BR"
+          echo "pushed to $BR"

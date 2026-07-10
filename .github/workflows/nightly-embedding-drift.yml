@@ -1,0 +1,56 @@
+# Nightly Embedding Drift Monitor — scheduled recall-quality trend for the memory indexes (REPORT-ONLY).
+#
+# Azure GenAIOps #13 ("Phoenix") pattern, cost-neutral on our stack: samples canned probe queries
+# (skills/embedding-drift-monitor/probes.json) against each Azure AI Search memory index (memory-exec,
+# the per-ring private indexes, any commons-<agent>-memory index), records top-score/coverage, compares
+# to the recorded baseline (drift-baseline.json), and emits embedding_drift events to PostHog so the
+# trend lives next to eval_result. Mirrors nightly-eval.yml's shape exactly: never blocks anything —
+# drift.mjs always exits 0 (this answers "is memory recall degrading", a monitor question, not a gate).
+#
+# Needs GCP_CLAUDE_DRIVER_SA_JSON (the same claude-driver SA secret nightly-eval.yml uses to reach
+# Azure AI Search + Azure OpenAI + PostHog via Secret Manager).
+name: Nightly Embedding Drift Monitor
+
+on:
+  schedule:
+    - cron: '45 6 * * *'   # daily 06:45 UTC, just after nightly-eval.yml's 06:30 UTC run
+  workflow_dispatch: {}     # manual trigger for testing
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-embedding-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: memory-index recall drift (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Probe memory indexes + emit to PostHog (report-only; never fails)
+        continue-on-error: true
+        env:
+          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+        run: |
+          node skills/embedding-drift-monitor/drift.mjs --emit --json "${GITHUB_WORKSPACE}/drift-report.json" 2>&1 | tee "${GITHUB_WORKSPACE}/drift.log"
+
+      - name: Upload drift report + log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: embedding-drift-report
+          path: |
+            drift-report.json
+            drift.log
+          retention-days: 90
+          if-no-files-found: warn

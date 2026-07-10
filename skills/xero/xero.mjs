@@ -15,6 +15,8 @@
 //   node xero.mjs <org> request <METHOD> <Endpoint>    # JSON body on stdin for writes
 //   <org> = otchealth | innd | hearingassist | personal (or a name substring)
 import crypto from "node:crypto";
+import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
+import { getAccessContext } from "./xero-token.mjs";
 
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const CONN_URL = "https://api.xero.com/connections";
@@ -36,9 +38,9 @@ function orgKeyFrom(sel) {
   return s;
 }
 
-function smAvailable() { return !!process.env.GCP_CLAUDE_DRIVER_SA_JSON; }
+function smAvailable() { return !!(process.env.GCP_CLAUDE_DRIVER_SA_JSON || process.env.AZURE_SP_CLIENT_ID); }
 async function smToken() {
-  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON; if(!__r){return null;} let sa; try{sa=JSON.parse(__r);}catch{return null;} if(!sa||!sa.private_key){return null;}
   const now = Math.floor(Date.now() / 1000);
   const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
@@ -47,12 +49,12 @@ async function smToken() {
   if (!r.ok) throw new Error("SM token " + r.status);
   return (await r.json()).access_token;
 }
-async function smReadLatest(t, id) {
+async function smReadLatest(t, id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
   if (!r.ok) return null;
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
 }
-async function smAddVersion(t, id, v) {
+async function smAddVersion(t, id, v) { const _ok = await kvSecretSet(id, v); if (_ok) return true;
   const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } });
   const add = () => fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body });
   let r = await add();
@@ -65,35 +67,29 @@ async function smAddVersion(t, id, v) {
   if (!r.ok) throw new Error("SM addVersion " + r.status);
 }
 
-async function accessToken(orgKey) {
-  const basic = Buffer.from(`${need("XERO_CLIENT_ID")}:${need("XERO_CLIENT_SECRET")}`).toString("base64");
-  const secretId = `xero-refresh-token-${orgKey}`;
-  let smTok = null, refresh, persistId = secretId;
-  if (smAvailable()) {
+// Client creds: prefer env (Claude-side hydration), else self-fetch from SM (Hyperagent: the
+// kb-memory wrapper provides only the GCP SA, not XERO_*). Makes the skill portable across engines.
+async function clientBasic(smTok) {
+  let id = process.env.XERO_CLIENT_ID, sec = process.env.XERO_CLIENT_SECRET;
+  if (!id || !sec) {
     try {
-      smTok = await smToken();
-      refresh = await smReadLatest(smTok, secretId);
-      if (!refresh && orgKey === "otchealth") {
-        const legacy = await smReadLatest(smTok, "xero-refresh-token");
-        if (legacy) { refresh = legacy; persistId = "xero-refresh-token"; }
-      }
-    } catch (e) { console.error("SM read failed: " + e.message); }
+      id = id || await smReadLatest(smTok, "xero-client-id");
+      sec = sec || await smReadLatest(smTok, "xero-client-secret");
+    } catch (e) { console.error("SM client-cred read failed: " + e.message); }
   }
-  if (!refresh) {
-    // Per-org env var is always allowed; the legacy unsuffixed XERO_REFRESH_TOKEN is the
-    // otchealth fallback ONLY. Never let another org silently borrow the otchealth token.
-    refresh = process.env[`XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}`];
-    if (!refresh && orgKey === "otchealth") refresh = process.env.XERO_REFRESH_TOKEN;
-  }
-  if (!refresh) throw new Error(`No refresh token for org '${orgKey}' (SM ${secretId} / env XERO_REFRESH_TOKEN_${orgKey.toUpperCase()}). Run the OAuth consent for this org first.`);
-  const r = await fetch(TOKEN_URL, { method: "POST", headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}` });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`token refresh failed ${r.status}: ${JSON.stringify(j).slice(0, 200)}`);
-  if (j.refresh_token && j.refresh_token !== refresh) {
-    if (smTok) { try { await smAddVersion(smTok, persistId, j.refresh_token); console.error(`Xero rotated ${orgKey} token -> persisted (${persistId}).`); } catch (e) { console.error(`ROTATE PERSIST FAILED for ${orgKey} (${e.message}): new token NOT saved.`); } }
-    else console.error(`NOTE: ${orgKey} token rotated but no SA to persist. Update ${secretId} or the connection will break.`);
-  }
-  return j.access_token;
+  if (!id || !sec) throw new Error("Missing XERO_CLIENT_ID/SECRET (env or SM xero-client-id/xero-client-secret).");
+  return Buffer.from(`${id}:${sec}`).toString("base64");
+}
+
+// Token acquisition delegates to the shared broker (access-token cache + cross-process refresh lock +
+// disconnect detection). This eliminates the per-call single-use rotation race. The legacy SM/refresh
+// helpers above are retained for back-compat but no longer the hot path. Stashes the resolved tenant so
+// the get/request path can skip a redundant /connections call.
+const _tenantByOrg = {};
+async function accessToken(orgKey) {
+  const c = await getAccessContext(orgKey);
+  _tenantByOrg[orgKey] = c.tenantId;
+  return c.access_token;
 }
 
 async function connections(token) {
@@ -131,7 +127,7 @@ try {
   if (!sel || !cmd) { console.error("usage: xero.mjs connections [org] | <org> get <Endpoint> | <org> request <METHOD> <Endpoint>"); process.exit(2); }
   const orgKey = orgKeyFrom(sel);
   const token = await accessToken(orgKey);
-  const tenantId = await resolveTenant(token, sel);
+  const tenantId = _tenantByOrg[orgKey] || await resolveTenant(token, sel);
   if (cmd === "get") {
     if (!a1) { console.error("usage: xero.mjs <org> get <Endpoint>"); process.exit(2); }
     await call("GET", tenantId, a1, token);

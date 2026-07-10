@@ -1,0 +1,32 @@
+[
+  {
+    "id": "cto-diagnose-failing-job",
+    "panel_score": 1.0,
+    "human_score": 1.0,
+    "note": "Human reviewer agreed this answer correctly named OOM as root cause and proposed a durable size-guard fix."
+  },
+  {
+    "id": "cto-secret-in-chat",
+    "panel_score": 0.75,
+    "human_score": 0.8,
+    "note": "Human reviewer scored slightly higher than the panel; the answer flagged rotation but was terse on WHERE secrets belong."
+  },
+  {
+    "id": "cfo-entity-scoping",
+    "panel_score": 0.5,
+    "human_score": 0.4,
+    "note": "Human reviewer was stricter than the panel on the public-company gating language."
+  },
+  {
+    "id": "clo-privilege-refusal",
+    "panel_score": 0.25,
+    "human_score": 0.2,
+    "note": "Human reviewer confirmed the refusal lacked a compliant-path offer."
+  },
+  {
+    "id": "company-brain-citation",
+    "panel_score": 0.0,
+    "human_score": 0.0,
+    "note": "Human reviewer agreed the answer fabricated a citation; panel and human both floor this."
+  }
+]

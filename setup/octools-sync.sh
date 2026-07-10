@@ -38,6 +38,10 @@ case "$TOOLS_DIR" in
               cp -R "$skdir" "${SKILLS_DST}/${sk}" 2>/dev/null || true
             done
           fi
+          # Re-wire user-scope hooks idempotently so a NEWLY-ADDED hook (e.g. kb-recall) reaches an
+          # already-RUNNING session on its next refresh, not only on the next fresh session. Additive,
+          # only writes when changed, always exits 0.
+          [ -f "$TOOLS_DIR/setup/install-octools-hook.mjs" ] && node "$TOOLS_DIR/setup/install-octools-hook.mjs" >/dev/null 2>&1 || true
           git -C "$TOOLS_DIR" rev-parse HEAD > "$MARKER" 2>/dev/null || true
           echo "[octools-sync] shared toolkit refreshed ${installed:0:7} -> ${remote:0:7} (live, no restart needed)."
         fi
@@ -45,6 +49,27 @@ case "$TOOLS_DIR" in
     fi
     ;;
 esac
+
+# --- Gateway lane self-heal: reconnect the MCP gateway on this session's ring lane if it dropped or the
+# token is aging, so a LONG-LIVED session regains brain_search/web_search WITHOUT a restart. Uses the
+# SANCTIONED one-shot session-connect (--if-lane; resolves the lane from the repo .kb-agent, never guesses
+# a privileged lane). Reconnect when NOT currently registered, else at most every ~50 min (token life ~1h).
+# `claude mcp list` each prompt is a cheap local read; the costly mint only runs when actually needed.
+# Fail-open, never blocks a prompt. Opt-out: OCTOOLS_NO_GATEWAY_SYNC=1.
+if [ -z "${OCTOOLS_NO_GATEWAY_SYNC:-}" ] && command -v claude >/dev/null 2>&1 \
+   && { [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ] || [ -f "${HOME}/.gcp_claude_driver_sa.json" ]; }; then
+  GW_STAMP="${HOME}/.claude/.gateway-connect-last"
+  GW_THROTTLE="${OCTOOLS_GATEWAY_THROTTLE:-3000}"
+  gw_now="$(date +%s 2>/dev/null || echo 0)"
+  gw_last="$(cat "$GW_STAMP" 2>/dev/null || echo 0)"
+  gw_reg=0
+  claude mcp list 2>/dev/null | grep -qiE 'otchealth-gateway|mcp\.otchealth\.app' && gw_reg=1
+  if [ "$gw_reg" -eq 0 ] || [ "$gw_now" -le 0 ] || [ $((gw_now - gw_last)) -ge "$GW_THROTTLE" ]; then
+    echo "$gw_now" > "$GW_STAMP" 2>/dev/null || true
+    [ -f "$TOOLS_DIR/skills/gateway-connect/session-connect.sh" ] \
+      && timeout 45 bash "$TOOLS_DIR/skills/gateway-connect/session-connect.sh" 2>&1 | sed 's/^/[octools-sync] /' || true
+  fi
+fi
 
 # --- Fleet bulletin: surface what changed + why (any session; cheap local read). ---
 node "$TOOLS_DIR/setup/bulletin.mjs" since 2>/dev/null || true

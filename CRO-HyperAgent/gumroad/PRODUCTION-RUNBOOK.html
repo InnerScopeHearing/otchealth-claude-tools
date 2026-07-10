@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>From the Chair — Production Runbook & Sequence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#2a2521;--ink2:#574d42;--line:#e4dac9;--paper:#f6efe3;--card:#fffdf8;
+    --cro:#8a4b2f;--sonnet:#2f6f8a;--folio:#7a5ea8;--matt:#b8862f;--care:#3f7a6d;--flag:#b4452f}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:920px;margin:0 auto;padding:0 6%}
+  .cover{padding:7vh 0 3vh;border-bottom:2px solid var(--ink)}
+  .kick{font-size:.72rem;letter-spacing:.3em;text-transform:uppercase;color:var(--cro);font-weight:700}
+  h1{font-family:'Fraunces';font-weight:500;font-size:clamp(2.4rem,6.5vw,4.2rem);line-height:1;letter-spacing:-.02em;margin:.2em 0}
+  .cover .sub{font-family:'Fraunces';font-style:italic;font-size:clamp(1.15rem,3vw,1.6rem);color:var(--ink2);max-width:44ch}
+  section{padding:3rem 0;border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:.7rem;letter-spacing:.26em;text-transform:uppercase;color:var(--matt);font-weight:700;margin-bottom:.5rem}
+  h2{font-family:'Fraunces';font-weight:600;font-size:clamp(1.5rem,4vw,2.2rem);margin:.2rem 0 .6rem;letter-spacing:-.01em}
+  p{margin-bottom:.9rem;font-size:1.03rem;color:#38312a} b{color:var(--ink)}
+  ul{margin:.3rem 0 1rem 1.2rem} li{margin:.3rem 0;font-size:1rem;color:#38312a}
+  /* owners legend */
+  .legend{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0}
+  .own{font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;font-weight:700;padding:.25rem .6rem;border-radius:6px}
+  .o-cro{background:#f3e3d6;color:var(--cro)} .o-sonnet{background:#d9eaf1;color:var(--sonnet)}
+  .o-folio{background:#ece6f5;color:var(--folio)} .o-matt{background:#f6ead0;color:var(--matt)} .o-care{background:#dcebe6;color:var(--care)}
+  /* package grid */
+  .pkg{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin:1rem 0}
+  .pkg .it{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem 1.1rem}
+  .pkg .it h4{font-family:'Fraunces';font-size:1.05rem;font-weight:600;margin-bottom:.2rem}
+  .pkg .it p{font-size:.88rem;color:var(--ink2);margin:0}
+  /* phase */
+  .ph{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--cro);border-radius:0 12px 12px 0;padding:1.2rem 1.4rem;margin:1rem 0}
+  .ph .hd{display:flex;align-items:baseline;gap:.7rem;flex-wrap:wrap;margin-bottom:.5rem}
+  .ph .no{font-family:'Fraunces';font-style:italic;color:var(--cro);font-weight:600;font-size:1rem}
+  .ph h3{font-family:'Fraunces';font-weight:600;font-size:1.3rem;margin:0}
+  .ph .meta{font-size:.93rem;margin:.3rem 0}
+  .ph .meta .k{font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);font-weight:700;margin-right:.4rem}
+  .ph.folio{border-left-color:var(--folio)} .ph.matt{border-left-color:var(--matt)}
+  .dep{font-size:.85rem;color:var(--ink2);font-style:italic}
+  .box{background:#fff7ec;border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.3rem;margin:1rem 0}
+  .box.method{border-left:4px solid var(--sonnet);background:#f2f8fb}
+  .box.foliob{border-left:4px solid var(--folio);background:#f7f3fb}
+  .box.flag{border-left:4px solid var(--flag);background:#fbf1ee}
+  .foot{padding:3rem 0 5rem;text-align:center;color:var(--ink2);font-size:.85rem}
+  .foot .m{font-family:'Fraunces';font-style:italic;font-size:1.2rem;color:var(--cro)}
+  @media(max-width:680px){.pkg{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header class="cover"><div class="wrap">
+  <span class="kick">Production Runbook · Sequence & Ownership · Draft for Matt</span>
+  <h1>From the Chair</h1>
+  <p class="sub">The ordered build — Sonnet does the heavy lifting, Folio owns the visuals, the CRO orchestrates, you hold the gates — ending in the most comprehensive sales-and-care tool in the hearing-aid industry.</p>
+</div></header>
+
+<section><div class="wrap">
+  <span class="eyebrow">The End Vision</span>
+  <h2>Not a book — a practice operating system</h2>
+  <p>To be "the most comprehensive tool in the industry," we ship more than two ebooks. We ship a complete, usable system a practice can run on — anchored by the books, made valuable (and copy-proof) by the workbooks, and rounded out by the working tools a real office needs.</p>
+  <div class="pkg">
+    <div class="it"><h4>2 Books</h4><p>Edition A (Closer / sales-owner) + Edition B (Professional / care) — same content, two vocabularies.</p></div>
+    <div class="it"><h4>2 Fillable Workbooks</h4><p>~70–110 pp each, one per edition — the value + anti-piracy engine.</p></div>
+    <div class="it"><h4>Scripts Library</h4><p>Fill-in-the-blank scripts: phone greeting, repeat-back, cost reframe, the family demo, the return-save.</p></div>
+    <div class="it"><h4>Quick-Reference Cards</h4><p>Objections inverted · Thinker/Knower/Feeler · return-save protocol · the patient-journey map.</p></div>
+    <div class="it"><h4>Training / Onboarding Kit</h4><p>Role-play cards + a new-hire path so an owner can train a whole team from it.</p></div>
+    <div class="it"><h4>30/60/90 Implementation Tracker</h4><p>Turns the book into measured behavior change — the thing that drives reviews & referrals.</p></div>
+    <div class="it"><h4>Companion Audio (optional premium)</h4><p>Key lessons narrated (ElevenLabs grant) for the windshield-time learner.</p></div>
+    <div class="it"><h4>The Bundle</h4><p>Both editions + all tools — the hero SKU for a whole practice.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">Who does what</span>
+  <h2>The four lanes</h2>
+  <div class="legend">
+    <span class="own o-sonnet">Sonnet subagents — heavy lifting</span>
+    <span class="own o-folio">Folio — all graphics & visuals</span>
+    <span class="own o-cro">CRO — orchestrate / integrate / compliance / save</span>
+    <span class="own o-matt">Matt — gates</span>
+  </div>
+  <div class="box method"><b>Sonnet subagent method (the lifting):</b> for each writing-heavy phase I fan out multiple parallel Sonnet subagents; each is briefed with the chapter spec + the exact transcript excerpts + the shared lexicon, and writes <b>only its own new file</b> in its own subtree (no shared-file edits, no git). Each returns a short report; I (premium model) integrate, edit for the Moores' voice, run compliance, and commit. This is faster and far cheaper than writing it all on the premium model.</div>
+  <div class="box foliob"><b>Folio's lane (the visuals):</b> Folio owns the entire visual identity — book covers (A/B/bundle), interior layout & typography, the fillable-workbook design (form fields), the quick-ref cards, the diagrams (patient-journey map, the modality wheel, the "objection iceberg"), 3D mockups, and the Gumroad listing graphics. I hand Folio precise design briefs (a BRAND.md + per-asset prompt spec); Folio returns the polished, on-brand assets and designed PDFs.</div>
+  <div class="box flag"><b>One wiring note:</b> Folio isn't currently in my invocable-agent list, so I can't call it directly yet. Either (a) wire Folio so I can invoke it, or (b) I produce the Folio briefs and you run them through Folio. Everything before the design phase proceeds regardless, so this doesn't block us.</div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">The Sequence</span>
+  <h2>Ten phases, in order</h2>
+
+  <div class="ph"><div class="hd"><span class="no">Phase 0</span><h3>Lock &amp; Set the Rails</h3><span class="own o-cro">CRO</span><span class="own o-matt">Matt gate</span></div>
+    <p class="meta"><span class="k">Do</span>Lock the 18-chapter list + the 6-part workbook template, and write the <b>STYLE-&amp;-LEXICON.md</b> — the master vocabulary-swap table + voice rules every subagent must follow (this is what keeps 20 subagents consistent). Stand up the folder tree in CRO-HyperAgent/gumroad/ (manuscript/, workbook/, assets/, design-briefs/, dist/). Reconcile against the Claude CRO's original scope doc + Prologue/Ch1 once pushed.</p>
+    <p class="meta"><span class="k">Out</span>Locked chapter specs (1 brief per chapter) + lexicon + folder scaffold.</p>
+    <p class="dep">Gate: you confirm editions + price direction. Then everything downstream can run.</p>
+  </div>
+
+  <div class="ph"><div class="hd"><span class="no">Phase 1</span><h3>Write the Manuscript (shared core)</h3><span class="own o-sonnet">Sonnet ×N parallel</span><span class="own o-cro">CRO integrates</span></div>
+    <p class="meta"><span class="k">Do</span>Fan out Sonnet subagents — each writes the full shared-core prose for its assigned chapter(s) from the exact Mark/Kim transcript excerpts + spec + lexicon. CRO edits for voice, continuity, and the AI-Layer bridge.</p>
+    <p class="meta"><span class="k">Out</span>18 finished shared-core chapters (edition-neutral, with A/B hooks marked).</p>
+    <p class="dep">Depends on Phase 0. Runs in parallel batches.</p>
+  </div>
+
+  <div class="ph"><div class="hd"><span class="no">Phase 2</span><h3>Build the Workbook (the value engine)</h3><span class="own o-sonnet">Sonnet ×N parallel</span><span class="own o-cro">CRO integrates</span></div>
+    <p class="meta"><span class="k">Do</span>Fan out Sonnet subagents — each builds one chapter's full workbook module (the 6-part template, multiple substantial exercises: self-score, script builder, real-patient log, drill, decision tool, metric tracker, role-play, reflect-&amp;-commit). CRO QCs depth + consistency.</p>
+    <p class="meta"><span class="k">Out</span>The complete ~70–110 pp workbook core (edition-neutral, A/B hooks marked).</p>
+    <p class="dep">Can start as soon as Phase 0 lexicon is locked (parallel with Phase 1).</p>
+  </div>
+
+  <div class="ph"><div class="hd"><span class="no">Phase 3</span><h3>Split into the Two Editions (vocabulary swap)</h3><span class="own o-sonnet">Sonnet ×N</span><span class="own o-cro">CRO QC</span></div>
+    <p class="meta"><span class="k">Do</span>Run the shared core (manuscript + workbook) through the lexicon to generate Edition A (Closer) and Edition B (Professional) — edition intros, framing boxes, vocabulary, metrics. Subagents do the mechanical reframing per chapter; CRO verifies the anti-sales voice in B is airtight.</p>
+    <p class="meta"><span class="k">Out</span>Edition A book+workbook and Edition B book+workbook — text complete.</p>
+    <p class="dep">Depends on Phases 1–2.</p>
+  </div>
+
+  <div class="ph"><div class="hd"><span class="no">Phase 4</span><h3>Build the Comprehensive Extras</h3><span class="own o-sonnet">Sonnet ×N parallel</span><span class="own o-cro">CRO</span></div>
+    <p class="meta"><span class="k">Do</span>Subagents produce the Scripts Library, Quick-Reference Cards (content), Training/Onboarding Kit, the 30/60/90 Tracker, and the companion-audio script. This is what pushes it from "book" to "industry tool."</p>
+    <p class="meta"><span class="k">Out</span>All supporting tool content, edition-tagged.</p>
+    <p class="dep">Depends on Phase 3 (uses final vocabulary). Parallelizable.</p>
+  </div>
+
+  <div class="ph matt"><div class="hd"><span class="no">Phase 5</span><h3>Compliance Pass</h3><span class="own o-cro">CRO + claims gate</span><span class="own o-care">CCO</span><span class="own o-matt">Matt/counsel</span></div>
+    <p class="meta"><span class="k">Do</span>Run ALL copy through the claims gate + CCO: dispensers-not-audiologists, health-claim disclaimers, strict separation from the iHEAR TReO PSAP, INND heritage → counsel. Fix before any design is finalized.</p>
+    <p class="meta"><span class="k">Out</span>Compliance-cleared text, locked for layout.</p>
+    <p class="dep"><b>Hard gate — must clear before Phase 6/publish.</b> Depends on Phases 3–4.</p>
+  </div>
+
+  <div class="ph folio"><div class="hd"><span class="no">Phase 6</span><h3>Design &amp; Visuals</h3><span class="own o-folio">Folio owns</span><span class="own o-cro">CRO briefs</span></div>
+    <p class="meta"><span class="k">Do</span>CRO writes the Folio brief (BRAND.md + per-asset specs). Folio designs: the <b>From the Chair</b> visual identity, covers (A/B/bundle), interior layout &amp; type, the fillable-workbook layout, quick-ref cards, the diagrams (patient-journey map, modality wheel, objection iceberg), and 3D mockups.</p>
+    <p class="meta"><span class="k">Out</span>Polished, on-brand designed assets + layout-ready files.</p>
+    <p class="dep">Depends on Phase 5 (locked text). Needs the Folio handoff wired (see note above).</p>
+  </div>
+
+  <div class="ph"><div class="hd"><span class="no">Phase 7</span><h3>Produce &amp; Assemble</h3><span class="own o-cro">CRO</span><span class="own o-folio">Folio assets</span></div>
+    <p class="meta"><span class="k">Do</span>Assemble the designed eBooks (PDF/EPUB) + the <b>fillable</b> Workbooks (real PDF form fields) + cards/kit. Add per-buyer personalization + license + light watermark (the copy-proofing). Final QC — optionally pressure-test with the focus-group-loop skill (industry personas).</p>
+    <p class="meta"><span class="k">Out</span>Final, shippable product files for all SKUs.</p>
+    <p class="dep">Depends on Phase 6.</p>
+  </div>
+
+  <div class="ph matt"><div class="hd"><span class="no">Phase 8</span><h3>Stage the Gumroad Listings</h3><span class="own o-cro">CRO stages</span><span class="own o-matt">Matt publishes + prices</span></div>
+    <p class="meta"><span class="k">Do</span>Build the 3 SKUs (Edition A, Edition B, Bundle) with sales-page copy, screenshots of the workbook, ratings/refund policy. Everything staged.</p>
+    <p class="meta"><span class="k">Out</span>Listings ready to go live.</p>
+    <p class="dep"><b>Gate: you click publish + set the price.</b> Depends on Phase 7.</p>
+  </div>
+
+  <div class="ph matt"><div class="hd"><span class="no">Phase 9</span><h3>Launch &amp; Sell</h3><span class="own o-cro">CRO plans</span><span class="own o-matt">Matt: sends/spend</span></div>
+    <p class="meta"><span class="k">Do</span>Seed reviews at the intro price, then drive traffic — the warm list, hearing-professional communities/associations, LinkedIn, a simple advertorial. Track sales; iterate copy + price.</p>
+    <p class="meta"><span class="k">Out</span>Revenue + a feedback loop into v2.</p>
+    <p class="dep"><b>Gate: list sends + ad spend are yours.</b></p>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <span class="eyebrow">Cross-cutting</span>
+  <h2>Run discipline</h2>
+  <ul>
+    <li><b>Save every phase:</b> each phase's output is committed to <code>CRO-HyperAgent/gumroad/</code> + written to the cro ledger before moving on. No ephemeral work.</li>
+    <li><b>Parallel where safe, serial where it matters:</b> Sonnet fan-out for writing; the CRO serializes integration, compliance, design handoff, and the single source of truth.</li>
+    <li><b>Compliance is a gate, not a step:</b> nothing gets designed or published until Phase 5 clears.</li>
+    <li><b>The workbook is the moat:</b> depth + personalization + license = real value and hard to pirate. It gets the most build effort.</li>
+  </ul>
+  <div class="box flag"><b>What I need from you to start Phase 0–2 now:</b> (1) confirm editions + a price direction; (2) confirm how I reach Folio (wire it to me, or you run my briefs); (3) green light the Sonnet fan-out. Publish, price, sends, ad spend, and counsel sign-off stay yours.</div>
+</div></section>
+
+<footer class="foot"><div class="wrap">
+  <p class="m">From the Chair</p>
+  <p>Production Runbook · Sonnet builds · Folio designs · CRO orchestrates · the industry's most comprehensive sales-and-care tool</p>
+</div></footer>
+
+</body>
+</html>

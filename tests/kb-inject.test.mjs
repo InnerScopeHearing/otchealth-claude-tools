@@ -23,13 +23,21 @@ function runHook(mode, { env = {}, sessionAgent, projectDir = ROOT } = {}) {
     writeFileSync(join(HOME, ".claude", ".kb-agent"), sessionAgent + "\n");
   }
   return execFileSync("bash", [HOOK, mode], {
-    env: { ...process.env, HOME, CLAUDE_PROJECT_DIR: projectDir, KB_AGENT: "", KB_MEMORY_OPTOUT: "", ...env },
+    // Hermetic: null the agent signals AND the GCP SA, so the hook's ledger preview cannot reach the
+    // real backend. In a LIVE agent sandbox the SA is in process.env, so mem.mjs would load the real
+    // ledger whose text can contain assertion phrases (e.g. a pitfall quoting "WORKING MEMORY IS OFF"),
+    // making this test fail only in sandboxes (green on CI). These tests check the hook's agent
+    // RESOLUTION, not the ledger contents, so the backend must be cut off regardless of host env.
+    env: { ...process.env, HOME, CLAUDE_PROJECT_DIR: projectDir, KB_AGENT: "", KB_MEMORY_OPTOUT: "", GCP_CLAUDE_DRIVER_SA_JSON: "", GCP_CLAUDE_DRIVER_SA_JSON_B64: "", GOOGLE_APPLICATION_CREDENTIALS: "", ...env },
     encoding: "utf8",
   });
 }
 
-test("no agent resolved (no marker, no repo file, KB_AGENT unset) warns LOUDLY", () => {
-  const out = runHook("session");
+test("no agent resolvable (no marker/repo/KB_AGENT, auto-claim off) warns LOUDLY", () => {
+  // KB_NO_AUTOCLAIM=1 so the repo-name auto-claim (which maps the claude-tools test dir -> 'cto') does
+  // not fire; this exercises the genuine no-identity loud-OFF path. The ambiguous-repo case (where
+  // auto-claim correctly DECLINES to guess) is covered in tests/agent-id.test.mjs.
+  const out = runHook("session", { env: { KB_NO_AUTOCLAIM: "1" } });
   assert.match(out, /WORKING MEMORY IS OFF/, "must announce memory is off");
   assert.match(out, /No agent resolved/i, "must say no agent resolved");
   assert.match(out, /\.kb-agent/, "must point at the per-session .kb-agent fix");

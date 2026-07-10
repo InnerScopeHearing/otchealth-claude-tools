@@ -1,0 +1,254 @@
+name: divorce-folder-bulk-digest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  copy-and-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - name: Checkout otchealth-claude-tools (for doc-indexer)
+        uses: actions/checkout@v4
+        with:
+          repository: InnerScopeHearing/otchealth-claude-tools
+          path: octools
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install poppler/libreoffice/tesseract (indexer's free extraction stack)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils libreoffice tesseract-ocr
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch credentials from Key Vault
+        run: |
+          set -euo pipefail
+          GRAPH_ID=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-mail-ro-client-id --query value -o tsv)
+          GRAPH_SECRET=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-mail-ro-client-secret --query value -o tsv)
+          GRAPH_TENANT=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-mail-ro-tenant-id --query value -o tsv)
+
+          # Mask BEFORE writing to GITHUB_ENV -- the "Pull all files..." step below explicitly
+          # re-declares GRAPH_RO_CLIENT_SECRET in its own env: block, which GitHub Actions prints
+          # verbatim in that step's log header unless the value was masked first.
+          echo "::add-mask::${GRAPH_SECRET}"
+
+          {
+            echo "GRAPH_RO_CLIENT_ID=${GRAPH_ID}"
+            echo "GRAPH_RO_CLIENT_SECRET=${GRAPH_SECRET}"
+            echo "GRAPH_RO_TENANT_ID=${GRAPH_TENANT}"
+          } >> "$GITHUB_ENV"
+
+          az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-account --query value -o tsv > /tmp/legal_acct.txt
+          az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-key --query value -o tsv > /tmp/legal_key.txt
+          echo "::add-mask::$(cat /tmp/legal_key.txt)"
+          echo "LEGAL_ACCOUNT=$(cat /tmp/legal_acct.txt)" >> "$GITHUB_ENV"
+
+          (az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-docintel-endpoint --query value -o tsv > /tmp/di_endpoint.txt) || echo "" > /tmp/di_endpoint.txt
+          (az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-docintel-key --query value -o tsv > /tmp/di_key.txt) || echo "" > /tmp/di_key.txt
+          DI_KEY_VAL=$(cat /tmp/di_key.txt)
+          if [ -n "$DI_KEY_VAL" ]; then echo "::add-mask::${DI_KEY_VAL}"; fi
+
+      - name: Pull all files from OneDrive folder (Graph, direct API, no chat pagination)
+        env:
+          GRAPH_RO_CLIENT_ID: ${{ env.GRAPH_RO_CLIENT_ID }}
+          GRAPH_RO_CLIENT_SECRET: ${{ env.GRAPH_RO_CLIENT_SECRET }}
+          GRAPH_RO_TENANT_ID: ${{ env.GRAPH_RO_TENANT_ID }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/pull.cjs << 'NODEEOF'
+          const https = require('https');
+
+          const TENANT = process.env.GRAPH_RO_TENANT_ID;
+          const CLIENT_ID = process.env.GRAPH_RO_CLIENT_ID;
+          const CLIENT_SECRET = process.env.GRAPH_RO_CLIENT_SECRET;
+          const USER = "matthew@innd.com";
+          const ROOT_PATH = "CLO Outgoing/Divorce Case Summary and ALL Filings";
+          const OUT_DIR = "/tmp/onedrive_pull";
+
+          const fs = require('fs');
+          const path = require('path');
+
+          function req(method, url, headers, body) {
+            return new Promise((resolve, reject) => {
+              const u = new URL(url);
+              const opts = { method, hostname: u.hostname, path: u.pathname + u.search, headers };
+              const r = https.request(opts, (res) => {
+                const chunks = [];
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+              });
+              r.on('error', reject);
+              if (body) r.write(body);
+              r.end();
+            });
+          }
+
+          async function reqFollowRedirects(method, url, headers, body, maxRedirects) {
+            if (maxRedirects === undefined) maxRedirects = 5;
+            const r = await req(method, url, headers, body);
+            if ((r.status === 301 || r.status === 302 || r.status === 303 || r.status === 307 || r.status === 308) && r.headers.location && maxRedirects > 0) {
+              // Redirect target (pre-authenticated CDN URL) must NOT carry the original Authorization header.
+              return reqFollowRedirects('GET', r.headers.location, {}, undefined, maxRedirects - 1);
+            }
+            return r;
+          }
+
+          async function getToken() {
+            const body = new URLSearchParams({
+              grant_type: 'client_credentials',
+              client_id: CLIENT_ID,
+              client_secret: CLIENT_SECRET,
+              scope: 'https://graph.microsoft.com/.default',
+            }).toString();
+            const r = await req('POST', `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Content-Length': Buffer.byteLength(body),
+            }, body);
+            const j = JSON.parse(r.body.toString());
+            if (!j.access_token) throw new Error('token mint failed: ' + r.body.toString().slice(0, 300));
+            return j.access_token;
+          }
+
+          async function listChildren(token, itemPath) {
+            const encoded = encodeURIComponent(itemPath);
+            const url = `https://graph.microsoft.com/v1.0/users/${USER}/drive/root:/${encoded}:/children?$top=200`;
+            const r = await req('GET', url, { Authorization: `Bearer ${token}` });
+            if (r.status !== 200) throw new Error(`list failed ${r.status} for ${itemPath}: ${r.body.toString().slice(0, 300)}`);
+            return JSON.parse(r.body.toString()).value || [];
+          }
+
+          async function downloadFile(token, itemPath, destPath) {
+            const encoded = encodeURIComponent(itemPath);
+            const url = `https://graph.microsoft.com/v1.0/users/${USER}/drive/root:/${encoded}:/content`;
+            const r = await reqFollowRedirects('GET', url, { Authorization: `Bearer ${token}` });
+            if (r.status !== 200) throw new Error(`download failed ${r.status} for ${itemPath}: ${r.body.toString().slice(0, 200)}`);
+            fs.mkdirSync(path.dirname(destPath), { recursive: true });
+            fs.writeFileSync(destPath, r.body);
+            return r.body.length;
+          }
+
+          async function walk(token, remotePath, localDir, stats) {
+            const children = await listChildren(token, remotePath);
+            for (const c of children) {
+              const childRemote = `${remotePath}/${c.name}`;
+              if (c.folder) {
+                await walk(token, childRemote, path.join(localDir, c.name), stats);
+              } else {
+                const dest = path.join(localDir, c.name);
+                try {
+                  const bytes = await downloadFile(token, childRemote, dest);
+                  stats.count++;
+                  stats.bytes += bytes;
+                  console.log(`  OK  ${childRemote} (${bytes} bytes)`);
+                } catch (e) {
+                  stats.errors.push({ path: childRemote, error: e.message });
+                  console.error(`  FAIL ${childRemote}: ${e.message}`);
+                }
+              }
+            }
+          }
+
+          async function main() {
+            const token = await getToken();
+            console.log('Graph token minted, len=' + token.length);
+            const stats = { count: 0, bytes: 0, errors: [] };
+            await walk(token, ROOT_PATH, OUT_DIR, stats);
+            console.log(JSON.stringify({ downloaded: stats.count, totalBytes: stats.bytes, errorCount: stats.errors.length, errors: stats.errors }, null, 2));
+            fs.writeFileSync('/tmp/pull_report.json', JSON.stringify(stats, null, 2));
+            if (stats.count === 0) { console.error('FATAL: zero files downloaded'); process.exit(1); }
+          }
+
+          main().catch((e) => { console.error('FATAL: ' + e.stack); process.exit(1); });
+          NODEEOF
+          node /tmp/pull.cjs 2>&1 | tee /tmp/pull.log
+
+      - name: Upload pulled files into Azure Blob (personal container, single batch)
+        run: |
+          set -uo pipefail
+          ACCT=$(cat /tmp/legal_acct.txt)
+          KEY=$(cat /tmp/legal_key.txt)
+          COUNT=$(find /tmp/onedrive_pull -type f | wc -l)
+          echo "Uploading $COUNT files to Azure Blob personal/clo-outgoing/Divorce Case Summary and ALL Filings/"
+          az storage blob upload-batch \
+            --account-name "$ACCT" --account-key "$KEY" \
+            --destination "personal" \
+            --destination-path "clo-outgoing/Divorce Case Summary and ALL Filings" \
+            --source /tmp/onedrive_pull \
+            --overwrite true > /tmp/upload.log 2>&1
+          UPSTATUS=$?
+          cat /tmp/upload.log
+          echo "Upload exit status: $UPSTATUS"
+          exit $UPSTATUS
+
+      - name: Run doc-indexer against the newly-uploaded prefix
+        working-directory: octools
+        env:
+          AZURE_LEGAL_STORAGE_ACCOUNT: ${{ env.LEGAL_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          export AZURE_LEGAL_STORAGE_KEY=$(cat /tmp/legal_key.txt)
+          export AZURE_DOCINTEL_ENDPOINT=$(cat /tmp/di_endpoint.txt)
+          export AZURE_DOCINTEL_KEY=$(cat /tmp/di_key.txt)
+          node skills/doc-indexer/indexer.mjs index \
+            --profile legal --azure --container personal \
+            --prefix "clo-outgoing/Divorce Case Summary and ALL Filings/" \
+            2>&1 | tee /tmp/index_output.log
+
+      - name: Report final status
+        working-directory: octools
+        env:
+          AZURE_LEGAL_STORAGE_ACCOUNT: ${{ env.LEGAL_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          export AZURE_LEGAL_STORAGE_KEY=$(cat /tmp/legal_key.txt)
+          node skills/doc-indexer/indexer.mjs status --profile legal --azure --container personal | tee /tmp/status_output.log
+
+      - name: Publish all logs for debugging (always runs, end of job)
+        if: always()
+        working-directory: octools
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          {
+            echo "# Bulk digest pipeline logs - $(date -u)"
+            echo ""
+            echo "## Pull log (tail 100 lines)"
+            echo '```'
+            tail -100 /tmp/pull.log 2>/dev/null || echo "(no pull.log)"
+            echo '```'
+            echo ""
+            echo "## File count pulled"
+            find /tmp/onedrive_pull -type f 2>/dev/null | wc -l || echo 0
+            echo ""
+            echo "## Upload log (tail 60 lines)"
+            echo '```'
+            tail -60 /tmp/upload.log 2>/dev/null || echo "(no upload.log - step may not have run)"
+            echo '```'
+            echo ""
+            echo "## Index output log (tail 100 lines)"
+            echo '```'
+            tail -100 /tmp/index_output.log 2>/dev/null || echo "(no index_output.log)"
+            echo '```'
+          } > diagnostics/pull-log.md
+          git config user.name "cto-diagnostic-bot"
+          git config user.email "cto-bot@otchealth.app"
+          git fetch origin diag-connector-toolset-latest 2>/dev/null || true
+          git checkout -B diag-connector-toolset-latest
+          git add -f diagnostics/pull-log.md
+          git commit -m "Diagnostic: bulk digest pipeline logs" || true
+          git push origin diag-connector-toolset-latest --force

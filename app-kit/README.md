@@ -30,6 +30,9 @@ rolled to all apps at once.
 | 5. Maintenance | `50-maintenance-kit.md` | Bug-hunting playbook, Sentry triage, dependency/security sweeps, parallel-agent maintenance |
 | 6. Marketing | `60-marketing-kit.md` | Store screenshots and assets (designer skill), ASO, marketing assets, reactivation hooks |
 | Lessons | `LESSONS.md` | Problems we already hit, written as a "do not repeat these" pre-flight list |
+| Standard | `DEV-DATA-STANDARD.md` | Dev/test data is synthetic by default, never real PHI: the `synthetic-health-data` skill + one-command reproducible fixtures |
+| Standard | `PR-HYGIENE-STANDARD.md` | Definition of done: done work never sits in an open PR |
+| Standard | `ORCHESTRATION-STANDARD.md` | How the orchestrator scales subagent fan-out to task complexity, explicit synthesis, verify every diff, cap at 4 |
 
 ## How an app uses the kit
 1. **New app:** run the Startup kit. It scaffolds a Capacitor app with brand,

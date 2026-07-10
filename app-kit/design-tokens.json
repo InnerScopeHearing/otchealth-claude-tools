@@ -1,0 +1,73 @@
+{
+  "_about": "Fleet design tokens — the $10M craft rules as concrete values. The shared, brand-agnostic foundation every OTCHealth/InnerScope app implements. Per-app brand overrides ONLY the palette + fonts; the scale/targets/motion/patterns are fleet-wide and non-negotiable. This is the seed for the eventual @otchealth/ui package. Source: app-kit/AI-AGENT-APP-BUILDING-BIBLE.md Part 2.",
+
+  "typography": {
+    "_rule": "At most TWO families: one display, one body. No third font, ever.",
+    "families": { "display": "<brand display>", "body": "<brand body / system>" },
+    "lineHeight": { "body": 1.5, "heading": 1.2, "_rule": "body 1.4-1.6x" },
+    "scale_pt": { "caption": 13, "body": 16, "bodyLarge": 18, "title": 22, "h2": 28, "h1": 34 },
+    "seniorScale_pt": { "_rule": "senior/kid apps default 1.5x; body min 18-20pt", "bodyDefault": 20 },
+    "dynamicType": true
+  },
+
+  "spacing": {
+    "_rule": "8pt grid. Every margin/padding is a multiple of 4. Never eyeball.",
+    "grid": 8,
+    "scale": [4, 8, 12, 16, 24, 32, 48, 64]
+  },
+
+  "touchTargets_pt": {
+    "_rule": "Apple floor 44; senior/kid go 56-64. Sub-44 ~3x error rate.",
+    "min": 44,
+    "comfortable": 56,
+    "senior": 64
+  },
+
+  "color": {
+    "_rule": "Per-app palette. Contrast is fleet-law: body >=4.5:1, large >=3:1. AAA for senior body where feasible.",
+    "contrast": { "bodyMin": 4.5, "largeMin": 3.0 },
+    "palette": { "primary": "<brand>", "surface": "<brand>", "onSurface": "<brand>", "danger": "#c0322b", "success": "#1f8a4c", "warning": "#b8860b" }
+  },
+
+  "motion": {
+    "_rule": "100-500ms, consistent easing. Honor prefers-reduced-motion.",
+    "duration_ms": { "fast": 150, "base": 250, "slow": 400 },
+    "easing": { "entrance": "cubic-bezier(0,0,0.2,1)", "move": "cubic-bezier(0.4,0,0.2,1)", "exit": "cubic-bezier(0.4,0,1,1)" },
+    "respectReducedMotion": true
+  },
+
+  "haptics": {
+    "_rule": "@capacitor/haptics. Light impact on primary tap; success/error on outcomes. Never on scroll.",
+    "primaryTap": "impactLight",
+    "success": "notificationSuccess",
+    "error": "notificationError"
+  },
+
+  "requiredPatterns": {
+    "_rule": "These are not optional. Every app implements all five.",
+    "skeletonLoading": "Shape-of-content skeletons, never a bare spinner. Text before images.",
+    "emptyState": "Every list/feed ships a designed zero-state: illustration + one value line + one primary action. (Apple 4.2: never look empty/unfinished.)",
+    "errorBoundary": "Top-level ErrorBoundary with a VISIBLE fallback (skills/boot-gate/templates/ErrorBoundary.tsx). Never a silent white/green screen.",
+    "splashHide": "SplashScreen.hide() in a finally; launchAutoHide:false. Never stuck on splash.",
+    "offlineGraceful": "Network/back-end down -> cached content + a friendly retry, never a dead spinner."
+  },
+
+  "performanceBudget": {
+    "coldStart_ms": 2000,
+    "warmStart_ms": 1000,
+    "_rule": "Defer analytics/ads/heavy init until after first interaction. >2.5s cold start hurts first-session retention."
+  },
+
+  "activation": {
+    "_rule": "Reach the aha before any signup/permission/paywall. Prime permissions with a contextual soft-ask AFTER a value moment.",
+    "ahaByApp": {
+      "iheartest": "first hearing test result",
+      "aware": "first training exercise completed",
+      "plantid": "first plant identified",
+      "fourvault": "first card scanned into the vault",
+      "flatstick": "first live score entered",
+      "companion": "first scan answered",
+      "innerease": "first relief session"
+    }
+  }
+}

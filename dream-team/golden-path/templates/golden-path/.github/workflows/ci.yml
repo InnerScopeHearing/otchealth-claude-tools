@@ -1,0 +1,56 @@
+name: ci
+
+# TEMPLATE — the reusable green-main gate for any OTCHealth/InnerScope backend repo.
+# Derived unchanged from otchealth-mcp-server/.github/workflows/ci.yml (this part of the
+# gateway's pipeline has ZERO gateway-specific content, so it is copied as-is).
+#
+# Making this a REQUIRED status check on `main` (+ "require branches up to date before merge")
+# is what makes deploy-from-stale-branch, merging-into-red-main, and dropped-file merges
+# structurally impossible — see otchealth-cto/runbooks/AZURE-AI-OPERATING-SYSTEM.md Layer E.
+#
+# ADOPT: copy this file unchanged. The only thing to fill in is `working-directory` if your
+# deployable service lives in a monorepo subdirectory (e.g. Flatstick's packages/api) rather
+# than the repo root. Leave it at "." if your package.json is at the repo root.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # TEMPLATE VALUE — set to the subdirectory holding the deployable service's package.json,
+  # e.g. "packages/api" for a pnpm-workspace monorepo. Leave as "." for a repo-root app.
+  WORKING_DIR: '.'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          # TEMPLATE NOTE: if the repo is a pnpm workspace (Flatstick, FourVault, Companion),
+          # replace `cache: 'npm'` with `cache: 'pnpm'` and add a pnpm/action-setup step before
+          # this one, then swap `npm ci` below for `pnpm install --frozen-lockfile`. Kept as npm
+          # here because that is the gateway's own package manager and the majority baseline.
+      - name: Install (frozen lockfile)
+        run: npm ci --include=dev
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test

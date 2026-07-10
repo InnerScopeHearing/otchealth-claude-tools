@@ -14,6 +14,7 @@
 //   node telemetry.mjs session-end --transcript <path> [--agent cto]
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const SM = "otchealth-shared-prod";
 const INGEST = "https://us.i.posthog.com/capture/";
 // approx Claude pricing $/Mtok [input, output, cache-write, cache-read]
@@ -28,13 +29,13 @@ const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i +
 function readStdin() { try { return readFileSync(0, "utf8"); } catch { return ""; } }
 
 function saJwt(scope) {
-  const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
+  const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;}
   const now = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
   return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
 }
-async function sm(id) {
+async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
   const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` });
   const t = (await r0.json()).access_token;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
@@ -84,8 +85,12 @@ async function sessionEnd() {
   if (!key) { console.error("no posthog-fleet-ingest-key"); process.exit(0); }
   const now = new Date().toISOString();
   const base = { distinct_id: agent, timestamp: now };
-  const aiProps = { "$ai_trace_id": sid, "$ai_model": m.model, "$ai_provider": "anthropic", "$ai_input_tokens": m.inTok + m.cacheW + m.cacheR, "$ai_output_tokens": m.outTok, "$ai_latency": Math.round(m.durMs / 1000), "$ai_total_cost_usd": +m.cost.toFixed(4), agent, session_id: sid };
-  const sessProps = { agent, session_id: sid, model: m.model, models: m.models, turns: m.turns, tool_calls: m.toolCalls, tools_used: Object.keys(m.tools), top_tools: Object.entries(m.tools).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`), tool_errors: m.errors, input_tokens: m.inTok, output_tokens: m.outTok, cache_read_tokens: m.cacheR, total_tokens: m.totalTok, est_cost_usd: +m.cost.toFixed(4), duration_s: Math.round(m.durMs / 1000), outcome: m.errors > 0 ? "had_tool_errors" : "clean" };
+  // callsite_id: the prompt-surface identifier for this session (defaults to the agent role, matching
+  // agent-evals' eval_result.callsite_id default). Substrate for a future quality-per-dollar router that
+  // joins eval scores to real production model/cost by callsite; the router itself is NOT built here.
+  const callsiteId = (takeVal("--callsite", "") || agent);
+  const aiProps = { "$ai_trace_id": sid, "$ai_model": m.model, "$ai_provider": "anthropic", "$ai_input_tokens": m.inTok + m.cacheW + m.cacheR, "$ai_output_tokens": m.outTok, "$ai_latency": Math.round(m.durMs / 1000), "$ai_total_cost_usd": +m.cost.toFixed(4), agent, callsite_id: callsiteId, session_id: sid };
+  const sessProps = { agent, callsite_id: callsiteId, session_id: sid, model: m.model, models: m.models, turns: m.turns, tool_calls: m.toolCalls, tools_used: Object.keys(m.tools), top_tools: Object.entries(m.tools).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`), tool_errors: m.errors, input_tokens: m.inTok, output_tokens: m.outTok, cache_read_tokens: m.cacheR, total_tokens: m.totalTok, est_cost_usd: +m.cost.toFixed(4), duration_s: Math.round(m.durMs / 1000), outcome: m.errors > 0 ? "had_tool_errors" : "clean" };
   await capture(key, [{ event: "$ai_generation", properties: { ...aiProps }, ...base }, { event: "agent_session", properties: { ...sessProps }, ...base }]);
   console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} tools=${m.toolCalls} tok=${m.totalTok} ~$${m.cost.toFixed(3)} -> PostHog Fleet Agents`);
 }

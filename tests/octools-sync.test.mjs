@@ -42,9 +42,10 @@ test("install-octools-hook installs the live-sync hook, idempotently, without cl
   const settingsPath = join(home, ".claude", "settings.json");
   const s1 = JSON.parse(readFileSync(settingsPath, "utf8"));
   assert.ok(JSON.stringify(s1.hooks.UserPromptSubmit).includes("octools-sync.sh"), "installs the octools-sync UserPromptSubmit hook");
+  assert.ok(JSON.stringify(s1.hooks.UserPromptSubmit).includes("kb-recall.sh"), "installs the kb-recall per-prompt memory-injection hook");
   run(); // idempotent
   const s2 = JSON.parse(readFileSync(settingsPath, "utf8"));
-  assert.strictEqual(s2.hooks.UserPromptSubmit.length, 1, "second run adds no duplicate");
+  assert.strictEqual(s2.hooks.UserPromptSubmit.length, 2, "second run adds no duplicate (octools-sync + kb-recall)");
   // never clobber an unparseable user settings file
   const home2 = mkdtempSync(join(tmpdir(), "ioh2-"));
   mkdirSync(join(home2, ".claude"), { recursive: true });

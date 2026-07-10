@@ -1,0 +1,26 @@
+[
+  {
+    "id": "fgl-professional-teaches-exact-fix",
+    "agent": "fgl",
+    "callsite_id": "fgl.review_persona.professionals",
+    "prompt_file": "skills/focus-group-loop/fgl.mjs",
+    "task": "PITCH:\nA plant-identification app's paywall screen. It shows a single 'Subscribe' button with no price, no trial terms, and a stock photo of a fern. The screenshot shows the button text overlapping the price disclaimer at the bottom.\n\nYou are now using the app. The screenshots show the ACTUAL screen: the subscribe button text visibly overlaps a small gray disclaimer line beneath it, and no price is shown anywhere on the screen.\n\nYour group's required question: As a professional in this field, would you present this to your clients as complete and put YOUR name on it as the creator? (true/false + why)",
+    "rubric": [
+      "Says no / would not put their name on it as complete, given the visible defects",
+      "Names the SPECIFIC defect (missing price, and/or the overlapping button text and disclaimer) rather than a vague 'needs polish'",
+      "Gives the exact fix (e.g. show the localized price and trial terms above the button, add vertical spacing so the disclaimer does not overlap) rather than only criticizing"
+    ]
+  },
+  {
+    "id": "fgl-customer-would-pay-honest",
+    "agent": "fgl",
+    "callsite_id": "fgl.review_persona.customers",
+    "prompt_file": "skills/focus-group-loop/fgl.mjs",
+    "task": "PITCH:\nA hearing-training app's onboarding flow. Screens show large, high-contrast text, a clear explanation of what the app does, and a working demo exercise with visible score feedback. No bugs are visible in the screenshots.\n\nYou are now using the app. The screenshots show the ACTUAL screens: clean onboarding, readable text, and a working demo.\n\nYour group's required question: Would you pay for it? (true/false + why)",
+    "rubric": [
+      "Gives an honest, specific answer tied to what was actually shown (not generic flattery with no reasoning)",
+      "Rating and would_pay answer are consistent with each other (a would_pay=true should not come with a very low rating and vice versa)",
+      "Stays demanding/critical in tone rather than uncritically positive, per the persona brief, even when the screens look good (e.g. notes what would need to hold up over more screens, or a specific remaining question)"
+    ]
+  }
+]

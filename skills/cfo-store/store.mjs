@@ -34,7 +34,7 @@ const accountOverride = takeVal("--account");      // override the Azure storage
 const keySecretOverride = takeVal("--key-secret"); // override which SM secret holds the account key
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
-const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "gcs").toLowerCase();
+const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "azure").toLowerCase(); // default azure (GCS/GCP retired)
 const [cmd, a1, a2] = pos;
 
 const SM = "otchealth-shared-prod";
@@ -43,6 +43,24 @@ function need(n) { const v = process.env[n]; if (!v) { console.error(`Missing en
 function walk(d) { let o = []; for (const e of readdirSync(d)) { const p = join(d, e); statSync(p).isDirectory() ? (o = o.concat(walk(p))) : o.push(p); } return o; }
 const CT = { ".pdf": "application/pdf", ".csv": "text/csv", ".json": "application/json", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls": "application/vnd.ms-excel", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".txt": "text/plain", ".zip": "application/zip" };
 const ctOf = (name) => CT[extname(name).toLowerCase()] || "application/octet-stream";
+
+// ---- Azure Key Vault (fleet secret store; GCP Secret Manager RETIRED, billing off) ----
+let _kvTok = null, _kvExp = 0;
+async function kvToken() {
+  const t = process.env.AZURE_SP_TENANT_ID, c = process.env.AZURE_SP_CLIENT_ID, s = process.env.AZURE_SP_CLIENT_SECRET;
+  if (!t || !c || !s) return null;
+  if (_kvTok && _kvExp - Date.now() > 60000) return _kvTok;
+  try {
+    const r = await fetch(`https://login.microsoftonline.com/${t}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "client_credentials", client_id: c, client_secret: s, scope: "https://vault.azure.net/.default" }) });
+    const j = await r.json(); if (!j.access_token) return null;
+    _kvTok = j.access_token; _kvExp = Date.now() + (Number(j.expires_in) || 3600) * 1000; return _kvTok;
+  } catch { return null; }
+}
+async function kvRead(name) {
+  const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
+  const tok = await kvToken(); if (!tok) return null;
+  try { const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, { headers: { Authorization: `Bearer ${tok}` } }); if (!r.ok) return null; const v = (await r.json()).value; return v == null ? null : String(v).trim() || null; } catch { return null; }
+}
 
 // ---- shared: claude-driver SA token (scope-parameterized) ----
 function saJwt(scope) {
@@ -60,6 +78,11 @@ async function gToken(scope) {
   return (await r.json()).access_token;
 }
 async function smRead(id) {
+  // Azure Key Vault FIRST (GCP Secret Manager retired). Secret names are identical.
+  const kv = await kvRead(id);
+  if (kv != null) return kv;
+  // Legacy GCP fallback ONLY if a claude-driver SA is present (else saJwt's need() would hard-exit).
+  if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null;
   try { const t = await gToken("https://www.googleapis.com/auth/cloud-platform"); const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); } catch { return null; }
 }
 

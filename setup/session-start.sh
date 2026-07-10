@@ -8,15 +8,19 @@
 #     2>/dev/null || (cd /tmp/octools && git pull --ff-only)
 #   bash /tmp/octools/setup/session-start.sh
 #
-# Secrets model: ONE environment secret bootstraps everything.
-#   GCP_CLAUDE_DRIVER_SA_JSON  full JSON of the non-PHI claude-driver SA key
-# Using that SA, this script pulls the API keys from GCP Secret Manager
-# (secrets: openai-api-key, elevenlabs-api-key, optional recraft-api-key).
-# OPENAI_API_KEY / ELEVENLABS_API_KEY may still be passed directly as env
-# vars to override Secret Manager (useful for local dev).
-# Optional:
-#   GOOGLE_CLOUD_PROJECT (default otchealth-shared-prod),
-#   VERTEX_DEFAULT_IMAGEN_MODEL / _VIDEO_MODEL / _LLM_MODEL
+# Secrets model (Azure-first, 2026-07): a service principal bootstraps everything
+# from Azure Key Vault. Set these four in the cloud environment's .env box:
+#   AZURE_SP_CLIENT_ID       the fleet service-principal app (client) id
+#   AZURE_SP_CLIENT_SECRET   its client secret
+#   AZURE_SP_TENANT_ID       the Entra tenant id
+#   AZURE_KEYVAULT_NAME      vault name (default kv-otc-55c84f6bef)
+# Using that SP, this script pulls all API keys from Key Vault (secret NAMES are a
+# 1:1 mirror of the retired GCP Secret Manager ids). OPENAI_API_KEY etc. may still
+# be passed directly as env vars to override the vault (useful for local dev).
+#
+# LEGACY (retired, GCP billing off): GCP_CLAUDE_DRIVER_SA_JSON + GOOGLE_CLOUD_PROJECT
+# are still honored as a fallback only if the Azure creds are absent AND a GCP SA
+# key is present. This path is expected to fail; Azure Key Vault is the source.
 
 set -euo pipefail
 
@@ -77,35 +81,78 @@ fi
 set +e
 set +o pipefail
 
-# ─── System deps: document pipeline (LibreOffice modules + poppler-utils) ─
+# ─── Establish lane identity (~/.claude/.kb-agent) ──────────────────
+# kb-memory writes/recall + the gateway lane self-scope off this marker. Without it,
+# a session either can't scope its memory or (worse) writes to the wrong lane. We
+# resolve it RELIABLY but NEVER GUESS a lane — a wrong lane (esp. a privileged one)
+# is worse than none. Precedence:
+#   1. KB_AGENT env explicitly set  -> authoritative pin (overrides a stale GLOBAL
+#      marker left by a prior session on a reused/shared container). This is the
+#      per-session knob: set KB_AGENT=<lane> in the session's env and it sticks.
+#   2. else the shared resolver (skills/kb-memory/agent-id.sh): existing marker >
+#      repo committed .kb-agent (walked to git root) > unambiguous repo->lane auto-claim.
+# The result is validated against the known lane allow-list before it is persisted,
+# so a typo never becomes a bogus marker. Unresolved => loud WARN with the exact fix.
+KB_MARK="${HOME}/.claude/.kb-agent"
+KB_VALID="clo clo-personal cfo coo cpo cro cco cto developer"
+mkdir -p "${HOME}/.claude" 2>/dev/null
+_LANE=""; _LSRC=""
+if [ -n "${KB_AGENT:-}" ]; then
+  _LANE="${KB_AGENT}"; _LSRC="KB_AGENT env (explicit pin)"
+else
+  AG=""; SRC=""
+  . "${TOOLS_DIR}/skills/kb-memory/agent-id.sh" 2>/dev/null || true
+  _LANE="${AG:-}"; _LSRC="${SRC:-repo resolver}"
+fi
+case " ${KB_VALID} " in
+  *" ${_LANE} "*)
+    printf '%s\n' "${_LANE}" > "$KB_MARK" 2>/dev/null
+    echo "[octools] Lane identity: ${_LANE}  (source: ${_LSRC})"
+    ;;
+  *)
+    echo "==================================================================================="
+    echo "[octools] WARN: lane identity UNRESOLVED${_LANE:+ (got invalid '${_LANE}')} — kb-memory + gateway lane can't self-scope."
+    echo "          Not guessing on purpose (a wrong lane, esp. a privileged one, is worse than none). Set it either way:"
+    echo "            • env:    add KB_AGENT=<lane> to this session's environment variables (best on the shared env), or"
+    echo "            • marker: echo <lane> > ~/.claude/.kb-agent"
+    echo "          Valid lanes: ${KB_VALID}"
+    echo "==================================================================================="
+    ;;
+esac
+
+# ─── System deps: document pipeline (LibreOffice + poppler-utils + weasyprint) ─
 # The remote container base image ships only libreoffice-core + libreoffice-common
-# (the Writer/Calc/Impress MODULES libswlo.so etc. are MISSING) and NO poppler-utils.
-# Without the LO modules, `soffice --headless --convert-to` fails to load ANY
-# document (even plain text) with a misleading "source file could not be loaded";
-# without poppler-utils there is no `pdftotext`, the cheap PDF text-layer extractor
-# the doc-indexer interactive path + the pdf skill rely on. Both silently degrade
-# document handling for every agent (the CLO hit the LO half rendering a legal
-# template, 2026-06-23). Install both so the document pipeline works. Guarded: skip
-# when already present, so a warm container pays nothing and only a fresh container
-# runs apt. Non-fatal, and only `apt-get update`s when an install is actually
-# needed. Needs root+network (present in the web container); degrades silently
-# where unavailable. (Heavier/rarer deps - weasyprint, tesseract, ffmpeg - stay
-# lazy-installed by the skills that use them, e.g. the pdf skill.)
-if ! dpkg -s libreoffice-writer >/dev/null 2>&1 || ! command -v pdftotext >/dev/null 2>&1; then
+# (the Writer/Calc/Impress MODULES libswlo.so etc. are MISSING), NO poppler-utils,
+# and NO weasyprint. The effects are silent and break real work for every agent:
+#   * no LO modules -> `soffice --convert-to` fails to load ANY document, with the
+#     misleading error "source file could not be loaded" (breaks docx/xlsx/pptx +
+#     the doc-indexer office path). Surfaced by the CLO rendering a legal template.
+#   * no poppler -> no `pdftotext`, the cheap PDF text-layer extractor the
+#     doc-indexer interactive path + the pdf skill rely on.
+#   * no weasyprint -> no HTML/Markdown -> PDF RENDERING (the pdf skill's CREATE
+#     path: legal docs, financial reports, memos, build-review PDFs). Surfaced by
+#     the Developer agent ("PDF rendering tooling isn't installed here").
+# These are the document ESSENTIALS an agent needs to actually run the company, so
+# they are installed always (when missing). Guarded: skip when present, so a warm
+# container pays nothing; non-fatal; only `apt-get update`s when an install is
+# needed; root-or-sudo aware. Heavier/rarer deps stay LAZY-installed by the skills
+# that use them (tesseract OCR - cloud Document Intelligence covers it; ffmpeg -
+# video only). Premium essentials always-on, not the kitchen sink.
+if ! dpkg -s libreoffice-writer >/dev/null 2>&1 || ! command -v pdftotext >/dev/null 2>&1 || ! command -v weasyprint >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     APT=""
     if [ "$(id -u)" = 0 ]; then APT="apt-get"; elif command -v sudo >/dev/null 2>&1; then APT="sudo -n apt-get"; fi
     if [ -n "$APT" ]; then
-      echo "[octools] Installing document-pipeline deps (LibreOffice writer/calc/impress + poppler-utils)..."
+      echo "[octools] Installing document-pipeline deps (LibreOffice writer/calc/impress + poppler-utils + weasyprint)..."
       if $APT update -qq >/dev/null 2>&1 \
          && DEBIAN_FRONTEND=noninteractive $APT install -y -qq \
-              libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils >/dev/null 2>&1; then
-        echo "[octools] Document-pipeline deps installed (soffice + pdftotext ready)."
+              libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils weasyprint >/dev/null 2>&1; then
+        echo "[octools] Document-pipeline deps installed (soffice + pdftotext + weasyprint ready)."
       else
-        echo "[octools] WARN: document-pipeline dep install failed (apt/network/permissions?) - docx/xlsx/pptx, PDF text extraction, and doc-indexer office conversion may be unavailable this session."
+        echo "[octools] WARN: document-pipeline dep install failed (apt/network/permissions?) - Office conversion, PDF text extraction, and HTML/MD->PDF rendering may be unavailable this session."
       fi
     else
-      echo "[octools] WARN: document-pipeline deps missing and no root/sudo to install - soffice conversion + pdftotext unavailable this session."
+      echo "[octools] WARN: document-pipeline deps missing and no root/sudo to install - soffice/pdftotext/weasyprint unavailable this session."
     fi
   fi
 fi
@@ -191,48 +238,63 @@ CRED="${HOME}/.designer/credentials.env"
 SA_PATH="${HOME}/.gcp_claude_driver_sa.json"
 PROJECT="${GOOGLE_CLOUD_PROJECT:-otchealth-shared-prod}"
 
-# ─── Write the GCP SA key from the one env secret ───────────────────
-if [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ]; then
-  # VALIDATE before trusting it. The #1 cause of "memory is off" (no kb-memory, no Vertex, no
-  # Secret Manager) is a malformed value in the environment's .env box: wrapping quotes, backslash
-  # escaped quotes, or a multi-line paste the .env parser truncated. Writing that as the SA file
-  # makes every JSON.parse downstream fail. So only write it if it actually parses as JSON.
-  if printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' 2>/dev/null; then
-    printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" > "$SA_PATH"
-    chmod 600 "$SA_PATH"
-    echo "[octools] GCP SA key written to $SA_PATH"
+KEYVAULT="${AZURE_KEYVAULT_NAME:-kv-otc-55c84f6bef}"
+FETCHED=""
+
+# ─── PRIMARY: pull fleet secrets from Azure Key Vault ───────────────
+# GCP Secret Manager is RETIRED (billing off, 2026-07). The fleet secret store is now
+# Azure Key Vault, read via an Entra service principal supplied in the environment. The
+# Key Vault secret NAMES are a 1:1 mirror of the old Secret Manager ids, so nothing
+# downstream changes — only the fetch mechanism. The client_secret is never logged.
+#
+# Retry a few times on transient failure: on a fresh container the Environment's
+# AZURE_SP_* vars can occasionally not yet be visible to this hook's first pass, or
+# the vault.azure.net call can hit a cold-start blip. Without a retry, that one bad
+# beat leaves credentials.env fully blank (all secrets empty) for the rest of the
+# session, which is silent and easy to miss (only the fetch-time WARN reveals it).
+if [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+  for attempt in 1 2 3; do
+    echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT), attempt $attempt/3..."
+    FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
+      node "${TOOLS_DIR}/setup/fetch-secrets-azure.mjs" 2>/dev/null || true)"
+    [ -n "$FETCHED" ] && break
+    [ "$attempt" -lt 3 ] && sleep 2
+  done
+  if [ -n "$FETCHED" ]; then
+    echo "[octools] Key Vault OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
   else
     echo "==================================================================================="
-    echo "[octools] ERROR: GCP_CLAUDE_DRIVER_SA_JSON is SET but is NOT valid JSON."
-    echo "          kb-memory, Vertex AI, and Secret Manager will be OFF this session."
-    echo "          In the cloud environment's Environment variables (.env format), the value must be:"
-    echo "            * the RAW service-account JSON, starting with a brace, with NO wrapping quotes"
-    echo "            * ONE line (private_key newlines as literal backslash-n, not real line breaks)"
-    echo "            * plain double-quotes inside the JSON, not backslash-escaped quotes"
-    echo "            * named exactly GCP_CLAUDE_DRIVER_SA_JSON (leading G)"
-    echo "          Save, then start a NEW session (env changes apply to new sessions only)."
+    echo "[octools] WARN: Key Vault returned nothing after 3 attempts. kb-memory + API keys may be OFF."
+    echo "          Check AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID, and"
+    echo "          that the SP holds 'Key Vault Secrets User' (or Officer) on $KEYVAULT."
+    echo "          Re-hydrate later in-session with: bash setup/session-start.sh"
     echo "==================================================================================="
-    [ -f "$SA_PATH" ] && echo "[octools] keeping the existing key on disk at $SA_PATH (not overwriting it with the bad value)."
   fi
-elif [ -f "$SA_PATH" ]; then
-  echo "[octools] Using existing SA key at $SA_PATH"
 else
   echo "==================================================================================="
-  echo "[octools] WARN: GCP_CLAUDE_DRIVER_SA_JSON not set and no key on disk."
-  echo "          kb-memory, Vertex AI, and Secret Manager are OFF this session."
-  _maybe="$(env 2>/dev/null | sed -n 's/=.*//; /CLAUDE_DRIVER_SA_JSON$/p' | grep -v '^GCP_CLAUDE_DRIVER_SA_JSON$' | head -1)"
-  [ -n "$_maybe" ] && echo "          Found a variable named '$_maybe' - did you mean GCP_CLAUDE_DRIVER_SA_JSON (leading G)?"
-  echo "          Set GCP_CLAUDE_DRIVER_SA_JSON (raw JSON, one line, no quotes) in the environment's"
-  echo "          Environment variables (.env format), then start a NEW session."
+  echo "[octools] WARN: Azure Key Vault creds not set — fleet secrets are OFF this session."
+  echo "          Set these in the cloud environment's Environment variables (.env format):"
+  echo "            AZURE_SP_CLIENT_ID      the service-principal app (client) id"
+  echo "            AZURE_SP_CLIENT_SECRET  its client secret"
+  echo "            AZURE_SP_TENANT_ID      the Entra tenant id"
+  echo "            AZURE_KEYVAULT_NAME     vault name (default kv-otc-55c84f6bef)"
+  echo "          Save, then start a NEW session (env changes apply to new sessions only)."
   echo "==================================================================================="
 fi
 
-# ─── Pull API keys from GCP Secret Manager (override with direct env vars) ──
-FETCHED=""
-if [ -f "$SA_PATH" ]; then
-  echo "[octools] Fetching API keys from Secret Manager (project: $PROJECT)..."
-  FETCHED="$(GOOGLE_APPLICATION_CREDENTIALS="$SA_PATH" GOOGLE_CLOUD_PROJECT="$PROJECT" \
-    node "${TOOLS_DIR}/setup/fetch-secrets.mjs" 2>/dev/null || true)"
+# ─── LEGACY FALLBACK: GCP Secret Manager (RETIRED; only if Azure gave nothing) ──
+# Kept for backward-compat on any Desktop still carrying the old SA env; GCP billing is
+# off, so this path is expected to fail silently. Azure above is the supported source.
+if [ -z "$FETCHED" ]; then
+  if [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ] && \
+     printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' 2>/dev/null; then
+    printf '%s' "$GCP_CLAUDE_DRIVER_SA_JSON" > "$SA_PATH"; chmod 600 "$SA_PATH"
+  fi
+  if [ -f "$SA_PATH" ]; then
+    echo "[octools] (legacy) Attempting GCP Secret Manager fallback (expected to be retired)..."
+    FETCHED="$(GOOGLE_APPLICATION_CREDENTIALS="$SA_PATH" GOOGLE_CLOUD_PROJECT="$PROJECT" \
+      node "${TOOLS_DIR}/setup/fetch-secrets.mjs" 2>/dev/null || true)"
+  fi
 fi
 # Direct env vars win over Secret Manager (handy for local dev).
 get_key() {  # $1=env name
@@ -291,16 +353,21 @@ FOURVAULT_NEON_DIRECT_V="$(get_key FOURVAULT_NEON_DATABASE_URL_DIRECT)"
 ( umask 077; : > "$CRED" )
 {
   echo "# Auto-generated by otchealth-claude-tools/setup/session-start.sh"
-  echo "# Secrets sourced from GCP Secret Manager via the claude-driver SA."
-  echo "# RING: NON-PHI ONLY. This SA must never touch a PHI project."
+  echo "# Secrets sourced from Azure Key Vault (${KEYVAULT}) via the fleet service principal."
+  echo "# RING: NON-PHI ONLY. This SP must never touch a PHI project."
   echo "OPENAI_API_KEY=${OPENAI_KEY}"
   echo "ELEVENLABS_API_KEY=${ELEVEN_KEY}"
-  echo "GOOGLE_CLOUD_PROJECT=${PROJECT}"
-  echo "GOOGLE_APPLICATION_CREDENTIALS=${SA_PATH}"
-  echo "VERTEX_DEFAULT_IMAGEN_MODEL=${VERTEX_DEFAULT_IMAGEN_MODEL:-imagen-4.0-generate-001}"
-  echo "VERTEX_DEFAULT_VIDEO_MODEL=${VERTEX_DEFAULT_VIDEO_MODEL:-veo-2.0-generate-001}"
-  echo "VERTEX_DEFAULT_LLM_MODEL=${VERTEX_DEFAULT_LLM_MODEL:-gemini-2.5-flash}"
   echo "RECRAFT_API_KEY=${RECRAFT_KEY}"
+  # GCP is retired; only emit the SA path/project if a key actually exists on disk
+  # (legacy Desktops). Otherwise these point at nothing and break JSON.parse downstream.
+  if [ -f "$SA_PATH" ]; then
+    echo "# (legacy GCP — key present on disk)"
+    echo "GOOGLE_CLOUD_PROJECT=${PROJECT}"
+    echo "GOOGLE_APPLICATION_CREDENTIALS=${SA_PATH}"
+    echo "VERTEX_DEFAULT_IMAGEN_MODEL=${VERTEX_DEFAULT_IMAGEN_MODEL:-imagen-4.0-generate-001}"
+    echo "VERTEX_DEFAULT_VIDEO_MODEL=${VERTEX_DEFAULT_VIDEO_MODEL:-veo-2.0-generate-001}"
+    echo "VERTEX_DEFAULT_LLM_MODEL=${VERTEX_DEFAULT_LLM_MODEL:-gemini-2.5-flash}"
+  fi
   echo "# Azure (optional; blank until provisioned + secrets added to the vault)"
   echo "AZURE_OPENAI_ENDPOINT=${AZ_OAI_ENDPOINT}"
   echo "AZURE_OPENAI_API_KEY=${AZ_OAI_KEY}"
@@ -315,6 +382,7 @@ FOURVAULT_NEON_DIRECT_V="$(get_key FOURVAULT_NEON_DATABASE_URL_DIRECT)"
   echo "AZURE_SP_CLIENT_SECRET=${AZ_SP_CLIENT_SECRET}"
   echo "AZURE_SP_TENANT_ID=${AZ_SP_TENANT_ID}"
   echo "AZURE_SUBSCRIPTION_ID=${AZ_SUBSCRIPTION_ID}"
+  echo "AZURE_KEYVAULT_NAME=${KEYVAULT}"
 } > "$CRED"
 
 # ─── Append platform/service tokens that are actually provisioned ───
@@ -355,7 +423,8 @@ if command -v claude >/dev/null 2>&1; then
   MCP_LIST="$(claude mcp list 2>/dev/null || true)"
   if ! printf '%s' "$MCP_LIST" | grep -q "context7"; then
     C7TMP="$(mktemp)"
-    if node "${TOOLS_DIR}/setup/get-secret.mjs" context7-api-key "$C7TMP" >/dev/null 2>&1 && [ -s "$C7TMP" ]; then
+    if { AZURE_KEYVAULT_NAME="$KEYVAULT" node "${TOOLS_DIR}/setup/get-secret-azure.mjs" context7-api-key "$C7TMP" >/dev/null 2>&1 \
+         || node "${TOOLS_DIR}/setup/get-secret.mjs" context7-api-key "$C7TMP" >/dev/null 2>&1; } && [ -s "$C7TMP" ]; then
       claude mcp add --transport http --scope user context7 https://mcp.context7.com/mcp \
         --header "Authorization: Bearer $(cat "$C7TMP")" >/dev/null 2>&1 \
         && echo "[octools] MCP added: context7 (authenticated)" || echo "[octools] WARN: context7 MCP add failed."
@@ -396,6 +465,22 @@ for PROFILE in "${HOME}/.bashrc" "${HOME}/.profile"; do
   fi
 done
 
+# ─── Install the `octsync` helper: one word to catch a stale session up to origin/main ──────────────
+# repo-freshen won't touch a dirty branch, so a long-lived session goes stale. `octsync` is the manual,
+# work-preserving catch-up (stash -> fetch -> merge -> restore). Named octsync (NOT `sync`) so it never
+# shadows the coreutils `sync`. Idempotent per profile.
+for PROFILE in "${HOME}/.bashrc" "${HOME}/.profile"; do
+  [ -e "$PROFILE" ] || continue
+  if ! grep -qF 'octsync()' "$PROFILE"; then
+    {
+      echo ''
+      echo '# octools: octsync — catch this session'"'"'s repo up to origin/main without losing work (added by session-start.sh)'
+      echo 'octsync() { bash /tmp/octools/setup/sync.sh || echo "[octsync] toolkit not at /tmp/octools"; }'
+    } >> "$PROFILE"
+    echo "[octools] Wired octsync helper into $PROFILE."
+  fi
+done
+
 # Fleet rollout of the in-session live-sync hook: install the octools-sync UserPromptSubmit hook into
 # the user-scope ~/.claude/settings.json once. Because session-start runs in every app session (and is
 # itself live-synced from main), this propagates the live-pull to the whole fleet with NO per-app edits.
@@ -406,8 +491,32 @@ node "${TOOLS_DIR}/setup/install-octools-hook.mjs" 2>/dev/null || true
 # in-session thereafter. Together: the fleet stays on the same page off one source (main) without resets.
 node "${TOOLS_DIR}/setup/bulletin.mjs" since 2>/dev/null || true
 
+# Keep the agent's OWN app/web repo current with origin/main, SAFELY (fast-forward a pristine stale
+# branch; never touch a branch that has local commits - just warn). Belt-and-suspenders alongside the
+# SessionStart hook, so even the very first session in a fresh container starts on the latest base.
+[ -n "${CLAUDE_PROJECT_DIR:-}" ] && bash "${TOOLS_DIR}/setup/repo-freshen.sh" "${CLAUDE_PROJECT_DIR}" 2>/dev/null || true
+
+# Agent onboarding: auto-connect this agent's Claude Code session to the MCP gateway on its OWN
+# ring-scoped lane (clo->clo, cfo->cfo, ...). Fail-open + no-op for agents without a lane, non-Desktop
+# envs (no `claude` CLI), or a missing SA — never blocks session start.
+bash "${TOOLS_DIR}/skills/gateway-connect/session-connect.sh" 2>/dev/null || true
+
 echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"
+
+# ─── OTCHealth AI OS migration notice ────────────────────────────────
+# The Azure AI Foundry agent "otchealth-os" (project otchealth-os, gpt-5.4) is now the unified,
+# company-wide brain: every fleet ledger/data-room is being consolidated into its 13 Azure AI Search
+# indexes. Point new sessions at the reconciliation process so this session's knowledge lands in the
+# shared brain instead of staying siloed. Fail-open (best-effort only): never blocks session start.
+if [ -f "${TOOLS_DIR}/docs/OS-MIGRATION.md" ]; then
+  echo "───────────────────────────────────────────────────────────────────"
+  echo "[octools] OTCHealth AI OS is now the unified company brain (Foundry project otchealth-os, gpt-5.4)."
+  echo "[octools] To reconcile THIS session's knowledge into it, follow ${TOOLS_DIR}/docs/OS-MIGRATION.md"
+  echo "[octools]   (and runbooks/agent-gateway-connectivity.md once published) — the 8-step migration"
+  echo "[octools]   process for the global doc 'OTCHealth AI OS — Session Migration & Reconciliation Prompt'."
+  echo "───────────────────────────────────────────────────────────────────"
+fi
 
 # Always succeed: skills + agents are installed. Missing secrets are warned above,
 # not fatal — a session must be able to start without the GCP SA / Secret Manager.

@@ -29,6 +29,10 @@ node skills/kb-memory/mem.mjs decision "<decision + why>"  --agent cfo [...] [--
 node skills/kb-memory/mem.mjs correct  "<the CORRECT fact>" --agent cfo --was "<the wrong belief>" [--supersedes <id>] [--share]
 node skills/kb-memory/mem.mjs pitfall  "<recurring mistake + truth + rule>" --agent cfo [--share]
 node skills/kb-memory/mem.mjs status   "<what I'm working on / project status>" --agent cfo   # ALWAYS shared to the exec team
+node skills/kb-memory/mem.mjs entity set <key> "<value>"   --agent cfo [--source "..."] [--share]  # deterministic "what is X now" (latest wins per key)
+node skills/kb-memory/mem.mjs entity get <key>             --agent cfo            # the CURRENT value + provenance (resolves aliases)
+node skills/kb-memory/mem.mjs entity list                  --agent cfo            # all current-values + aliases
+node skills/kb-memory/mem.mjs entity alias "<phrasing>" <canonical-key> --agent cfo  # point many phrasings at one key
 node skills/kb-memory/mem.mjs recall   "<query>"           --agent cfo [--n 25]    # searches YOUR lane + the TEAM feed
 node skills/kb-memory/mem.mjs tail     --agent cfo [--n 40]     # YOUR pitfalls/recent + the TEAM feed (company-wide)
 node skills/kb-memory/mem.mjs team     [--n 60]                # the whole exec team feed: who is working on what
@@ -120,3 +124,31 @@ Indexes ONLY the shared exec feed (`_MEMORY/_exec/*`), never a private or clo-pe
 
 - `node skills/kb-memory/semantic.mjs reindex` - (re)build the `memory-exec` index (resumable; skips already-indexed). Run after a batch of new entries (or wire into the daily-digest job).
 - `node skills/kb-memory/semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall]` - vector + keyword (hybrid) recall across the whole exec team's memory.
+
+**Always fresh (Wave 2b):** a SHARED entry is embedded into `memory-exec` the INSTANT it is written
+(detached `index-one.mjs`), so semantic recall and the company-brain see it within the minute, not after
+the next reindex. **Per-prompt (Wave 2b follow-on):** when an agent's local keyword pack is THIN, `pack`
+auto-injects up to 3 ring-safe `RELATED (shared brain, by meaning)` hits from `memory-exec` using the
+server-side SEMANTIC RANKER + a READ-ONLY query key (`azure-search-query-key`; no admin/embedding key on
+the hot path). Thin-triggered + 60s-throttled + 2s-bounded + fail-open; `KB_SEM_DISABLE=1` turns it off.
+
+**Trust-ranked recall (semantic-trust wiring):** `semantic.mjs recall` annotates + re-orders hits by
+CROSS-AGENT corroboration via `skills/semantic-trust`. Memories several agents independently recorded rank
+`durable`/`corroborated` and float ahead of a single `unverified` assertion (each hit shows `trust: <status>
+t=<0..1>, N agents`). Corroboration-only (recall hits have no subject key, so no contradiction fabrication);
+additive + fail-open — recall still works, just unranked, if semantic-trust is unavailable.
+
+## Cross-lane read/write + wake reconciliation (exec team, 2026-07-04)
+The exec ledgers stay SEPARATE per agent, but every exec agent can READ and WRITE any exec ledger to pass
+information and suggest corrections. Cross-writes are APPEND-ONLY + ATTRIBUTED and never supersede the
+owner's entries — the owner reconciles them on wake. This doubles as the inter-agent comms channel.
+
+- Write on ANOTHER agent's ledger:  `mem.mjs remember "<note>" --agent cfo --on clo`
+  (writer = --agent; target ledger = --on; entry is tagged `by:cfo`; cannot delete/supersede clo's entries.)
+- WAKE FIRST DUTY (every session): take in your OWN ledger, THEN check what other agents left you:
+    `mem.mjs inbound --agent <you>`     # notes other agents wrote on your ledger since last reconcile
+    ...review + act on each (record your own decisions/corrections normally)...
+    `mem.mjs reconcile --agent <you>`   # ack: advances the marker (deletes nothing; history is kept)
+  `tail` and the per-prompt pack also surface a 📥 INBOUND banner automatically, so a fresh/compacted
+  session sees inbound cross-agent input immediately.
+- clo-personal is excluded from cross-lane writes/sharing (attorney privilege, unwaivable).
