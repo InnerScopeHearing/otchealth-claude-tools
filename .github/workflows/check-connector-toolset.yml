@@ -1,0 +1,15 @@
+name: check-connector-toolset
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder (reusable ad-hoc diagnostic workflow -- repurpose freely)
+        run: echo "ready for next diagnostic task"
