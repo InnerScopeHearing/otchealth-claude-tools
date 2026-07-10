@@ -1,0 +1,69 @@
+name: force-ocr-two-summaries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  force-ocr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch credentials from Key Vault
+        run: |
+          set -euo pipefail
+          ACCT=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-account --query value -o tsv)
+          KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-legal-storage-key --query value -o tsv)
+          DI_EP=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-docintel-endpoint --query value -o tsv)
+          DI_KEY=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name azure-docintel-key --query value -o tsv)
+
+          # Mask BEFORE these values ever land in GITHUB_ENV, so no later step's auto-printed
+          # "env:" block (or any accidental echo) can leak them in plaintext to the job log.
+          echo "::add-mask::${KEY}"
+          echo "::add-mask::${DI_KEY}"
+
+          {
+            echo "AZURE_LEGAL_STORAGE_ACCOUNT=${ACCT}"
+            echo "AZURE_LEGAL_STORAGE_KEY=${KEY}"
+            echo "AZURE_DOCINTEL_ENDPOINT=${DI_EP}"
+            echo "AZURE_DOCINTEL_KEY=${DI_KEY}"
+          } >> "$GITHUB_ENV"
+
+      - name: Run targeted OCR force-fix (2 files only)
+        run: |
+          set -euo pipefail
+          node scripts/force-ocr-specific-files.mjs \
+            --container personal \
+            --path "clo-outgoing/Divorce Case Summary and ALL Filings/Summary of All Divorce Documents as of 7.6.26.pdf" \
+            --path "clo-outgoing/Divorce Case Summary and ALL Filings/Summary of All Divorce Hearings as of 7.6.26.pdf" \
+            2>&1 | tee /tmp/force-ocr-output.log
+
+      - name: Save output as diagnostic artifact
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p diagnostics
+          cp /tmp/force-ocr-output.log diagnostics/force-ocr-two-summaries.log 2>/dev/null || echo "(no log captured)" > diagnostics/force-ocr-two-summaries.log
+          git config user.name "cto-diagnostic-bot"
+          git config user.email "cto-bot@otchealth.app"
+          git checkout -B diag-connector-toolset-latest
+          git add -f diagnostics/force-ocr-two-summaries.log
+          git commit -m "Diagnostic: force-OCR output for the 2 garbled divorce summary PDFs" || echo "nothing to commit"
+          git push origin diag-connector-toolset-latest --force

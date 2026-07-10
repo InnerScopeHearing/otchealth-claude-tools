@@ -1,0 +1,85 @@
+name: diag-set-env-error
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main explicitly
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run the exact failing command and capture FULL verbatim stdout+stderr
+        run: |
+          # Deliberately DO NOT use `set -e` here: we must let the az command
+          # fail and still capture its output + exit code. No exit 0 masking.
+          set +e
+          az containerapp update -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --set-env-vars "GRAPH_DRIVE_USER=matthew@innd.com" \
+            > /tmp/az_stdout.txt 2> /tmp/az_stderr.txt
+          echo $? > /tmp/az_exit.txt
+          echo "captured az exit code: $(cat /tmp/az_exit.txt)"
+
+      - name: Write verbatim capture to a committed file and push to a NEW unprotected branch
+        run: |
+          set -euo pipefail
+          BR="diag/set-env-error"
+          OUT="diagnostics/set-env-error.md"
+          mkdir -p diagnostics
+          {
+            echo "# az containerapp update --set-env-vars diagnostic"
+            echo ""
+            echo "Run: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "Exact command:"
+            echo '```'
+            echo "az containerapp update -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --set-env-vars \"GRAPH_DRIVE_USER=matthew@innd.com\""
+            echo '```'
+            echo ""
+            echo "## Exit code"
+            echo '```'
+            cat /tmp/az_exit.txt
+            echo '```'
+            echo ""
+            echo "## STDERR (verbatim, full)"
+            echo '```'
+            cat /tmp/az_stderr.txt
+            echo '```'
+            echo ""
+            echo "## STDOUT (verbatim, full)"
+            echo '```'
+            cat /tmp/az_stdout.txt
+            echo '```'
+            echo ""
+            echo "## az version"
+            echo '```'
+            az version -o json 2>&1 || true
+            echo '```'
+          } > "$OUT"
+
+          echo "===== FILE CONTENTS (also echoed to log) ====="
+          cat "$OUT"
+          echo "===== END FILE CONTENTS ====="
+
+          git config user.name "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+          git switch -c "$BR"
+          git add "$OUT"
+          git commit -m "diag: capture az set-env-vars verbatim error"
+          git push origin "HEAD:$BR"
+          echo "pushed to $BR"

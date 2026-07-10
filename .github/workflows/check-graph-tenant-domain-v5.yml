@@ -1,0 +1,75 @@
+name: check-graph-tenant-domain-v5
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run checks and write results to a file
+        run: |
+          set +e
+          OUT=diagnostics/graph-tenant-check.md
+          mkdir -p diagnostics
+          {
+            echo "# Graph tenant/domain check ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            echo ""
+            TID=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-tenant-id --query value -o tsv 2>/tmp/err1)
+            if [ -z "$TID" ]; then
+              echo "graph-tenant-id secret: NOT FOUND. Error: $(cat /tmp/err1 2>/dev/null | head -c 300)"
+            else
+              echo "graph-tenant-id secret: found (value withheld)"
+              echo ""
+              echo "## Issuer"
+              ISSUER_RAW=$(curl -s "https://login.microsoftonline.com/${TID}/v2.0/.well-known/openid-configuration" 2>/tmp/err2)
+              echo "raw response (first 300 chars): $(echo \"$ISSUER_RAW\" | head -c 300)"
+              echo ""
+              echo "## Candidate domain resolution"
+              for DOMAIN in innd.com otchealth.app otchealthmart.com; do
+                RESULT=$(curl -s "https://login.microsoftonline.com/common/GetUserRealm.srf?login=test@${DOMAIN}&xml=1" 2>/tmp/err3)
+                echo "- $DOMAIN raw: $(echo \"$RESULT\" | head -c 200)"
+              done
+            fi
+            echo ""
+            DU=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-drive-user --query value -o tsv 2>/tmp/err4)
+            if [ -z "$DU" ]; then
+              echo "graph-drive-user secret: DOES NOT EXIST or empty. Error: $(cat /tmp/err4 2>/dev/null | head -c 300)"
+            else
+              echo "graph-drive-user secret: EXISTS, length ${#DU}"
+            fi
+          } > "$OUT" 2>&1
+
+          cat "$OUT"
+
+          git config user.name "otchealth-fleet-bot"
+          git config user.email "noreply@otchealth.app"
+          git add "$OUT"
+          git commit -m "chore: graph tenant/domain check results v5"
+          for i in 1 2 3 4 5; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin HEAD:main; then
+              echo "PUSH_OK"
+              exit 0
+            fi
+            echo "push attempt $i failed, retrying in 5s"
+            sleep 5
+          done
+          echo "PUSH_FAILED_AFTER_RETRIES"
+          exit 1

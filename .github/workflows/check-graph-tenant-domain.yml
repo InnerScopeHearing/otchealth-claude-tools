@@ -1,0 +1,54 @@
+name: check-graph-tenant-domain
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch GRAPH_TENANT_ID from Key Vault into a masked variable, never printed
+        id: fetch
+        run: |
+          set -euo pipefail
+          TID=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-tenant-id --query value -o tsv 2>&1) || TID="NOTFOUND"
+          echo "::add-mask::$TID"
+          echo "$TID" > /tmp/tid.txt
+
+      - name: Resolve tenant domain names via the public OIDC discovery endpoint, never exposes the tenant ID
+        run: |
+          set -euo pipefail
+          TID=$(cat /tmp/tid.txt)
+          if [ "$TID" = "NOTFOUND" ]; then
+            echo "graph-tenant-id secret not found in Key Vault under that name."
+            exit 0
+          fi
+          curl -s "https://login.microsoftonline.com/${TID}/v2.0/.well-known/openid-configuration" | python3 -c "import json,sys; d=json.load(sys.stdin); print('issuer:', d.get('issuer','?'))"
+          echo ""
+          for DOMAIN in innd.com otchealth.app otchealthmart.com; do
+            RESULT=$(curl -s "https://login.microsoftonline.com/common/GetUserRealm.srf?login=test@${DOMAIN}&xml=1")
+            NS=$(echo "$RESULT" | grep -oP '(?<=<NameSpaceType>)[^<]+' || echo "?")
+            echo "$DOMAIN -> NameSpaceType: $NS"
+          done
+
+      - name: Check GRAPH_DRIVE_USER current value, masked
+        run: |
+          set -euo pipefail
+          DU=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name graph-drive-user --query value -o tsv 2>&1) || DU="NOTSET"
+          if [ "$DU" = "NOTSET" ]; then
+            echo "graph-drive-user secret does not exist in Key Vault yet."
+          else
+            echo "::add-mask::$DU"
+            echo "graph-drive-user secret EXISTS, length: ${#DU}"
+          fi

@@ -1,0 +1,34 @@
+name: set-graph-drive-user-v2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  set:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set GRAPH_DRIVE_USER as a plain literal env value (additive - only this one key)
+        run: |
+          set -euo pipefail
+          az containerapp update -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --set-env-vars "GRAPH_DRIVE_USER=matthew@innd.com"
+
+      - name: Verify the new env var, and that OAUTH_CLIENTS is untouched (regression check)
+        run: |
+          set -euo pipefail
+          sleep 15
+          echo "--- GRAPH_DRIVE_USER entry ---"
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query "properties.template.containers[0].env[?name=='GRAPH_DRIVE_USER']" -o json
+          echo "--- OAUTH_CLIENTS entry (must still be secretref) ---"
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS']" -o json
