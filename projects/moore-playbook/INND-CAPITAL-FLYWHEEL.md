@@ -42,6 +42,17 @@ Each rung serves a different investor pool and timeline. The fleet's `raise-ops`
 already frames this; below is the regulatory reality each rung must satisfy, with our intended
 use. **Counsel selects, structures, and runs every one.**
 
+**⚠️ Sequencing risk added 2026-07-10:** a standalone review found INND currently has an
+actively converting dilutive note outstanding (mechanism + severity in
+`INNERSCOPE-STANDALONE-PROFILE.md` §3). Raising new capital on ANY rung while that note is
+still converting means new investors are buying into a share count that is a moving target —
+their real ownership percentage keeps shrinking after they invest, for reasons unrelated to
+company performance. This is a real disclosure problem (any raise materials need to describe
+the note's dilutive effect prominently) and a real deal-quality problem (sophisticated
+investors will price this in or walk). **Recommend counsel weigh whether the note needs to be
+addressed — retired, converted in full, or explicitly disclosed and priced around — before or
+alongside any Rung 1-3 raise, not after.**
+
 ### Rung 1 — Reg D 506(c) · accredited, fastest cash (the live lever)
 - Accredited investors **only**; **general solicitation permitted**; **no dollar cap**.
 - Issuer must take **"reasonable steps to verify"** accredited status (self-certification NOT
@@ -103,6 +114,18 @@ non-binding materials flagged "ATTORNEY REVIEW REQUIRED."
   **2024-08-22** (public record). Any *future* reverse split is a separate board/counsel action;
   whether/when/ratio are **not decided here**.
 
+**⚠️ Why a reverse split alone will not fix the current dilution problem (added 2026-07-10):**
+this section already noted a reverse split "does not cure underlying business issues; prices
+can drift back" — that general caution is now a specific, live fact pattern. A standalone review
+found that since the 2024-08-22 split above, the share count has grown substantially through an
+actively converting dilutive note (mechanism in `INNERSCOPE-STANDALONE-PROFILE.md` §3). **A
+reverse split resets the visible share price and count, but does nothing to the note itself —
+if the note is still outstanding and convertible after a new split, the same dilution mechanism
+will simply resume and the count will balloon again.** This is a well-known failure mode for
+reverse splits used by companies with active toxic/death-spiral financing, and counsel should
+weigh whether the note needs to be resolved BEFORE any future split is even worth pursuing,
+rather than treating the split as a fix on its own.
+
 **COUNSEL GATE (§3):** board + counsel decide whether, when, and at what ratio; counsel + the
 transfer agent run the 6490 process. COO does not initiate.
 
@@ -111,6 +134,28 @@ transfer agent run the 6490 process. COO does not initiate.
 ## 4. The roll-up thesis (the Launch Platform compounding lever)
 **The idea:** use INND as the public vehicle to acquire complementary hearing / senior-health /
 adjacent brands, paying in **stock** rather than cash, and compound enterprise value.
+
+**⚠️ Precondition added 2026-07-10 — read before anything else in this section.** This entire
+thesis depends on INND's stock being a reasonably stable, negotiable unit of value. A
+standalone review found it currently is not: an actively converting dilutive note is expanding
+the share count on an ongoing, accelerating basis, unrelated to deal activity (full mechanism in
+`INNERSCOPE-STANDALONE-PROFILE.md` §3). Two consequences for this section specifically:
+- **Path (a) below (stock-for-stock, S-4) is effectively not usable today.** A registered
+  stock-for-stock merger requires a defensible, stable valuation of the acquirer's own stock at
+  signing that still holds by closing (3-5 months out). That's not achievable while the note is
+  actively converting — any seller's counsel would flag it immediately, and the S-4's own
+  disclosure would have to describe the dilution risk prominently, undermining the deal's own
+  pitch to the target's shareholders.
+- **Path (b) (exempt issuance under Reg D 506) is somewhat more workable but still exposed** —
+  target shareholders receiving restricted stock are exposed to the same ongoing dilution during
+  their Rule 144 hold period, which is exactly the kind of thing a well-advised seller prices in
+  via a bigger share count, a ratchet/anti-dilution provision, or simply declining stock
+  consideration.
+- **Until the note is resolved (retired, converted in full, or otherwise stopped), treat this
+  roll-up thesis as cash/earnout-consideration-only, or as a target-state plan to revisit once
+  the precondition clears — not as something to structure a real deal around.** This does not
+  invalidate the underlying multiple-arbitrage logic below, which remains sound in principle; it
+  invalidates using INND stock as the funding mechanism specifically, right now.
 
 - **Stock as currency — two paths:** (a) **registered** stock-for-stock merger via **Form S-4**
   (combines registration + proxy/prospectus; needs audited target financials + pro formas;
@@ -129,9 +174,12 @@ adjacent brands, paying in **stock** rather than cash, and compound enterprise v
 - **Risks to design around (all counsel/CFO territory):** SEC disclosure on material
   acquisitions (Rule 3-05 audited target financials on an 8-K within 75 days above significance
   thresholds); integration underperformance; **goodwill impairment** (ASC 350) if targets miss;
-  a **dilution spiral** if stock-funded deals don't earn out and the price falls; and
-  **OTC-specific** limits — thin liquidity makes stock a weaker currency and draws heightened
-  SEC scrutiny, so **uplisting materially improves the roll-up dynamic.**
+  a **dilution spiral** if stock-funded deals don't earn out and the price falls — **this is no
+  longer a hypothetical risk to design around, it is a live, active condition today** (see the
+  precondition note above); and **OTC-specific** limits — thin liquidity makes stock a weaker
+  currency and draws heightened SEC scrutiny, so **uplisting materially improves the roll-up
+  dynamic — but only after the note-driven dilution is addressed, since an uplisting attempt
+  itself would face the same share-count-instability problem.**
 
 **COUNSEL GATE (§4):** no target outreach, LOI, valuation, or share issuance without Matt +
 counsel + CFO. The fleet may only build a non-binding target-landscape/screen.
@@ -163,8 +211,13 @@ investor/IR/INND content.
 Aligns with the Moore Playbook Phase 3 (Weeks 13–18) "turn on the flywheel," but **none of this
 fires until the gates clear**:
 1. **Engage barred securities counsel** for: the capital chain, the live Reg D, pending-
-   litigation disclosure, and a go-forward disclosure-controls calendar. *(PRIORITIES #7 — open,
-   Matt-only.)*
+   litigation disclosure, a go-forward disclosure-controls calendar, **and the dilutive-note
+   question below.** *(PRIORITIES #7 — open, Matt-only.)*
+1b. **NEW 2026-07-10 — resolve or explicitly price around the actively converting dilutive
+   note** before treating Rung 1-3 or the roll-up thesis as actionable. Options for counsel/CFO
+   to weigh: negotiate a retirement/payoff, negotiate a conversion-in-full at a fixed price,
+   or proceed only with cash/earnout-based structures until it's resolved. See
+   `INNERSCOPE-STANDALONE-PROFILE.md` §3 and §5 for the mechanism and full precondition list.
 2. **Rotate the GCP SA + PostHog keys** — HARD GATE: blocks **any** investor/public action until
    done. *(Open.)*
 3. **Reg D 506(c):** counsel finalizes structure + the **accredited-verification method** + Rule
@@ -184,8 +237,11 @@ fires until the gates clear**:
 ---
 
 ## 7. Open decisions — Matt / counsel
+- **NEW 2026-07-10 — the dilutive note:** retire it, negotiate a full conversion, or proceed
+  cash/earnout-only until it's resolved? This gates nearly everything else in this document.
 - Engage which securities counsel, and when? (the master unlock)
-- Confirm the **reverse split** go / timing / ratio, and whether it precedes an uplisting goal.
+- Confirm the **reverse split** go / timing / ratio, and whether it precedes an uplisting goal —
+  **and confirm the note is resolved first, or the split will not hold** (§3).
 - Which capital rungs run in **parallel** vs sequence (506(c) now + WeFunder prep)?
 - Audited-financials readiness (gates Reg CF tiers, Reg A+ Tier 2, and S-4 roll-up deals) — CFO + counsel.
 - Roll-up appetite: pursue a stock-funded acquisition program at all, and within what risk box?

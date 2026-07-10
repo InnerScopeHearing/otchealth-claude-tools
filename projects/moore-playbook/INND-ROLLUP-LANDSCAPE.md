@@ -31,12 +31,20 @@ senior-health businesses, pay primarily in **stock**, and compound enterprise va
 **multiple arbitrage** (buy private revenue cheap, re-rate it at the public multiple) — pairing
 with the Playbook's subscription-mix re-rating lever.
 
-**The honest constraint up front:** at ~$0 cash and a thinly-traded sub-penny OTC stock, our
-acquisition *currency is weak today.* So the realistic near-term landscape is **small, cheap,
-high-strategic-value, low-integration assets** (consumables, a screening/tinnitus app, distressed
-IP). The bigger adjacency plays (telehealth, PERS, Rx-savings) are **post-uplisting / post-
-capital** — which is exactly why the reverse-split + capital sequence in the flywheel doc come
-first. **Uplisting + a healthier multiple is what makes serious roll-up possible.**
+**The honest constraint up front, sharpened 2026-07-10:** at ~$0 cash, a thinly-traded sub-penny
+OTC stock, AND an actively converting dilutive note (`INNERSCOPE-STANDALONE-PROFILE.md` §3), our
+acquisition currency isn't just *weak today* — the stock leg specifically is **currently
+unusable as deal consideration**, not merely unattractive. That changes the realistic near-term
+landscape more than a "weak currency" framing implies: it's not "small deals funded with a
+little stock instead of a lot," it's "near-term work should assume **no stock consideration is
+available** until the note is resolved." So the realistic near-term landscape is **small, cheap,
+high-strategic-value, low-integration assets** pursued via cash (however small), partnership, or
+option/earnout structures — not small-stock deals. The bigger adjacency plays (telehealth, PERS,
+Rx-savings) are **post-uplisting / post-capital / post-note-resolution** — which is exactly why
+the reverse-split + capital sequence in the flywheel doc come first, and why that doc now flags
+the note as a precondition to the reverse split itself, not just to the roll-up. **Resolving the
+note + uplisting + a healthier multiple together are what make serious stock-funded roll-up
+possible — none of the three alone gets there.**
 
 ---
 
@@ -50,7 +58,7 @@ high here:
 | 2 | **Gross-margin quality** | 50%+ (SaaS/membership) funds itself; 35–45% hardware needs scale to move the needle. |
 | 3 | **Senior / hearing customer overlap** | Overlap = cross-sell density + shared marketing; unrelated bases add cost, not synergy. |
 | 4 | **Profitability / cash burn** | A burning target consumes our working capital or forces dilution. Prefer breakeven+. |
-| 5 | **Seller willingness to take stock** | Our currency is illiquid OTC stock — need motivated/strategic sellers (succession, platform thesis). |
+| 5 | **Seller willingness to take stock** | Our currency is illiquid OTC stock **currently subject to active, ongoing dilution** (see §1) — as of 2026-07-10 this criterion should be scored as effectively unscoreable/disqualifying for any real deal until the note is resolved, not just "need a motivated seller." A well-advised seller will refuse stock, demand a ratchet/floor, or price the risk into a much larger share count than the headline multiple suggests. |
 | 6 | **Clean cap table + auditable books** | Rule 3-05 may require audited target financials on an 8-K within 75 days; messy books = delay/restatement risk. |
 | 7 | **Integration complexity** | Owner-operated DTC/app = fast; multi-site licensed clinical ops = slow, clinician-dependent. |
 | 8 | **Regulatory / compliance load** | Medicare/HIPAA (clinics) or FTC/FDA (DTC) — inherited liability risk; prefer clean histories. |
@@ -135,6 +143,12 @@ dealflow-os, Hearing Review, SEC/issuer filings — full URLs in the subagent re
 ---
 
 ## 5. The multiple-arbitrage model (illustrative round numbers — NOT INND's)
+**⚠️ Precondition added 2026-07-10:** every step below assumes "PublicCo" has a stable,
+negotiable share price and count at the moment of the deal. That assumption currently doesn't
+hold for INND (see §1). The model itself is still correct as a teaching tool for *how* multiple
+arbitrage works — treat it as illustrative-only until the note is resolved; do not use these
+mechanics to size or justify a real deal in the meantime.
+
 **Setup:** "PublicCo" trades at **5× revenue** on $4M rev (≈$20M illustrative EV). It buys
 "PrivateCo" ($2M rev, no recurring) at the private comp of **2.5× rev = $5M.**
 
@@ -154,19 +168,27 @@ for uplisting/reverse-split first).
 ---
 
 ## 6. Prioritization (how to think about sequence — not a commitment)
-- **Tier 1 — realistic near-term (cheap, high-fit, low-integration, cash/small-stock):**
-  consumables/private-label (A2) + a screening or tinnitus app (A3) + opportunistic distressed IP
-  as the category resurfaces (the Nuheara-style asset previously cited here was sold to a third
-  party in March 2025 and is no longer available — watch for the next distressed hearables/OTC
-  IP situation rather than treating that specific name as current). These directly feed our
-  existing LTV + funnel levers and don't need a strong currency.
-- **Tier 2 — after first capital / early uplift:** tele-audiology / aural-rehab (A4, ties to
-  AWARE) + a small DTC OTC brand (A1) for customer base.
-- **Tier 3 — post-uplisting, real currency:** the senior-health adjacencies (B1–B5) — telehealth,
-  SaveRx-style Rx savings, PERS/RPM — the platform-expanding, capital-intensive plays.
+- **Tier 1 — realistic near-term (cheap, high-fit, low-integration, cash-or-nothing, NOT
+  stock — revised 2026-07-10):** consumables/private-label (A2) + a screening or tinnitus app
+  (A3) + opportunistic distressed IP as the category resurfaces (the Nuheara-style asset
+  previously cited here was sold to a third party in March 2025 and is no longer available —
+  watch for the next distressed hearables/OTC IP situation rather than treating that specific
+  name as current). These directly feed our existing LTV + funnel levers and don't need a strong
+  currency — but "don't need a strong currency" now specifically means **cash, however small, or
+  a partnership/option structure, not a little bit of stock.** Any stock component reintroduces
+  the §1 dilution problem at any size.
+- **Tier 2 — after first capital / early uplift AND note resolution:** tele-audiology /
+  aural-rehab (A4, ties to AWARE) + a small DTC OTC brand (A1) for customer base. This tier was
+  already gated on "after first capital" — it is now also gated on the note being resolved,
+  since it's the first tier where stock consideration was assumed to become viable.
+- **Tier 3 — post-uplisting, post-note-resolution, real currency:** the senior-health
+  adjacencies (B1–B5) — telehealth, SaveRx-style Rx savings, PERS/RPM — the platform-expanding,
+  capital-intensive plays. Furthest out; most dependent on the preconditions in
+  `INNERSCOPE-STANDALONE-PROFILE.md` §5 actually clearing.
 - **Generally partner-or-build, not acquire (near term):** GoodRx/SingleCare-style Rx savings and
   PERS monitoring are often better as **partnerships/white-label** than acquisitions for a
-  capital-light operator.
+  capital-light operator — this logic is now more attractive across the board, not just for
+  these two categories, given stock isn't available as a fallback currency.
 
 ---
 
@@ -174,16 +196,25 @@ for uplisting/reverse-split first).
 - **Illiquid stock = weak currency** (thin volume; sellers demand more shares for liquidity risk).
 - **Rule 3-05 disclosure burden** (audited target financials on an 8-K; small targets rarely have them).
 - **Goodwill impairment** (ASC 350) if an acquisition underperforms — can wipe out quarters of EPS.
-- **Dilution spiral** — stock-funded deals that don't earn out depress price → each next deal needs more shares.
+- **Dilution spiral — UPGRADED 2026-07-10 from a hypothetical design risk to a live, active
+  condition.** This section originally framed this as something that happens "if stock-funded
+  deals don't earn out" — a future risk to manage. A standalone review found an actively
+  converting dilutive note is expanding INND's share count right now, independent of any deal
+  activity. Any roll-up work done before this resolves isn't managing a risk, it's building on
+  top of one already in progress. See `INNERSCOPE-STANDALONE-PROFILE.md` §3.
 - **Integration risk** — in hearing, loyalty follows the clinician, not the brand; simultaneous integrations on a thin team degrade quality everywhere.
 
 ---
 
 ## 8. Prepare-and-flag next steps (NO outreach)
+0. **NEW, added 2026-07-10, comes before everything below:** resolve or explicitly price around
+   the actively converting dilutive note (`INNERSCOPE-STANDALONE-PROFILE.md` §3, §5). Every step
+   after this one assumes stock-funded deals are eventually usable again — none of them are
+   ready to act on until this clears.
 1. **Decision for Matt:** is a stock-funded roll-up a path we want at all, and in what risk box?
 2. If yes, **gate to counsel + CFO**: deal structures (S-4 vs 506 exempt), disclosure plan, audited-financials readiness.
-3. **Sequence behind the capital flywheel:** uplisting/reverse-split + a healthier multiple materially improve currency before any aggressive roll-up.
-4. **On Matt's explicit go (and only then):** I can build a *deeper scored shortlist* of Tier-1 candidates against the §2 scorecard — still research-only, still no contact. Outreach is a Matt + counsel action, never the fleet's.
+3. **Sequence behind the capital flywheel:** uplisting/reverse-split + a healthier multiple materially improve currency before any aggressive roll-up — and the reverse split itself now depends on the note being resolved first (see the flywheel doc §3).
+4. **On Matt's explicit go (and only then):** I can build a *deeper scored shortlist* of Tier-1 candidates against the §2 scorecard, scoped to cash/partnership structures only given step 0 — still research-only, still no contact. Outreach is a Matt + counsel action, never the fleet's.
 
 ---
 ## 9. Freshness spot-check (2026-07-10)
