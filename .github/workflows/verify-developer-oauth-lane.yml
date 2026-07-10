@@ -1,0 +1,73 @@
+name: verify-developer-oauth-lane
+
+# Read-only follow-up after provision-developer-oauth-lane.yml (run 28806975346) completed steps 1-6
+# (Azure login, read-current, merge, apply to gateway, write Key Vault secrets) but FAILED at step 7
+# (token mint verification), which skipped step 8 (regression check). This workflow does NOT write
+# anything — it only reads the already-written Key Vault secrets and the live OAUTH_CLIENTS state to
+# determine (a) does the already-provisioned developer client actually work, and (b) are all
+# pre-existing lanes still intact.
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Read developer lane creds already written to Key Vault
+        id: creds
+        run: |
+          set -euo pipefail
+          DEV_CLIENT_ID=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name oauth-lane-developer-id --query value -o tsv)
+          DEV_SECRET=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name oauth-lane-developer-secret --query value -o tsv)
+          echo "::add-mask::$DEV_SECRET"
+          echo "$DEV_CLIENT_ID" > dev_client_id.txt
+          echo "$DEV_SECRET" > dev_secret.txt
+          echo "Read developer client_id: $DEV_CLIENT_ID (secret masked)"
+
+      - name: Attempt token mint for developer lane (with retry, in case of revision propagation delay)
+        run: |
+          set -euo pipefail
+          CID=$(cat dev_client_id.txt)
+          SEC=$(cat dev_secret.txt)
+          for i in 1 2 3 4 5 6; do
+            RESP=$(curl -s -X POST https://mcp.otchealth.app/oauth/token \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              -d "grant_type=client_credentials&client_id=${CID}&client_secret=${SEC}")
+            HAS_TOKEN=$(echo "$RESP" | jq -e '.access_token != null' 2>/dev/null || echo "false")
+            if [ "$HAS_TOKEN" = "true" ]; then
+              echo "SUCCESS on attempt $i: developer lane token mint works."
+              exit 0
+            fi
+            echo "Attempt $i failed. Response (access_token stripped): $(echo "$RESP" | jq 'del(.access_token)' 2>/dev/null || echo "$RESP")"
+            sleep 15
+          done
+          echo "FATAL: developer lane token mint failed after 6 attempts (90s total). This is a REAL, unresolved failure, not a timing issue."
+          exit 1
+
+      - name: Regression check — current OAUTH_CLIENTS structure and known lanes
+        if: always()
+        run: |
+          set -euo pipefail
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS'].value | [0]" \
+            -o tsv > current.json
+          echo "Total entries now: $(jq 'length' current.json)"
+          echo "All agent lanes present (client secrets never logged):"
+          jq '[.[] | {client_id, agent}]' current.json
+          echo "Developer entries found:"
+          jq '[.[] | select(.agent == "developer")]| map({client_id, agent})' current.json
+          DEV_COUNT=$(jq '[.[] | select(.agent == "developer")] | length' current.json)
+          if [ "$DEV_COUNT" -ne "1" ]; then
+            echo "WARNING: expected exactly 1 developer entry, found $DEV_COUNT — check for a duplicate from a prior partial run."
+          fi

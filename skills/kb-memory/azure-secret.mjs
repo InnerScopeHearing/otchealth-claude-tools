@@ -20,15 +20,29 @@
 //
 // Key Vault secret NAMES are a 1:1 mirror of the old GCP Secret Manager ids, so callers pass the
 // exact same id (e.g. 'azure-legal-storage-key') they used with the GCP sm() helper.
+//
+// FIX (2026-07-08, RBAC-masking bug class): the old kvSecret() minted ONE token via vaultToken()
+// (identity-first, SP-fallback-only-if-no-token-minted) and used it for the actual secret GET. This
+// meant an identity that COULD mint a token but had NO RBAC role on the vault (a real, recurring
+// operational mistake — happened on 4 live jobs: xero-health, xero-run, token-keeper,
+// docintel-ocr-sweep) got a 403 on the real GET, which kvSecret() swallowed identically to "vault
+// unreachable" or "secret doesn't exist" — and the perfectly-working SP fallback was NEVER TRIED,
+// because a token HAD been minted (just an unauthorized one). kvSecret() now tries BOTH auth paths
+// per call, in order, but ONLY escalates to the next path on an auth-shaped failure (401/403) from
+// the actual secret GET — not on 404 (wrong secret name) or 5xx (vault genuinely down), where
+// retrying via a different identity would silently mask a real, different bug instead of fixing
+// this one. Whenever the SP path is what actually worked, it logs a loud warning so RBAC drift on
+// the identity is visible in logs/alerts immediately, not discovered months later.
 
-let _tok = null;
-let _exp = 0;
-let _authMode = null; // "identity" | "sp" | null — set on first successful mint, for diagnostics only
+let _identityTok = null, _identityExp = 0;
+let _spTok = null, _spExp = 0;
 
 /** Container Apps managed-identity token, via the platform-injected sidecar endpoint. Returns null
  *  (never throws) if the container has no identity attached (IDENTITY_ENDPOINT unset) or the call
  *  fails for any reason — callers fall through to the SP path. */
 async function identityToken() {
+  const now = Date.now();
+  if (_identityTok && _identityExp - now > 60_000) return _identityTok;
   const endpoint = process.env.IDENTITY_ENDPOINT;
   const header = process.env.IDENTITY_HEADER;
   if (!endpoint || !header) return null;
@@ -39,13 +53,18 @@ async function identityToken() {
     });
     if (!r.ok) return null;
     const j = await r.json();
-    return j.access_token || null;
+    if (!j.access_token) return null;
+    _identityTok = j.access_token;
+    _identityExp = now + 3600_000;
+    return _identityTok;
   } catch {
     return null;
   }
 }
 
 async function spToken() {
+  const now = Date.now();
+  if (_spTok && _spExp - now > 60_000) return _spTok;
   const tenant = process.env.AZURE_SP_TENANT_ID;
   const cid = process.env.AZURE_SP_CLIENT_ID;
   const csec = process.env.AZURE_SP_CLIENT_SECRET;
@@ -57,59 +76,86 @@ async function spToken() {
       body: new URLSearchParams({ grant_type: "client_credentials", client_id: cid, client_secret: csec, scope: "https://vault.azure.net/.default" }),
     });
     const j = await r.json();
-    return j.access_token || null;
+    if (!j.access_token) return null;
+    _spTok = j.access_token;
+    _spExp = now + 3600_000;
+    return _spTok;
   } catch {
     return null;
   }
 }
 
-async function vaultToken() {
-  const now = Date.now();
-  if (_tok && _exp - now > 60_000) return _tok; // reuse a still-valid token across calls in this process
-  let tok = await identityToken();
-  let mode = "identity";
-  if (!tok) { tok = await spToken(); mode = "sp"; }
-  if (!tok) return null;
-  _tok = tok; _authMode = mode;
-  _exp = now + 3600_000; // conservative fixed TTL; both paths' real tokens outlive this, and re-minting early is cheap and safe
-  return _tok;
-}
-
-/** For diagnostics/logging only — which path actually authenticated last (or null if never minted). */
+// For diagnostics/logging only — which path actually authenticated successfully last (or null if
+// never minted). Kept for backward compatibility with any caller importing this.
+let _authMode = null;
 export function authMode() { return _authMode; }
 
-/** Write/overwrite a secret in Key Vault (SP needs "Key Vault Secrets Officer"). Returns true on
- *  success, false otherwise. Never throws. This is the Azure replacement for the retired GCP
- *  Secret Manager addVersion() path used by OAuth token-rotation persistence (Xero/Gmail/OneDrive/QBO). */
+/** Write/overwrite a secret in Key Vault (whichever identity is used needs "Key Vault Secrets
+ *  Officer"). Returns true on success, false otherwise. Never throws. This is the Azure replacement
+ *  for the retired GCP Secret Manager addVersion() path used by OAuth token-rotation persistence
+ *  (Xero/Gmail/OneDrive/QBO). Tries identity first, falls back to SP on an auth-shaped failure only
+ *  — same policy as kvSecret() below, for the same reason. */
 export async function kvSecretSet(name, value) {
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
-  const tok = await vaultToken();
-  if (!tok) return false;
-  try {
-    const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, {
-      method: "PUT",
-      headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ value: String(value) }),
-    });
-    return r.ok;
-  } catch {
-    return false;
+  const attempts = [];
+  for (const mode of ["identity", "sp"]) {
+    const tok = mode === "identity" ? await identityToken() : await spToken();
+    if (!tok) { attempts.push(`${mode}:no-token`); continue; }
+    try {
+      const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ value: String(value) }),
+      });
+      if (r.ok) {
+        _authMode = mode;
+        if (mode === "sp") {
+          console.warn(`[kv-secret] WARN: fell back to SP to WRITE "${name}" — identity token was rejected (missing Key Vault Secrets Officer on the identity?).`);
+        }
+        return true;
+      }
+      attempts.push(`${mode}:http-${r.status}`);
+      if (r.status !== 401 && r.status !== 403) return false; // 404/5xx: a different real problem, don't mask it
+    } catch (e) {
+      attempts.push(`${mode}:error-${String(e && e.message || e)}`);
+    }
   }
+  console.error(`[kv-secret] WRITE failed for "${name}" via all auth paths: ${attempts.join(", ")}`);
+  return false;
 }
 
-/** Fetch one secret from Key Vault. Returns the trimmed value, or null if unavailable. Never throws. */
+/** Fetch one secret from Key Vault. Returns the trimmed value, or null if unavailable. Never throws.
+ *  Tries the identity path first (preferred — no stored secret needed), then the SP path, but ONLY
+ *  escalates to the next path when the actual secret GET comes back 401/403 (an auth-shaped
+ *  failure — "this credential isn't allowed", worth retrying via the other credential). A 404 (wrong
+ *  secret name) or 5xx (vault down) stops immediately without trying the other path, because
+ *  silently retrying there would mask a genuinely different bug behind "it worked anyway via SP". */
 export async function kvSecret(name) {
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
-  const tok = await vaultToken();
-  if (!tok) return null;
-  try {
-    const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, { headers: { Authorization: `Bearer ${tok}` } });
-    if (!r.ok) return null;
-    const v = (await r.json()).value;
-    return v == null ? null : String(v).trim() || null;
-  } catch {
-    return null;
+  const attempts = [];
+  for (const mode of ["identity", "sp"]) {
+    const tok = mode === "identity" ? await identityToken() : await spToken();
+    if (!tok) { attempts.push(`${mode}:no-token`); continue; }
+    try {
+      const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, { headers: { Authorization: `Bearer ${tok}` } });
+      if (r.ok) {
+        _authMode = mode;
+        if (mode === "sp") {
+          console.warn(`[kv-secret] WARN: fell back to SP to READ "${name}" — identity token was rejected (missing Key Vault Secrets User on the identity?).`);
+        }
+        const v = (await r.json()).value;
+        return v == null ? null : String(v).trim() || null;
+      }
+      attempts.push(`${mode}:http-${r.status}`);
+      if (r.status !== 401 && r.status !== 403) return null; // 404/5xx: don't retry via the other path
+    } catch (e) {
+      attempts.push(`${mode}:error-${String(e && e.message || e)}`);
+    }
   }
+  if (attempts.length) {
+    console.error(`[kv-secret] READ failed for "${name}" via all auth paths: ${attempts.join(", ")}`);
+  }
+  return null;
 }
 
 // ── FAIL-LOUD startup guard (P0 stability, 2026-07-04) ──────────────────────
@@ -130,9 +176,12 @@ export async function requireSecrets(names) {
   if (missing.length) {
     const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
     const spOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
+    const identityOk = Boolean(process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER);
     console.error("==================================================================================");
     console.error(`[FATAL] Required secret(s) UNAVAILABLE from Key Vault (${vault}): ${missing.join(", ")}`);
-    console.error(`        AZURE_SP_* creds present: ${spOk ? "yes" : "NO — set AZURE_SP_CLIENT_ID/SECRET/TENANT_ID"}.`);
+    console.error(`        Managed identity attached: ${identityOk ? "yes" : "no"}. AZURE_SP_* creds present: ${spOk ? "yes" : "NO — set AZURE_SP_CLIENT_ID/SECRET/TENANT_ID"}.`);
+    console.error("        Both auth paths were tried per secret (see [kv-secret] WARN/ERROR lines above for which");
+    console.error("        path failed and how — a 401/403 means an RBAC grant is likely missing on the identity).");
     console.error("        Refusing to run with missing credentials (fail-loud, not silent). GCP Secret Manager is retired.");
     console.error("==================================================================================");
     process.exit(78);
@@ -143,6 +192,6 @@ export async function requireSecrets(names) {
 // Non-exiting variant: throw (for callers that want to catch). Never returns null.
 export async function kvSecretOrThrow(name) {
   const v = await kvSecret(name);
-  if (v == null) throw new Error(`required secret '${name}' unavailable from Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"})`);
+  if (v == null) throw new Error(`required secret '${name}' unavailable from Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"}) — see [kv-secret] log lines above for which auth path(s) failed`);
   return v;
 }

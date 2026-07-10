@@ -1,0 +1,63 @@
+name: audit-oauth-clients-history
+
+# URGENT, READ-ONLY audit. GitHub Copilot found that OAUTH_CLIENTS on otchealth-mcp-gateway is
+# currently an empty string, which explains why 3 attempts to add a developer client silently failed
+# (jq on an empty file produces no output, so every "merge" was a no-op, and every regression check
+# was comparing empty-against-empty and falsely reporting success). The urgent open question: was
+# OAUTH_CLIENTS already empty BEFORE any of tonight's changes (meaning no real client entries were ever
+# lost), or did the FIRST attempt (provision-developer-oauth-lane.yml, run 28806975346, ~16:30 UTC
+# 2026-07-06) wipe pre-existing cfo/clo/coo/etc. entries that were genuinely there before? This
+# workflow makes ZERO writes — it only reads history to answer that question.
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: List ALL revisions (including deactivated/old ones), oldest first
+        run: |
+          set -euo pipefail
+          az containerapp revision list -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --all --query "sort_by([], &properties.createdTime)[].{name:name, created:properties.createdTime, active:properties.active}" -o table
+
+      - name: For each revision found, show its OAUTH_CLIENTS value or secretRef (READ ONLY)
+        run: |
+          set -euo pipefail
+          REVISIONS=$(az containerapp revision list -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --all --query "sort_by([], &properties.createdTime)[].name" -o tsv)
+          for REV in $REVISIONS; do
+            echo "=== Revision: $REV ==="
+            az containerapp revision show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --revision "$REV" \
+              --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS']" -o json 2>&1 || echo "(could not read env for this revision)"
+            echo "created: $(az containerapp revision show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --revision \"$REV\" --query properties.createdTime -o tsv 2>&1)"
+            echo ""
+          done
+
+      - name: Check the Key Vault 'oauth-clients' secret (a SEPARATE historical source, per cfo-gateway/cli.mjs) - value length only, never print the actual secret content
+        run: |
+          set -euo pipefail
+          echo "Checking if Key Vault has a separate/independent 'oauth-clients' secret (distinct from the Container App's own OAUTH_CLIENTS env var) that might hold the real historical client registry:"
+          az keyvault secret list --vault-name kv-otc-55c84f6bef --query "[?contains(name, 'oauth')].{name:name, updated:attributes.updated, enabled:attributes.enabled}" -o table || echo "(could not list vault secrets or none match)"
+          echo ""
+          echo "If an 'oauth-clients' secret exists, checking its LENGTH ONLY (never printing content) to see if it looks populated (long) or empty (short):"
+          VALUE_LEN=$(az keyvault secret show --vault-name kv-otc-55c84f6bef --name oauth-clients --query value -o tsv 2>/dev/null | wc -c) || VALUE_LEN="secret not found or inaccessible"
+          echo "oauth-clients secret byte length: $VALUE_LEN (a large number suggests real populated content; near-zero suggests empty/never-populated)"
+
+      - name: Summary
+        run: |
+          echo "### OAUTH_CLIENTS History Audit" >> "$GITHUB_STEP_SUMMARY"
+          echo "Reviewed above: does any revision OLDER than tonight's changes show a non-empty OAUTH_CLIENTS value?" >> "$GITHUB_STEP_SUMMARY"
+          echo "Reviewed above: does the separate Key Vault oauth-clients secret show a populated (long) or empty (short) length?" >> "$GITHUB_STEP_SUMMARY"
+          echo "NO WRITES were made by this workflow." >> "$GITHUB_STEP_SUMMARY"

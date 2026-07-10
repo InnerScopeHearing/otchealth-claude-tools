@@ -1,0 +1,48 @@
+name: set-graph-drive-user
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  set:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Write graph-drive-user secret to Key Vault
+        run: |
+          set -euo pipefail
+          az keyvault secret set --vault-name kv-otc-55c84f6bef --name graph-drive-user --value "matthew@innd.com" -o none
+          echo "graph-drive-user secret written."
+
+      - name: Check current gateway env for GRAPH_DRIVE_USER (diagnostic only)
+        run: |
+          set -euo pipefail
+          HAS=$(az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query "properties.template.containers[0].env[?name=='GRAPH_DRIVE_USER'].name | [0]" -o tsv)
+          echo "Existing GRAPH_DRIVE_USER env entry: '${HAS:-none}'"
+
+      - name: Create the Container App secret backed by Key Vault, then set the env var via secretRef (additive - does not touch any other env var)
+        run: |
+          set -euo pipefail
+          az containerapp secret set -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --secrets "graph-drive-user=keyvaultref:https://kv-otc-55c84f6bef.vault.azure.net/secrets/graph-drive-user,identityref:system"
+          az containerapp update -n otchealth-mcp-gateway -g rg-otchealth-apps-prod \
+            --set-env-vars "GRAPH_DRIVE_USER=secretref:graph-drive-user"
+
+      - name: Verify the new env var is set correctly, and that other env vars are untouched
+        run: |
+          set -euo pipefail
+          sleep 15
+          echo "--- GRAPH_DRIVE_USER entry ---"
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query "properties.template.containers[0].env[?name=='GRAPH_DRIVE_USER']" -o json
+          echo "--- OAUTH_CLIENTS entry (regression check - must still be secretref, not touched) ---"
+          az containerapp show -n otchealth-mcp-gateway -g rg-otchealth-apps-prod --query "properties.template.containers[0].env[?name=='OAUTH_CLIENTS']" -o json
