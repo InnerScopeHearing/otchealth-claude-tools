@@ -121,11 +121,42 @@ single source-of-truth field per fact rather than continuing to catch these one 
 Personal sound amplification product, deliberately not marketed as a hearing aid. **Confirmed
 live pricing:** Single $99/side; Pair $149 list → **$99 via PAIR99** (evergreen). Status:
 proven-but-dormant — $227,290 all-time / 1,484 orders, ~$0 in the last 90 days; Stripe payout
-connect is still the live blocker. The 10,298-unit legacy pool (refurb/liquidation target,
-$199-299 resale) is TReO/PSAP inventory — **it requires no FDA registration to sell**, only a
-3PL/refurb partner (already scoped in `REFURB-3PL-RFQ.md`).
+connect is still the live blocker. **It requires no FDA registration to sell**, only a 3PL/refurb
+partner (already scoped in `REFURB-3PL-RFQ.md`).
 **Comp table, market, opportunities:** unchanged from v1 — undercuts every DTC PSAP/OTC
 competitor at $99/pair; US OTC/PSAP category ~$272M-$864M narrow, growing 8-18% CAGR.
+
+### 1.1 The 10,298-unit pool — corrected, this is NOT TReO-specific
+Real inventory data from the CFO (JingHao manufacturer invoices, primary-source, `OTCHealth_
+Inventory_Valuation_InHouse_v1.docx` 2026-06-17 + `3.6.26 - InnerScope Total Inventory Value.xlsx`)
+shows the "10,298-unit pool" referenced throughout the Moore Playbook is the **combined count
+across every physical SKU in the portfolio**, not TReO alone: TReO Left (1,294) + TReO Right
+(1,324) + iHEAR aXis (2,315) + linX (2,589) + matriX (1,705) + legacy HearingAssist Stream (547),
+Control (145), Connect (36), Eaze 302 (47), Eaze 2 (287), 802 (4), Micro (5) = **10,298 exactly**.
+**This corrects an assumption this doc (and the broader Playbook) has carried all along.**
+
+Real per-unit costs (JingHao invoices): $140 Control/STREAM/aXis/matriX; $142 CONNECT/linX/
+EAZE-NS; $99 EAZE; $112 HA-302; $180 HA-802 ReCharge Plus; $135 "MICRO PSAP" (naming conflict —
+see below); $54.60 "Lee Majors (legacy)" (unidentified product, zero current units — possibly a
+celebrity-endorsement legacy SKU, unconfirmed). Refurb cost: TReO ~$5-7/unit (simple repack,
+disposable battery); rechargeable units (the majority) ~$20-27/unit (battery replacement +
+repack) — ~$257K total refurb investment across all 10,298 units. Cost basis: $1.4-1.9M;
+CFO's own xlsx computes total retail value at **$4,314,845** — notably higher than the "$2-3M
+retail lever" figure used elsewhere in the Playbook. **This resolves part of GAP-REVIEW.md's
+flagged P0 ("the 85-90% margin on TReO is asserted with zero COGS build") — real costs now
+exist — but surfaces two new open items, not yet resolved:**
+1. **"MICRO PSAP" naming conflict.** CFO's cost sheet labels the Micro SKU (5 units) a PSAP,
+   which conflicts with Matt's stated rule that only TReO is a PSAP. Not resolved here — asked
+   CRO/CFO directly rather than assuming either way.
+2. **Pricing-model mismatch.** CFO's inventory-valuation model prices aXis/linX/matriX at
+   $499/$399/$599 retail-per-unit; the live Shopify catalog (repo-verified earlier today) prices
+   Matrix at $349 list/$174.50 promo, Linx at ~$239, Axis at ~$599. These don't match. Asked CRO
+   which is current/authoritative — do not treat either as settled until that comes back.
+
+**URGENT, separate from product questions:** the same CFO doc states storage arrears + "lien
+risk"/"the active lien cliff" on the facilities physically holding this inventory (Treelake +
+Security Public Storage, ~$1,100/mo combined). This is a real risk to the underlying asset
+itself, not a pricing/deck issue — flagged directly to CFO, not resolved here.
 
 ## 2. The OTC hearing aid line
 **iHEAR Matrix** — $349 list → $174.50 via MATRIX50, pre-order, ships "late Aug 2026," gated on
