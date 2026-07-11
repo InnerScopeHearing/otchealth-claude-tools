@@ -110,7 +110,12 @@ export async function kvSecretSet(name, value) {
       if (r.ok) {
         _authMode = mode;
         if (mode === "sp") {
-          console.warn(`[kv-secret] WARN: fell back to SP to WRITE "${name}" — identity token was rejected (missing Key Vault Secrets Officer on the identity?).`);
+          // CLARIFIED 2026-07-10 (real fleet incident, 2nd occurrence -- CFO then CRO both misread
+          // this exact line as evidence of a broken/failing write, when in fact the write ALREADY
+          // SUCCEEDED (r.ok is true) by the time this prints -- it's a diagnostic note about WHICH
+          // credential worked, not an error. Wording fixed to say so explicitly rather than let a
+          // third agent repeat the same misdiagnosis.
+          console.warn(`[kv-secret] OK (fallback): WRITE "${name}" succeeded via the SP credential, not identity (identity token was rejected -- likely missing Key Vault Secrets Officer on the identity, harmless on Hyperagent which has no managed identity anyway). The write completed normally; this is informational, not a failure.`);
         }
         return true;
       }
@@ -141,7 +146,12 @@ export async function kvSecret(name) {
       if (r.ok) {
         _authMode = mode;
         if (mode === "sp") {
-          console.warn(`[kv-secret] WARN: fell back to SP to READ "${name}" — identity token was rejected (missing Key Vault Secrets User on the identity?).`);
+          // CLARIFIED 2026-07-10 (real fleet incident, 2nd occurrence -- CFO then CRO both misread
+          // this exact line as evidence of a broken/failing read, when in fact the read ALREADY
+          // SUCCEEDED (r.ok is true) by the time this prints -- it's a diagnostic note about WHICH
+          // credential worked, not an error. Wording fixed to say so explicitly rather than let a
+          // third agent repeat the same misdiagnosis.
+          console.warn(`[kv-secret] OK (fallback): READ "${name}" succeeded via the SP credential, not identity (identity token was rejected -- likely missing Key Vault Secrets User on the identity, harmless on Hyperagent which has no managed identity anyway). The value was retrieved normally; this is informational, not a failure.`);
         }
         const v = (await r.json()).value;
         return v == null ? null : String(v).trim() || null;
