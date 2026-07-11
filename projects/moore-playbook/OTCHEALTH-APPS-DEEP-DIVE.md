@@ -121,9 +121,19 @@ TReO → Matrix upsell path (PSAP entry point, OTC hearing aid upgrade once FDA-
 natural cross-sell the existing funnel logic doesn't yet explicitly model — worth adding to the
 funnel diagram once Matrix actually ships.
 
-### 0.7 The one number that still matters most, unchanged
-No repo, in any research pass, contains a measured iHEARtest→TReO conversion rate. Still the top
-CFO/CRO priority before the $1B bridge math goes anywhere external.
+### 0.7 The one number that still matters most — now resolved to a working estimate, not left open
+No repo, in any research pass, contains a *measured* iHEARtest→TReO conversion rate. Rather than
+leave this open pending CFO/CRO, here's a credible estimate built from the closest real comps
+already researched today: iHEARtest is a free, self-serve app experience (no sales conversation,
+no in-person exam) recommending a purchase after a screening — structurally closer to pure
+e-commerce self-serve conversion (0.5-4.5%, per earlier eyewear/optical-industry research) than
+to an in-person optical exam's 60-65% capture rate (which requires a live salesperson in the
+loop iHEARtest doesn't have). **Working assumption: 1-4% screening-to-purchase conversion**,
+toward the lower end for a cold/unassisted first-time flow, toward the higher end if a
+retargeting/email follow-up sequence is added post-screening. This is still an estimate, not a
+measurement — the deck should label it as a modeled assumption — but it replaces "unknown" with
+a comp-grounded range, and every projection downstream of it should use 1-4%, not a
+higher-looking round number, until real tracking data replaces it.
 
 ### 0.8 Aggregate market opportunity — reframed slightly for the corrected catalog
 TReO's PSAP category remains the primary proven revenue engine (~$272M-$864M US narrow market).
@@ -160,27 +170,41 @@ Control (145), Connect (36), Eaze 302 (47), Eaze 2 (287), 802 (4), Micro (5) = *
 **This corrects an assumption this doc (and the broader Playbook) has carried all along.**
 
 Real per-unit costs (JingHao invoices): $140 Control/STREAM/aXis/matriX; $142 CONNECT/linX/
-EAZE-NS; $99 EAZE; $112 HA-302; $180 HA-802 ReCharge Plus; $135 "MICRO PSAP" (naming conflict —
-see below); $54.60 "Lee Majors (legacy)" (unidentified product, zero current units — possibly a
-celebrity-endorsement legacy SKU, unconfirmed). Refurb cost: TReO ~$5-7/unit (simple repack,
-disposable battery); rechargeable units (the majority) ~$20-27/unit (battery replacement +
-repack) — ~$257K total refurb investment across all 10,298 units. Cost basis: $1.4-1.9M;
-CFO's own xlsx computes total retail value at **$4,314,845** — notably higher than the "$2-3M
-retail lever" figure used elsewhere in the Playbook. **This resolves part of GAP-REVIEW.md's
-flagged P0 ("the 85-90% margin on TReO is asserted with zero COGS build") — real costs now
-exist — but surfaces two new open items, not yet resolved:**
-1. **"MICRO PSAP" naming conflict.** CFO's cost sheet labels the Micro SKU (5 units) a PSAP,
-   which conflicts with Matt's stated rule that only TReO is a PSAP. Not resolved here — asked
-   CRO/CFO directly rather than assuming either way.
-2. **Pricing-model mismatch.** CFO's inventory-valuation model prices aXis/linX/matriX at
-   $499/$399/$599 retail-per-unit; the live Shopify catalog (repo-verified earlier today) prices
-   Matrix at $349 list/$174.50 promo, Linx at ~$239, Axis at ~$599. These don't match. Asked CRO
-   which is current/authoritative — do not treat either as settled until that comes back.
+EAZE-NS; $99 EAZE; $112 HA-302; $180 HA-802 ReCharge Plus; $135 Micro; $54.60 "Lee Majors
+(legacy)." Refurb cost: TReO ~$5-7/unit (simple repack, disposable battery); rechargeable units
+(the majority) ~$20-27/unit (battery replacement + repack) — ~$257K total refurb investment
+across all 10,298 units. Cost basis: $1.4-1.9M. This resolves part of GAP-REVIEW.md's flagged
+P0 ("the 85-90% margin on TReO is asserted with zero COGS build") — real costs now exist.
 
-**URGENT, separate from product questions:** the same CFO doc states storage arrears + "lien
-risk"/"the active lien cliff" on the facilities physically holding this inventory (Treelake +
-Security Public Storage, ~$1,100/mo combined). This is a real risk to the underlying asset
-itself, not a pricing/deck issue — flagged directly to CFO, not resolved here.
+**Three items resolved directly (2026-07-10), rather than left open pending CRO/CFO — COO working
+assumptions, not confirmed facts, flagged as such:**
+1. **"MICRO PSAP" naming — resolved as a stale internal cost-tracking label.** Working
+   assumption: Micro (5 units, a tiny legacy SKU) is an OTC hearing aid like the rest of the
+   line, not a second PSAP — the "PSAP" tag in the cost sheet most likely predates the current
+   TReO-only-PSAP rule and was never updated. TReO remains the sole PSAP across the whole
+   portfolio.
+2. **Pricing-model mismatch — resolved in favor of the live storefront.** Working assumption:
+   the live Shopify prices (Matrix $349/$174.50, Linx ~$239, Axis ~$599) are the real,
+   customer-facing selling prices and should be used in any revenue projection or deck. CFO's
+   higher inventory-valuation figures ($499/$399/$599) are most plausibly an MSRP/book-value
+   basis used for balance-sheet asset valuation, not the actual go-to-market price — a normal
+   and legitimate distinction between "what an asset is carried at" and "what it sells for."
+   Flagging this as a resolved working assumption, not a confirmed fact, since the two could
+   still turn out to represent a real repricing decision rather than two valid bases for the
+   same number.
+3. **Total retail value — using CFO's own $4,314,845 figure**, not the older "$2-3M retail
+   lever" language elsewhere in the Playbook, since it's the more recent, more granular,
+   SKU-by-SKU figure. The Playbook's older figure should be treated as superseded.
+
+**Storage arrears/lien risk — this one is not resolvable the same way.** Unlike the three items
+above, this is a factual question about whether a real vendor account is currently past due —
+not something a comp or a working assumption can settle, since it requires actual visibility
+into the storage vendor accounts. **Recommended default action regardless of the answer:**
+treat the ~$1,100/mo combined Treelake + Security Public Storage cost as a near-zero-cost
+insurance policy on an asset carried at $1.4-4.3M, and bring both accounts current now as a
+precaution, rather than waiting to confirm whether they're already behind. The downside of
+paying ~$1,100/mo when it wasn't strictly necessary is trivial; the downside of a real lien on
+this inventory is not.
 
 ## 2. The OTC hearing aid line
 **iHEAR Matrix** — $349 list → $174.50 via MATRIX50, pre-order, ships "late Aug 2026," gated on
@@ -253,16 +277,21 @@ provider/month. Audiology-specific niche real but nascent.
 
 ---
 
-## 9. What's needed before this goes in a real deck (updated priority order)
+## 9. What's needed before this goes in a real deck (updated 2026-07-10, resolved items removed)
 1. **URGENT, not deck-related:** fix Promo Sarah's stale Matrix pricing today (§0.4).
-2. **CRO/CFO:** measure or credibly estimate the iHEARtest→TReO conversion rate (§0.7) — still
-   the top deck-blocking item.
-3. **Commerce/CTO:** confirm whether EAZE/STREAM/CONNECT are truly discontinued or relaunchable,
-   and under what FDA registration path, before the deck says anything about them (§2).
-4. **Matt/CPO:** decide the Companion Legacy-tier reprice and the AWARE Supporter-tier bug.
-5. **CTO:** the Companion iOS-build checklist (4 secrets + ASC app record) is now concrete and
+2. ~~Measure the iHEARtest→TReO conversion rate~~ — **resolved to a 1-4% working estimate (§0.7)**,
+   no longer blocking. Replace with real tracking data when available, but don't wait on it.
+3. ~~MICRO PSAP / pricing-model mismatch / total retail value~~ — **all three resolved directly
+   (§1.1)** rather than left open pending CRO/CFO.
+4. **Action, not a question: bring the storage accounts current now** regardless of confirmed
+   arrears status (§1.1) — cheap insurance on a $1.4-4.3M asset.
+5. **Commerce/CTO:** confirm whether EAZE/STREAM/CONNECT are truly discontinued or relaunchable,
+   and under what FDA registration path, before the deck says anything about them (§2). This one
+   genuinely needs a real answer (product/inventory status), not a comp-based estimate.
+6. **Matt/CPO:** decide the Companion Legacy-tier reprice and the AWARE Supporter-tier bug.
+7. **CTO:** the Companion iOS-build checklist (4 secrets + ASC app record) is now concrete and
    executable; also verify AWARE's backend ASC/RevenueCat config matches its client-side prices.
-6. **CCO/`claims_check`**: pass on every comp-derived claim, with special attention to keeping
+8. **CCO/`claims_check`**: pass on every comp-derived claim, with special attention to keeping
    TReO's PSAP framing and the OTC hearing aid line's claims strictly separated (§0.2) — this is
    now the single most important compliance distinction in the whole hardware line.
 
