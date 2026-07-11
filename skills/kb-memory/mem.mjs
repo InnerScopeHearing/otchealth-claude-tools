@@ -671,6 +671,17 @@ async function runPack() {
     return;
   }
   if (cmd === "recall") {
+    // DEPRECATED PATH — FIXED 2026-07-10 (real fleet incident: CFO agent concluded ~2 weeks of
+    // real derivative-valuation work "could not be found" after 3 zero-hit calls here, while the
+    // SAME query against the gateway's mcp-otchealth-gateway__memory_recall tool returned 5 direct
+    // hits instantly). Root cause: this command does LITERAL KEYWORD substring matching (matchq)
+    // against ONLY your local ledger + team feed rows — it has no semantic/embedding search, so a
+    // 0-hit here is NOT evidence something doesn't exist, only that its exact wording doesn't
+    // happen to share a keyword with your query. The gateway tool is embedding-based and searches
+    // the real semantic index. Printing this to stderr on every invocation so the deprecation is
+    // visible at the point of use, not just buried in a system prompt that may not get re-read
+    // mid-task.
+    console.error(`[kb-memory] ⚠️  DEPRECATED: 'recall' is literal keyword matching against your local ledger only — it has a proven false-negative gap (0-hit here is NOT proof something doesn't exist; see the 2026-07-10 CFO incident). Use the gateway's mcp-otchealth-gateway__memory_recall tool (semantic, cross-agent, via ExecuteIntegration) as your PRIMARY recall path. This CLI still runs below for backward compatibility only — treat its output as supplementary, never authoritative for "nothing found."`);
     const terms = TEXT.toLowerCase().split(/\s+/).filter(Boolean);
     const own = rows.filter((r) => matchq(r, terms)).sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, N);
     let team = [];
