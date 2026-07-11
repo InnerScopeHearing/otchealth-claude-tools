@@ -16,8 +16,12 @@
 // patient/diagnosis/medication/audiogram/hearing-number terms).
 //
 // Usage:
-//   node run-evals.mjs                       # run the whole golden set against keyword recall
-//   node run-evals.mjs --engine semantic      # use semantic.mjs recall instead of mem.mjs recall
+//   node run-evals.mjs                       # run the whole golden set against semantic.mjs recall (default, 2026-07-10)
+//   node run-evals.mjs --engine keyword       # use mem.mjs recall instead -- HARD-DEPRECATED as of 2026-07-10,
+//                                              # this will now fail loudly (mem.mjs recall exits 1 on every call,
+//                                              # see skills/kb-memory/mem.mjs) -- kept only so this harness can still
+//                                              # measure/document the deprecated path's failure if ever needed, not
+//                                              # as a real eval option going forward.
 //   node run-evals.mjs --k 5                  # precision@k cutoff (default 5)
 //   node run-evals.mjs --set /path/other.json # use a different golden-set file
 //   node run-evals.mjs --json                 # also print the raw scorecard as JSON (for CI logs)
@@ -36,7 +40,7 @@ const SEMANTIC_MJS = join(HERE, "..", "kb-memory", "semantic.mjs");
 
 const argv = process.argv.slice(2);
 const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
-const ENGINE = (takeVal("--engine", "keyword") || "keyword").toLowerCase(); // keyword | semantic
+const ENGINE = (takeVal("--engine", "semantic") || "semantic").toLowerCase(); // keyword | semantic -- default flipped 2026-07-10, mem.mjs recall (keyword) is now hard-deprecated and exits 1
 const K = parseInt(takeVal("--k", "5"), 10) || 5;
 const SET_PATH = takeVal("--set", join(HERE, "golden-set.json"));
 const PRINT_JSON = argv.includes("--json");
