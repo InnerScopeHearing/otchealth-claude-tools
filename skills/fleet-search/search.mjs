@@ -7,8 +7,8 @@
 // Matt a question he's already answered. Only fall back externally if all three come back empty.
 //
 // Usage:
-//   node search.mjs "<query>" [--n 8] [--rooms memory,legal,finance,commerce,journal]
-//                    [--no-brain] [--no-docs] [--no-github] [--json]
+//   node search.mjs "<query>" [--n 8] [--rooms memory,legal,finance,commerce,journal] [--agent <role>]
+//                    [--no-brain] [--no-docs] [--no-github] [--no-bulletin] [--json]
 //
 // Design notes:
 // - Reuses company-brain's brain.mjs UNCHANGED (spawns it as a subprocess) rather than re-implementing
@@ -22,6 +22,19 @@
 // - Fail-open per source: one source erroring (e.g. GitHub rate limit) never blocks the other two from
 //   reporting -- this tool's whole point is "check everything before giving up", so a partial result is
 //   still far better than no result.
+//
+// 2026-07-12 ADDITION: side-effect bulletin check. Every call also checks FLEET-BULLETIN.md for
+// entries since this agent's last-known point and prints them. This does NOT reuse bulletin.mjs's
+// "since" command -- that tracks a LOCAL per-environment marker file (~/.claude/.octools-bulletin-seen)
+// which is unreliable across a fleet spanning multiple engines/containers, and its own "add" command
+// was separately found this same day to only edit a local file without ever actually committing/
+// pushing despite printing a message implying it had. Both mistakes are avoided here by (a) reading
+// FLEET-BULLETIN.md via the authenticated GitHub Contents API (never git clone / raw.githubusercontent
+// -- the latter is CDN-cached and served stale content for several minutes on a real incident earlier
+// today), and (b) persisting the per-agent "last seen" marker as a durable Azure Blob object in the
+// shared commons (_BULLETIN_SEEN/<agent>.json), not a local file, so it means the same thing regardless
+// of which engine or container is asking. Fail-open: any failure here never blocks the three main
+// search results above.
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -37,26 +50,30 @@ const FLAG = (f) => argv.includes(f);
 const QUERY = argv.filter((a, i, arr) => !a.startsWith("--") && !(i > 0 && arr[i - 1].startsWith("--"))).join(" ").trim();
 const N = parseInt(val("--n", "8"), 10) || 8;
 const ROOMS = val("--rooms", "");
-const AGENT = (val("--agent", "") || "").toLowerCase();
+const AGENT = (val("--agent", "") || "unknown").toLowerCase();
 const JSON_OUT = FLAG("--json");
 
 // ---------------- commons blob (same account/container as sunset-protocol + kb-memory) ----------------
 const COMMONS = { accountSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal" };
 const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-function buildSas(acct, key) {
-  const sv = "2021-12-02", sp = "rl", ss = "b", srt = "co";
+function buildSas(acct, key, write) {
+  const sv = "2021-12-02", sp = write ? "rwlc" : "rl", ss = "b", srt = "co";
   const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
   const se = new Date(Date.now() + 3600 * 1000).toISOString().slice(0, 19) + "Z";
   const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
   const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64");
   return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
+async function commonsCreds() {
+  const acct = await kvSecret(COMMONS.accountSecret);
+  const key = await kvSecret(COMMONS.keySecret);
+  return { acct, key };
+}
 async function listDocsPrefix(prefix = "_DOCS/") {
   try {
-    const acct = await kvSecret(COMMONS.accountSecret);
-    const key = await kvSecret(COMMONS.keySecret);
+    const { acct, key } = await commonsCreds();
     if (!acct || !key) return { ok: false, error: "commons creds unavailable", items: [] };
-    const sas = buildSas(acct, key);
+    const sas = buildSas(acct, key, false);
     const items = [];
     let marker = "";
     do {
@@ -86,9 +103,11 @@ function filterDocsByQuery(items, query) {
 
 // ---------------- GitHub code search (classic PAT, org-wide) ----------------
 const GH_ORG = "InnerScopeHearing";
+let _ghPat; // cached for reuse by the bulletin fetch below
+async function ghPat() { if (_ghPat === undefined) _ghPat = await kvSecret("github-user-pat"); return _ghPat; }
 async function githubSearch(query, n) {
   try {
-    const pat = await kvSecret("github-user-pat");
+    const pat = await ghPat();
     if (!pat) return { ok: false, error: "github-user-pat unavailable", items: [] };
     const q = encodeURIComponent(`${query} org:${GH_ORG}`);
     const r = await fetch(`https://api.github.com/search/code?q=${q}&per_page=${n}`, {
@@ -115,11 +134,64 @@ function brainAsk(query, { rooms, agent, n } = {}) {
   }
 }
 
+// ---------------- bulletin side-effect (durable, per-agent, authenticated) ----------------
+const ENTRY_RE = /^- (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z) \| (.+)$/;
+const SEEN_PREFIX = "_BULLETIN_SEEN/";
+
+async function fetchBulletinEntries() {
+  const pat = await ghPat();
+  if (!pat) return { ok: false, error: "github-user-pat unavailable", entries: [] };
+  const r = await fetch(
+    `https://api.github.com/repos/${GH_ORG}/otchealth-claude-tools/contents/FLEET-BULLETIN.md?ref=main`,
+    { headers: { Authorization: `Bearer ${pat}`, Accept: "application/vnd.github.v3+json" } }
+  );
+  if (!r.ok) return { ok: false, error: `bulletin fetch ${r.status}`, entries: [] };
+  const j = await r.json();
+  const content = Buffer.from(j.content, "base64").toString("utf8");
+  const entries = content.split("\n")
+    .map((l) => l.match(ENTRY_RE))
+    .filter(Boolean)
+    .map((m) => ({ ts: m[1], text: m[2] }));
+  return { ok: true, entries, sha: j.sha };
+}
+async function getSeenCount(agent) {
+  try {
+    const { acct, key } = await commonsCreds();
+    if (!acct || !key) return 0;
+    const sas = buildSas(acct, key, false);
+    const url = `https://${acct}.blob.core.windows.net/${COMMONS.container}/${encPath(SEEN_PREFIX + agent + ".json")}?${sas}`;
+    const r = await fetch(url);
+    if (r.status === 404) return 0;
+    if (!r.ok) return 0;
+    const j = await r.json();
+    return j.seenCount || 0;
+  } catch { return 0; }
+}
+async function setSeenCount(agent, count) {
+  try {
+    const { acct, key } = await commonsCreds();
+    if (!acct || !key) return false;
+    const sas = buildSas(acct, key, true);
+    const url = `https://${acct}.blob.core.windows.net/${COMMONS.container}/${encPath(SEEN_PREFIX + agent + ".json")}?${sas}`;
+    const body = JSON.stringify({ seenCount: count, updatedAt: new Date().toISOString() });
+    const r = await fetch(url, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/json" }, body });
+    return r.ok;
+  } catch { return false; }
+}
+async function checkBulletin(agent) {
+  const fetched = await fetchBulletinEntries();
+  if (!fetched.ok) return { ok: false, error: fetched.error, newEntries: [] };
+  const seen = await getSeenCount(agent);
+  const newEntries = seen < fetched.entries.length ? fetched.entries.slice(seen) : [];
+  if (newEntries.length) await setSeenCount(agent, fetched.entries.length);
+  return { ok: true, totalEntries: fetched.entries.length, previouslySeen: seen, newEntries };
+}
+
 // ---------------- main ----------------
 async function main() {
-  if (!QUERY) { console.error('usage: search.mjs "<query>" [--n 8] [--rooms a,b] [--agent <role>] [--no-brain] [--no-docs] [--no-github] [--json]'); process.exit(2); }
+  if (!QUERY) { console.error('usage: search.mjs "<query>" [--n 8] [--rooms a,b] [--agent <role>] [--no-brain] [--no-docs] [--no-github] [--no-bulletin] [--json]'); process.exit(2); }
 
-  const results = { query: QUERY, brain: null, docs: null, github: null };
+  const results = { query: QUERY, brain: null, docs: null, github: null, bulletin: null };
 
   if (!FLAG("--no-brain")) results.brain = brainAsk(QUERY, { rooms: ROOMS, agent: AGENT, n: N });
   if (!FLAG("--no-docs")) {
@@ -127,6 +199,7 @@ async function main() {
     results.docs = { ok: listing.ok, error: listing.error, matches: filterDocsByQuery(listing.items, QUERY), allCount: listing.items.length };
   }
   if (!FLAG("--no-github")) results.github = await githubSearch(QUERY, N);
+  if (!FLAG("--no-bulletin")) { try { results.bulletin = await checkBulletin(AGENT); } catch (e) { results.bulletin = { ok: false, error: e.message, newEntries: [] }; } }
 
   const brainEmpty = !results.brain || !results.brain.ok || /No grounded results/i.test(results.brain.raw || "");
   const docsEmpty = !results.docs || !results.docs.ok || results.docs.matches.length === 0;
@@ -156,12 +229,22 @@ async function main() {
     else for (const it of results.github.items) console.log(`  ${it.repo}/${it.path}\n    ${it.url}`);
   } else console.log("(skipped)");
 
+  if (results.bulletin) {
+    console.log(`\n--- FLEET-BULLETIN.md (side effect: entries since agent '${AGENT}' last checked) ---`);
+    if (!results.bulletin.ok) console.log(`(error: ${results.bulletin.error})`);
+    else if (!results.bulletin.newEntries.length) console.log(`(no new entries; ${results.bulletin.totalEntries} total, ${results.bulletin.previouslySeen} already seen by '${AGENT}')`);
+    else {
+      console.log(`  ${results.bulletin.newEntries.length} NEW entr${results.bulletin.newEntries.length === 1 ? "y" : "ies"} since '${AGENT}' last checked:`);
+      for (const e of results.bulletin.newEntries) console.log(`  [${e.ts}] ${e.text}`);
+    }
+  }
+
   console.log(`\n================================================================`);
-  if (results.allEmpty) console.log(`ALL THREE SOURCES EMPTY -- nothing internal found for this query. Safe to fall back to external search (Exa) or ask Matt, but say plainly that internal search was checked first and came up empty.`);
-  else console.log(`At least one internal source had a hit -- review above before reaching for external search or asking Matt something that may already be answered.`);
+  if (results.allEmpty) console.log(`ALL THREE SEARCH SOURCES EMPTY -- nothing internal found for this query. Safe to fall back to external search (Exa) or ask Matt, but say plainly that internal search was checked first and came up empty.`);
+  else console.log(`At least one internal search source had a hit -- review above before reaching for external search or asking Matt something that may already be answered.`);
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) { main().catch((e) => { console.error("fleet-search ERROR: " + e.message); process.exit(1); }); }
 
-export { listDocsPrefix, filterDocsByQuery, githubSearch, brainAsk };
+export { listDocsPrefix, filterDocsByQuery, githubSearch, brainAsk, fetchBulletinEntries, checkBulletin };
