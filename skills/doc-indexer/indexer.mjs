@@ -73,7 +73,7 @@ const TEXT_PREFIX = "_TEXT/";
 // document text anyway. Catalog them but skip extraction. Override with MAX_INDEX_MB.
 const MAX_INDEX_MB = parseInt(process.env.MAX_INDEX_MB || "200", 10);
 const MAX_INDEX_BYTES = MAX_INDEX_MB * 1024 * 1024;
-const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/", "_DUPLICATES/", "_ARCHIVE/"]; // our own artifacts (incl. quarantined duplicates + archived/superseded content excluded from index/brain)
+const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/", "_DUPLICATES/", "_ARCHIVE/", "_MEMORY/", "_HANDOFF/", "_DISPATCH/"]; // our own artifacts, PLUS (2026-07-12, ring-safety fix) the kb-memory/sunset-protocol ledger prefixes in the commons container -- _MEMORY/ holds the CFO/CLO exec-feed ledgers (MNPI/privileged), already indexed ring-aware into memory-exec by semantic.mjs. If a commons index/push-search run ever crawled the WHOLE container instead of a --prefix-scoped slice, these prefixes would otherwise get their raw ledger text embedded into the UNRESTRICTED commons-company-journal index (the "journal" room every agent can query, no ring wall) -- a real MNPI/privileged leak. Never remove this without adding an equivalent ring wall to the commons profile itself.
 const MAXTEXT = 400000; // chars persisted per doc
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (ext) => join(tmpdir(), `idx_${Date.now()}_${Math.random().toString(36).slice(2)}${ext || ""}`);
