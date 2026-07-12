@@ -1,1 +1,59 @@
-IyEvdXNyL2Jpbi9lbnYgbm9kZQovLyBpbWFnZS1kcmlmdC5tanMg4oCUIFAwIHN0YWJpbGl0eSAoMjAyNi0wNy0wNCkuIEZsYWdzIGFueSBBenVyZSBDb250YWluZXIgQXBwIC8gQ29udGFpbmVyIEFwcHMgSm9iCi8vIHJ1bm5pbmcgYSBNVVRBQkxFIGltYWdlIHRhZyAoIjpsYXRlc3QiLCAiOm1haW4iLCBldGMuKSBpbnN0ZWFkIG9mIGFuIGltbXV0YWJsZSBAc2hhMjU2IGRpZ2VzdCDigJQKLy8gdGhlICJjb2RlIGNoYW5nZWQgYnV0IHRoZSBpbWFnZSBkaWRuJ3QiIC8gaGFuZC1kZXBsb3kgcmlzay4gUmVwb3J0LW9ubHkgKG5ldmVyIG11dGF0ZXMpLiBBUk0gdmlhCi8vIEFaVVJFX1NQXyogKGNsaWVudF9jcmVkZW50aWFscykuIERlcGVuZGVuY3ktZnJlZS4gRXhpdHMgMCAocmVwb3J0KSB1bmxlc3MgLS1zdHJpY3QgKGV4aXQgMyBvbiBkcmlmdCkuCi8vCi8vIDIwMjYtMDctMTIgRklYOiBhcm0oKSB3YXMgYSBzaW5nbGUtcGFnZSBHRVQgd2l0aCBubyBuZXh0TGluayBoYW5kbGluZyAtLSB0aGUgZXhhY3Qgc2FtZSBidWcKLy8gYWxyZWFkeSBmb3VuZCBhbmQgZml4ZWQgaW4gZHJpZnQtcmVjb24ubWpzIG9uIDIwMjYtMDctMDUgKHRoYXQgZml4J3Mgb3duIGhlYWRlciBjb21tZW50OgovLyAic2lnbmFsLXJhZGFyLCBkZWNpc2lvbi1jbG9jaywgbWVtb3J5LWxpYnJhcmlhbiBhbGwgbGFuZGVkIG9uIHBhZ2UgMiBhbmQgd2VyZSB3cm9uZ2x5IHJlcG9ydGVkCi8vIE5PLUpPQiIpLCBidXQgdGhpcyBzY3JpcHQgd2FzIG5ldmVyIHVwZGF0ZWQgdG8gbWF0Y2guIG90Y2hlYWx0aC1hdXRvbWF0aW9uLXJnIGFscmVhZHkgaGFzIDIwKwovLyByZXNvdXJjZXMgKHRoZSB0aHJlc2hvbGQgd2hlcmUgQVJNIHN0YXJ0cyBwYWdpbmF0aW5nKSwgc28gdGhpcyBzY3JpcHQgY291bGQgaGF2ZSBiZWVuIHNpbGVudGx5Ci8vIHVuZGVyLXJlcG9ydGluZyBkcmlmdCBvbiBldmVyeSBqb2IvYXBwIHBhc3QgcGFnZSAxLiBGaXhlZCB0aGUgc2FtZSB3YXk6IGFybUxpc3QoKSBiZWxvdyBhbHdheXMKLy8gZm9sbG93cyBuZXh0TGluayB0byBjb21wbGV0aW9uLiBObyBvdGhlciBzY3JpcHQgaW4gdGhpcyByZXBvIHNob3VsZCBzdGlsbCBoYXZlIHRoaXMgYnVnIGFmdGVyCi8vIHRoaXMgZml4IC0tIGNvbmZpcm1lZCB2aWEgcmVwby13aWRlIHNlYXJjaCB0aGF0IGRyaWZ0LXJlY29uLm1qcywgcmVwbGljYS10aW1lb3V0LWF1ZGl0Lm1qcywgYW5kCi8vIHJlc291cmNlLXJlY29uY2lsZS5tanMgYWxyZWFkeSBwYWdpbmF0ZSBjb3JyZWN0bHkuCmNvbnN0IFNVQlNfUkdTID0gWwogIFsib3RjaGVhbHRoLWF1dG9tYXRpb24tcmciXSwgICAvLyBkb2MtaW5kZXhlciBjcm9uIGpvYnMKICBbInJnLW90Y2hlYWx0aC1hcHBzLXByb2QiXSwgICAgLy8gTUNQIGdhdGV3YXkgKyBhcHBzCl07CmNvbnN0IFRFTiA9IHByb2Nlc3MuZW52LkFaVVJFX1NQX1RFTkFOVF9JRCwgQ0lEID0gcHJvY2Vzcy5lbnYuQVpVUkVfU1BfQ0xJRU5UX0lELCBDU0VDID0gcHJvY2Vzcy5lbnYuQVpVUkVfU1BfQ0xJRU5UX1NFQ1JFVDsKYXN5bmMgZnVuY3Rpb24gYXJtVG9rZW4oKSB7CiAgaWYgKCFURU4gfHwgIUNJRCB8fCAhQ1NFQykgeyBjb25zb2xlLmVycm9yKCJbaW1hZ2UtZHJpZnRdW0ZBVEFMXSBBWlVSRV9TUF8qIG5vdCBzZXQuIik7IHByb2Nlc3MuZXhpdCg3OCk7IH0KICBjb25zdCByID0gYXdhaXQgZmV0Y2goYGh0dHBzOi8vbG9naW4ubWljcm9zb2Z0b25saW5lLmNvbS8ke1RFTn0vb2F1dGgyL3YyLjAvdG9rZW5gLCB7IG1ldGhvZDogIlBPU1QiLCBoZWFkZXJzOiB7ICJDb250ZW50LVR5cGUiOiAiYXBwbGljYXRpb24veC13d3ctZm9ybS11cmxlbmNvZGVkIiB9LCBib2R5OiBuZXcgVVJMU2VhcmNoUGFyYW1zKHsgZ3JhbnRfdHlwZTogImNsaWVudF9jcmVkZW50aWFscyIsIGNsaWVudF9pZDogQ0lELCBjbGllbnRfc2VjcmV0OiBDU0VDLCBzY29wZTogImh0dHBzOi8vbWFuYWdlbWVudC5henVyZS5jb20vLmRlZmF1bHQiIH0pIH0pOwogIGNvbnN0IGogPSBhd2FpdCByLmpzb24oKTsgaWYgKCFqLmFjY2Vzc190b2tlbikgeyBjb25zb2xlLmVycm9yKCJbaW1hZ2UtZHJpZnRdW0ZBVEFMXSBubyBBUk0gdG9rZW4iKTsgcHJvY2Vzcy5leGl0KDEpOyB9IHJldHVybiBqLmFjY2Vzc190b2tlbjsKfQovLyBBTFdBWVMgZm9sbG93cyBuZXh0TGluayB0byBjb21wbGV0aW9uIC0tIG5ldmVyIHJlYWQgb25seSBwYWdlIDEgb2YgYW4gQVJNIGxpc3QgcmVzcG9uc2UuCmFzeW5jIGZ1bmN0aW9uIGFybUxpc3QodG9rLCBwYXRoKSB7CiAgY29uc3Qgb3V0ID0gW107CiAgbGV0IHVybCA9IGBodHRwczovL21hbmFnZW1lbnQuYXp1cmUuY29tJHtwYXRofWA7CiAgd2hpbGUgKHVybCkgewogICAgY29uc3QgciA9IGF3YWl0IGZldGNoKHVybCwgeyBoZWFkZXJzOiB7IEF1dGhvcml6YXRpb246IGBCZWFyZXIgJHt0b2t9YCB9IH0pOwogICAgaWYgKCFyLm9rKSBicmVhazsKICAgIGNvbnN0IGogPSBhd2FpdCByLmpzb24oKTsKICAgIG91dC5wdXNoKC4uLihqLnZhbHVlIHx8IFtdKSk7CiAgICB1cmwgPSBqLm5leHRMaW5rIHx8IG51bGw7CiAgfQogIHJldHVybiBvdXQ7Cn0KY29uc3QgaXNQaW5uZWQgPSAoaW1nKSA9PiAvQHNoYTI1Njovi50ZXN0KGltZyB8fCAiIik7Cihhc3luYyAoKSA9PiB7CiAgY29uc3QgU1VCID0gcHJvY2Vzcy5lbnYuQVpVUkVfU1VCU0NSSVBUSU9OX0lEIHx8IChhd2FpdCAoYXN5bmMgKCkgPT4geyB0cnkgeyBjb25zdCBtID0gYXdhaXQgaW1wb3J0KCIuLi9za2lsbHMva2ItbWVtb3J5L2F6dXJlLXNlY3JldC5tanMiKTsgcmV0dXJuIGF3YWl0IG0ua3ZTZWNyZXQoImF6dXJlLXN1YnNjcmlwdGlvbi1pZCIpOyB9IGNhdGNoIHsgcmV0dXJuIG51bGw7IH0gfSkoKSk7CiAgaWYgKCFTVUIpIHsgY29uc29sZS5lcnJvcigiW2ltYWdlLWRyaWZ0XVtGQVRBTF0gbm8gc3Vic2NyaXB0aW9uIGlkIik7IHByb2Nlc3MuZXhpdCg3OCk7IH0KICBjb25zdCB0b2sgPSBhd2FpdCBhcm1Ub2tlbigpOwogIGNvbnN0IHJvd3MgPSBbXTsKICBmb3IgKGNvbnN0IFtyZ10gb2YgU1VCU19SR1MpIHsKICAgIGNvbnN0IGpvYnMgPSBhd2FpdCBhcm1MaXN0KHRvaywgYC9zdWJzY3JpcHRpb25zLyR7U1VCfS9yZXNvdXJjZUdyb3Vwcy8ke3JnfS9wcm92aWRlcnMvTWljcm9zb2Z0LkFwcC9qb2JzP2FwaS12ZXJzaW9uPTIwMjQtMDMtMDFgKTsKICAgIGZvciAoY29uc3QgaiBvZiBqb2JzKSB7IGNvbnN0IGltZyA9IGoucHJvcGVydGllcz8udGVtcGxhdGU/LmNvbnRhaW5lcnM/LlswXT8uaW1hZ2UgfHwgIiI7IHJvd3MucHVzaCh7IGtpbmQ6ICJqb2IiLCByZywgbmFtZTogai5uYW1lLCBpbWcsIHBpbm5lZDogaXNQaW5uZWQoaW1nKSB9KTsgfQogICAgY29uc3QgYXBwcyA9IGF3YWl0IGFybUxpc3QodG9rLCBgL3N1YnNjcmlwdGlvbnMvJHtTVUJ9L3Jlc291cmNlR3JvdXBzLyRye2gvcHJvdmlkZXJzL01pY3Jvc29mdC5BcHAvY29udGFpbmVyQXBwcz9hcGktdmVyc2lvbj0yMDI0LTAzLTAxYCk7CiAgICBmb3IgKGNvbnN0IGEgb2YgYXBwcykgeyBjb25zdCBpbWcgPSBhLnByb3BlcnRpZXM/LnRlbXBsYXRlPy5jb250YWluZXJzPy5bMF0/LmltYWdlIHx8ICIiOyByb3dzLnB1c2goeyBraW5kOiAiYXBwIiwgcmcsIG5hbWU6IGEubmFtZSwgaW1nLCBwaW5uZWQ6IGlzUGlubmVkKGltZykgfSk7IH0KICB9CiAgY29uc3QgZHJpZnQgPSByb3dzLmZpbHRlcigociA9PiAhci5waW5uZWQpOwogIGlmIChwcm9jZXNzLmFyZ3YuaW5jbHVkZXMoIi0tanNvbiIpKSB7IGNvbnNvbGUubG9nKEpTT04uc3RyaW5naWZ5KHJvd3MsIG51bGwsIDIpKTsgfQogIGVsc2UgewogICAgY29uc29sZS5sb2coYCMgSU1BR0UtRFJJRlQg4oCUICR7cm93cy5sZW5ndGh9IHJlc291cmNlKHMpOyAke2RyaWZ0Lmxlbmd0aH0gb24gTVVUQUJMRSB0YWdzIChkcmlmdCByaXNrKWApOwogICAgZm9yIChjb25zdCByIG9mIHJvd3MpIGNvbnNvbGUubG9nKGBbJHtyLnBpbm5lZCA/ICJQSU5ORUQiIDogIkRSSUZUICJ9XSAke3Iua2luZH0gJHtyLm5hbWUucGFkRW5kKDMwKX0gJHtyLmltZy5zcGxpdCgiLyIpLnBvcCgpfWApOwogICAgaWYgKGRyaWZ0Lmxlbmd0aCkgY29uc29sZS5sb2coYFxuTVVUQUJMRSAocGluIGJ5IEBzaGEyNTYgdG8gcHJldmVudCAnY29kZSBjaGFuZ2VkLCBpbWFnZSBkaWRuJ3QnKTogJHtkcmlmdC5tYXAoKHIpID0+IHIubmFtZSkuam9pbigiLCAiKX1gKTsKICB9CiAgcHJvY2Vzcy5leGl0KHByb2Nlc3MuYXJndi5pbmNsdWRlcygiLS1zdHJpY3QiKSAmJiBkcmlmdC5sZW5ndGggPyAzIDogMCk7Cn0pKCkuY2F0Y2goKGUpID0+IHsgY29uc29sZS5lcnJvcigiW2ltYWdlLWRyaWZ0XSBFUlJPUjogIiArIGUubWVzc2FnZSk7IHByb2Nlc3MuZXhpdCgxKTsgfSk7Cg==
+#!/usr/bin/env node
+// image-drift.mjs — P0 stability (2026-07-04). Flags any Azure Container App / Container Apps Job
+// running a MUTABLE image tag (":latest", ":main", etc.) instead of an immutable @sha256 digest —
+// the "code changed but the image didn't" / hand-deploy risk. Report-only (never mutates). ARM via
+// AZURE_SP_* (client_credentials). Dependency-free. Exits 0 (report) unless --strict (exit 3 on drift).
+//
+// 2026-07-12 FIX: arm() was a single-page GET with no nextLink handling -- the exact same bug
+// already found and fixed in drift-recon.mjs on 2026-07-05 (that fix's own header comment:
+// "signal-radar, decision-clock, memory-librarian all landed on page 2 and were wrongly reported
+// NO-JOB"), but this script was never updated to match. otchealth-automation-rg already has 20+
+// resources (the threshold where ARM starts paginating), so this script could have been silently
+// under-reporting drift on every job/app past page 1. Fixed the same way: armList() below always
+// follows nextLink to completion. No other script in this repo should still have this bug after
+// this fix -- confirmed via repo-wide search that drift-recon.mjs, replica-timeout-audit.mjs, and
+// resource-reconcile.mjs already paginate correctly.
+const SUBS_RGS = [
+  ["otchealth-automation-rg"],   // doc-indexer cron jobs
+  ["rg-otchealth-apps-prod"],    // MCP gateway + apps
+];
+const TEN = process.env.AZURE_SP_TENANT_ID, CID = process.env.AZURE_SP_CLIENT_ID, CSEC = process.env.AZURE_SP_CLIENT_SECRET;
+async function armToken() {
+  if (!TEN || !CID || !CSEC) { console.error("[image-drift][FATAL] AZURE_SP_* not set."); process.exit(78); }
+  const r = await fetch(`https://login.microsoftonline.com/${TEN}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "client_credentials", client_id: CID, client_secret: CSEC, scope: "https://management.azure.com/.default" }) });
+  const j = await r.json(); if (!j.access_token) { console.error("[image-drift][FATAL] no ARM token"); process.exit(1); } return j.access_token;
+}
+// ALWAYS follows nextLink to completion -- never read only page 1 of an ARM list response.
+async function armList(tok, path) {
+  const out = [];
+  let url = `https://management.azure.com${path}`;
+  while (url) {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
+    if (!r.ok) break;
+    const j = await r.json();
+    out.push(...(j.value || []));
+    url = j.nextLink || null;
+  }
+  return out;
+}
+const isPinned = (img) => /@sha256:/.test(img || "");
+(async () => {
+  const SUB = process.env.AZURE_SUBSCRIPTION_ID || (await (async () => { try { const m = await import("../skills/kb-memory/azure-secret.mjs"); return await m.kvSecret("azure-subscription-id"); } catch { return null; } })());
+  if (!SUB) { console.error("[image-drift][FATAL] no subscription id"); process.exit(78); }
+  const tok = await armToken();
+  const rows = [];
+  for (const [rg] of SUBS_RGS) {
+    const jobs = await armList(tok, `/subscriptions/${SUB}/resourceGroups/${rg}/providers/Microsoft.App/jobs?api-version=2024-03-01`);
+    for (const j of jobs) { const img = j.properties?.template?.containers?.[0]?.image || ""; rows.push({ kind: "job", rg, name: j.name, img, pinned: isPinned(img) }); }
+    const apps = await armList(tok, `/subscriptions/${SUB}/resourceGroups/${rg}/providers/Microsoft.App/containerApps?api-version=2024-03-01`);
+    for (const a of apps) { const img = a.properties?.template?.containers?.[0]?.image || ""; rows.push({ kind: "app", rg, name: a.name, img, pinned: isPinned(img) }); }
+  }
+  const drift = rows.filter((r) => !r.pinned);
+  if (process.argv.includes("--json")) { console.log(JSON.stringify(rows, null, 2)); }
+  else {
+    console.log(`# IMAGE-DRIFT — ${rows.length} resource(s); ${drift.length} on MUTABLE tags (drift risk)`);
+    for (const r of rows) console.log(`[${r.pinned ? "PINNED" : "DRIFT "}] ${r.kind} ${r.name.padEnd(30)} ${r.img.split("/").pop()}`);
+    if (drift.length) console.log(`\nMUTABLE (pin by @sha256 to prevent 'code changed, image didn't'): ${drift.map((r) => r.name).join(", ")}`);
+  }
+  process.exit(process.argv.includes("--strict") && drift.length ? 3 : 0);
+})().catch((e) => { console.error("[image-drift] ERROR: " + e.message); process.exit(1); });
