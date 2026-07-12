@@ -20,3 +20,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** hyperagent-skill:Azure-Control-Plane@n/a-hyperagent-skill-not-git — Added _arm_list_all() that always follows nextLink to completion; every list-style command now uses it instead of a raw single-page request. Also independently found and fixed the one remaining un-paginated instance (image-drift.mjs) in otchealth-claude-tools, commit 4faa71be.
 - **Verified:** Re-ran list-jobs live: correctly found 41 jobs across 2 pages including signal-radar/decision-clock, confirmed via PostHog signal_detected events
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-12T23:47Z] tag:bulletin-local-write-only — bulletin.mjs add on Hyperagent silently never committed/pushed 4 real broadcasts; its own stdout implied a push happened when none did
+
+- **Root cause:** bulletin.mjs was built correctly for Claude Code (2026-06-22), where the caller is expected to git commit+push themselves after add -- a normal step in that environment. On Hyperagent there is no git write credential in the plain https clone used by the kb-memory wrapper, so that expected follow-up step never happens, and nothing in the tool itself checks or warns. This was a cross-platform mismatch, not a code defect in the tool's original context.
+- **Fix:** InnerScopeHearing/otchealth-claude-tools@e170814ed303cb17c6b14a893b75315695772aeb — Reconstructed and repushed the 4 lost entries via the authenticated GitHub Contents API; built fleet-search's bulletin side-effect (commit 832e0f99) and this ledger tool itself to always write via the authenticated API with independent verification, never a local-file-plus-trust pattern.
+- **Verified:** github__list_commits confirmed the repush landed; fleet-search's bulletin check re-tested twice across separate invocations and correctly persisted its own durable marker
+**First recorded occurrence of this root-cause tag.**
