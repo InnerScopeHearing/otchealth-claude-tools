@@ -34,3 +34,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** InnerScopeHearing/otchealth-exec@89075f2bbc315aec7ce7c9493bccf1ab42294470 — Deleted the marker file entirely rather than setting it to one valid lane (no single lane is correct for a repo serving both coo/ and cro/) -- restores the intended fallback chain where KB_AGENT env actually works as the override.
 - **Verified:** Confirmed file returns 404 on main via direct fetch after deletion; cross-checked all 13 other .kb-agent files fleet-wide via github__search_code, all valid, this was the only broken one
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-12T23:48Z] tag:kb-agent-marker-precedence — otchealth-exec committed .kb-agent file (value exec, invalid) sat above KB_AGENT env in agent-id.sh precedence, silently overriding a correctly-set KB_AGENT=coo or cro into an unresolved-lane failure
+
+- **Root cause:** 2026-07-02: repo marker deliberately set to cfo (correct, CFO only home). 2026-07-04: broadened via a real architecture decision to host multiple exec roles, value changed to exec -- but nobody updated the valid-lane list or reconsidered that a repo marker outranks KB_AGENT in the resolver precedence order, which is the exact mechanism meant to let a shared ambiguous repo be overridden per session. The side effect went undetected for 8 days.
+- **Fix:** InnerScopeHearing/otchealth-exec@89075f2bbc315aec7ce7c9493bccf1ab42294470 — Deleted the marker file entirely rather than setting it to one valid lane, since no single lane is correct for a repo serving both coo and cro directories; restores the intended fallback chain where KB_AGENT env actually works as the override.
+- **Verified:** Confirmed file returns 404 on main via direct fetch after deletion; cross-checked all 13 other .kb-agent files fleet-wide via github search, all valid, this was the only broken one
+**REGRESSION — this root-cause tag has fired before:** [2026-07-12T23:48Z]. This is not a new finding; the earlier fix did not hold or did not cover this case.
