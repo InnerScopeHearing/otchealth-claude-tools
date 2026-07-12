@@ -27,3 +27,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** InnerScopeHearing/otchealth-claude-tools@e170814ed303cb17c6b14a893b75315695772aeb — Reconstructed and repushed the 4 lost entries via the authenticated GitHub Contents API; built fleet-search's bulletin side-effect (commit 832e0f99) and this ledger tool itself to always write via the authenticated API with independent verification, never a local-file-plus-trust pattern.
 - **Verified:** github__list_commits confirmed the repush landed; fleet-search's bulletin check re-tested twice across separate invocations and correctly persisted its own durable marker
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-12T23:48Z] tag:kb-agent-marker-precedence — otchealth-exec's committed .kb-agent file (value 'exec', invalid) sat above KB_AGENT env in agent-id.sh's precedence, silently overriding a correctly-set KB_AGENT=coo/cro into an unresolved-lane failure
+
+- **Root cause:** 2026-07-02: repo marker deliberately set to 'cfo' (correct, CFO's only home). 2026-07-04: broadened via a real architecture decision to host multiple exec roles, value changed to 'exec' -- but nobody updated the valid-lane list or reconsidered that a repo marker outranks KB_AGENT in the resolver's precedence order, which is the exact mechanism meant to let a shared/ambiguous repo be overridden per-session. The side effect went undetected for 8 days.
+- **Fix:** InnerScopeHearing/otchealth-exec@89075f2bbc315aec7ce7c9493bccf1ab42294470 — Deleted the marker file entirely rather than setting it to one valid lane (no single lane is correct for a repo serving both coo/ and cro/) -- restores the intended fallback chain where KB_AGENT env actually works as the override.
+- **Verified:** Confirmed file returns 404 on main via direct fetch after deletion; cross-checked all 13 other .kb-agent files fleet-wide via github__search_code, all valid, this was the only broken one
+**First recorded occurrence of this root-cause tag.**
