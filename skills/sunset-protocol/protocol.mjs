@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 // SUNSET / SUNRISE TRANSFER PROTOCOL — hardened cross-engine consciousness transfer for the fleet.
 //
-// Matt's ask: one phrase spins an agent DOWN on one engine (Claude Code), another phrase spins it UP
-// on the other (Hyperagent) fully self-updated. The brain is already durable + engine-agnostic (Azure
-// ledgers + memory-exec), so "transfer" = FLUSH-then-ATTACH, not a migration of state.
+// Matt's ask: one phrase spins an agent DOWN on one engine, another phrase spins it UP on the other,
+// fully self-updated. The brain is already durable + engine-agnostic (Azure ledgers + memory-exec), so
+// "transfer" = FLUSH-then-ATTACH, not a migration of state.
+//
+// 2026-07-12 CORRECTION (Matt, direct): the Executive-side agents (cto/cfo/clo/coo/cro) run in
+// Claude CHAT, not Claude Code. Do not assume "Claude Code" fleet-wide just because Developer (and
+// possibly other non-exec roster roles) legitimately does. See otherEngineLabel() below -- role-aware,
+// not a blanket assumption. This was a real, demonstrated failure mode: the auto-generated handoff doc
+// itself said "running on Hyperagent (Claude Code)" for the CTO, which is wrong.
 //
 //   SUNSET  (spin down): snapshot the agent into a PORTABLE, RING-SAFE handoff doc in the shared commons
 //           (_HANDOFF/<role>.md) so the seat survives the blackout. Then the agent says "Goodnight friend".
@@ -41,6 +47,11 @@ const DISPATCH_PREFIX = "_DISPATCH/";
 const ROSTER = ["cto", "cfo", "clo", "coo", "cro", "developer", "commerce", "rainmaker", "lifecycle", "switchboard", "capital", "growth", "guardian", "medic"];
 // Rings: SENSITIVE ledgers never have their text embedded in a commons-stored doc.
 const SENSITIVE = new Set(["cfo", "clo", "clo-personal", "capital"]);
+// Executive-side roster runs on Claude Chat (Matt, 2026-07-12), NOT Claude Code. Everyone else on this
+// roster defaults to Claude Code (dev-tooling roles) unless/until corrected the same way. Keep this map,
+// not a blanket string, so the next correction is a one-line edit instead of a repo-wide sweep.
+const EXEC_ENGINE = { cto: "Claude Chat", cfo: "Claude Chat", clo: "Claude Chat", coo: "Claude Chat", cro: "Claude Chat" };
+function otherEngineLabel(agent) { return EXEC_ENGINE[agent] || "Claude Code"; }
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -92,6 +103,7 @@ function computeLast3(rows) {
 // non-sensitive roles (and even then only short titles); sensitive roles get counts + "read your ledger live".
 function renderHandoff(agent, rows, openDisp) {
   const sensitive = SENSITIVE.has(agent);
+  const engine = otherEngineLabel(agent);
   const decisions = rows.filter((r) => r.type === "decision").length;
   const corrections = rows.filter((r) => r.type === "correction" || r.type === "correct").length;
   const pitfalls = rows.filter((r) => r.type === "pitfall").length;
@@ -117,8 +129,9 @@ function renderHandoff(agent, rows, openDisp) {
 
 ## Who you are
 You are the **${agent.toUpperCase()}** agent for OTCHealth Inc. and InnerScope (OTC: INND), running on
-Hyperagent (Claude Code). Your seat moved engines during a Claude Code usage blackout. Your brain is
-durable and engine-agnostic, so SPIN UP by attaching, not rebuilding.
+Hyperagent. Your seat moved engines during an engine outage/rotation. Your OTHER engine for this role is
+**${engine}** (verified 2026-07-12 -- do not assume otherwise even if an older doc says differently). Your
+brain is durable and engine-agnostic, so SPIN UP by attaching, not rebuilding.
 
 ## Ring
 ${ringLine}
@@ -171,7 +184,7 @@ async function sunset() {
   if (!_saRaw) { console.error("SUNSET: no claude-driver SA -> cannot reach the commons. (set GCP_CLAUDE_DRIVER_SA_JSON)"); process.exit(1); }
   await commonsInit(true);
   const r = await sunsetOne(agent, { repoPath: val("--repo-path", "") });
-  stampLedger(agent, `SUNSET (Transfer Protocol): wrote portable handoff to commons _HANDOFF/${agent}.md at sunset. Ledger ${r.ledger} entries, ${r.openDisp} pending dispatches. Ready for cross-engine attach (Hyperagent).`);
+  stampLedger(agent, `SUNSET (Transfer Protocol): wrote portable handoff to commons _HANDOFF/${agent}.md at sunset. Ledger ${r.ledger} entries, ${r.openDisp} pending dispatches. Ready for cross-engine attach (other engine: ${otherEngineLabel(agent)}).`);
   console.log(`\n[SUNSET] ${agent}: handoff written -> _HANDOFF/${agent}.md (commons). Ledger ${r.ledger} entries; ${r.openDisp} pending dispatch(es).`);
   console.log(`[SUNSET] Everything is flushed and durable. The agent should now say, verbatim:  Goodnight friend\n`);
 }
@@ -186,7 +199,7 @@ async function sunsetFleet() {
     catch (e) { console.log(`[sunset-fleet] ${role}: SKIP (${e.message})`); }
   }
   console.log(`\n[sunset-fleet] DONE for ${done.length}/${roles.length} roles: ${done.join(", ")}`);
-  console.log(`[sunset-fleet] Every agent can SUNRISE on Hyperagent by reading its _HANDOFF/<role>.md. No session-opening was needed.`);
+  console.log(`[sunset-fleet] Every agent can SUNRISE on its other engine by reading its _HANDOFF/<role>.md. No session-opening was needed.`);
 }
 
 async function last3() {
