@@ -41,3 +41,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** manually deduplicated this file (removed the redundant second kb-agent-marker-precedence entry) via a direct authenticated edit. NOT YET FIXED IN THE TOOL ITSELF: `add` should ideally check for an identical/near-identical existing entry within the same short time window before writing, or at minimum print the full existing entry list so a human/agent can see whether a "regression" is a real repeat or an accidental resubmission. Flagging as a known, real, immediate gap rather than fixing silently.
 - **Verified:** re-fetched the file directly and confirmed only one kb-agent-marker-precedence entry remains
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-12T23:53Z] tag:indexer-skip-prefixes-recurring-gap — doc-indexer SKIP_PREFIXES has needed manual extension 3 separate times as new content types were added to shared containers (original CATALOG/TEXT/NON-ACCOUNTING; plus DUPLICATES/ARCHIVE on 2026-07-02; plus MEMORY/HANDOFF/DISPATCH by me on 2026-07-12) -- not the same bug recurring, but a recurring PATTERN with no automatic safeguard
+
+- **Root cause:** SKIP_PREFIXES is a manually-maintained hardcoded list with no test or check that fires when a new well-known prefix convention is introduced elsewhere in the fleet (HANDOFF_PREFIX, MEM_PREFIX, DISPATCH_PREFIX are all defined in OTHER files -- sunset-protocol/kb-memory -- with no cross-reference back to indexer.mjs). Each extension so far has been caught by luck or direct investigation, not by any structural check.
+- **Fix:** InnerScopeHearing/otchealth-claude-tools@87905a0b4b15f5c7834af3be00dc0748a8f32056 — Fixed the immediate instance (added MEMORY/HANDOFF/DISPATCH). NOT YET FIXED: no structural safeguard added to prevent a 4th occurrence -- flagging as an open, unresolved gap rather than claiming this is closed for good.
+- **Verified:** Read the full commit history for indexer.mjs and confirmed exactly 3 separate SKIP_PREFIXES extensions across its lifetime via github__list_commits
+**First recorded occurrence of this root-cause tag.**
