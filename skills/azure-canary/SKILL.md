@@ -1,6 +1,6 @@
 ---
 name: azure-canary
-description: The Azure control-plane freshness + dead-job CANARY for the fleet (ITEM #2 Phase A monitor). Calls the gateway's Azure read tools (azure_jobs_list / azure_job_executions / azure_search_index_stats) the way the Chat CTO does -- a cto-lane client_credentials bearer against the live gateway /mcp over public HTTPS -- and raises a page-worthy signal if the tools are unreachable / erroring (gateway down or the managed identity lost its RBAC), if any scheduled Container Apps Job's latest run != Succeeded (the dead-job pager, the exact failure family that let daily-digest fail silently for 9 days), or if the otchealth-brain AI Search index doc count fell below a floor (broken reindex / emptied index). REPORT-ONLY (the PostHog azure_canary event + a ::warning:: line are the alert; exits non-zero only when it cannot run at all, which is itself the signal that the sensor lane is dark). Runs nightly as .github/workflows/nightly-azure-canary.yml. Non-PHI; reads only control-plane metadata, never secret values. Creds via kvSecret (never a local AZURE_SP-only reader).
+description: The fleet FRESHNESS + dead-job CANARY. Two checks. (1) DEAD-JOB PAGER, every scheduled Container Apps Job's latest run must be Succeeded (via the gateway's azure_jobs_list / azure_job_executions on the cto lane, the exact failure family that let daily-digest fail silently for 9 days). (2) PER-INDEX FRESHNESS, for every LIVE index in setup/expected-indexes.json the newest document's timestamp (indexed_at for the room indexes, ts for memory-exec) must be younger than that index's max_age_h SLO. This REPLACES the old single-index doc-count floor, the exact blind spot that let otchealth-brain sit frozen for ~12 days (a frozen index never drops below a floor, it stays identical forever, so only AGE catches it). It reads only the newest timestamp + doc count, never document content, so it does not breach the privileged rings. REPORT-ONLY (PostHog azure_canary event + a ::warning:: line are the alert; exits non-zero only when it cannot run at all, which is itself the sensor-lane-dark page). Runs nightly. Non-PHI. Creds via the shared kvSecret (cto lane for the job sweep; azure-sp -> ARM listQueryKeys -> a read-only AI Search query key for the freshness probe), never a local AZURE_SP-only reader.
 ---
 
 # azure-canary -- make the Azure sensors' silence page us
@@ -16,8 +16,11 @@ goes dark. It is the freshness canary + dead-job pager the ITEM #2 work order ca
    down or the gateway managed identity lost its least-privilege roles.
 2. **Dead-job pager** -- for every `Schedule`-triggered Container Apps Job, reads the latest execution and
    flags anything not `Succeeded` (or with no executions).
-3. **Freshness canary** -- reads the `otchealth-brain` index doc count and flags a drop below the floor
-   (`AZURE_CANARY_BRAIN_FLOOR`, default 60000; brain sits ~67.6k).
+3. **Per-index freshness** -- for every LIVE index in `setup/expected-indexes.json`, reads the newest
+   document's timestamp (`indexed_at` for the room indexes, `ts` for memory-exec) and flags any index
+   whose newest doc is older than its `max_age_h` SLO, or that has no dateable document (NO_DATE). This
+   replaces the old doc-count floor (a frozen index never trips a floor; only AGE catches it, which is how
+   `otchealth-brain` sat frozen ~12 days). Reads only the timestamp, never document content.
 
 ## Run
 ```

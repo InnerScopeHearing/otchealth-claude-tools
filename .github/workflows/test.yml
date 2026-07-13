@@ -35,5 +35,11 @@ jobs:
       - name: run-tests.sh
         run: bash run-tests.sh
 
+      # THE GATE: an index any retrieval tool can query MUST have a real, scheduled writer.
+      # This is the check that would have blocked otchealth-brain (67,645 docs, no writer, 12 days as
+      # the fleet's source of truth) from ever being wired in. See setup/expected-indexes.json.
+      - name: index-writer-gate
+        run: node setup/index-writer-gate.mjs
+
       - name: lint-silent-success
         run: node setup/lint-silent-success.mjs --dir .

@@ -1,0 +1,85 @@
+{
+  "_comment": "THE INDEX WRITER REGISTRY. Declarative manifest of every Azure AI Search index the fleet's retrieval tools can query, and -- critically -- WHAT WRITES IT. Consumed by setup/index-writer-gate.mjs (CI gate) and skills/azure-canary/canary.mjs (freshness canary). WHY IT EXISTS: on 2026-07-13 we found that `otchealth-brain` (67,645 docs) -- the ONLY index the gateway's brain_search queried, whose tool description told every agent 'Ground answers here and cite' -- HAD NO WRITER ANYWHERE. It was an ad-hoc one-time snapshot created outside both repos and outside IaC (git log -S across all 541 commits: the string first appears 2026-07-10, in a READER). It sat frozen for ~12 days while every agent grounded answers in it. Nothing caught it because (a) a job literally named `brain-reindex` ran green every 6h -- it actually refreshes memory-exec, and was named back when memory-exec WAS 'the brain' (company-brain/brain.mjs still labels it '(shared brain)'); (b) the only freshness signal we had was a doc-count FLOOR, and a frozen index never drops below a floor -- it stays identical forever; (c) expected-resources.json proves every JOB exists but asserts nothing about what a job WRITES. THE RULE THIS FILE ENFORCES: an index that any retrieval tool can query MUST have a registered writer that actually exists and is actually scheduled. If you wire a new index into a search tool, add it here, or index-writer-gate.mjs fails CI. If an index has no writer, it does not get to be a source of truth.",
+  "indexes": [
+    {
+      "index": "memory-exec",
+      "service": "otchealth-dataroom-search",
+      "writer_job": "brain-reindex",
+      "writer_rg": "otchealth-automation-rg",
+      "writer_source": "skills/doc-indexer/job/brain-reindex.sh -> skills/kb-memory/semantic.mjs reindex",
+      "cadence_min": 360,
+      "timestamp_field": "ts",
+      "max_age_h": 24,
+      "queried_by": ["gateway brain_search (federated)", "gateway kb_search", "skills/company-brain/brain.mjs"],
+      "note": "The real shared brain. `brain-reindex` is NOT misnamed historically -- brain.mjs labels this index '(shared brain)'. The name only became a trap once the separate `otchealth-brain` index was created and stole the noun."
+    },
+    {
+      "index": "commons-company-journal",
+      "service": "otchealth-dataroom-search",
+      "writer_job": "librarian-commerce",
+      "writer_rg": "otchealth-automation-rg",
+      "writer_source": "skills/doc-indexer/indexer.mjs push-search (profile commons / container company-journal)",
+      "cadence_min": 60,
+      "timestamp_field": "indexed_at",
+      "max_age_h": 48,
+      "queried_by": ["gateway brain_search (federated)", "gateway kb_search", "skills/company-brain/brain.mjs"],
+      "note": "max_age is 48h not 4h: the librarian runs hourly but only pushes when there is NEW content, so a quiet day is legitimately quiet. The canary asserts the WRITER is alive (via the dead-job sweep) AND that content is not ancient -- not that content arrives hourly."
+    },
+    {
+      "index": "finance-cfo-source-docs",
+      "service": "otchealth-dataroom-search",
+      "writer_job": "librarian-finance",
+      "writer_rg": "otchealth-automation-rg",
+      "writer_source": "skills/doc-indexer/indexer.mjs push-search (profile finance)",
+      "cadence_min": 360,
+      "timestamp_field": "indexed_at",
+      "max_age_h": 168,
+      "queried_by": ["gateway kb_search_privileged (ring-gated)", "skills/company-brain/brain.mjs"],
+      "note": "MNPI ring. Source docs change slowly; a week of no new finance docs is normal, so max_age is generous. Liveness of the WRITER is the real assertion here."
+    },
+    {
+      "index": "legal-company",
+      "service": "otchealth-dataroom-search",
+      "writer_job": "librarian-legal-company",
+      "writer_rg": "otchealth-automation-rg",
+      "writer_source": "skills/doc-indexer/indexer.mjs push-search (profile legal-company)",
+      "cadence_min": 360,
+      "timestamp_field": "indexed_at",
+      "max_age_h": 168,
+      "queried_by": ["gateway kb_search_privileged (ring-gated)", "skills/company-brain/brain.mjs"],
+      "note": "Attorney ring."
+    },
+    {
+      "index": "legal-personal",
+      "service": "otchealth-dataroom-search",
+      "writer_job": "librarian-legal-personal",
+      "writer_rg": "otchealth-automation-rg",
+      "writer_source": "skills/doc-indexer/indexer.mjs push-search (profile legal-personal)",
+      "cadence_min": 360,
+      "timestamp_field": "indexed_at",
+      "max_age_h": 168,
+      "queried_by": ["gateway kb_search_privileged (CLO ring only)"],
+      "note": "ATTORNEY-PRIVILEGED. The canary reads ONLY the newest indexed_at timestamp and the doc count -- never document CONTENT. Metadata-only, so the freshness check does not breach the privilege wall."
+    },
+    {
+      "index": "commerce-commerce-source-docs",
+      "service": "otchealth-dataroom-search",
+      "writer_job": "librarian-commerce",
+      "writer_rg": "otchealth-automation-rg",
+      "writer_source": "skills/doc-indexer/indexer.mjs push-search (profile commerce)",
+      "cadence_min": 60,
+      "timestamp_field": "indexed_at",
+      "max_age_h": 72,
+      "queried_by": ["skills/company-brain/brain.mjs"]
+    }
+  ],
+  "decommissioning": [
+    {
+      "index": "otchealth-brain",
+      "service": "otchealth-brain-search",
+      "writer_job": null,
+      "status": "ORPHAN -- SCHEDULED FOR DECOMMISSION (2026-07-13)",
+      "note": "NO WRITER, EVER. Ad-hoc one-time snapshot (~2026-07-01) created outside both repos and outside IaC; frozen at exactly 67,645 docs. Retired as a retrieval target by mcp-server PR #103 (brain_search now federates the live rooms above). Deliberately listed here, NOT in `indexes`, so index-writer-gate.mjs FAILS if any retrieval tool is ever re-pointed at it. ARM deletion of the index + the orphan `otchealth-brain-search` service requires a delete path the gateway does not expose (no azure_search_index_delete / no service delete) -- pending a human hand. Until then this entry is the tombstone."
+    }
+  ]
+}

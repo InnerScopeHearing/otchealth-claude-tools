@@ -66,6 +66,7 @@
  *   node backup.mjs selftest            # no writes: verify identity token + KV secret + blob container reachable
  */
 
+import { readFileSync } from "node:fs";
 import crypto from "node:crypto";
 
 // ---------- Key Vault (managed identity, mirrors skills/kb-memory/azure-secret.mjs) ----------
@@ -357,35 +358,75 @@ async function run({ ledgerOnly, brainOnly }) {
   }
 
   if (!ledgerOnly) {
-    // Prefer the DIRECT AI Search dump (reliable full-index export). Fall back to the gateway
-    // brain_search path (LIMITED: cannot enumerate the full index) ONLY if no query key is
-    // provisioned, so the job still produces a ledger backup + best-effort brain sample.
-    const brainKey = await kvSecret("brain-search-query-key");
-    const brainEndpoint = (await kvSecret("brain-search-endpoint")) || process.env.BRAIN_SEARCH_ENDPOINT || "https://otchealth-brain-search.search.windows.net";
-    const blobName = `brain-index-${date}.jsonl`;
-    let bstat;
-    if (brainKey) {
-      // STREAM straight to blob (Put Block per page) -- the buffered approach OOM'd the ~512MB heap.
-      console.log(`[fleet-backup] streaming otchealth-brain -> ${container}/${blobName} via direct AI Search dump (${brainEndpoint}) ...`);
-      bstat = await exportBrainIndexToBlob(brainKey, brainEndpoint, account, container, blobName);
-    } else {
-      console.warn("[fleet-backup] brain-search-query-key ABSENT; falling back to gateway brain_search (LIMITED: cannot enumerate the full index -- expect a partial/empty dump).");
-      const brainRows = await exportBrainIndex(bearer);
-      const brainBuf = Buffer.from(toNdjson(brainRows), "utf8");
-      await putBlockBlob(account, container, blobName, brainBuf, "application/x-ndjson");
-      bstat = { rows: brainRows.length, bytes: brainBuf.length, sha256: sha256(brainBuf) };
+    // >>> 2026-07-13 CRITICAL REPOINT. This job used to dump ONLY `otchealth-brain` and call that "the
+    // >>> fleet brain DR copy". otchealth-brain is a DEAD, WRITER-LESS one-time snapshot, frozen at
+    // >>> 67,645 docs since ~2026-07-01 (see setup/expected-indexes.json). So the fleet's celebrated
+    // >>> "first-ever valid brain backup" was a backup OF A CORPSE -- while the indexes that actually
+    // >>> hold the living brain (memory-exec + every data room) had ZERO offline copy. Backing up the
+    // >>> one index nothing writes, and none of the six that everything writes, is worse than no backup:
+    // >>> it produces the FEELING of DR coverage. We now back up every LIVE index in the writer registry,
+    // >>> which is the same list the freshness canary watches -- one registry, no second list to forget.
+    const registry = JSON.parse(readFileSync(new URL("../../setup/expected-indexes.json", import.meta.url), "utf8"));
+    const liveIndexes = registry.indexes || [];
+    // Search creds are NOT in Key Vault (no AIS secret exists there). Obtain a read-only QUERY key per
+    // service via ARM listQueryKeys using THIS job's managed identity (granted Search Service Contributor
+    // on otchealth-dataroom-search 2026-07-13), mirroring the gateway's azure_search_index_stats path.
+    // The endpoint is derived from the service name; the query key is held in memory, never logged.
+    const SUBSCRIPTION = process.env.AZURE_SUBSCRIPTION_ID || "55c84f6b-ef90-4259-a58b-50835cc4cab4";
+    const SEARCH_RG = process.env.AZURE_SEARCH_RG || "otchealth-automation-rg";
+    async function miArmToken() {
+      const ep = process.env.IDENTITY_ENDPOINT, hdr = process.env.IDENTITY_HEADER;
+      if (!ep || !hdr) throw new Error("managed identity unavailable (IDENTITY_ENDPOINT unset) -- cannot obtain a search key. This job MUST run under a managed identity with Search Service Contributor.");
+      const r = await fetch(`${ep}?resource=${encodeURIComponent("https://management.azure.com")}&api-version=2019-08-01`, { headers: { "X-IDENTITY-HEADER": hdr } });
+      if (!r.ok) throw new Error(`MI ARM token request failed (${r.status})`);
+      return (await r.json()).access_token;
     }
-    manifest.brain = { blob: blobName, rows: bstat.rows, bytes: bstat.bytes, sha256: bstat.sha256 };
-    console.log(`[fleet-backup] brain index export OK: ${bstat.rows} docs, ${bstat.bytes} bytes -> ${container}/${blobName}`);
-    if (bstat.rows < 60000) {
-      console.warn(`[fleet-backup] WARNING: expected ~67,645 docs in otchealth-brain; only captured ${bstat.rows}. Investigate before trusting this as a full DR copy.`);
+    const _keyCache = {};
+    async function searchKeyFor(service) {
+      if (_keyCache[service]) return _keyCache[service];
+      const tok = await miArmToken();
+      const r = await fetch(`https://management.azure.com/subscriptions/${SUBSCRIPTION}/resourceGroups/${SEARCH_RG}/providers/Microsoft.Search/searchServices/${service}/listQueryKeys?api-version=2023-11-01`, { method: "POST", headers: { Authorization: `Bearer ${tok}` } });
+      if (!r.ok) throw new Error(`listQueryKeys(${service}) -> ${r.status}: ${(await r.text()).slice(0, 150)}`);
+      const key = (await r.json()).value?.find((k) => k.key)?.key;
+      if (!key) throw new Error(`no query key returned for search service ${service}`);
+      return (_keyCache[service] = key);
     }
+    manifest.indexes = [];
+    const failures = [];
+    for (const ix of liveIndexes) {
+      const blobName = `index-${ix.index}-${date}.jsonl`;
+      try {
+        const searchKey = await searchKeyFor(ix.service);
+        console.log(`[fleet-backup] streaming ${ix.index} (${ix.service}) -> ${container}/${blobName} ...`);
+        const st = await exportBrainIndexToBlob(searchKey, `https://${ix.service}.search.windows.net`, account, container, blobName, { index: ix.index });
+        manifest.indexes.push({ index: ix.index, service: ix.service, blob: blobName, rows: st.rows, bytes: st.bytes, sha256: st.sha256 });
+        console.log(`[fleet-backup] ${ix.index}: ${st.rows} docs, ${st.bytes} bytes`);
+        // LIVENESS ASSERTION, not a volume floor: an index that dumps ZERO rows is a dead index, and a
+        // backup job that cheerfully writes an empty file is the exact "green job that did nothing"
+        // pattern this whole change exists to kill -- so ZERO rows counts as a FAILURE.
+        if (st.rows === 0) { console.warn(`::warning::[fleet-backup] ${ix.index} dumped ZERO documents.`); failures.push(`${ix.index}: 0 rows`); }
+      } catch (e) {
+        console.error(`::error::[fleet-backup] ${ix.index} FAILED: ${e.message}`);
+        failures.push(`${ix.index}: ${e.message}`);
+      }
+    }
+    const totalDocs = manifest.indexes.reduce((a, b) => a + b.rows, 0);
+    manifest.brain = { mode: "federated-live-rooms", indexes: manifest.indexes.length, expected: liveIndexes.length, total_docs: totalDocs, failures };
+    console.log(`[fleet-backup] LIVE brain export: ${manifest.indexes.length}/${liveIndexes.length} index(es) OK, ${totalDocs} docs total.`);
+    // Persist the manifest (below) BEFORE failing, so partial progress is recorded -- but FAIL LOUD if
+    // any live index could not be captured. A silent partial backup is exactly how we got here.
+    if (failures.length) manifest.backup_incomplete = failures;
   }
 
   const manifestBuf = Buffer.from(JSON.stringify(manifest, null, 2), "utf8");
   await putBlockBlob(account, container, `manifest-${date}.json`, manifestBuf, "application/json");
   console.log(`[fleet-backup] manifest written: ${container}/manifest-${date}.json`);
   console.log(JSON.stringify(manifest, null, 2));
+  // Manifest is persisted (partial progress recorded). Now FAIL LOUD if any live index was missed, so a
+  // partial brain backup can never masquerade as a green run.
+  if (Array.isArray(manifest.backup_incomplete) && manifest.backup_incomplete.length) {
+    throw new Error(`[fleet-backup] INCOMPLETE: ${manifest.backup_incomplete.length} live index(es) not captured -> ${manifest.backup_incomplete.join("; ")}`);
+  }
 }
 
 async function selftest() {

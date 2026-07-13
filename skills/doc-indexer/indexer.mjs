@@ -466,6 +466,12 @@ async function aisCreateIndex() {
       { name: "material", type: "Edm.Boolean", filterable: true },
       { name: "execution_status", type: "Edm.String", filterable: true, facetable: true, retrievable: true },
       { name: "signed", type: "Edm.Boolean", filterable: true },
+      // FRESHNESS (2026-07-13): the room indexes carried NO time field of any kind, so index staleness
+      // was structurally UNMEASURABLE -- the exact blind spot that let `otchealth-brain` sit frozen for
+      // ~12 days behind a green doc-count canary. indexed_at is stamped on every mergeOrUpload and is
+      // sortable, so a canary can assert max(indexed_at) age instead of a doc-count floor (a frozen
+      // index never drops below a floor; it stays identical forever).
+      { name: "indexed_at", type: "Edm.DateTimeOffset", filterable: true, sortable: true, retrievable: true },
       { name: "contentVector", type: "Collection(Edm.Single)", searchable: true, retrievable: false, dimensions: EMB_DIMS, vectorSearchProfile: "vp" },
     ],
     vectorSearch: {
@@ -535,7 +541,7 @@ async function runPushSearch() {
     if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
     const summary = r.summary || "";
-    pend.push({ "@search.action": "mergeOrUpload", id, path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), summary: summary.slice(0, 16000), content: txt.slice(0, 32000), material: !!r.material, execution_status: r.execution_status || "", signed: !!r.has_signature });
+    pend.push({ "@search.action": "mergeOrUpload", id, indexed_at: new Date().toISOString(), path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), summary: summary.slice(0, 16000), content: txt.slice(0, 32000), material: !!r.material, execution_status: r.execution_status || "", signed: !!r.has_signature });
     texts.push(((r.title || "") + "\n" + summary + "\n" + txt).slice(0, 8000));
     if (texts.length >= EMB_BATCH) await flushEmb();
   }

@@ -1,28 +1,49 @@
 #!/usr/bin/env node
-// canary.mjs -- the Azure control-plane freshness + dead-job CANARY (ITEM #2 Phase A, DoD item 5).
+// canary.mjs -- the fleet FRESHNESS + dead-job CANARY.
 //
-// The 6 Azure read tools (azure_jobs_list / azure_job_executions / azure_search_index_stats / ...) shipped
-// in gateway PR #101 are the SENSORS. This is the MONITOR that makes their silence page us: it calls them
-// the way the Chat CTO does -- a cto-lane client_credentials bearer against the live gateway /mcp over
-// public HTTPS -- and raises a signal if:
-//   (1) the tools are unreachable / erroring (the gateway is down, or the MI lost its RBAC), OR
-//   (2) any scheduled Container Apps Job's latest run != Succeeded (the dead-job pager -- the exact
-//       failure family that let daily-digest fail silently for 9 days), OR
-//   (3) the otchealth-brain index doc count fell below a floor (the freshness canary -- a broken
-//       reindex / emptied index).
-// REPORT-ONLY: it never exits non-zero on an anomaly (the PostHog event + the ::warning:: line ARE the
-// alert, same model as nightly-recall-eval). It exits non-zero ONLY if it cannot run at all (no creds /
-// gateway unreachable), which is itself a page-worthy signal that the sensor lane is dark.
+// WHAT IT WATCHES (and why it now looks nothing like the old version):
+//   (1) DEAD-JOB PAGER -- every scheduled Container Apps Job's latest run must be Succeeded (via the
+//       gateway's azure_jobs_list / azure_job_executions, cto lane). The failure family that let
+//       daily-digest fail silently for 9 days.
+//   (2) PER-INDEX FRESHNESS -- for every LIVE index in setup/expected-indexes.json, the newest document's
+//       timestamp (indexed_at for the room indexes, ts for memory-exec) must be younger than that index's
+//       max_age_h SLO. This REPLACES the old single-index doc-count FLOOR. The floor was the exact blind
+//       spot that let `otchealth-brain` (67,645 docs, NO WRITER) sit frozen for ~12 days: a frozen index
+//       never drops below a floor -- it stays identical forever. Age can only be measured because the
+//       room indexes now carry a sortable indexed_at field (indexer.mjs, 2026-07-13) + the backfill.
+//   (3) TOMBSTONE GUARD -- otchealth-brain must stay in `decommissioning`, never re-adopted as live.
 //
-// Auth: cto-lane creds from Key Vault via kvSecret (managed-identity / azure-sp / az-cli resolver -- NEVER
-// a local AZURE_SP-only reader). No secret value is ever printed.
+// REPORT-ONLY on an anomaly (PostHog azure_canary event + ::warning::); exits non-zero ONLY if it cannot
+// run at all (sensor lane dark), which is itself the page.
+//
+// Auth: cto-lane bearer (gateway /mcp) for the job sweep; azure-sp (read via the shared kvSecret, NEVER a
+// local AZURE_SP-only reader) -> ARM listQueryKeys -> a read-only AI Search query key for the freshness
+// probe. The freshness probe reads ONLY the newest timestamp + doc count -- never document CONTENT, so it
+// does not breach the privileged (finance/legal) rings. No secret value is ever printed.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
+const HERE = dirname(fileURLToPath(import.meta.url));
 const GW = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
-const BRAIN_FLOOR = parseInt(process.env.AZURE_CANARY_BRAIN_FLOOR || "60000", 10);
+const SUB = process.env.AZURE_SUBSCRIPTION_ID || "55c84f6b-ef90-4259-a58b-50835cc4cab4";
+const SEARCH_RG = process.env.AZURE_SEARCH_RG || "otchealth-automation-rg";
 const JSONOUT = process.argv.includes("--json");
 
 function warn(msg) { console.log(`::warning::[azure-canary] ${msg}`); }
+
+/**
+ * PURE freshness verdict for one index. Given the index registry entry, the newest document timestamp
+ * (ISO string or null), and "now", classify FRESH / STALE / NO_DATE. Unit-tested; no I/O.
+ */
+export function assessFreshness(ix, newestIso, nowMs) {
+  if (!newestIso) return { index: ix.index, state: "NO_DATE", ageH: null, maxAgeH: ix.max_age_h };
+  const ts = Date.parse(newestIso);
+  if (Number.isNaN(ts)) return { index: ix.index, state: "NO_DATE", ageH: null, maxAgeH: ix.max_age_h };
+  const ageH = (nowMs - ts) / 3_600_000;
+  return { index: ix.index, state: ageH <= ix.max_age_h ? "FRESH" : "STALE", ageH: Math.round(ageH * 10) / 10, maxAgeH: ix.max_age_h, newest: newestIso };
+}
 
 async function ctoBearer() {
   const cid = await kvSecret("oauth-lane-cto-id");
@@ -52,75 +73,121 @@ async function mcpCall(bearer, name, args) {
   return j?.result?.structuredContent?.result ?? j?.result?.structuredContent ?? null;
 }
 
+// --- azure-sp -> ARM token -> per-service AI Search query key (cached). Read-only query key; never logged. ---
+async function armToken() {
+  const tid = await kvSecret("azure-sp-tenant-id");
+  const cid = await kvSecret("azure-sp-client-id");
+  const sec = await kvSecret("azure-sp-client-secret");
+  if (!tid || !cid || !sec) throw new Error("azure-sp creds unavailable for ARM listQueryKeys");
+  const r = await fetch(`https://login.microsoftonline.com/${tid}/oauth2/v2.0/token`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: cid, client_secret: sec, scope: "https://management.azure.com/.default" }),
+  });
+  const j = await r.json();
+  if (!j.access_token) throw new Error(`ARM token mint failed (${r.status})`);
+  return j.access_token;
+}
+const _keyCache = {};
+async function searchKeyFor(service) {
+  if (_keyCache[service]) return _keyCache[service];
+  const tok = await armToken();
+  const r = await fetch(`https://management.azure.com/subscriptions/${SUB}/resourceGroups/${SEARCH_RG}/providers/Microsoft.Search/searchServices/${service}/listQueryKeys?api-version=2023-11-01`, { method: "POST", headers: { Authorization: `Bearer ${tok}` } });
+  if (!r.ok) throw new Error(`listQueryKeys(${service}) -> ${r.status}`);
+  const key = (await r.json()).value?.find((k) => k.key)?.key;
+  if (!key) throw new Error(`no query key for ${service}`);
+  return (_keyCache[service] = key);
+}
+
+/** Newest value of `field` in `index` on `service`, or null. Reads only that one field (metadata, not content). */
+async function newestTimestamp(service, index, field) {
+  const key = await searchKeyFor(service);
+  const r = await fetch(`https://${service}.search.windows.net/indexes/${encodeURIComponent(index)}/docs/search?api-version=2023-11-01`, {
+    method: "POST", headers: { "api-key": key, "Content-Type": "application/json" },
+    body: JSON.stringify({ search: "*", top: 1, orderby: `${field} desc`, select: field }),
+  });
+  if (!r.ok) throw new Error(`freshness query ${index} -> ${r.status}: ${(await r.text()).slice(0, 120)}`);
+  const j = await r.json();
+  return j.value?.[0]?.[field] ?? null;
+}
+
 async function emitPosthog(props) {
   try {
     const key = await kvSecret("posthog-fleet-ingest-key");
     const host = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
     if (!key) return;
     await fetch(`${host}/capture/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_key: key, event: "azure_canary", distinct_id: "fleet-azure-canary", properties: props }),
     });
-  } catch { /* emit is best-effort; never fail the canary on telemetry */ }
+  } catch { /* emit is best-effort */ }
 }
 
 async function main() {
+  const registry = JSON.parse(readFileSync(join(HERE, "..", "..", "setup", "expected-indexes.json"), "utf8"));
+  const liveIndexes = registry.indexes || [];
+  const tombstoned = (registry.decommissioning || []).map((d) => d.index);
+
   const bearer = await ctoBearer();
 
-  // (1) reachability + jobs
+  // (1) dead-job sweep
   const jl = await mcpCall(bearer, "azure_jobs_list", {});
   const jobs = jl?.jobs || [];
   const scheduled = jobs.filter((j) => j.triggerType === "Schedule");
-
-  // (2) dead-job sweep (dogfoods azure_job_executions)
-  const failed = [];
+  const failedJobs = [];
   for (const j of scheduled) {
-    let last = null;
     try {
       const ex = await mcpCall(bearer, "azure_job_executions", { job_name: j.name, resource_group: j.resourceGroup, top: 1 });
-      last = (ex?.executions || [])[0] || null;
-    } catch (e) { failed.push(`${j.name}: executions-query-error (${e.message})`); continue; }
-    if (!last) failed.push(`${j.name}: NO EXECUTIONS EVER`);
-    else if (last.status !== "Succeeded") failed.push(`${j.name}: ${last.status} @ ${last.startTime}`);
+      const last = (ex?.executions || [])[0] || null;
+      if (!last) failedJobs.push(`${j.name}: NO EXECUTIONS EVER`);
+      else if (last.status !== "Succeeded") failedJobs.push(`${j.name}: ${last.status} @ ${last.startTime}`);
+    } catch (e) { failedJobs.push(`${j.name}: executions-query-error (${e.message})`); }
   }
 
-  // (3) freshness canary
-  const brain = await mcpCall(bearer, "azure_search_index_stats", { index: "otchealth-brain" });
-  const mem = await mcpCall(bearer, "azure_search_index_stats", { index: "memory-exec" }).catch(() => null);
-  const brainDocs = brain?.documentCount ?? 0;
-  const brainBelowFloor = brainDocs < BRAIN_FLOOR;
+  // (2) per-index freshness
+  const now = Date.now();
+  const freshness = [];
+  const stale = [];
+  for (const ix of liveIndexes) {
+    try {
+      const newest = await newestTimestamp(ix.service, ix.index, ix.timestamp_field);
+      const v = assessFreshness(ix, newest, now);
+      freshness.push(v);
+      if (v.state !== "FRESH") stale.push(`${ix.index}: ${v.state}${v.ageH != null ? ` (${v.ageH}h > ${v.maxAgeH}h)` : ` (no ${ix.timestamp_field})`}`);
+    } catch (e) {
+      freshness.push({ index: ix.index, state: "QUERY_ERROR", error: e.message });
+      stale.push(`${ix.index}: QUERY_ERROR (${e.message})`);
+    }
+  }
 
   const anomalies = [];
-  if (failed.length) anomalies.push(`${failed.length} scheduled job(s) not-Succeeded`);
-  if (brainBelowFloor) anomalies.push(`otchealth-brain doc count ${brainDocs} < floor ${BRAIN_FLOOR}`);
+  if (failedJobs.length) anomalies.push(`${failedJobs.length} scheduled job(s) not-Succeeded`);
+  if (stale.length) anomalies.push(`${stale.length} index(es) not FRESH`);
 
   const summary = {
     ok: anomalies.length === 0,
-    jobs_total: jobs.length,
-    jobs_scheduled: scheduled.length,
-    jobs_failed: failed.length,
-    failed_names: failed,
-    brain_docs: brainDocs,
-    memory_exec_docs: mem?.documentCount ?? null,
-    brain_below_floor: brainBelowFloor,
+    jobs_total: jobs.length, jobs_scheduled: scheduled.length, jobs_failed: failedJobs.length, failed_jobs: failedJobs,
+    indexes_total: liveIndexes.length,
+    indexes_fresh: freshness.filter((f) => f.state === "FRESH").length,
+    stale, freshness, tombstoned,
   };
   await emitPosthog(summary);
 
   if (JSONOUT) console.log(JSON.stringify(summary, null, 2));
   else {
-    console.log(`[azure-canary] jobs=${jobs.length} scheduled=${scheduled.length} failed=${failed.length} | brain=${brainDocs} memory-exec=${summary.memory_exec_docs}`);
-    for (const f of failed) console.log(`  FAILED: ${f}`);
+    console.log(`[azure-canary] jobs ${scheduled.length - failedJobs.length}/${scheduled.length} ok | indexes ${summary.indexes_fresh}/${liveIndexes.length} FRESH | tombstoned: ${tombstoned.join(",") || "none"}`);
+    for (const f of freshness) console.log(`  ${f.state.padEnd(12)} ${f.index}${f.ageH != null ? ` (${f.ageH}h/${f.maxAgeH}h)` : ""}${f.error ? " " + f.error : ""}`);
+    for (const f of failedJobs) console.log(`  DEAD JOB: ${f}`);
   }
   for (const a of anomalies) warn(a);
-  console.log(summary.ok ? "[azure-canary] OK (all sensors green)" : `[azure-canary] ANOMALIES: ${anomalies.join("; ")}`);
-  // Report-only: exit 0 even on an anomaly (the PostHog event + ::warning:: are the alert).
-  process.exit(0);
+  console.log(summary.ok ? "[azure-canary] OK (jobs green, all indexes fresh)" : `[azure-canary] ANOMALIES: ${anomalies.join("; ")}`);
+  process.exit(0); // report-only on anomaly
 }
 
-main().catch(async (e) => {
-  // Cannot run at all -> the sensor lane itself is dark. THAT is page-worthy: emit + exit non-zero.
-  await emitPosthog({ ok: false, fatal: true, error: e.message });
-  console.error(`::error::[azure-canary] FATAL: ${e.message}`);
-  process.exit(1);
-});
+// Only run as a script (not when imported by the test).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch(async (e) => {
+    await emitPosthog({ ok: false, fatal: true, error: e.message });
+    console.error(`::error::[azure-canary] FATAL: ${e.message}`);
+    process.exit(1);
+  });
+}
