@@ -265,6 +265,47 @@ async function exportBrainIndex(bearer, { pageSize = 25 } = {}) {
   return rows;
 }
 
+// DIRECT AI Search index dump (the reliable path, preferred by run()). brain_search is a ranked
+// top-N search (top<=25, NO skip param) and CANNOT enumerate a full index -- the gateway-paginated
+// exportBrainIndex above either captured 0 docs (query "*" returned nothing that run) or INFINITE-
+// LOOPED on a full page that never satisfies `docs.length < pageSize`, running until the 30-min
+// replica timeout killed it (the real cause of the nightly Failed runs; the two 2026-07-10
+// "successes" captured 0 brain docs = no valid DR copy). This dumps the index directly via the
+// Search REST API with real $top/$skip paging, using a READ-ONLY query key (brain-search-query-key
+// in Key Vault; Azure query keys cannot modify the index/service). $skip tops out at 100,000 per
+// Azure AI Search; the current corpus is ~67,645 so skip-paging is complete (guarded + warned above).
+async function exportBrainIndexDirect(apiKey, endpoint, { index = process.env.BRAIN_INDEX || "otchealth-brain", pageSize = 1000, apiVersion = "2023-11-01" } = {}) {
+  const rows = [];
+  let skip = 0, odataCount = null;
+  for (;;) {
+    const r = await fetch(`${endpoint}/indexes/${index}/docs/search?api-version=${apiVersion}`, {
+      method: "POST",
+      headers: { "api-key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ search: "*", top: pageSize, skip, count: skip === 0 }),
+    });
+    if (!r.ok) throw new Error(`AI Search dump ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const j = await r.json();
+    if (skip === 0) odataCount = j["@odata.count"];
+    const docs = (j.value || []).map((d) => {
+      const o = { ...d };
+      delete o["@search.score"]; delete o["@search.rerankerScore"]; delete o["@search.highlights"]; delete o["@search.captions"];
+      return o;
+    });
+    if (!docs.length) break;
+    rows.push(...docs);
+    skip += docs.length;
+    if (docs.length < pageSize) break; // last page
+    if (skip >= 100000) { // Azure AI Search $skip hard ceiling
+      console.warn(`[fleet-backup] WARNING: hit the AI Search $skip=100000 ceiling at ${rows.length} docs; index has more. Switch to range/key paging for a complete dump.`);
+      break;
+    }
+  }
+  if (odataCount != null && rows.length < odataCount) {
+    console.warn(`[fleet-backup] WARNING: dumped ${rows.length} of @odata.count=${odataCount} brain docs.`);
+  }
+  return rows;
+}
+
 function toNdjson(rows) { return rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""); }
 function sha256(buf) { return crypto.createHash("sha256").update(buf).digest("hex"); }
 function todayStamp() { return new Date().toISOString().slice(0, 10); } // YYYY-MM-DD
@@ -292,15 +333,26 @@ async function run({ ledgerOnly, brainOnly }) {
   }
 
   if (!ledgerOnly) {
-    console.log("[fleet-backup] exporting otchealth-brain AI Search index via gateway brain_search ...");
-    const brainRows = await exportBrainIndex(bearer);
+    // Prefer the DIRECT AI Search dump (reliable full-index export). Fall back to the gateway
+    // brain_search path (LIMITED: cannot enumerate the full index) ONLY if no query key is
+    // provisioned, so the job still produces a ledger backup + best-effort brain sample.
+    const brainKey = await kvSecret("brain-search-query-key");
+    const brainEndpoint = (await kvSecret("brain-search-endpoint")) || process.env.BRAIN_SEARCH_ENDPOINT || "https://otchealth-brain-search.search.windows.net";
+    let brainRows;
+    if (brainKey) {
+      console.log(`[fleet-backup] exporting otchealth-brain via DIRECT AI Search dump (${brainEndpoint}, search=* $top/$skip) ...`);
+      brainRows = await exportBrainIndexDirect(brainKey, brainEndpoint);
+    } else {
+      console.warn("[fleet-backup] brain-search-query-key ABSENT; falling back to gateway brain_search (LIMITED: cannot enumerate the full index -- expect a partial/empty dump).");
+      brainRows = await exportBrainIndex(bearer);
+    }
     const brainBuf = Buffer.from(toNdjson(brainRows), "utf8");
     const blobName = `brain-index-${date}.jsonl`;
     await putBlockBlob(account, container, blobName, brainBuf, "application/x-ndjson");
     manifest.brain = { blob: blobName, rows: brainRows.length, bytes: brainBuf.length, sha256: sha256(brainBuf) };
     console.log(`[fleet-backup] brain index export OK: ${brainRows.length} docs, ${brainBuf.length} bytes -> ${container}/${blobName}`);
     if (brainRows.length < 60000) {
-      console.warn(`[fleet-backup] WARNING: expected ~67,645 docs in otchealth-brain; only captured ${brainRows.length}. brain_search may be projecting a subset of fields/docs (e.g. ring-gated or paginated short). Investigate before trusting this as a full DR copy.`);
+      console.warn(`[fleet-backup] WARNING: expected ~67,645 docs in otchealth-brain; only captured ${brainRows.length}. Investigate before trusting this as a full DR copy.`);
     }
   }
 
