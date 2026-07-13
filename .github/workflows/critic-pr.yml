@@ -4,9 +4,13 @@
 # autonomous-run session (autonomous-run.yml) opens DRAFT PRs from claude/* branches but is deliberately
 # LEAST-PRIVILEGE (only CLAUDE_CODE_OAUTH_TOKEN + the repo GITHUB_TOKEN, NO Secret Manager), so it cannot
 # run the real critic model call itself. This workflow runs that critic HERE, on the credentialed
-# ubuntu-latest CI runner (the same GCP_CLAUDE_DRIVER_SA_JSON secret promptcheck.yml uses), automatically
-# on the draft PR BEFORE a human finalizes (marks ready / merges) it. The unattended agent gains no new
-# powers; the model call lives where creds already legitimately live.
+# ubuntu-latest CI runner (Azure via secretless OIDC: azure/login + repo VARIABLES AZURE_CLIENT_ID/
+# TENANT_ID/SUBSCRIPTION_ID + id-token: write, the claude-tools Azure auth pattern; run.mjs resolves
+# azure-openai-* from Key Vault via kvSecret()'s az-CLI/OIDC path), automatically on the draft PR BEFORE a
+# human finalizes (marks ready / merges) it. The unattended agent gains no new powers; the model call
+# lives where creds already legitimately live. (2026-07-13: was wired to the retired
+# GCP_CLAUDE_DRIVER_SA_JSON so kvSecret had no token and the critic reported "missing azure-openai
+# endpoint/key" on every PR; same GCP-exit family as the nightly monitors.)
 #
 # Scope (job-level `if`): only DRAFT PRs, or PRs from claude/* branches (the autonomous runner's + the
 # fleet-dispatch --spawn safety-net branches). A normal non-draft feature PR triggers the workflow but
@@ -22,6 +26,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
+  id-token: write     # secretless OIDC login to Azure (azure/login); no client secret at rest
   contents: read
   pull-requests: write
 
@@ -48,6 +53,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Azure login (OIDC, secretless — the claude-tools Azure auth pattern)
+        continue-on-error: true
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Gather the PR diff + goal (injection-safe via env + files, never interpolated)
         continue-on-error: true
         env:
@@ -71,10 +84,8 @@ jobs:
 
       - name: Run the real critic pass on the diff (credentialed runner)
         continue-on-error: true
-        env:
-          # Same claude-driver SA secret promptcheck.yml uses; run.mjs's sm() resolves azure-openai-* from
-          # Secret Manager with it. This secret lives ONLY on this CI runner, never on the autonomous runner.
-          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+        # No env creds: the azure/login step above authenticated the runner via OIDC, and run.mjs's sm()
+        # resolves azure-openai-* from Key Vault via kvSecret()'s az-CLI/OIDC path. No secret at rest.
         run: |
           node skills/critic-pass/run.mjs \
             --task-file /tmp/task.txt \
