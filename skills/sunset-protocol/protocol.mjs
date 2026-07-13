@@ -11,6 +11,19 @@
 // not a blanket assumption. This was a real, demonstrated failure mode: the auto-generated handoff doc
 // itself said "running on Hyperagent (Claude Code)" for the CTO, which is wrong.
 //
+// 2026-07-13 FIX: fixing the ENGINE LABEL alone was not enough -- the actual SUNRISE steps and gateway
+// connection instructions were still Claude-Code-shaped for every role (git clone + session-start.sh +
+// a ~/.claude/.kb-agent file marker + a static Bearer token), none of which apply on Claude Chat. Claude
+// Chat has no filesystem, no shell, no session-start hook -- it only has whatever MCP connector Matt has
+// configured in Settings > Connectors (a human action the agent cannot do itself). Both blocks below are
+// now role-aware via isClaudeChat(agent), matching the real Claude Chat connector confirmed live 2026-07-12
+// (name "OTCHealth Brain - <ROLE>", URL https://mcp.otchealth.app/mcp?agent=<role>, screenshot-verified).
+// Whether that connector's actual auth is Descope OAuth, the legacy homegrown OAuth, or is bound purely by
+// the ?agent= query param is EXPLICITLY LEFT OPEN for the Claude-Chat-side agent itself to verify -- see
+// REGRESSION-LEDGER.md tag:descope-provisioned-but-never-used-in-production for the evidence gathered so
+// far (provisioned + gateway-accepted for all 9 lanes, but zero real token-exchange activity since
+// 2026-07-08 provisioning day). Do not have this template assert an answer to that question.
+//
 //   SUNSET  (spin down): snapshot the agent into a PORTABLE, RING-SAFE handoff doc in the shared commons
 //           (_HANDOFF/<role>.md) so the seat survives the blackout. Then the agent says "Goodnight friend".
 //   SUNRISE (spin up):   verify attach (memory PASS + brain reachable), read the handoff, compute the
@@ -52,6 +65,7 @@ const SENSITIVE = new Set(["cfo", "clo", "clo-personal", "capital"]);
 // not a blanket string, so the next correction is a one-line edit instead of a repo-wide sweep.
 const EXEC_ENGINE = { cto: "Claude Chat", cfo: "Claude Chat", clo: "Claude Chat", coo: "Claude Chat", cro: "Claude Chat" };
 function otherEngineLabel(agent) { return EXEC_ENGINE[agent] || "Claude Code"; }
+function isClaudeChat(agent) { return EXEC_ENGINE[agent] === "Claude Chat"; }
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -99,6 +113,41 @@ function computeLast3(rows) {
   return out;
 }
 
+// Role-aware SUNRISE steps + gateway-connect block. Claude Chat has no filesystem/shell/hooks -- only
+// whatever MCP connector Matt has already configured in Settings > Connectors. The agent cannot install
+// or fix that connector itself; it can only verify it and report back if something is missing.
+function sunriseStepsBlock(agent) {
+  if (isClaudeChat(agent)) {
+    return `## SUNRISE - attach + self-update (run on wake, Claude Chat)
+1. You have NO filesystem, shell, or session-start hook here -- do not attempt git clone/bash steps, they will not work. Your only tools are whatever MCP connector(s) Matt has configured in Settings > Connectors.
+2. Confirm the connector "OTCHealth Brain - ${agent.toUpperCase()}" is present and connected (URL pattern \`https://mcp.otchealth.app/mcp?agent=${agent}\`, confirmed live 2026-07-12 via screenshot). If it is missing or disconnected, STOP and tell Matt directly -- you cannot add or fix a connector yourself.
+3. Attach proof: call whatever memory/brain tool this connector exposes (e.g. a "Brain search" or "Agent dispatch" tool) and ask for "current ${agent} state and what is pending." If no such tool is available, say so plainly rather than guessing at state.
+4. Run the protocol via that connector if it exposes a way to invoke \`sunset-protocol/protocol.mjs sunrise --agent ${agent}\` server-side; otherwise read your \`_HANDOFF/${agent}.md\` and \`last3\` content directly through whatever read tool is available.
+5. OPEN, NOT YOUR JOB TO ASSUME AN ANSWER TO: whether this connector authenticates via Descope OAuth, the legacy homegrown gateway OAuth, or is identified purely by the \`?agent=\` URL parameter is unconfirmed as of 2026-07-12 (see REGRESSION-LEDGER.md tag:descope-provisioned-but-never-used-in-production). If you can determine this from your own session (e.g. an auth/connector-status tool), report it and flush the answer to the ledger. If you cannot, say so rather than asserting either answer.`;
+  }
+  return `## SUNRISE - attach + self-update (run on wake)
+1. Toolkit:  rm -rf /tmp/octools && git clone https://github.com/innerscopehearing/otchealth-claude-tools /tmp/octools && bash /tmp/octools/setup/session-start.sh
+2. Identity: mkdir -p ~/.claude && echo ${agent} > ~/.claude/.kb-agent
+3. Attach proof (both must pass):
+   node /tmp/octools/skills/kb-memory/mem.mjs whoami --agent ${agent}        # expect PASS
+   node /tmp/octools/skills/company-brain/brain.mjs ask "current ${agent} state and what is pending"
+   If whoami says "service-account: missing", STOP: the claude-driver SA (GCP_CLAUDE_DRIVER_SA_JSON or
+   ~/.gcp_claude_driver_sa.json) is not in this environment. That one secret is the keystone.
+4. Run the protocol:  node /tmp/octools/skills/sunset-protocol/protocol.mjs sunrise --agent ${agent}
+   Then greet Matt EXACTLY: "I am fully updated and ready to go, Sir." list the last 3 workstreams it
+   prints, and ask which one he wants to work on.`;
+}
+function gatewayConnectBlock(agent) {
+  if (isClaudeChat(agent)) {
+    return `## Connect the custom MCP gateway (Claude Chat connector, already configured by Matt)
+Connector name: "OTCHealth Brain - ${agent.toUpperCase()}". URL: \`https://mcp.otchealth.app/mcp?agent=${agent}\` (confirmed live via screenshot, 2026-07-12). This is set up in Claude Chat Settings > Connectors -- you cannot create or repair it yourself; if it is missing, tell Matt.
+Do NOT assume the old static-Bearer-token instructions below apply here (they described the legacy Claude Code connection method, not Claude Chat): the actual auth mechanism behind this URL (Descope OAuth vs. legacy homegrown OAuth vs. the \`?agent=\` param alone) is an open, unverified question as of 2026-07-12 -- see the note in the SUNRISE steps above.`;
+  }
+  return `## Connect the custom MCP gateway (whole-stack, single connector)
+URL https://mcp.otchealth.app/mcp ; header Authorization: Bearer <SM gateway-connector-token>.
+Verify: curl -sS https://mcp.otchealth.app/health  (status:ok, env:production). Read-only by design.`;
+}
+
 // The PORTABLE, RING-SAFE handoff doc body. Procedure + counts + pointers. Embeds ledger TEXT only for
 // non-sensitive roles (and even then only short titles); sensitive roles get counts + "read your ledger live".
 function renderHandoff(agent, rows, openDisp) {
@@ -136,21 +185,9 @@ brain is durable and engine-agnostic, so SPIN UP by attaching, not rebuilding.
 ## Ring
 ${ringLine}
 
-## SUNRISE - attach + self-update (run on wake)
-1. Toolkit:  rm -rf /tmp/octools && git clone https://github.com/innerscopehearing/otchealth-claude-tools /tmp/octools && bash /tmp/octools/setup/session-start.sh
-2. Identity: mkdir -p ~/.claude && echo ${agent} > ~/.claude/.kb-agent
-3. Attach proof (both must pass):
-   node /tmp/octools/skills/kb-memory/mem.mjs whoami --agent ${agent}        # expect PASS
-   node /tmp/octools/skills/company-brain/brain.mjs ask "current ${agent} state and what is pending"
-   If whoami says "service-account: missing", STOP: the claude-driver SA (GCP_CLAUDE_DRIVER_SA_JSON or
-   ~/.gcp_claude_driver_sa.json) is not in this environment. That one secret is the keystone.
-4. Run the protocol:  node /tmp/octools/skills/sunset-protocol/protocol.mjs sunrise --agent ${agent}
-   Then greet Matt EXACTLY: "I am fully updated and ready to go, Sir." list the last 3 workstreams it
-   prints, and ask which one he wants to work on.
+${sunriseStepsBlock(agent)}
 
-## Connect the custom MCP gateway (whole-stack, single connector)
-URL https://mcp.otchealth.app/mcp ; header Authorization: Bearer <SM gateway-connector-token>.
-Verify: curl -sS https://mcp.otchealth.app/health  (status:ok, env:production). Read-only by design.
+${gatewayConnectBlock(agent)}
 
 ## Brain snapshot (counts; the content lives in the access-controlled ledger)
 - ledger entries: ${rows.length}  | decisions: ${decisions}  | corrections: ${corrections}  | pitfalls: ${pitfalls}  | current-value entities: ${entities}
