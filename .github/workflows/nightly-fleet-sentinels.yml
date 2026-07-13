@@ -50,10 +50,21 @@ jobs:
 
       # A11-CANARY: /health + /health/deep + a real tools/call end-to-end through the live gateway.
       # continue-on-error so one dark sentinel cannot mask the other -- both always get to run and beat.
+      # Wrapped in a heartbeat beat (start -> ok/fail) so gateway-canary's SILENCE is now visible to the
+      # fleet-medic heartbeat sweep -- previously it left NO beat (last-ok: NEVER forever) so a dead
+      # gateway-canary was itself undetectable. --strict makes a real gateway failure a non-zero exit,
+      # so the beat reflects true gateway health, not just "the script ran". Mirrors with-heartbeat.sh
+      # (set +e so pipefail does not skip the fail-beat; PIPESTATUS preserves the canary's real exit).
       - name: gateway-canary
         id: gwcanary
         continue-on-error: true
-        run: node setup/gateway-canary.mjs 2>&1 | tee "${GITHUB_WORKSPACE}/gateway-canary.log"
+        run: |
+          set +e
+          node setup/heartbeat.mjs beat gateway-canary start >/dev/null 2>&1
+          node setup/gateway-canary.mjs --strict 2>&1 | tee "${GITHUB_WORKSPACE}/gateway-canary.log"; rc=${PIPESTATUS[0]}
+          if [ "$rc" -eq 0 ]; then node setup/heartbeat.mjs beat gateway-canary ok >/dev/null 2>&1
+          else node setup/heartbeat.mjs beat gateway-canary fail --detail "gateway-canary exit $rc" >/dev/null 2>&1; fi
+          exit $rc
 
       # A12-DRIFT-SENTINEL: combined heartbeat + image-drift + resource-recon verdict.
       - name: drift-sentinel

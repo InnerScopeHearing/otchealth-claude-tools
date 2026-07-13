@@ -17,9 +17,24 @@ const SUBS_RGS = [
   ["otchealth-automation-rg"],   // doc-indexer cron jobs
   ["rg-otchealth-apps-prod"],    // MCP gateway + apps
 ];
-const TEN = process.env.AZURE_SP_TENANT_ID, CID = process.env.AZURE_SP_CLIENT_ID, CSEC = process.env.AZURE_SP_CLIENT_SECRET;
+// azure-sp creds: env fast-path, else the SHARED kvSecret resolver (managed-identity / az-CLI OIDC /
+// SP), NEVER an AZURE_SP-only read. An env-only read returns null under the GitHub Actions OIDC runtime
+// (no AZURE_SP_* there, only an azure/login az session), which made this sub-check CRASH inside
+// drift-sentinel while working locally. Mirrors canary.mjs. Same AZURE_SP-only-reader bug family as the
+// 9-day daily-digest outage.
+let TEN = process.env.AZURE_SP_TENANT_ID, CID = process.env.AZURE_SP_CLIENT_ID, CSEC = process.env.AZURE_SP_CLIENT_SECRET;
+async function ensureSpCreds() {
+  if (TEN && CID && CSEC) return true;
+  try {
+    const m = await import("../skills/kb-memory/azure-secret.mjs");
+    TEN = TEN || await m.kvSecret("azure-sp-tenant-id");
+    CID = CID || await m.kvSecret("azure-sp-client-id");
+    CSEC = CSEC || await m.kvSecret("azure-sp-client-secret");
+  } catch { /* fall through to the fatal below */ }
+  return Boolean(TEN && CID && CSEC);
+}
 async function armToken() {
-  if (!TEN || !CID || !CSEC) { console.error("[image-drift][FATAL] AZURE_SP_* not set."); process.exit(78); }
+  if (!(await ensureSpCreds())) { console.error("[image-drift][FATAL] azure-sp creds unavailable (AZURE_SP_* env or Key Vault azure-sp-*)."); process.exit(78); }
   const r = await fetch(`https://login.microsoftonline.com/${TEN}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "client_credentials", client_id: CID, client_secret: CSEC, scope: "https://management.azure.com/.default" }) });
   const j = await r.json(); if (!j.access_token) { console.error("[image-drift][FATAL] no ARM token"); process.exit(1); } return j.access_token;
 }
