@@ -28,11 +28,12 @@
 //
 // Requires: GCP_CLAUDE_DRIVER_SA_JSON in env (kb-memory self-resolves from ~/.gcp_claude_driver_sa.json
 // too) -- run via `bash skills/kb-memory/run.sh node skills/recall-evals/run-evals.mjs`.
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { aggregate, precisionAtK, hitAtK, reciprocalRank } from "./scoring.mjs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MEM_MJS = join(HERE, "..", "kb-memory", "mem.mjs");
@@ -44,6 +45,11 @@ const ENGINE = (takeVal("--engine", "semantic") || "semantic").toLowerCase(); //
 const K = parseInt(takeVal("--k", "5"), 10) || 5;
 const SET_PATH = takeVal("--set", join(HERE, "golden-set.json"));
 const PRINT_JSON = argv.includes("--json");
+const EMIT = argv.includes("--emit");                       // emit recall_eval to PostHog Fleet Agents
+const BASELINE_PATH = takeVal("--baseline", "");            // compare hit@K to a stored baseline
+const UPDATE_BASELINE = argv.includes("--update-baseline"); // overwrite the baseline with this run (nightly seeds/rolls it)
+const TOLERANCE = parseFloat(takeVal("--tolerance", "0.05")) || 0.05; // allowed hit@K drop (5pp) before flagging a regression
+const ENFORCE = argv.includes("--enforce");                 // exit 1 on regression (report-mode default = exit 0)
 const N_RECALL = 10; // how many rows to ask the underlying recall verb for, per query
 
 // PHI-exclusion guard: hard-fail loudly (not a ledger write, just a refusal to run) if the golden
@@ -91,7 +97,21 @@ function runRecall(item) {
 function fmtPct(x) { return `${(x * 100).toFixed(1)}%`; }
 function fmtMs(x) { return `${Math.round(x)}ms`; }
 
-function main() {
+// Emit one event to the PostHog Fleet Agents project (same sink + key as agent-evals). Best-effort:
+// a missing key or a network error never fails the run (this stays report-mode).
+async function emitPosthog(event, props) {
+  try {
+    const key = await kvSecret("posthog-fleet-ingest-key");
+    if (!key) return false;
+    const r = await fetch("https://us.i.posthog.com/capture/", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: key, event, distinct_id: "recall-evals", timestamp: new Date().toISOString(), properties: props }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+async function main() {
   const items = loadGoldenSet(SET_PATH);
   console.log(`# RECALL-QUALITY SCORECARD (report-mode / measurement only, writes nothing)`);
   console.log(`engine=${ENGINE} k=${K} golden-set=${SET_PATH} (${items.length} queries)\n`);
@@ -126,14 +146,44 @@ function main() {
   if (runErrors) console.log(`  runner errors:         ${runErrors}/${agg.n} queries errored (see ERR rows above)`);
   console.log(`\nREPORT-MODE: measurement only. No ledger writes. Never exits non-zero on a low score.`);
 
-  if (PRINT_JSON) {
-    console.log("\n## JSON");
-    console.log(JSON.stringify({ engine: ENGINE, k: K, n: agg.n, meanPrecisionAtK: agg.meanPrecisionAtK, hitRate: agg.hitRate, mrr: agg.mrr, latencyMeanMs: meanLat, latencyP50Ms: p50, latencyP95Ms: p95, runErrors, items: perItem.map((r) => ({ id: r.id, query: r.query, ok: r.ok, hit: r.hit, precisionAtK: r.precisionAtK, rr: r.rr, latencyMs: r.latencyMs })) }, null, 2));
+  const scorecard = { engine: ENGINE, k: K, n: agg.n, hitRate: agg.hitRate, mrr: agg.mrr, meanPrecisionAtK: agg.meanPrecisionAtK, latencyMeanMs: Math.round(meanLat), runErrors, recordedAt: new Date().toISOString() };
+
+  // BASELINE regression check on hit@K (the blunt "did recall get worse" signal). Report-mode:
+  // prints an ::warning:: on regression; exits non-zero ONLY with --enforce.
+  let regressed = false;
+  if (BASELINE_PATH) {
+    let baseline = null;
+    try { baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")); } catch { /* missing/malformed -> no gate */ }
+    if (baseline && typeof baseline.hitRate === "number" && (baseline.n || 0) > 0) {
+      const delta = agg.hitRate - baseline.hitRate;
+      regressed = delta < -TOLERANCE;
+      console.log(`\n## BASELINE (${BASELINE_PATH}): hit@${K} ${fmtPct(baseline.hitRate)} -> ${fmtPct(agg.hitRate)} (delta ${(delta * 100).toFixed(1)}pp; tolerance ${(TOLERANCE * 100).toFixed(0)}pp)`);
+      console.log(regressed ? `  ::warning:: RECALL REGRESSION: hit@${K} dropped ${(-delta * 100).toFixed(1)}pp below baseline.` : `  OK: within tolerance.`);
+    } else {
+      console.log(`\n## BASELINE (${BASELINE_PATH}): no usable baseline yet (n=0) -- seed it with --update-baseline.`);
+    }
   }
 
-  // ALWAYS exit 0 -- report-mode, never gates CI or blocks anything on a low score.
-  process.exit(0);
+  if (EMIT) {
+    const ok1 = await emitPosthog("recall_eval", scorecard);
+    if (regressed) await emitPosthog("recall_eval_regression", { ...scorecard, baseline_path: BASELINE_PATH });
+    console.log(ok1 ? `emitted recall_eval -> PostHog Fleet Agents${regressed ? " (+ recall_eval_regression ALERT)" : ""}` : `(PostHog emit skipped: no ingest key)`);
+  }
+
+  if (UPDATE_BASELINE && BASELINE_PATH) {
+    writeFileSync(BASELINE_PATH, JSON.stringify(scorecard, null, 2) + "\n");
+    console.log(`updated baseline -> ${BASELINE_PATH}`);
+  }
+
+  if (PRINT_JSON) {
+    console.log("\n## JSON");
+    console.log(JSON.stringify({ ...scorecard, latencyP50Ms: p50, latencyP95Ms: p95, regressed, items: perItem.map((r) => ({ id: r.id, query: r.query, ok: r.ok, hit: r.hit, precisionAtK: r.precisionAtK, rr: r.rr, latencyMs: r.latencyMs })) }, null, 2));
+  }
+
+  // Report-mode default: exit 0 even on a low score / regression. --enforce turns a regression into a
+  // non-zero exit (the future hard gate a deploy/CI workflow can require).
+  process.exit(ENFORCE && regressed ? 1 : 0);
 }
 
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
-if (isMain) main();
+if (isMain) main().catch((e) => { console.error("recall-evals error:", e.message); process.exit(0); });

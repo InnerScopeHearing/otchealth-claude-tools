@@ -1,0 +1,67 @@
+# Nightly Recall-Quality Eval — scheduled hit@5 regression tripwire for fleet memory recall (REPORT-ONLY).
+#
+# P0-3b (Cosmos Brain review F3): recall quality was ASSERTED not MEASURED — the old 12-case suite
+# saturated at hit@5 = 12/12 / MRR 1.0, so it could never detect a regression. This runs the EXPANDED
+# recall-evals golden set (100+ hard cases mined + validated from the real ledger; see
+# skills/recall-evals/mine-cases.mjs) nightly through the real semantic recall path, emits recall_eval
+# to the PostHog Fleet Agents project (the durable trend), and compares hit@5 to a stored baseline —
+# emitting recall_eval_regression + an ::warning:: if it drops more than the tolerance. NEVER blocks
+# anything (report-mode; run-evals.mjs exits 0 without --enforce).
+#
+# Azure auth = SECRETLESS OIDC (same pattern as nightly-eval.yml): run-evals.mjs / semantic.mjs resolve
+# the AI Search + Azure OpenAI + PostHog secrets from Key Vault via kvSecret(); claude-tools CI logs in
+# with azure/login federated OIDC (repo VARIABLES AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID + id-token:
+# write). No AZURE_SP_* secret at rest. Regression-ledger tag: monitor-azure-auth-oidc.
+name: Nightly Recall-Quality Eval
+
+on:
+  schedule:
+    - cron: '45 6 * * *'    # daily 06:45 UTC (after the 06:30 agent-eval nightly, before the 08:00 medic)
+  workflow_dispatch: {}      # manual trigger for testing
+
+permissions:
+  id-token: write   # secretless OIDC login to Azure (azure/login); no AZURE_SP_* secret at rest
+  contents: read
+
+concurrency:
+  group: nightly-recall-eval
+  cancel-in-progress: false
+
+jobs:
+  recall-eval:
+    name: recall hit@5 tripwire (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Azure login (OIDC, secretless — the claude-tools Azure auth pattern)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run recall-eval (semantic) + emit + hit@5 baseline check
+        # Report-mode: exits 0 even on a low score / regression. The recall_eval_regression PostHog
+        # event + the ::warning:: line ARE the alert. --enforce is intentionally NOT passed here.
+        continue-on-error: true
+        working-directory: skills/recall-evals
+        run: |
+          node run-evals.mjs --emit --baseline baseline.json --tolerance 0.05 --json \
+            2>&1 | tee "${GITHUB_WORKSPACE}/nightly-recall-eval.log"
+
+      - name: Upload scorecard log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nightly-recall-eval-log
+          path: nightly-recall-eval.log
+          retention-days: 90
+          if-no-files-found: warn
