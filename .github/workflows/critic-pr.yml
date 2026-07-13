@@ -57,7 +57,7 @@ jobs:
         continue-on-error: true
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-id: ${{ vars.AZURE_CI_CLIENT_ID }}   # least-privilege CI identity (KV Secrets User only), pull_request federated cred; NOT the Owner azure-sp
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
