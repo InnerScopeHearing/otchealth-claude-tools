@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The 2-Minute Everyday Hearing Check — OTChealth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..800&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --canvas:#F7F1E4; --canvas-card:#FBF7EE;
+    --ink:#241F19; --ink-soft:#4A4238;
+    --terracotta:#B5603C; --terracotta-soft:#D8A98D;
+    --taupe:#8C7F68; --line:#DBCEB0;
+    --serif:'Fraunces', serif; --sans:'Inter', sans-serif; --mono:'IBM Plex Mono', monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.6;-webkit-font-smoothing:antialiased;min-height:100vh;}
+  .wrap{max-width:560px;margin:0 auto;padding:48px 24px 80px;}
+  .kicker{font-family:var(--mono);font-size:11.5px;letter-spacing:0.12em;text-transform:uppercase;color:var(--terracotta);text-align:center;}
+  h1{font-family:var(--serif);font-weight:600;font-size:clamp(26px,5vw,34px);text-align:center;margin:14px 0 8px;line-height:1.2;}
+  .sub{text-align:center;color:var(--ink-soft);font-size:15.5px;max-width:420px;margin:0 auto 36px;}
+
+  .progress-track{height:4px;background:var(--line);border-radius:4px;overflow:hidden;margin-bottom:44px;}
+  .progress-fill{height:100%;background:var(--terracotta);width:0%;transition:width 0.35s ease;}
+
+  .card{background:var(--canvas-card);border:1px solid var(--line);padding:36px 32px;}
+  .q-count{font-family:var(--mono);font-size:11px;color:var(--taupe);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:14px;}
+  .q-text{font-family:var(--serif);font-weight:600;font-size:22px;line-height:1.3;margin:0 0 26px;}
+  .options{display:flex;flex-direction:column;gap:10px;}
+  .opt{display:block;border:1px solid var(--line);background:var(--canvas);padding:16px 18px;border-radius:2px;cursor:pointer;font-size:15.5px;color:var(--ink-soft);transition:border-color 0.15s, background 0.15s;}
+  .opt:hover{border-color:var(--terracotta-soft);}
+  .opt.selected{border-color:var(--terracotta);background:rgba(181,96,60,0.08);color:var(--ink);font-weight:500;}
+  .nav-row{display:flex;justify-content:space-between;margin-top:32px;}
+  .btn-back{font-family:var(--mono);font-size:12.5px;color:var(--taupe);text-transform:uppercase;letter-spacing:0.04em;background:none;border:none;cursor:pointer;visibility:hidden;}
+  .btn-back.show{visibility:visible;}
+  .btn-next{background:var(--terracotta);color:#FBF7EE;border:none;padding:13px 28px;border-radius:2px;font-weight:700;font-size:14.5px;cursor:pointer;opacity:0.4;pointer-events:none;transition:opacity 0.15s;}
+  .btn-next.active{opacity:1;pointer-events:auto;}
+
+  .result-screen{display:none;}
+  .result-screen.show{display:block;}
+  #quiz-flow.hide{display:none;}
+  .result-eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:0.1em;text-transform:uppercase;color:var(--terracotta);text-align:center;}
+  .result-headline{font-family:var(--serif);font-weight:600;font-size:clamp(26px,5vw,34px);text-align:center;margin:14px 0 20px;line-height:1.25;}
+  .result-body{color:var(--ink-soft);font-size:16.5px;text-align:center;max-width:440px;margin:0 auto 32px;}
+  .compare-box{background:var(--canvas-card);border:1px solid var(--line);padding:28px;margin:0 0 28px;}
+  .compare-row{display:flex;justify-content:space-between;padding:12px 0;border-top:1px solid var(--line);font-size:15px;}
+  .compare-row:first-child{border-top:none;}
+  .compare-row.hero-row{background:rgba(181,96,60,0.08);margin:0 -28px;padding:14px 28px;border-top:1px solid var(--terracotta-soft);border-bottom:1px solid var(--terracotta-soft);}
+  .compare-row.hero-row .val{color:var(--terracotta);font-family:var(--serif);font-weight:600;}
+  .compare-row .val{font-weight:600;}
+  .trust-strip{display:flex;justify-content:center;gap:22px;flex-wrap:wrap;font-family:var(--mono);font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.03em;margin-bottom:32px;}
+  .cta-center{text-align:center;}
+  .btn-primary-lg{display:inline-block;background:var(--terracotta);color:#FBF7EE;padding:16px 36px;border-radius:2px;font-weight:700;font-size:15.5px;text-decoration:none;}
+  .btn-secondary-lg{display:block;margin-top:16px;color:var(--ink-soft);font-size:13.5px;text-decoration:underline;}
+  .disclosure{font-family:var(--mono);font-size:11px;color:var(--taupe);text-align:center;max-width:460px;margin:36px auto 0;line-height:1.6;}
+  footer{padding:40px 0;text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--taupe);text-transform:uppercase;letter-spacing:0.04em;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="quiz-flow">
+    <p class="kicker">A Quick Self-Check</p>
+    <h1>The 2-Minute Everyday Hearing Check</h1>
+    <p class="sub">Four quick questions about your everyday moments. No appointment, no equipment, no obligation &mdash; just a clearer sense of whether iHEAR TReO is worth trying.</p>
+
+    <div class="progress-track"><div class="progress-fill" id="progress"></div></div>
+
+    <div class="card">
+      <div class="q-count" id="q-count">Question 1 of 4</div>
+      <div class="q-text" id="q-text"></div>
+      <div class="options" id="q-options"></div>
+      <div class="nav-row">
+        <button class="btn-back" id="btn-back">&larr; Back</button>
+        <button class="btn-next" id="btn-next">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="result-screen" id="result-screen">
+    <p class="result-eyebrow">Your Result</p>
+    <h2 class="result-headline" id="result-headline"></h2>
+    <p class="result-body" id="result-body"></p>
+
+    <div class="compare-box">
+      <div class="compare-row"><span class="label">Traditional RX Hearing Aid</span><span class="val">$2,000&ndash;$5,000</span></div>
+      <div class="compare-row"><span class="label">Traditional OTC Hearing Aids</span><span class="val">$299&ndash;$1,499</span></div>
+      <div class="compare-row hero-row"><span class="label">iHEAR TReO</span><span class="val">$99 single / $149 pair</span></div>
+    </div>
+
+    <div class="trust-strip">
+      <span>75-day money-back guarantee</span>
+      <span>1-year limited warranty</span>
+      <span>Free shipping</span>
+    </div>
+
+    <div class="cta-center">
+      <a class="btn-primary-lg" href="#">Shop TReO &mdash; $99</a>
+      <a class="btn-secondary-lg" href="#">or the Complete Pair &mdash; $149 (code PAIR99)</a>
+    </div>
+
+    <p class="disclosure">TReO is not a hearing aid. It does not diagnose, treat, cure, or mitigate hearing loss. If you suspect hearing loss, consult a hearing professional. This check is not a hearing test and does not diagnose anything &mdash; it's a quick read on your everyday listening situations, nothing more.</p>
+  </div>
+
+  <footer>OTCHealth &middot; Family-Run Since 1947 &middot; Quiz Draft &middot; 2026-07-13</footer>
+</div>
+
+<script>
+const questions = [
+  {
+    text: "At a busy dinner table, how often do you ask someone to repeat themselves?",
+    options: ["Rarely", "Sometimes", "Often"],
+    weight: [0, 1, 2]
+  },
+  {
+    text: "Is the TV volume ever a point of disagreement in your house?",
+    options: ["No, never", "Occasionally", "Yes, often"],
+    weight: [0, 1, 2]
+  },
+  {
+    text: "In a group conversation, do you find yourself just nodding along sometimes?",
+    options: ["No", "A little", "Yes, more than I'd like"],
+    weight: [0, 1, 2]
+  },
+  {
+    text: "What brought you here today?",
+    options: [
+      "I want to hear better at gatherings and at home",
+      "A family member suggested I check this out",
+      "Just curious what's out there"
+    ],
+    weight: [2, 1, 0]
+  }
+];
+
+let current = 0;
+const answers = new Array(questions.length).fill(null);
+
+const qCount = document.getElementById('q-count');
+const qText = document.getElementById('q-text');
+const qOptions = document.getElementById('q-options');
+const progress = document.getElementById('progress');
+const btnBack = document.getElementById('btn-back');
+const btnNext = document.getElementById('btn-next');
+const quizFlow = document.getElementById('quiz-flow');
+const resultScreen = document.getElementById('result-screen');
+
+function renderQuestion() {
+  const q = questions[current];
+  qCount.textContent = `Question ${current + 1} of ${questions.length}`;
+  qText.textContent = q.text;
+  progress.style.width = `${(current / questions.length) * 100}%`;
+  qOptions.innerHTML = '';
+  q.options.forEach((opt, i) => {
+    const div = document.createElement('div');
+    div.className = 'opt' + (answers[current] === i ? ' selected' : '');
+    div.textContent = opt;
+    div.onclick = () => {
+      answers[current] = i;
+      renderQuestion();
+    };
+    qOptions.appendChild(div);
+  });
+  btnBack.className = 'btn-back' + (current > 0 ? ' show' : '');
+  btnNext.className = 'btn-next' + (answers[current] !== null ? ' active' : '');
+  btnNext.textContent = current === questions.length - 1 ? 'See My Result' : 'Next';
+}
+
+btnBack.onclick = () => { if (current > 0) { current--; renderQuestion(); } };
+btnNext.onclick = () => {
+  if (answers[current] === null) return;
+  if (current < questions.length - 1) {
+    current++;
+    renderQuestion();
+  } else {
+    showResult();
+  }
+};
+
+function showResult() {
+  let score = 0;
+  questions.forEach((q, i) => { score += q.weight[answers[i]]; });
+  quizFlow.classList.add('hide');
+  resultScreen.classList.add('show');
+
+  const headline = document.getElementById('result-headline');
+  const body = document.getElementById('result-body');
+
+  if (score >= 5) {
+    headline.textContent = "Sounds like TReO could genuinely help.";
+    body.textContent = "Based on your answers, those dinner-table and TV-volume moments come up more than you'd like. That's exactly what TReO was built for.";
+  } else if (score >= 2) {
+    headline.textContent = "You might notice a difference with TReO.";
+    body.textContent = "It's not every day for you, but when it happens, it happens. TReO's 75-day guarantee means there's no real risk in trying it.";
+  } else {
+    headline.textContent = "You're mostly doing fine, and TReO is still worth a look.";
+    body.textContent = "Your everyday hearing sounds pretty good right now. Some people try TReO anyway, just for the moments when a room gets loud.";
+  }
+}
+
+renderQuestion();
+</script>
+</body>
+</html>
