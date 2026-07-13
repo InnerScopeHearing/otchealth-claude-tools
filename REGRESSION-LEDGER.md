@@ -69,3 +69,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** n/a@n/a-finding-not-a-code-fix — Not a bug to fix in code -- a factual finding about actual usage vs provisioned capability. Relevant for ADR-002 open trigger 4: has the parallel path run in production long enough to measure real data -- answer, as of today, is effectively no real traffic has gone through it at all.
 - **Verified:** Direct query of the real Descope Management API audit search endpoint for the full window 2026-07-08 through now; only 76 total entries, all confined to a single 24h provisioning window, zero exchange events since
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-13T03:59Z] tag:monitor-azure-auth-oidc — nightly-embedding-drift + nightly-eval monitors emitted nothing (silently dead) after the GCP exit
+
+- **Root cause:** The monitors resolve Azure secrets via kvSecret() = client_credentials from AZURE_SP_* env, but claude-tools CI has NO AZURE_SP_* secrets (deliberately: the repo uses secretless federated OIDC, azure/login + vars.AZURE_CLIENT_ID). First they wired the retired GCP_CLAUDE_DRIVER_SA_JSON, then AZURE_SP_* secrets that this repo never sets. Both = kvSecret sp:no-token -> fatal. continue-on-error:true masked it as a green run. Same family as workflow-gcp-only-env-post-gcp-exit and bulletin-local-write-only: an environment assumption that did not survive the GCP->Azure migration. (Secondary: their events emit via posthog-fleet-ingest-key to the Fleet Agents project 479484, NOT Gateway Ops 493944 where the initial diagnosis looked.)
+- **Fix:** InnerScopeHearing/otchealth-claude-tools@2cf8b6bd8d69929d3dcdd147e77fbcdf6fbd9337 — Add a secretless az-CLI/OIDC token path to shared kvSecret() (additive+last) and wire both workflows to azure/login OIDC (id-token:write); no Owner client secret at rest
+- **Verified:** Re-dispatched both on main; PostHog project 479484 received 3 embedding_drift (03:48:53) + 47 eval_result (03:56:47) events timestamped to the runs; eval ran a real 7min (vs the prior 11s fast-fail); toolkit test gate 591 green
+**First recorded occurrence of this root-cause tag.**
