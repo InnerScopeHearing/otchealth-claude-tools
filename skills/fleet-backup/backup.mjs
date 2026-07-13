@@ -274,9 +274,18 @@ async function exportBrainIndex(bearer, { pageSize = 25 } = {}) {
 // Search REST API with real $top/$skip paging, using a READ-ONLY query key (brain-search-query-key
 // in Key Vault; Azure query keys cannot modify the index/service). $skip tops out at 100,000 per
 // Azure AI Search; the current corpus is ~67,645 so skip-paging is complete (guarded + warned above).
-async function exportBrainIndexDirect(apiKey, endpoint, { index = process.env.BRAIN_INDEX || "otchealth-brain", pageSize = 1000, apiVersion = "2023-11-01" } = {}) {
-  const rows = [];
-  let skip = 0, odataCount = null;
+// STREAMS straight to a Block Blob (one Put Block per page) so the full ~67k-doc corpus is NEVER
+// held in memory at once. The earlier buffered version (rows.push all docs -> toNdjson one big
+// string) OOM'd the container's ~512MB Node heap at ~500MB. Peak memory here = one page (~10-30MB).
+// Computes sha256 + row/byte counts incrementally; commits with Put Block List. Returns the manifest
+// stats so run() does not re-buffer. $skip tops out at 100,000 per Azure AI Search (guarded).
+async function exportBrainIndexToBlob(apiKey, endpoint, account, container, blobName, { index = process.env.BRAIN_INDEX || "otchealth-brain", pageSize = 1000, apiVersion = "2023-11-01" } = {}) {
+  const tok = await blobToken();
+  if (!tok) throw new Error("could not mint a storage.azure.com managed-identity token for the brain dump");
+  const url = `https://${account}.blob.core.windows.net/${container}/${blobName}`;
+  const hash = crypto.createHash("sha256");
+  const blockIds = [];
+  let skip = 0, rows = 0, bytes = 0, page = 0, odataCount = null;
   for (;;) {
     const r = await fetch(`${endpoint}/indexes/${index}/docs/search?api-version=${apiVersion}`, {
       method: "POST",
@@ -286,24 +295,39 @@ async function exportBrainIndexDirect(apiKey, endpoint, { index = process.env.BR
     if (!r.ok) throw new Error(`AI Search dump ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const j = await r.json();
     if (skip === 0) odataCount = j["@odata.count"];
-    const docs = (j.value || []).map((d) => {
-      const o = { ...d };
-      delete o["@search.score"]; delete o["@search.rerankerScore"]; delete o["@search.highlights"]; delete o["@search.captions"];
-      return o;
-    });
+    const docs = j.value || [];
     if (!docs.length) break;
-    rows.push(...docs);
-    skip += docs.length;
-    if (docs.length < pageSize) break; // last page
-    if (skip >= 100000) { // Azure AI Search $skip hard ceiling
-      console.warn(`[fleet-backup] WARNING: hit the AI Search $skip=100000 ceiling at ${rows.length} docs; index has more. Switch to range/key paging for a complete dump.`);
-      break;
+    let chunk = "";
+    for (const d of docs) {
+      delete d["@search.score"]; delete d["@search.rerankerScore"]; delete d["@search.highlights"]; delete d["@search.captions"];
+      chunk += JSON.stringify(d) + "\n";
     }
+    const buf = Buffer.from(chunk, "utf8");
+    const blockId = Buffer.from(`blk-${String(page).padStart(8, "0")}`).toString("base64");
+    const pr = await fetch(`${url}?comp=block&blockid=${encodeURIComponent(blockId)}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${tok}`, "x-ms-version": "2023-11-03", "Content-Length": String(buf.length) },
+      body: buf,
+    });
+    if (!pr.ok) throw new Error(`Put Block ${pr.status}: ${(await pr.text()).slice(0, 200)}`);
+    blockIds.push(blockId);
+    hash.update(buf); rows += docs.length; bytes += buf.length; skip += docs.length; page++;
+    if (docs.length < pageSize) break; // last page
+    if (skip >= 100000) { console.warn(`[fleet-backup] WARNING: hit the AI Search $skip=100000 ceiling at ${rows} docs; index has more. Switch to range/key paging for a complete dump.`); break; }
   }
-  if (odataCount != null && rows.length < odataCount) {
-    console.warn(`[fleet-backup] WARNING: dumped ${rows.length} of @odata.count=${odataCount} brain docs.`);
+  if (!blockIds.length) { // empty index: write a 0-byte blob so the manifest points at something real
+    await putBlockBlob(account, container, blobName, Buffer.alloc(0), "application/x-ndjson");
+    return { rows: 0, bytes: 0, sha256: hash.digest("hex") };
   }
-  return rows;
+  const xml = `<?xml version="1.0" encoding="utf-8"?><BlockList>${blockIds.map((id) => `<Latest>${id}</Latest>`).join("")}</BlockList>`;
+  const cr = await fetch(`${url}?comp=blocklist`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${tok}`, "x-ms-version": "2023-11-03", "Content-Type": "text/plain", "x-ms-blob-content-type": "application/x-ndjson" },
+    body: xml,
+  });
+  if (!cr.ok) throw new Error(`Put Block List ${cr.status}: ${(await cr.text()).slice(0, 200)}`);
+  if (odataCount != null && rows < odataCount) console.warn(`[fleet-backup] WARNING: dumped ${rows} of @odata.count=${odataCount} brain docs.`);
+  return { rows, bytes, sha256: hash.digest("hex") };
 }
 
 function toNdjson(rows) { return rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""); }
@@ -338,21 +362,23 @@ async function run({ ledgerOnly, brainOnly }) {
     // provisioned, so the job still produces a ledger backup + best-effort brain sample.
     const brainKey = await kvSecret("brain-search-query-key");
     const brainEndpoint = (await kvSecret("brain-search-endpoint")) || process.env.BRAIN_SEARCH_ENDPOINT || "https://otchealth-brain-search.search.windows.net";
-    let brainRows;
+    const blobName = `brain-index-${date}.jsonl`;
+    let bstat;
     if (brainKey) {
-      console.log(`[fleet-backup] exporting otchealth-brain via DIRECT AI Search dump (${brainEndpoint}, search=* $top/$skip) ...`);
-      brainRows = await exportBrainIndexDirect(brainKey, brainEndpoint);
+      // STREAM straight to blob (Put Block per page) -- the buffered approach OOM'd the ~512MB heap.
+      console.log(`[fleet-backup] streaming otchealth-brain -> ${container}/${blobName} via direct AI Search dump (${brainEndpoint}) ...`);
+      bstat = await exportBrainIndexToBlob(brainKey, brainEndpoint, account, container, blobName);
     } else {
       console.warn("[fleet-backup] brain-search-query-key ABSENT; falling back to gateway brain_search (LIMITED: cannot enumerate the full index -- expect a partial/empty dump).");
-      brainRows = await exportBrainIndex(bearer);
+      const brainRows = await exportBrainIndex(bearer);
+      const brainBuf = Buffer.from(toNdjson(brainRows), "utf8");
+      await putBlockBlob(account, container, blobName, brainBuf, "application/x-ndjson");
+      bstat = { rows: brainRows.length, bytes: brainBuf.length, sha256: sha256(brainBuf) };
     }
-    const brainBuf = Buffer.from(toNdjson(brainRows), "utf8");
-    const blobName = `brain-index-${date}.jsonl`;
-    await putBlockBlob(account, container, blobName, brainBuf, "application/x-ndjson");
-    manifest.brain = { blob: blobName, rows: brainRows.length, bytes: brainBuf.length, sha256: sha256(brainBuf) };
-    console.log(`[fleet-backup] brain index export OK: ${brainRows.length} docs, ${brainBuf.length} bytes -> ${container}/${blobName}`);
-    if (brainRows.length < 60000) {
-      console.warn(`[fleet-backup] WARNING: expected ~67,645 docs in otchealth-brain; only captured ${brainRows.length}. Investigate before trusting this as a full DR copy.`);
+    manifest.brain = { blob: blobName, rows: bstat.rows, bytes: bstat.bytes, sha256: bstat.sha256 };
+    console.log(`[fleet-backup] brain index export OK: ${bstat.rows} docs, ${bstat.bytes} bytes -> ${container}/${blobName}`);
+    if (bstat.rows < 60000) {
+      console.warn(`[fleet-backup] WARNING: expected ~67,645 docs in otchealth-brain; only captured ${bstat.rows}. Investigate before trusting this as a full DR copy.`);
     }
   }
 
