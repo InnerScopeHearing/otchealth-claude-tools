@@ -2,7 +2,7 @@
 // GCP Secret Manager retirement (billing off, 2026-07). Returns the secret value (string) or null;
 // NEVER throws (fail-open).
 //
-// TWO auth paths, tried in order (2026-07-05, A3-KV-REFERENCES / A9-MANAGED-IDENTITY groundwork):
+// THREE auth paths, tried in order (2026-07-05, A3-KV-REFERENCES / A9-MANAGED-IDENTITY groundwork):
 //   1. MANAGED IDENTITY (preferred, no stored secret at all): if the container has IDENTITY_ENDPOINT
 //      + IDENTITY_HEADER env vars (Azure Container Apps injects these automatically whenever a
 //      user/system-assigned identity is attached — see
@@ -16,6 +16,15 @@
 //      any job not yet migrated to managed identity. Migrate a job by: attach a user-assigned
 //      identity, grant it Key Vault Secrets User on the vault, remove AZURE_SP_CLIENT_SECRET from
 //      the job spec — no code change needed, this file picks the identity path automatically.
+//   3. az-CLI / OIDC (secretless CI fallback, 2026-07-13): if neither of the above minted a token,
+//      shell `az account get-access-token`. In a GitHub Actions job that ran `azure/login@v2` with
+//      federated OIDC (client-id from a repo VARIABLE, id-token: write), the az CLI is authenticated
+//      with NO client secret at rest — the federated login IS the credential. This is how the
+//      claude-tools repo authenticates to Azure (see .github/workflows/verify-get-secret-migration.yml),
+//      which deliberately does NOT set AZURE_SP_* secrets. Purely additive + last: it only runs when
+//      paths 1 and 2 both yield no token, so every managed-identity or AZURE_SP_*-equipped environment
+//      (Container Apps jobs, Hyperagent, the local seat) is byte-for-byte unchanged. Returns null (never
+//      throws) if az is absent or not logged in.
 //   AZURE_KEYVAULT_NAME   vault name (default kv-otc-55c84f6bef)
 //
 // Key Vault secret NAMES are a 1:1 mirror of the old GCP Secret Manager ids, so callers pass the
@@ -34,8 +43,11 @@
 // this one. Whenever the SP path is what actually worked, it logs a loud warning so RBAC drift on
 // the identity is visible in logs/alerts immediately, not discovered months later.
 
+import { execFileSync } from "node:child_process";
+
 let _identityTok = null, _identityExp = 0;
 let _spTok = null, _spExp = 0;
+let _azTok = null, _azExp = 0;
 
 /** Container Apps managed-identity token, via the platform-injected sidecar endpoint. Returns null
  *  (never throws) if the container has no identity attached (IDENTITY_ENDPOINT unset) or the call
@@ -85,6 +97,30 @@ async function spToken() {
   }
 }
 
+/** az-CLI / OIDC token (SECRETLESS). After `azure/login@v2` (federated OIDC) in a GitHub Actions job,
+ *  or in any az-authenticated shell, mint a Key Vault token via the az CLI — no client secret at rest.
+ *  Returns null (never throws) if az is missing from PATH or not logged in, so callers fall through
+ *  exactly as with the other paths. execFileSync (not a shell string) so `name`/args can never be
+ *  interpolated into a shell; args are static. */
+async function azCliToken() {
+  const now = Date.now();
+  if (_azTok && _azExp - now > 60_000) return _azTok;
+  try {
+    const out = execFileSync(
+      "az",
+      ["account", "get-access-token", "--resource", "https://vault.azure.net", "--query", "accessToken", "-o", "tsv"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 20_000 },
+    );
+    const tok = String(out || "").trim();
+    if (!tok) return null;
+    _azTok = tok;
+    _azExp = now + 3000_000; // ~50 min; az KV tokens are typically ~60-75 min
+    return _azTok;
+  } catch {
+    return null; // az absent / not logged in / any failure — fall through
+  }
+}
+
 // For diagnostics/logging only — which path actually authenticated successfully last (or null if
 // never minted). Kept for backward compatibility with any caller importing this.
 let _authMode = null;
@@ -98,8 +134,8 @@ export function authMode() { return _authMode; }
 export async function kvSecretSet(name, value) {
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
   const attempts = [];
-  for (const mode of ["identity", "sp"]) {
-    const tok = mode === "identity" ? await identityToken() : await spToken();
+  for (const mode of ["identity", "sp", "azcli"]) {
+    const tok = mode === "identity" ? await identityToken() : mode === "sp" ? await spToken() : await azCliToken();
     if (!tok) { attempts.push(`${mode}:no-token`); continue; }
     try {
       const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, {
@@ -138,8 +174,8 @@ export async function kvSecretSet(name, value) {
 export async function kvSecret(name) {
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
   const attempts = [];
-  for (const mode of ["identity", "sp"]) {
-    const tok = mode === "identity" ? await identityToken() : await spToken();
+  for (const mode of ["identity", "sp", "azcli"]) {
+    const tok = mode === "identity" ? await identityToken() : mode === "sp" ? await spToken() : await azCliToken();
     if (!tok) { attempts.push(`${mode}:no-token`); continue; }
     try {
       const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, { headers: { Authorization: `Bearer ${tok}` } });
@@ -187,10 +223,11 @@ export async function requireSecrets(names) {
     const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
     const spOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
     const identityOk = Boolean(process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER);
+    const azOk = Boolean(await azCliToken());
     console.error("==================================================================================");
     console.error(`[FATAL] Required secret(s) UNAVAILABLE from Key Vault (${vault}): ${missing.join(", ")}`);
-    console.error(`        Managed identity attached: ${identityOk ? "yes" : "no"}. AZURE_SP_* creds present: ${spOk ? "yes" : "NO — set AZURE_SP_CLIENT_ID/SECRET/TENANT_ID"}.`);
-    console.error("        Both auth paths were tried per secret (see [kv-secret] WARN/ERROR lines above for which");
+    console.error(`        Managed identity attached: ${identityOk ? "yes" : "no"}. AZURE_SP_* creds present: ${spOk ? "yes" : "NO"}. az-CLI/OIDC login: ${azOk ? "yes" : "no — run azure/login@v2 (OIDC) or 'az login'"}.`);
+    console.error("        All three auth paths were tried per secret (see [kv-secret] WARN/ERROR lines above for which");
     console.error("        path failed and how — a 401/403 means an RBAC grant is likely missing on the identity).");
     console.error("        Refusing to run with missing credentials (fail-loud, not silent). GCP Secret Manager is retired.");
     console.error("==================================================================================");

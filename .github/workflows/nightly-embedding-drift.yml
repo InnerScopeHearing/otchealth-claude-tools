@@ -7,11 +7,14 @@
 # trend lives next to eval_result. Mirrors nightly-eval.yml's shape exactly: never blocks anything —
 # drift.mjs always exits 0 (this answers "is memory recall degrading", a monitor question, not a gate).
 #
-# Needs AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID (drift.mjs resolves all
-# service secrets via Azure Key Vault kv-otc-55c84f6bef through kvSecret(); GCP is permanently
-# retired -- 2026-07-12 fix: this workflow wired only the dead GCP_CLAUDE_DRIVER_SA_JSON secret
-# since GCP exit, so kvSecret() had no SP creds, every secret read failed, and the monitor was
-# silently dead. Regression-ledger tag: embedding-drift-gcp-only-env.)
+# Azure auth = SECRETLESS OIDC (2026-07-13): drift.mjs resolves every service secret from Azure Key
+# Vault kv-otc-55c84f6bef via kvSecret(). claude-tools CI authenticates to Azure with federated OIDC
+# (azure/login + repo VARIABLES AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID + id-token: write), the same
+# pattern verify-get-secret-migration.yml uses; the repo deliberately does NOT set AZURE_SP_* secrets
+# (no client secret at rest). kvSecret()'s az-CLI/OIDC path (added 2026-07-13) mints the KV token from
+# the az login this step establishes. History: GCP retired -> this workflow first wired the dead
+# GCP_CLAUDE_DRIVER_SA_JSON (silently dead), then AZURE_SP_* secrets that this repo never sets (still
+# dead, PostHog 493944 had zero events) -> now OIDC. Regression-ledger tag: monitor-azure-auth-oidc.
 name: Nightly Embedding Drift Monitor
 
 on:
@@ -20,6 +23,7 @@ on:
   workflow_dispatch: {}     # manual trigger for testing
 
 permissions:
+  id-token: write   # secretless OIDC login to Azure (azure/login); no AZURE_SP_* secret at rest
   contents: read
 
 concurrency:
@@ -40,12 +44,15 @@ jobs:
         with:
           node-version: 22
 
+      - name: Azure login (OIDC, secretless — the claude-tools Azure auth pattern)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Probe memory indexes + emit to PostHog (report-only; never fails)
         continue-on-error: true
-        env:
-          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
-          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
-          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
         run: |
           node skills/embedding-drift-monitor/drift.mjs --emit --json "${GITHUB_WORKSPACE}/drift-report.json" 2>&1 | tee "${GITHUB_WORKSPACE}/drift.log"
 
