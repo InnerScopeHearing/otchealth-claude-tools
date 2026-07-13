@@ -11,6 +11,7 @@
 // separately; PHI-HOLD is never exported here). Each ring maps to a (storage account, container, prefix).
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const SMPROJ = "otchealth-shared-prod";
 const RING = (process.argv[2] || "OPERATIONAL").toUpperCase();
@@ -70,6 +71,8 @@ async function smToken() {
   SMTOK = (await r.json()).access_token; return SMTOK;
 }
 async function sm(id) {
+  const _kv = await kvSecret(id); if (_kv != null) return _kv;
+  if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null;   // no GCP SA post-exit -> Key Vault only; skip the retired SM fallback (smToken/saJwt would throw)
   const t = await smToken();
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SMPROJ}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
   if (!r.ok) return null;

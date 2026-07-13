@@ -56,23 +56,27 @@ function need(n) { const v = process.env[n]; if (!v) { console.error("Missing en
 function encPath(p) { return p.split("/").filter(Boolean).map(encodeURIComponent).join("/"); }
 function itemRef(path) { return path && path !== "/" ? `/me/drive/root:/${encPath(path)}` : "/me/drive/root"; }
 
+let _smtok = null;
 async function smToken() {
-  const sa = JSON.parse(need("GCP_CLAUDE_DRIVER_SA_JSON"));
+  if (_smtok) return _smtok;
+  const raw = process.env.GCP_CLAUDE_DRIVER_SA_JSON;
+  if (!raw) return null;   // GCP SA retired (post-exit) -> return null instead of process.exit(2) via need(); smRead/smWrite are kvSecret-first so this is non-fatal
+  const sa = JSON.parse(raw);
   const now = Math.floor(Date.now() / 1000);
   const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
   const s = crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
   const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(i + "." + s)}` });
-  if (!r.ok) throw new Error("SM auth " + r.status);
-  return (await r.json()).access_token;
+  if (!r.ok) return null;
+  _smtok = (await r.json()).access_token;
+  return _smtok;
 }
-async function smRead(t, id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
-async function smWrite(t, id, v) { const _ok = await kvSecretSet(id, v); if (_ok) return true; const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); let r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); } if (!r.ok) throw new Error("SM write " + r.status); }
+async function smRead(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const t = await smToken(); if (!t) return null; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
+async function smWrite(id, v) { const _ok = await kvSecretSet(id, v); if (_ok) return true; const t = await smToken(); if (!t) throw new Error("SM write: Key Vault write failed and no GCP SA present"); const body = JSON.stringify({ payload: { data: Buffer.from(v, "utf8").toString("base64") } }); let r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); if (r.status === 404) { await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets?secretId=${id}`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ replication: { automatic: {} } }) }); r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body }); } if (!r.ok) throw new Error("SM write " + r.status); }
 
 async function accessToken(user) {
-  const smt = await smToken();
   const key = user ? `graph-onedrive-refresh-token-${user}` : "graph-onedrive-refresh-token";
-  const refresh = await smRead(smt, key);
+  const refresh = await smRead(key);
   if (!refresh) throw new Error(`No ${key} in Secret Manager. Run the OneDrive consent first: onedrive.mjs consent ${user || "<user>"}`);
   const T = need("GRAPH_MAIL_TENANT_ID"), CID = need("GRAPH_MAIL_CLIENT_ID");
   // The app is both confidential and a public client (isFallbackPublicClient=true). The
@@ -89,7 +93,7 @@ async function accessToken(user) {
   let j = await refreshGrant(false);
   if (!j.access_token && /7000218/.test(JSON.stringify(j))) j = await refreshGrant(true);
   if (!j.access_token) throw new Error("token refresh failed: " + JSON.stringify(j).slice(0, 200));
-  if (j.refresh_token && j.refresh_token !== refresh) { try { await smWrite(smt, key, j.refresh_token); console.error("rotated OneDrive refresh token -> persisted."); } catch (e) { console.error("ROTATE PERSIST FAILED: " + e.message); } }
+  if (j.refresh_token && j.refresh_token !== refresh) { try { await smWrite(key, j.refresh_token); console.error("rotated OneDrive refresh token -> persisted."); } catch (e) { console.error("ROTATE PERSIST FAILED: " + e.message); } }
   return j.access_token;
 }
 async function gx(tok, method, path, opts = {}) { return fetch(path.startsWith("http") ? path : GRAPH + path, { method, headers: { Authorization: `Bearer ${tok}`, ...(opts.headers || {}) }, body: opts.body }); }
@@ -213,7 +217,7 @@ async function runConsent(user) {
     const body = { client_id: CID, grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: dc.device_code };
     const tj = await (await fetch(`https://login.microsoftonline.com/${T}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) })).json();
     if (tj.refresh_token) {
-      await smWrite(await smToken(), `graph-onedrive-refresh-token-${user}`, tj.refresh_token);
+      await smWrite(`graph-onedrive-refresh-token-${user}`, tj.refresh_token);
       console.log(`\nSUCCESS: stored graph-onedrive-refresh-token-${user}. Use it with:  onedrive.mjs --user ${user} tree`);
       return;
     }

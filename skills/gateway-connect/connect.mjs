@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { kvSecret } from '../kb-memory/azure-secret.mjs';
 
 const SM = 'otchealth-shared-prod';
 const KV_NAME = process.env.AZURE_KEYVAULT_NAME || 'kv-otc-55c84f6bef';
@@ -94,12 +95,20 @@ async function sm(id, tok) {
 
 /** Read a lane's [client_id, client_secret] from the active cred source (Key Vault first, else Secret Manager). */
 async function laneCreds(cfg) {
-  if (azureEnvPresent()) {
-    const tok = await kvToken();
-    return Promise.all([kv(cfg.idSecret, tok), kv(cfg.secretSecret, tok)]);
+  // Azure Key Vault FIRST via the SHARED resolver (managed-identity -> AZURE_SP_* -> az-CLI/OIDC),
+  // not the old AZURE_SP-only local kv() gated on azureEnvPresent(). That gate fell through to the
+  // now-dead GCP path whenever AZURE_SP_* env was absent (managed-identity / az-login runtimes),
+  // which is what threw the octools-sync "oauth-lane-*-id 404" ambient errors. Secret names identical.
+  const [kvId, kvSec] = await Promise.all([kvSecret(cfg.idSecret), kvSecret(cfg.secretSecret)]);
+  if (kvId && kvSec) return [kvId, kvSec];
+  // Legacy GCP Secret Manager fallback, ONLY if a claude-driver SA is actually present (else
+  // smToken/saRaw() throws). Non-fatal: a clear error if neither store can supply the lane creds.
+  try {
+    const tok = await smToken();
+    return await Promise.all([sm(cfg.idSecret, tok), sm(cfg.secretSecret, tok)]);
+  } catch (e) {
+    throw new Error(`lane creds ${cfg.idSecret}/${cfg.secretSecret} unavailable from Key Vault (${KV_NAME}) and GCP fallback failed: ${String((e && e.message) || e)}`);
   }
-  const tok = await smToken();
-  return Promise.all([sm(cfg.idSecret, tok), sm(cfg.secretSecret, tok)]);
 }
 
 /** Mint a short-lived lane token via client_credentials. Never logs the client_secret or the token. */
