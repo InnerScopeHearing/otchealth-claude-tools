@@ -27,7 +27,20 @@
 // Exit codes: 0 = report (default, always unless --strict); 3 = STALE pin(s) found AND --strict;
 // 1 = unexpected error; 78 = missing config/creds (EX_CONFIG, matches image-drift.mjs's convention).
 
-const TEN = process.env.AZURE_SP_TENANT_ID, CID = process.env.AZURE_SP_CLIENT_ID, CSEC = process.env.AZURE_SP_CLIENT_SECRET;
+// azure-sp creds: env fast-path, else the SHARED kvSecret resolver (managed-identity / az-CLI OIDC /
+// SP), NEVER an AZURE_SP-only read -- null under the GitHub Actions OIDC runtime (no AZURE_SP_* there),
+// which made this sub-check CRASH inside drift-sentinel while working locally. Mirrors canary.mjs.
+let TEN = process.env.AZURE_SP_TENANT_ID, CID = process.env.AZURE_SP_CLIENT_ID, CSEC = process.env.AZURE_SP_CLIENT_SECRET;
+async function ensureSpCreds() {
+  if (TEN && CID && CSEC) return true;
+  try {
+    const m = await import("../skills/kb-memory/azure-secret.mjs");
+    TEN = TEN || await m.kvSecret("azure-sp-tenant-id");
+    CID = CID || await m.kvSecret("azure-sp-client-id");
+    CSEC = CSEC || await m.kvSecret("azure-sp-client-secret");
+  } catch { /* fall through to the fatal below */ }
+  return Boolean(TEN && CID && CSEC);
+}
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
@@ -58,7 +71,7 @@ const JOBS_OVERRIDE = opt("--jobs", null);
 const EXPLICIT_JOBS = JOBS_OVERRIDE ? JOBS_OVERRIDE.split(",").map((s) => s.trim()).filter(Boolean) : null;
 
 async function armToken() {
-  if (!TEN || !CID || !CSEC) { console.error("[drift-recon][FATAL] AZURE_SP_* not set."); process.exit(78); }
+  if (!(await ensureSpCreds())) { console.error("[drift-recon][FATAL] azure-sp creds unavailable (AZURE_SP_* env or Key Vault azure-sp-*)."); process.exit(78); }
   const r = await fetch(`https://login.microsoftonline.com/${TEN}/oauth2/v2.0/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },

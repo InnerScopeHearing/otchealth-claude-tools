@@ -30,8 +30,16 @@ const GW = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
 const SUB = process.env.AZURE_SUBSCRIPTION_ID || "55c84f6b-ef90-4259-a58b-50835cc4cab4";
 const SEARCH_RG = process.env.AZURE_SEARCH_RG || "otchealth-automation-rg";
 const JSONOUT = process.argv.includes("--json");
+// STRICT turns an anomaly (a STALE/NO_DATE/QUERY_ERROR index or a not-Succeeded scheduled job) into a
+// non-zero EXIT so the nightly workflow goes RED and pages. Without it the canary is report-only
+// (PostHog event + ::warning:: only) -- which is how a frozen index emits to a dashboard nobody watches.
+// The nightly-azure-canary workflow runs with --strict; a manual/local run stays report-only by default.
+const STRICT = process.argv.includes("--strict") || process.env.AZURE_CANARY_STRICT === "1";
 
 function warn(msg) { console.log(`::warning::[azure-canary] ${msg}`); }
+
+/** Exit-code policy (pure, unit-tested): strict mode pages (exit 1) on any anomaly; default report-only (0). */
+export function pageExitCode(summaryOk, strict) { return strict && !summaryOk ? 1 : 0; }
 
 /**
  * PURE freshness verdict for one index. Given the index registry entry, the newest document timestamp
@@ -180,7 +188,8 @@ async function main() {
   }
   for (const a of anomalies) warn(a);
   console.log(summary.ok ? "[azure-canary] OK (jobs green, all indexes fresh)" : `[azure-canary] ANOMALIES: ${anomalies.join("; ")}`);
-  process.exit(0); // report-only on anomaly
+  if (STRICT && !summary.ok) console.error(`::error::[azure-canary] STRICT: paging on the above anomalies (stale index or dead job); the nightly run goes RED so a frozen index cannot sit silent.`);
+  process.exit(pageExitCode(summary.ok, STRICT)); // strict => page on anomaly; default => report-only
 }
 
 // Only run as a script (not when imported by the test).

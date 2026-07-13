@@ -7,9 +7,11 @@
 # dead-job pager -- the failure family that let daily-digest fail silently for 9 days), or (3) the
 # otchealth-brain index doc count dropped below a floor (broken reindex). See skills/azure-canary/.
 #
-# Behaviour: ANOMALIES are report-only (a PostHog azure_canary event + a ::warning:: line; the step stays
-# green). The workflow goes RED only if the canary cannot run at all (no cto-lane creds / gateway
-# unreachable) -- that "the sensor lane itself is dark" state is exactly what should page.
+# Behaviour (2026-07-13, --strict): the canary emits the PostHog azure_canary event + ::warning:: lines on
+# every run (the durable trend), AND runs with --strict so a real ANOMALY -- any index STALE/NO_DATE/
+# QUERY_ERROR or any scheduled job not Succeeded -- makes the run RED and PAGES. It ALSO goes RED if the
+# canary cannot run at all (dark sensor lane). This closes the P0 gap: report-only meant a frozen index
+# emitted an event to a dashboard nobody watched (the exact failure that hid otchealth-brain for ~12 days).
 #
 # Azure auth = SECRETLESS OIDC (same pattern as nightly-recall-eval.yml): azure/login federated OIDC lets
 # canary.mjs resolve the cto-lane creds + PostHog key from Key Vault via kvSecret(). No secret at rest.
@@ -49,10 +51,10 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Run Azure canary (report-only for anomalies; red only if sensors are dark)
+      - name: Run Azure canary (--strict: RED on a stale index / dead job, and on a dark sensor lane)
         working-directory: skills/azure-canary
         run: |
-          node canary.mjs --json 2>&1 | tee "${GITHUB_WORKSPACE}/azure-canary.log"
+          node canary.mjs --json --strict 2>&1 | tee "${GITHUB_WORKSPACE}/azure-canary.log"
 
       - name: Upload canary log
         if: always()
