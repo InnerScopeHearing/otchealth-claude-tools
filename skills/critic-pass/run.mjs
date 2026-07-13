@@ -39,6 +39,7 @@ function saJwt(saRaw) {
   return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
 }
 async function sm(id, saRaw) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
+  if (!saRaw) return null; // no GCP SA post-exit -> Key Vault only (via kvSecret above); skip the retired SM fallback
   const t = (await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt(saRaw))}` })).json()).access_token;
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } });
   if (!r.ok) return null;
@@ -59,8 +60,7 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
 // The default (real) model call: primary azure-openai (gpt-4o standard), foundry fallback on throttle.
 // Mirrors agent-evals/run-evals.mjs's chat() so the whole fleet agrees on endpoints + throttle handling.
 async function defaultAzureChat({ system, user, tier, maxTokens = 700 }) {
-  const saRaw = resolveSa();
-  if (!saRaw) throw new Error("no GCP SA available for the critic model call");
+  const saRaw = resolveSa(); // may be null post-GCP-exit; sm() then resolves via Key Vault (OIDC on CI)
   const dep = resolveTier(process.env.CRITIC_MODEL || tier || "standard").deployment;
   const [ep, key] = await Promise.all([sm("azure-openai-endpoint", saRaw), sm("azure-openai-key", saRaw)]);
   if (!ep || !key) throw new Error("missing azure-openai endpoint/key");
