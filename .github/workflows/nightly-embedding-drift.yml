@@ -7,8 +7,11 @@
 # trend lives next to eval_result. Mirrors nightly-eval.yml's shape exactly: never blocks anything —
 # drift.mjs always exits 0 (this answers "is memory recall degrading", a monitor question, not a gate).
 #
-# Needs GCP_CLAUDE_DRIVER_SA_JSON (the same claude-driver SA secret nightly-eval.yml uses to reach
-# Azure AI Search + Azure OpenAI + PostHog via Secret Manager).
+# Needs AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID (drift.mjs resolves all
+# service secrets via Azure Key Vault kv-otc-55c84f6bef through kvSecret(); GCP is permanently
+# retired -- 2026-07-12 fix: this workflow wired only the dead GCP_CLAUDE_DRIVER_SA_JSON secret
+# since GCP exit, so kvSecret() had no SP creds, every secret read failed, and the monitor was
+# silently dead. Regression-ledger tag: embedding-drift-gcp-only-env.)
 name: Nightly Embedding Drift Monitor
 
 on:
@@ -40,7 +43,9 @@ jobs:
       - name: Probe memory indexes + emit to PostHog (report-only; never fails)
         continue-on-error: true
         env:
-          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
+          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
         run: |
           node skills/embedding-drift-monitor/drift.mjs --emit --json "${GITHUB_WORKSPACE}/drift-report.json" 2>&1 | tee "${GITHUB_WORKSPACE}/drift.log"
 

@@ -44,7 +44,9 @@ jobs:
         continue-on-error: true
         working-directory: skills/agent-evals
         env:
-          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
+          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
         run: |
           node run-evals.mjs --emit --json "${GITHUB_WORKSPACE}/nightly-scorecard.json" 2>&1 | tee "${GITHUB_WORKSPACE}/nightly-eval.log"
 
