@@ -27,6 +27,7 @@ on:
       - "dream-team/governance/charters/**"
 
 permissions:
+  id-token: write     # secretless OIDC login to Azure (least-privilege CI identity); no secret at rest
   contents: read
   pull-requests: write
 
@@ -49,6 +50,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Azure login (OIDC, least-privilege CI identity — pull_request federated cred)
+        continue-on-error: true
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CI_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Check out PR base into a sibling dir
         working-directory: head
         env:
@@ -63,16 +72,15 @@ jobs:
         id: base_eval
         continue-on-error: true
         working-directory: base/skills/agent-evals
-        env:
-          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+        # No env creds: azure/login (above) authenticated the runner via OIDC; run-evals.mjs resolves
+        # azure-openai-* from Key Vault via kvSecret()'s az-CLI/OIDC path. No secret at rest.
         run: node run-evals.mjs --json "${{ github.workspace }}/base-scorecard.json"
 
       - name: Run golden-task suite on PR HEAD
         id: head_eval
         continue-on-error: true
         working-directory: head/skills/agent-evals
-        env:
-          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+        # No env creds: OIDC login above; run-evals resolves azure-openai-* from Key Vault.
         run: node run-evals.mjs --json "${{ github.workspace }}/head-scorecard.json"
 
       - name: Diff the two scorecards and render the PR comment

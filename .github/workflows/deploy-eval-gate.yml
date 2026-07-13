@@ -55,6 +55,7 @@ on:
         default: "0.05"
 
 permissions:
+  id-token: write     # secretless OIDC login to Azure (azure/login); no secret at rest
   contents: read
 
 jobs:
@@ -71,13 +72,21 @@ jobs:
         with:
           node-version: 22
 
+      - name: Azure login (OIDC, secretless — the claude-tools Azure auth pattern; main context)
+        continue-on-error: true
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Run golden-task suite (judge on Azure credits)
         id: run
         continue-on-error: true # run-evals.mjs exits 1 on any single failing task; that is a scoring
                                  # SIGNAL for eval-gate.mjs to interpret, not a workflow error by itself.
         working-directory: skills/agent-evals
-        env:
-          GCP_CLAUDE_DRIVER_SA_JSON: ${{ secrets.GCP_CLAUDE_DRIVER_SA_JSON }}
+        # No env creds: azure/login (above) authenticated the runner via OIDC; run-evals.mjs resolves
+        # azure-openai-* from Key Vault via kvSecret()'s az-CLI/OIDC path. No secret at rest.
         run: |
           AGENT_FLAG=""
           if [ -n "${{ inputs.agent }}" ]; then AGENT_FLAG="--agent ${{ inputs.agent }}"; fi
