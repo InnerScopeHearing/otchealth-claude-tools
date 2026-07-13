@@ -26,6 +26,7 @@
 import crypto from "node:crypto";
 import { readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, relative, dirname, extname } from "node:path";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const argv = process.argv.slice(2);
 function takeVal(name) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return null; }
@@ -45,22 +46,13 @@ const CT = { ".pdf": "application/pdf", ".csv": "text/csv", ".json": "applicatio
 const ctOf = (name) => CT[extname(name).toLowerCase()] || "application/octet-stream";
 
 // ---- Azure Key Vault (fleet secret store; GCP Secret Manager RETIRED, billing off) ----
-let _kvTok = null, _kvExp = 0;
-async function kvToken() {
-  const t = process.env.AZURE_SP_TENANT_ID, c = process.env.AZURE_SP_CLIENT_ID, s = process.env.AZURE_SP_CLIENT_SECRET;
-  if (!t || !c || !s) return null;
-  if (_kvTok && _kvExp - Date.now() > 60000) return _kvTok;
-  try {
-    const r = await fetch(`https://login.microsoftonline.com/${t}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "client_credentials", client_id: c, client_secret: s, scope: "https://vault.azure.net/.default" }) });
-    const j = await r.json(); if (!j.access_token) return null;
-    _kvTok = j.access_token; _kvExp = Date.now() + (Number(j.expires_in) || 3600) * 1000; return _kvTok;
-  } catch { return null; }
-}
-async function kvRead(name) {
-  const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
-  const tok = await kvToken(); if (!tok) return null;
-  try { const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, { headers: { Authorization: `Bearer ${tok}` } }); if (!r.ok) return null; const v = (await r.json()).value; return v == null ? null : String(v).trim() || null; } catch { return null; }
-}
+// Use the SHARED resolver (managed-identity -> AZURE_SP_* -> az-CLI/OIDC), NOT an AZURE_SP-only
+// local token. The old local kvToken read AZURE_SP_* env directly and returned null under a
+// MANAGED IDENTITY (Container Apps Jobs), so a job like daily-digest, which runs as the
+// id-otc-jobs-kv managed identity with NO AZURE_SP_* env, could not resolve azure-commons-storage-key
+// and died at the "staging to journal commons" step (Missing storage key) under set -e. kvSecret
+// resolves via the identity in that runtime; secret names are identical.
+async function kvRead(name) { return await kvSecret(name); }
 
 // ---- shared: claude-driver SA token (scope-parameterized) ----
 function saJwt(scope) {
