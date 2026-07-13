@@ -1,0 +1,64 @@
+# Nightly Azure control-plane CANARY (ITEM #2 Phase A, DoD item 5: "a monitor whose silence pages us").
+#
+# The six Azure read tools shipped in gateway PR #101 are the SENSORS; this is the MONITOR. It calls them
+# the way the Chat CTO does -- a cto-lane client_credentials bearer against the live gateway /mcp over
+# public HTTPS -- and alerts if (1) the tools are unreachable / erroring (gateway down or the gateway
+# managed identity lost its RBAC), (2) any scheduled Container Apps Job's latest run != Succeeded (the
+# dead-job pager -- the failure family that let daily-digest fail silently for 9 days), or (3) the
+# otchealth-brain index doc count dropped below a floor (broken reindex). See skills/azure-canary/.
+#
+# Behaviour: ANOMALIES are report-only (a PostHog azure_canary event + a ::warning:: line; the step stays
+# green). The workflow goes RED only if the canary cannot run at all (no cto-lane creds / gateway
+# unreachable) -- that "the sensor lane itself is dark" state is exactly what should page.
+#
+# Azure auth = SECRETLESS OIDC (same pattern as nightly-recall-eval.yml): azure/login federated OIDC lets
+# canary.mjs resolve the cto-lane creds + PostHog key from Key Vault via kvSecret(). No secret at rest.
+name: Nightly Azure Canary
+
+on:
+  schedule:
+    - cron: '20 8 * * *'   # daily 08:20 UTC
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write   # secretless OIDC login to Azure (azure/login); kvSecret reads KV via the az session
+  contents: read
+
+concurrency:
+  group: nightly-azure-canary
+  cancel-in-progress: false
+
+jobs:
+  azure-canary:
+    name: azure control-plane freshness + dead-job canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Azure login (OIDC, secretless)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run Azure canary (report-only for anomalies; red only if sensors are dark)
+        working-directory: skills/azure-canary
+        run: |
+          node canary.mjs --json 2>&1 | tee "${GITHUB_WORKSPACE}/azure-canary.log"
+
+      - name: Upload canary log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: azure-canary-log
+          path: azure-canary.log
+          retention-days: 90
+          if-no-files-found: warn
