@@ -59,6 +59,7 @@ import { dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { diffScorecards } from "./promptcheck.mjs";
 import { TIERS, chatBody } from "../../setup/model-routing.mjs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -396,6 +397,9 @@ async function defaultRewriteLLM(promptText) {
 // Minimal GCP Secret Manager read (same JWT->token->access path run-evals.mjs uses), local to the CLI
 // so the pure core imports nothing network-related.
 async function smGet(id) {
+  const _kv = await kvSecret(id);
+  if (_kv != null) return _kv;
+  if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null; // no GCP SA post-exit -> Key Vault only (via kvSecret above); skip the retired SM fallback
   const crypto = await import("node:crypto");
   const sa = JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON);
   const now = Math.floor(Date.now() / 1000);
@@ -435,7 +439,7 @@ async function rewriteCmd() {
   // closure returning the resolved string. --offline (or no SA in env) skips the network -> a well-formed
   // abstaining proposal. This keeps the pure core synchronous while the CLI does the async work.
   let resolvedHunk = null, llmErr = null;
-  const offline = has("--offline") || !process.env.GCP_CLAUDE_DRIVER_SA_JSON;
+  const offline = has("--offline"); // Key Vault (managed-identity/OIDC) fetches azure creds without a GCP SA; a genuinely credless env still abstains via the try/catch below
   if (!offline && failedRubric.length) {
     const rewritePrompt = buildRewritePrompt({ prompt_file: primary.prompt_file, basePromptText, headPromptText, rubric: failedRubric });
     try { resolvedHunk = await defaultRewriteLLM(rewritePrompt); } catch (e) { llmErr = e; }

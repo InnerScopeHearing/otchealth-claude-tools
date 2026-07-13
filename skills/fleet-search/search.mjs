@@ -104,7 +104,33 @@ function filterDocsByQuery(items, query) {
 // ---------------- GitHub code search (classic PAT, org-wide) ----------------
 const GH_ORG = "InnerScopeHearing";
 let _ghPat; // cached for reuse by the bulletin fetch below
-async function ghPat() { if (_ghPat === undefined) _ghPat = await kvSecret("github-user-pat"); return _ghPat; }
+
+// Mint a fleet-bot GitHub App installation token from Key Vault App creds (github-app-id/
+// -private-key/-installation-id) -- the canonical, always-fresh fleet GitHub identity (15k/hr).
+// Mirrors regression-ledger/ledger.mjs's fleetBotToken(); kept self-contained. Returns null on any
+// failure so callers fall through to the legacy PAT.
+async function fleetBotToken() {
+  try {
+    const iss = (await kvSecret("github-app-id")) || (await kvSecret("github-app-client-id"));
+    let key = await kvSecret("github-app-private-key");
+    const installationId = await kvSecret("github-app-installation-id");
+    if (!iss || !key || !installationId) return null;
+    if (key.includes("\\n") && !key.includes("\n")) key = key.replace(/\\n/g, "\n"); // tolerate escaped newlines
+    const now = Math.floor(Date.now() / 1000);
+    const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iat: now - 60, exp: now + 540, iss })}`;
+    const jwt = `${input}.${crypto.createSign("RSA-SHA256").update(input).sign(key, "base64url")}`;
+    const r = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${jwt}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    if (!r.ok) return null;
+    return (await r.json()).token || null;
+  } catch { return null; }
+}
+// Prefer the always-fresh fleet-bot App token; fall back to the legacy github-user-pat only as a
+// last resort (it went stale and broke GitHub calls -- the reason for the fleet-bot preference).
+async function ghPat() { if (_ghPat === undefined) _ghPat = (await fleetBotToken()) || (await kvSecret("github-user-pat")) || null; return _ghPat; }
 async function githubSearch(query, n) {
   try {
     const pat = await ghPat();

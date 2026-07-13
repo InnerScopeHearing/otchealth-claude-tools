@@ -218,7 +218,6 @@ async function sunsetOne(agent, { repoPath } = {}) {
 async function sunset() {
   const agent = (val("--agent", "") || process.env.KB_AGENT || "").toLowerCase();
   if (!agent) { console.error("usage: protocol.mjs sunset --agent <role>"); process.exit(2); }
-  if (!_saRaw) { console.error("SUNSET: no claude-driver SA -> cannot reach the commons. (set GCP_CLAUDE_DRIVER_SA_JSON)"); process.exit(1); }
   await commonsInit(true);
   const r = await sunsetOne(agent, { repoPath: val("--repo-path", "") });
   stampLedger(agent, `SUNSET (Transfer Protocol): wrote portable handoff to commons _HANDOFF/${agent}.md at sunset. Ledger ${r.ledger} entries, ${r.openDisp} pending dispatches. Ready for cross-engine attach (other engine: ${otherEngineLabel(agent)}).`);
@@ -227,7 +226,6 @@ async function sunset() {
 }
 
 async function sunsetFleet() {
-  if (!_saRaw) { console.error("SUNSET-FLEET: no claude-driver SA"); process.exit(1); }
   await commonsInit(true);
   const roles = (val("--roles", "") ? val("--roles", "").split(",") : ROSTER).map((s) => s.trim().toLowerCase()).filter(Boolean);
   const done = [];
@@ -241,7 +239,7 @@ async function sunsetFleet() {
 
 async function last3() {
   const agent = (val("--agent", "") || process.env.KB_AGENT || "").toLowerCase();
-  if (!agent || !_saRaw) { if (FLAG("--json")) console.log("[]"); process.exit(0); }
+  if (!agent) { if (FLAG("--json")) console.log("[]"); process.exit(0); }
   try { await commonsInit(false); const rows = await readLedger(agent); const l3 = computeLast3(rows);
     if (FLAG("--json")) { console.log(JSON.stringify(l3)); return; }
     l3.forEach((x, i) => console.log(`${i + 1}. [${x.ts}] ${x.title}`));
@@ -256,7 +254,7 @@ async function sunrise() {
   const m = memBin();
   if (m) { try { const out = execFileSync("node", [m, "whoami", "--agent", agent], { encoding: "utf8", timeout: 30000 }); attach = /RESULT:\s*PASS/.test(out) ? "PASS" : "FAIL"; } catch { attach = "FAIL"; } }
   let l3 = [];
-  try { if (_saRaw) { await commonsInit(false); l3 = computeLast3(await readLedger(agent)); } } catch { /* fail-open */ }
+  try { await commonsInit(false); l3 = computeLast3(await readLedger(agent)); } catch { /* fail-open */ }
   console.log(`================ SUNRISE TRANSFER PROTOCOL - ${agent.toUpperCase()} ================`);
   console.log(`attach: memory ${attach}` + (attach !== "PASS" ? "  (if FAIL: the claude-driver SA is missing from this environment - tell Matt)" : ""));
   console.log(`\nThe agent must now greet Matt EXACTLY:\n  "I am fully updated and ready to go, Sir."`);

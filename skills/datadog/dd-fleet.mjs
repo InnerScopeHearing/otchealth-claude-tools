@@ -17,8 +17,8 @@ async function sm(tok,id){ const _kv = await kvSecret(id); if (_kv != null) retu
 (async()=>{
   try{
     const [agent,type,ring,engine,shared]=[process.argv[2]||"unknown",process.argv[3]||"entry",process.argv[4]||"unknown",process.argv[5]||"unknown",process.argv[6]==="1"?"true":"false"];
-    const sa=loadSA(); if(!sa) return;
-    const tok=await gcpToken(sa); if(!tok) return;
+    const sa=loadSA();
+    const tok=sa?await gcpToken(sa):null;   // GCP SA retired -> no hard gate; sm() is kvSecret-first, the GCP token is a non-fatal fallback only when an SA is still present
     const [apiKey,site]=await Promise.all([sm(tok,"datadog-api-key"),sm(tok,"datadog-site")]);
     if(!apiKey) return;
     const host=`https://api.${site||"us3.datadoghq.com"}`;

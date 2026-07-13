@@ -30,6 +30,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
+import { kvSecret, kvSecretSet } from "../kb-memory/azure-secret.mjs";
 
 const PROJECT = "otchealth-shared-prod";
 const SM = `https://secretmanager.googleapis.com/v1`;
@@ -59,7 +60,11 @@ function loadSA() {
   throw new Error("No GCP claude-driver SA found (env GCP_CLAUDE_DRIVER_SA_JSON or ~/.gcp_claude_driver_sa.json). On HyperAgent run via run.sh.");
 }
 async function gcpToken() {
-  const sa = loadSA();
+  // Post-GCP-exit: no claude-driver SA -> return null and run Key-Vault-only (smRead/smExists/
+  // smAddVersion fall through to kvSecret/kvSecretSet when tok is null). Non-fatal by design so the
+  // live Azure path always runs; this removes the hard gate that used to kill the tool before KV ran.
+  let sa;
+  try { sa = loadSA(); } catch { return null; }
   const now = Math.floor(Date.now() / 1000);
   const claim = {
     iss: sa.client_email,
@@ -84,6 +89,10 @@ async function gcpToken() {
 
 // ---------- Secret Manager helpers (read + addVersion + create) ----------
 async function smRead(tok, id) {
+  // Azure Key Vault FIRST (GCP Secret Manager retired). Secret names are a 1:1 mirror.
+  const _kv = await kvSecret(id);
+  if (_kv != null) return _kv;
+  if (!tok) return null; // no GCP token post-exit -> Key Vault only; skip the retired SM fallback
   const r = await fetch(`${SM}/projects/${PROJECT}/secrets/${id}/versions/latest:access`, {
     headers: { Authorization: `Bearer ${tok}` },
   });
@@ -93,6 +102,9 @@ async function smRead(tok, id) {
   return Buffer.from(j.payload.data, "base64").toString("utf8").trim();
 }
 async function smExists(tok, id) {
+  // Key Vault first: a non-null value means the secret exists in the live store.
+  if ((await kvSecret(id)) != null) return true;
+  if (!tok) return false; // no GCP token post-exit -> Key Vault only
   const r = await fetch(`${SM}/projects/${PROJECT}/secrets/${id}`, { headers: { Authorization: `Bearer ${tok}` } });
   return r.status === 200;
 }
@@ -105,6 +117,12 @@ async function smCreate(tok, id) {
   return { status: r.status, body: await r.text() };
 }
 async function smAddVersion(tok, id, value) {
+  // CRITICAL rotation-persist path: write the rotated token to Azure Key Vault FIRST (the live
+  // store). Only fall back to the retired GCP addVersion if the KV write fails AND a GCP token is
+  // present. Consumers read Key-Vault-first (smRead), so a successful KV write is the authoritative
+  // persist; a true persist failure (KV fail + GCP fail/absent) surfaces as status>=300 to the caller.
+  if (await kvSecretSet(id, value)) return { status: 200, body: "kv-ok" };
+  if (!tok) return { status: 500, body: `kv write failed for ${id} and no GCP token available` };
   const r = await fetch(`${SM}/projects/${PROJECT}/secrets/${id}:addVersion`, {
     method: "POST",
     headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },

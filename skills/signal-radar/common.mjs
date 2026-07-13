@@ -6,6 +6,7 @@
 import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 export const SM = "otchealth-shared-prod";
@@ -44,17 +45,55 @@ export async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) 
   return val;
 }
 
-/** List every secret id + its createTime (for the rotate-age detector). */
+// ---------------------------- Azure Key Vault enumeration (live secret store) ----------------------------
+// GCP Secret Manager is RETIRED (billing off). Enumerate Key Vault kv-otc-55c84f6bef instead, minting a
+// vault token via the SAME chain azure-secret.mjs uses (managed identity -> SP client_credentials -> az CLI).
+const KV_NAME = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
+let _kvTok = null, _kvTokExp = 0;
+async function kvVaultToken() {
+  const now = Date.now();
+  if (_kvTok && _kvTokExp - now > 60_000) return _kvTok;
+  const ie = process.env.IDENTITY_ENDPOINT, ih = process.env.IDENTITY_HEADER;
+  if (ie && ih) {
+    try {
+      const cq = process.env.AZURE_UAMI_CLIENT_ID ? `&client_id=${encodeURIComponent(process.env.AZURE_UAMI_CLIENT_ID)}` : "";
+      const r = await fetch(`${ie}?resource=${encodeURIComponent("https://vault.azure.net")}&api-version=2019-08-01${cq}`, { headers: { "x-identity-header": ih } });
+      if (r.ok) { const j = await r.json(); if (j.access_token) { _kvTok = j.access_token; _kvTokExp = now + 3600_000; return _kvTok; } }
+    } catch { /* fall through */ }
+  }
+  const tenant = process.env.AZURE_SP_TENANT_ID, cid = process.env.AZURE_SP_CLIENT_ID, csec = process.env.AZURE_SP_CLIENT_SECRET;
+  if (tenant && cid && csec) {
+    try {
+      const r = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "client_credentials", client_id: cid, client_secret: csec, scope: "https://vault.azure.net/.default" }) });
+      const j = await r.json();
+      if (j.access_token) { _kvTok = j.access_token; _kvTokExp = now + 3600_000; return _kvTok; }
+    } catch { /* fall through */ }
+  }
+  try {
+    const out = execFileSync("az", ["account", "get-access-token", "--resource", "https://vault.azure.net", "--query", "accessToken", "-o", "tsv"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 20_000 });
+    const tok = String(out || "").trim();
+    if (tok) { _kvTok = tok; _kvTokExp = now + 3000_000; return _kvTok; }
+  } catch { /* az absent / not logged in */ }
+  return null;
+}
+
+/** List every secret id + its created time from Key Vault (for the rotate-age detector). */
 export async function listSecrets() {
-  const t = await gcpToken();
-  const out = []; let pt = "";
-  do {
-    const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets?pageSize=200${pt ? `&pageToken=${pt}` : ""}`, { headers: { Authorization: "Bearer " + t } });
+  const t = await kvVaultToken();
+  if (!t) return [];
+  const out = [];
+  let next = `https://${KV_NAME}.vault.azure.net/secrets?api-version=7.4`;
+  while (next) {
+    const r = await fetch(next, { headers: { Authorization: "Bearer " + t } });
     if (!r.ok) break;
     const j = await r.json();
-    for (const s of (j.secrets || [])) out.push({ id: s.name.split("/secrets/")[1], created: s.createTime || null });
-    pt = j.nextPageToken || "";
-  } while (pt);
+    for (const s of (j.value || [])) {
+      const id = (s.id || "").split("/secrets/")[1] || (s.id || "");
+      const created = s.attributes && s.attributes.created != null ? new Date(s.attributes.created * 1000).toISOString() : null;
+      out.push({ id, created });
+    }
+    next = j.nextLink || "";
+  }
   return out;
 }
 
