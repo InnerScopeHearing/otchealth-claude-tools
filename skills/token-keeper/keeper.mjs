@@ -108,13 +108,13 @@ async function smExists(tok, id) {
   const r = await fetch(`${SM}/projects/${PROJECT}/secrets/${id}`, { headers: { Authorization: `Bearer ${tok}` } });
   return r.status === 200;
 }
-async function smCreate(tok, id) {
-  const r = await fetch(`${SM}/projects/${PROJECT}/secrets?secretId=${id}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ replication: { automatic: {} }, labels: { owner: "token-keeper", ring: "cfo" } }),
-  });
-  return { status: r.status, body: await r.text() };
+async function smCreate(_tok, _id) {
+  // Key Vault has NO "empty slot" concept: a secret is created on its FIRST write (kvSecretSet), so
+  // pre-creating an empty slot is meaningless here -- consumers read Key-Vault-first (smRead), and the
+  // rotation/consent flow materializes each slot when it persists its first value via smAddVersion ->
+  // kvSecretSet. The legacy GCP "create empty secret" POST is therefore dead (post-GCP-exit it 403s on
+  // disabled billing), so create-slots is a clean no-op in the KV world: report kv-managed, never POST.
+  return { status: 200, body: "kv-managed", kvManaged: true };
 }
 async function smAddVersion(tok, id, value) {
   // CRITICAL rotation-persist path: write the rotated token to Azure Key Vault FIRST (the live
@@ -293,8 +293,12 @@ const has = (flag) => process.argv.includes(flag);
   }
 
   if (cmd === "create-slots") {
-    // idempotent: create the empty SM secrets (NAMES only) so consent flows have a place to write.
-    const created = [], existed = [], failed = [];
+    // Ensure every provider secret NAME has a place to live so consent/rotation flows can write.
+    // KV-first: existing secrets are detected via smExists (Key-Vault-first); a genuinely-missing name
+    // needs no pre-creation because Key Vault auto-creates on first write (smCreate returns kvManaged
+    // when no GCP token is present). The GCP branch still pre-creates an empty SM secret when a
+    // claude-driver SA is available (legacy engines).
+    const created = [], existed = [], kvManaged = [], failed = [];
     const ids = new Set();
     for (const cfg of Object.values(PROVIDERS)) {
       const refs = Array.isArray(cfg.tenants) ? cfg.tenants.map((t) => cfg.refreshSecretFor(t)) : [cfg.refreshSecret];
@@ -304,9 +308,12 @@ const has = (flag) => process.argv.includes(flag);
     for (const id of ids) {
       if (await smExists(tok, id)) { existed.push(id); continue; }
       const res = await smCreate(tok, id);
-      if (res.status < 300) created.push(id); else failed.push({ id, status: res.status, detail: res.body.slice(0, 120) });
+      if (res.kvManaged) kvManaged.push(id);
+      else if (res.status < 300) created.push(id);
+      else failed.push({ id, status: res.status, detail: res.body.slice(0, 120) });
     }
-    console.log(JSON.stringify({ engine, created, existed, failed }, null, 2));
+    const note = kvManaged.length ? "Key Vault auto-creates each slot on its first write (kvSecretSet); nothing to pre-create." : undefined;
+    console.log(JSON.stringify({ engine, created, existed, kvManaged, failed, note }, null, 2));
     return;
   }
 
