@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>He Came to Your Living Room. We Ship to Your Door.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..800&family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --canvas:#F7F1E4; --canvas-card:#FBF7EE;
+    --ink:#241F19; --ink-soft:#4A4238;
+    --terracotta:#B5603C; --terracotta-soft:#D8A98D;
+    --taupe:#8C7F68; --line:#DBCEB0;
+    --serif:'Fraunces', serif; --sans:'Inter', sans-serif; --mono:'IBM Plex Mono', monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.7;-webkit-font-smoothing:antialiased;}
+  img{max-width:100%;display:block;}
+  .wrap{max-width:680px;margin:0 auto;padding:0 24px;}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:var(--terracotta);text-align:center;padding-top:48px;}
+  .hero-photo{position:relative;margin-top:20px;}
+  .hero-photo img{width:100%;filter:sepia(0.3) contrast(1.05);}
+  .hero-photo .cap{font-family:var(--mono);font-size:11px;color:var(--taupe);text-align:center;margin-top:10px;}
+  h1.giant{font-family:var(--serif);font-weight:600;font-size:clamp(32px,5.5vw,50px);line-height:1.1;text-align:center;margin:36px 0 0;letter-spacing:-0.01em;}
+  .byline{font-family:var(--mono);font-size:12px;color:var(--taupe);text-align:center;text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 50px;}
+  article{padding-bottom:20px;}
+  article p{margin:0 0 26px;font-size:18px;color:var(--ink-soft);}
+  article p.lede{font-size:21px;color:var(--ink);font-weight:500;}
+  article h2{font-family:var(--serif);font-weight:600;font-size:28px;margin:48px 0 20px;line-height:1.2;}
+  .pull-quote{font-family:var(--serif);font-weight:500;font-size:26px;line-height:1.35;color:var(--ink);border-left:3px solid var(--terracotta);padding-left:26px;margin:44px 0;}
+  .situations{list-style:none;margin:24px 0;padding:0;}
+  .situations li{display:flex;gap:14px;padding:16px 0;border-top:1px solid var(--line);font-size:17px;color:var(--ink-soft);}
+  .situations li:first-child{border-top:none;}
+  .situations li .mark{color:var(--terracotta);font-family:var(--mono);flex-shrink:0;}
+  .compare-box{background:var(--canvas-card);border:1px solid var(--line);padding:32px;margin:44px 0;}
+  .compare-box .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--terracotta);margin-bottom:14px;}
+  .compare-rows{display:flex;flex-direction:column;gap:0;margin-top:16px;}
+  .compare-row{display:flex;justify-content:space-between;padding:14px 0;border-top:1px solid var(--line);font-size:15px;}
+  .compare-row:first-child{border-top:none;}
+  .compare-row .label{color:var(--ink-soft);}
+  .compare-row .val{font-weight:600;}
+  .compare-row.hero-row{background:rgba(181,96,60,0.08);margin:0 -32px;padding:14px 32px;border-top:1px solid var(--terracotta-soft);border-bottom:1px solid var(--terracotta-soft);}
+  .compare-row.hero-row .val{color:var(--terracotta);font-family:var(--serif);font-size:18px;}
+  .caption-note{font-family:var(--mono);font-size:12px;color:var(--taupe);margin-top:16px;}
+  .trust-strip{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:40px 0;padding:24px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.03em;}
+  .cta-block{text-align:center;margin:56px 0 20px;padding:44px 32px;background:var(--ink);color:var(--canvas);}
+  .cta-block h3{font-family:var(--serif);font-weight:600;font-size:26px;margin:0 0 14px;color:#FBF7EE;}
+  .cta-block p{color:#E4D9C2;font-size:16px;max-width:440px;margin:0 auto 28px;}
+  .btn-primary{display:inline-block;background:var(--terracotta);color:#FBF7EE;padding:16px 32px;border-radius:2px;font-weight:700;font-size:15px;text-decoration:none;margin-right:10px;}
+  .btn-secondary{display:inline-block;color:#FBF7EE;font-size:14px;text-decoration:underline;opacity:0.85;margin-top:16px;}
+  .disclosure{font-family:var(--mono);font-size:11.5px;color:var(--taupe);text-align:center;max-width:520px;margin:32px auto 0;line-height:1.6;}
+  .signoff{margin-top:60px;padding-top:32px;border-top:1px solid var(--line);display:flex;gap:18px;align-items:center;}
+  .signoff img{width:64px;height:64px;border-radius:50%;object-fit:cover;filter:sepia(0.15);}
+  .signoff .name{font-weight:700;font-size:15px;}
+  .signoff .role{font-family:var(--mono);font-size:11px;color:var(--taupe);text-transform:uppercase;}
+  footer{padding:50px 0;text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--taupe);text-transform:uppercase;letter-spacing:0.04em;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="kicker">A Family Story</p>
+  <div class="hero-photo">
+    <img src="https://hyperagent.com/api/files/usergenerated/threads/cmrfxg2pq0g8608adea7v92gf/images/f556b607-31c7-42d2-932b-df7323728c1f.png" alt="Marvin Posey, 1950s">
+    <p class="cap">Marvin Posey, my mother Kim's father, in the 1950s — house calls, hearing aid case in hand.</p>
+  </div>
+
+  <h1 class="giant">He came to your living room. We ship to your door.</h1>
+  <p class="byline">By Matt Moore &middot; OTCHealth</p>
+
+  <article>
+    <p class="lede">My grandfather didn't have an office. He had a car, a case, and a list of houses to visit. That was hearing care in 1947 — you called, and someone real showed up.</p>
+
+    <p>My parents, Mark and Kim, kept that going for decades, running their own hearing practice the same way: in person, unhurried, honest about what would actually help and what wouldn't. I grew up watching them do it.</p>
+
+    <p>What's changed since then isn't the need. It's the markup. Somewhere between my grandfather driving to your house and today, the same basic help got wrapped in a $2,000 to $5,000 price tag, an appointment you have to schedule weeks out, and a sales pitch you didn't ask for.</p>
+
+    <h2>The moments I built this for</h2>
+    <p>Maybe none of this is new to you. It wasn't new to me either, until I started paying attention to how often it comes up:</p>
+    <ul class="situations">
+      <li><span class="mark">&mdash;</span> Asking someone to repeat themselves at a loud dinner table, more than once.</li>
+      <li><span class="mark">&mdash;</span> Turning the TV up loud enough that everyone else leaves the room.</li>
+      <li><span class="mark">&mdash;</span> Missing half of what's said in a group conversation and just nodding along.</li>
+      <li><span class="mark">&mdash;</span> Not hearing the doorbell, or the phone, from the next room.</li>
+    </ul>
+    <p>None of that means something is wrong with you. It usually just means everyday moments have gotten a little quieter than they used to be, and most people wait years before doing anything about it &mdash; usually because the fix seems like a bigger deal than the problem.</p>
+
+    <div class="pull-quote">Three generations, one idea: real hearing help shouldn't require a clinic appointment or a five-figure price tag.</div>
+
+    <h2>What we actually built</h2>
+    <p>iHEAR TReO is the thing I wish my grandfather could have handed someone on his way out the door &mdash; simple, small, and priced like a product instead of a procedure. It's not a hearing aid, and I want to be straightforward about that rather than let you assume otherwise: TReO is not a hearing aid. It does not diagnose, treat, cure, or mitigate hearing loss. If you suspect hearing loss, consult a hearing professional. What it does do is make everyday moments &mdash; the dinner table, the TV, the group conversation &mdash; easier to follow, without an appointment and without the markup.</p>
+
+    <div class="compare-box">
+      <div class="eyebrow">The Honest Comparison</div>
+      <div class="compare-rows">
+        <div class="compare-row"><span class="label">Traditional RX Hearing Aid</span><span class="val">$2,000&ndash;$5,000</span></div>
+        <div class="compare-row"><span class="label">Traditional OTC Hearing Aids</span><span class="val">$299&ndash;$1,499</span></div>
+        <div class="compare-row hero-row"><span class="label">iHEAR TReO</span><span class="val">$99 single / $149 pair</span></div>
+      </div>
+      <p class="caption-note">Same core technology, without the clinic markup. Pair pricing available with code PAIR99.</p>
+    </div>
+
+    <div class="trust-strip">
+      <span>75-day money-back guarantee</span>
+      <span>1-year limited warranty</span>
+      <span>Free shipping</span>
+      <span>Family-run since 1947</span>
+    </div>
+
+    <h2>Why I'm telling you this now</h2>
+    <p>Because it worked for my family for three generations before it had a website. Because it's the same idea my grandfather had &mdash; just without the drive across town. And because if any of those dinner-table moments sounded familiar, there's a two-minute way to find out if this is worth trying, before you spend a dollar.</p>
+  </article>
+
+  <div class="cta-block">
+    <h3>Take the free 2-minute hearing check</h3>
+    <p>A few quick questions about your own everyday moments &mdash; no appointment, no obligation, just a clearer sense of whether TReO is worth trying.</p>
+    <a class="btn-primary" href="#">Start the Free Check</a>
+    <br>
+    <a class="btn-secondary" href="#">or shop TReO directly &mdash; $99</a>
+  </div>
+
+  <p class="disclosure">TReO is not a hearing aid. It does not diagnose, treat, cure, or mitigate hearing loss. If you suspect hearing loss, consult a hearing professional.</p>
+
+  <div class="signoff">
+    <img src="https://hyperagent.com/api/files/usergenerated/threads/cmrfxg2pq0g8608adea7v92gf/images/809afa49-fec7-4688-921e-f3026834a25c.png" alt="Matthew Moore">
+    <div>
+      <div class="name">Matt Moore</div>
+      <div class="role">OTCHealth</div>
+    </div>
+  </div>
+</div>
+<footer>OTCHealth &middot; Family-Run Since 1947 &middot; Advertorial Draft &middot; 2026-07-13</footer>
+</body>
+</html>
