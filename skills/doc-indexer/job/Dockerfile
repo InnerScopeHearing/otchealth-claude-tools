@@ -23,6 +23,9 @@ COPY skills/github-app/ /app/skills/github-app/
 # kb-memory: the brain-reindex job runs semantic.mjs reindex from this image to keep the
 # memory-exec AI Search index fresh (agent lessons/decisions + focus-group/shark catalog feed it).
 COPY skills/kb-memory/ /app/skills/kb-memory/
+# vault-sync: daily-digest's nightly.sh regenerates the credential registry from the secret store
+# via vault-registry.mjs. Without this COPY the step logs a (guarded, non-fatal) MODULE_NOT_FOUND.
+COPY skills/vault-sync/ /app/skills/vault-sync/
 # fleet-medic: the auto-dispatch memory medic job (fleet-medic.sh -> medic.mjs scan --dispatch).
 # medic.mjs execs kb-memory/mem.mjs team-health (copied above) for its deterministic health spine.
 COPY skills/fleet-medic/ /app/skills/fleet-medic/
