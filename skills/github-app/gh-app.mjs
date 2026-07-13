@@ -19,6 +19,7 @@
 //   node gh-app.mjs merge-pr <owner> <repo> <number> [squash|merge|rebase]
 //   node gh-app.mjs graphql                                # GraphQL query on stdin
 import crypto from "node:crypto";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const API = "https://api.github.com";
 const SM_PROJECT = "otchealth-shared-prod";
@@ -44,16 +45,20 @@ async function smGet(id) {
   if (!r.ok) return null;
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
 }
-// env-first, then Secret Manager
+// env-first, then Azure Key Vault (the live store post-GCP-exit), then GCP Secret Manager (legacy).
 async function cred(envName, secretId) {
   if (process.env[envName]) return process.env[envName];
+  const kv = await kvSecret(secretId);
+  if (kv) return kv;
   const v = await smGet(secretId);
-  if (!v) throw new Error(`Missing ${envName} (env) / ${secretId} (Secret Manager). Provision the GitHub App creds first.`);
+  if (!v) throw new Error(`Missing ${envName} (env) / ${secretId} (Key Vault or Secret Manager). Provision the GitHub App creds first.`);
   return v;
 }
 
 async function loadCreds() {
-  const iss = process.env.GITHUB_APP_ID || process.env.GITHUB_APP_CLIENT_ID || (await smGet("github-app-id")) || (await smGet("github-app-client-id"));
+  const iss = process.env.GITHUB_APP_ID || process.env.GITHUB_APP_CLIENT_ID
+    || (await kvSecret("github-app-id")) || (await kvSecret("github-app-client-id"))
+    || (await smGet("github-app-id")) || (await smGet("github-app-client-id"));
   if (!iss) throw new Error("Missing JWT issuer (GITHUB_APP_ID / github-app-id).");
   let key = await cred("GITHUB_APP_PRIVATE_KEY", "github-app-private-key");
   if (key.includes("\\n") && !key.includes("\n")) key = key.replace(/\\n/g, "\n"); // tolerate escaped newlines

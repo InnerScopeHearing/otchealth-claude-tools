@@ -20,8 +20,11 @@
 //   node ledger.mjs check <tag>                 # has this root-cause tag ever appeared before?
 //   node ledger.mjs list [--json]                # dump all entries
 //
-// Requires: GITHUB_TOKEN env or the github-user-pat Key Vault secret (same PAT pattern used by
-// fleet-search's GitHub search and every other authenticated push this session).
+// Auth (2026-07-13): tries the CI job token (GITHUB_TOKEN), then the fleet-bot GitHub App token minted
+// from Key Vault (the canonical, always-fresh fleet identity), then the legacy github-user-pat — each
+// VALIDATED before use, so a stale GITHUB_TOKEN or an expired PAT falls through instead of 401ing the run
+// (the github-user-pat went stale and broke this skill's default auth).
+import crypto from "node:crypto";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const OWNER = "InnerScopeHearing";
@@ -33,12 +36,48 @@ const argv = process.argv.slice(2);
 const cmd = argv[0];
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 
-async function pat() {
-  const p = process.env.GITHUB_TOKEN || (await kvSecret("github-user-pat"));
-  if (!p) throw new Error("no GitHub token available (GITHUB_TOKEN env or github-user-pat secret)");
-  return p;
-}
 const ghHeaders = (token) => ({ Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "X-GitHub-Api-Version": "2022-11-28" });
+
+// Mint a fleet-bot GitHub App installation token from Key Vault creds — the canonical, always-fresh
+// fleet GitHub identity. Mirrors skills/github-app/gh-app.mjs; kept self-contained here (that module
+// runs its CLI on import, so it cannot be imported). Returns null on any failure.
+async function fleetBotToken() {
+  try {
+    const iss = (await kvSecret("github-app-id")) || (await kvSecret("github-app-client-id"));
+    let key = await kvSecret("github-app-private-key");
+    const installationId = await kvSecret("github-app-installation-id");
+    if (!iss || !key || !installationId) return null;
+    if (key.includes("\\n") && !key.includes("\n")) key = key.replace(/\\n/g, "\n"); // tolerate escaped newlines
+    const now = Math.floor(Date.now() / 1000);
+    const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const input = `${enc({ alg: "RS256", typ: "JWT" })}.${enc({ iat: now - 60, exp: now + 540, iss })}`;
+    const jwt = `${input}.${crypto.createSign("RSA-SHA256").update(input).sign(key, "base64url")}`;
+    const r = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${jwt}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+    });
+    if (!r.ok) return null;
+    return (await r.json()).token || null;
+  } catch { return null; }
+}
+
+// A token is only usable if it actually authenticates — /rate_limit is a free, side-effect-free probe.
+async function tokenWorks(token) {
+  if (!token) return false;
+  try { const r = await fetch("https://api.github.com/rate_limit", { headers: ghHeaders(token) }); return r.ok; } catch { return false; }
+}
+
+async function pat() {
+  const candidates = [
+    ["GITHUB_TOKEN env", process.env.GITHUB_TOKEN || null],
+    ["fleet-bot App (Key Vault)", await fleetBotToken()],
+    ["github-user-pat (legacy)", await kvSecret("github-user-pat")],
+  ];
+  for (const [, tok] of candidates) {
+    if (await tokenWorks(tok)) return tok;
+  }
+  throw new Error("no working GitHub token (tried GITHUB_TOKEN env, fleet-bot App from Key Vault, github-user-pat)");
+}
 
 async function fetchLedger(token) {
   const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${PATH}?ref=main`, { headers: ghHeaders(token) });
