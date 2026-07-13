@@ -8,8 +8,12 @@
 # report-only FLOOR guard. It NEVER blocks anything: run-evals.mjs exits 1 whenever any single task fails
 # (normal signal), so the run step tolerates that; the baseline is a human-facing signal, not a gate.
 #
-# Mirrors otchealth-mcp-server's nightly-medic.yml cron pattern. Needs GCP_CLAUDE_DRIVER_SA_JSON (the same
-# claude-driver SA secret promptcheck.yml uses to reach Azure OpenAI + PostHog via Secret Manager).
+# Mirrors otchealth-mcp-server's nightly-medic.yml cron pattern. Azure auth = SECRETLESS OIDC
+# (2026-07-13): run-evals.mjs resolves Azure OpenAI + PostHog secrets from Key Vault via kvSecret();
+# claude-tools CI logs in with azure/login federated OIDC (repo VARIABLES AZURE_CLIENT_ID/TENANT_ID/
+# SUBSCRIPTION_ID + id-token: write), the pattern verify-get-secret-migration.yml uses. No AZURE_SP_*
+# secret at rest; kvSecret()'s az-CLI/OIDC path mints the KV token from this login. (History: GCP SA ->
+# AZURE_SP_* secrets this repo never sets -> OIDC.) Regression-ledger tag: monitor-azure-auth-oidc.
 name: Nightly Eval Baseline
 
 on:
@@ -18,6 +22,7 @@ on:
   workflow_dispatch: {}     # manual trigger for testing
 
 permissions:
+  id-token: write   # secretless OIDC login to Azure (azure/login); no AZURE_SP_* secret at rest
   contents: read
 
 concurrency:
@@ -38,15 +43,18 @@ jobs:
         with:
           node-version: 22
 
+      - name: Azure login (OIDC, secretless — the claude-tools Azure auth pattern)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: Run golden-task suite (judge on Azure credits) + emit to PostHog
         id: run
         # run-evals.mjs exits 1 if ANY task fails; that is a baseline SIGNAL, not a workflow failure.
         continue-on-error: true
         working-directory: skills/agent-evals
-        env:
-          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
-          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
-          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
         run: |
           node run-evals.mjs --emit --json "${GITHUB_WORKSPACE}/nightly-scorecard.json" 2>&1 | tee "${GITHUB_WORKSPACE}/nightly-eval.log"
 
