@@ -108,14 +108,6 @@ async function smExists(tok, id) {
   const r = await fetch(`${SM}/projects/${PROJECT}/secrets/${id}`, { headers: { Authorization: `Bearer ${tok}` } });
   return r.status === 200;
 }
-async function smCreate(tok, id) {
-  const r = await fetch(`${SM}/projects/${PROJECT}/secrets?secretId=${id}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ replication: { automatic: {} }, labels: { owner: "token-keeper", ring: "cfo" } }),
-  });
-  return { status: r.status, body: await r.text() };
-}
 async function smAddVersion(tok, id, value) {
   // CRITICAL rotation-persist path: write the rotated token to Azure Key Vault FIRST (the live
   // store). Only fall back to the retired GCP addVersion if the KV write fails AND a GCP token is
@@ -293,20 +285,24 @@ const has = (flag) => process.argv.includes(flag);
   }
 
   if (cmd === "create-slots") {
-    // idempotent: create the empty SM secrets (NAMES only) so consent flows have a place to write.
-    const created = [], existed = [], failed = [];
+    // KV-first: a genuinely-missing provider secret needs NO pre-creation -- Key Vault auto-creates it
+    // on its FIRST write (smAddVersion -> kvSecretSet) during the rotation/consent flow, and consumers
+    // read Key-Vault-first (smRead). So this verb no longer POSTs anything (the legacy GCP "create empty
+    // secret" call is dead post-GCP-exit); it just reports how many provider slots already exist vs how
+    // many will materialize on first write. Secret IDENTIFIERS are intentionally NOT enumerated in the
+    // output; run `status` for the per-provider secret-presence breakdown.
     const ids = new Set();
     for (const cfg of Object.values(PROVIDERS)) {
       const refs = Array.isArray(cfg.tenants) ? cfg.tenants.map((t) => cfg.refreshSecretFor(t)) : [cfg.refreshSecret];
       [...refs, cfg.accessSecret, cfg.apiToken, cfg.clientId, cfg.clientSecret].filter(Boolean).forEach((x) => ids.add(x));
     }
     Object.keys(PROVIDERS).forEach((p) => ids.add(metaSecret(p)));
-    for (const id of ids) {
-      if (await smExists(tok, id)) { existed.push(id); continue; }
-      const res = await smCreate(tok, id);
-      if (res.status < 300) created.push(id); else failed.push({ id, status: res.status, detail: res.body.slice(0, 120) });
-    }
-    console.log(JSON.stringify({ engine, created, existed, failed }, null, 2));
+    let existing = 0, pendingFirstWrite = 0;
+    for (const id of ids) { if (await smExists(tok, id)) existing++; else pendingFirstWrite++; }
+    console.log(JSON.stringify({
+      engine, store: "key-vault", slotsTotal: ids.size, existing, pendingFirstWrite,
+      note: "Key Vault auto-creates each slot on its first write (kvSecretSet); nothing to pre-create. Run `status` for the per-provider secret-presence breakdown.",
+    }, null, 2));
     return;
   }
 
