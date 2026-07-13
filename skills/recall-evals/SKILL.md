@@ -60,6 +60,27 @@ that touches PHI/patient/diagnosis/medication/audiogram/hearing-number/medreview
 hard-refuses (throws before making any call) if it detects one, as a defense-in-depth backstop on top
 of kb-memory's own `RING_DENY` regex.
 
+## P0-3b expansion (2026-07-13): 100+ hard cases, PostHog emit, nightly hit@5 regression alert
+The original 12-case set saturated at hit@5 = 12/12 / MRR 1.0, so it could never DETECT a regression.
+Added:
+- **`mine-cases.mjs`** -- generates + VALIDATES hard cases from the real shared-feed ledger. For each
+  real fact it asks Azure OpenAI (credit-funded gpt-4o) for a PARAPHRASED query (low lexical overlap ->
+  tests SEMANTIC recall, not keyword) plus verbatim `expect` substrings, then keeps ONLY cases the
+  current `semantic.mjs recall` HITS@5 -- so every committed case is answerable-by-current-recall and a
+  future recall regression MISSES it (a meaningful tripwire, not noise). Re-runnable to grow the set;
+  merges with (never drops) the existing set. `--corpus-file <facts.json>` feeds a big pre-dumped corpus
+  (the tail view is capped; dump `_MEMORY/_exec/*.jsonl` from the commons journal for the full feed).
+  `node mine-cases.mjs --agent commons --target 90 --corpus-file corpus.json`.
+- **`run-evals.mjs --emit`** -- emits a `recall_eval` event (hit@5 / MRR / precision / latency) to the
+  PostHog Fleet Agents project (same sink + key as agent-evals). Best-effort; a missing key never fails.
+- **`run-evals.mjs --baseline baseline.json [--tolerance 0.05] [--update-baseline] [--enforce]`** --
+  compares hit@5 to a stored baseline; on a drop > tolerance it prints `::warning::` and emits
+  `recall_eval_regression`. Report-mode by default (exit 0); `--enforce` turns a regression into exit 1
+  (the future hard gate). `baseline.json` seeds at n=0 (no gate until a real run seeds it).
+- **`.github/workflows/nightly-recall-eval.yml`** -- nightly 06:45 UTC, secretless OIDC (same pattern as
+  nightly-eval.yml), runs `run-evals.mjs --emit --baseline baseline.json`. The PostHog trend + the
+  `recall_eval_regression` event ARE the alert.
+
 ## Guardrails
 - **Report-mode only.** No ledger writes, ever. No exit-code gating on score. This is a dashboard,
   not a gate (pair it with `agent-evals` -- the task-quality judge harness -- if a hard CI gate is

@@ -4,7 +4,10 @@
     "query": "kb-memory ledger source of truth",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["source of truth", "ledger"],
+    "expect": [
+      "source of truth",
+      "ledger"
+    ],
     "note": "Fleet Super-Brain protocol status entries assert the shared ledger is the source of truth."
   },
   {
@@ -12,7 +15,10 @@
     "query": "self-repair draft PR promptcheck",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["selfrepair.mjs", "draft pr"],
+    "expect": [
+      "selfrepair.mjs",
+      "draft pr"
+    ],
     "note": "CTO fact entry on self-repair item #1 (PR #266), report-only + draft-PR mode."
   },
   {
@@ -20,7 +26,10 @@
     "query": "contradiction staleness signal radar detector",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["signal radar", "detector #6"],
+    "expect": [
+      "signal radar",
+      "detector #6"
+    ],
     "note": "CTO fact entry on the contradiction+staleness Signal Radar detector #6 shipping."
   },
   {
@@ -28,7 +37,10 @@
     "query": "PostHog gateway ops observability sink",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["gateway ops", "posthog"],
+    "expect": [
+      "gateway ops",
+      "posthog"
+    ],
     "note": "CTO decision entry on the PostHog Gateway Ops sink (self-improving-loop item A)."
   },
   {
@@ -36,7 +48,10 @@
     "query": "Front Door WAF alphanumeric hyphens deploy",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["waf policy names must be alphanumeric", "no hyphens"],
+    "expect": [
+      "waf policy names must be alphanumeric",
+      "no hyphens"
+    ],
     "note": "CTO pitfall entry: WAF policy names must be alphanumeric only, no hyphens."
   },
   {
@@ -44,7 +59,10 @@
     "query": "published copy dash-clean compliance",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["dash-clean", "no em/en dashes"],
+    "expect": [
+      "dash-clean",
+      "no em/en dashes"
+    ],
     "note": "COO pitfall entry: published copy must be dash-clean (no em/en dashes)."
   },
   {
@@ -52,7 +70,10 @@
     "query": "agents merge approved work to main CEO git",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["merge approved work to main themselves", "ceo does not handle"],
+    "expect": [
+      "merge approved work to main themselves",
+      "ceo does not handle"
+    ],
     "note": "COO decision entry: agents merge their own approved work; the CEO doesn't handle git/PR merges."
   },
   {
@@ -60,7 +81,10 @@
     "query": "Hyperagent CTO primary lead command change",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["hyperagent cto is now the primary lead", "claude cto is standby"],
+    "expect": [
+      "hyperagent cto is now the primary lead",
+      "claude cto is standby"
+    ],
     "note": "CTO decision entry recording the 2026-07-01 command change (Matt directive)."
   },
   {
@@ -68,7 +92,10 @@
     "query": "keeping a draft PR open protect main",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["draft pr open does not protect main", "only merge"],
+    "expect": [
+      "draft pr open does not protect main",
+      "only merge"
+    ],
     "note": "CCO fact entry: a draft PR does not protect main, only merging deploys the CI workflow."
   },
   {
@@ -76,7 +103,10 @@
     "query": "GitHub as agent memory coordination substrate",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["wrong substrate", "agent state"],
+    "expect": [
+      "wrong substrate",
+      "agent state"
+    ],
     "note": "CTO pitfall entry: GitHub is the wrong substrate for agent team memory/coordination."
   },
   {
@@ -84,7 +114,10 @@
     "query": "Cosmos vector similarity threshold near-duplicate cache",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["0.97", "near-duplicates"],
+    "expect": [
+      "0.97",
+      "near-duplicates"
+    ],
     "note": "CTO decision entry: Phase 4 HOT-cache Cosmos vector similarity threshold >=0.97."
   },
   {
@@ -92,7 +125,76 @@
     "query": "onboarding continue handler white screen overlay hang",
     "agent": "commons",
     "engine": "keyword",
-    "expect": ["overlay hang", "boot-ready signal"],
+    "expect": [
+      "overlay hang",
+      "boot-ready signal"
+    ],
     "note": "Developer pitfall entry on the onboarding Continue handler white-screen hang + fix."
+  },
+  {
+    "id": "gm-013",
+    "query": "What is the current status of the full build for the project, and what actions are still required before moving forward?",
+    "agent": "commons",
+    "engine": "semantic",
+    "expect": [
+      "a70c5e5b",
+      "6774324799"
+    ],
+    "note": "mined+validated from real commons ledger"
+  },
+  {
+    "id": "gm-014",
+    "query": "Which commit serves as the finalized version for the current build, and what branch should be used for the next development session?",
+    "agent": "commons",
+    "engine": "semantic",
+    "expect": [
+      "a70c5e5b",
+      "gifted-tesla-6z9vek"
+    ],
+    "note": "mined+validated from real commons ledger"
+  },
+  {
+    "id": "gm-015",
+    "query": "What tasks need to be completed by the team before the next session can proceed?",
+    "agent": "commons",
+    "engine": "semantic",
+    "expect": [
+      "a70c5e5b",
+      "5v6yp3KFx6Di0SgW"
+    ],
+    "note": "mined+validated from real commons ledger"
+  },
+  {
+    "id": "gm-016",
+    "query": "What is the correct mechanism for unlocking the vault, and what changes were made to the associated assets?",
+    "agent": "commons",
+    "engine": "semantic",
+    "expect": [
+      "blaze-key.png",
+      "2026-06-24"
+    ],
+    "note": "mined+validated from real commons ledger"
+  },
+  {
+    "id": "gm-021",
+    "query": "What tasks are still pending after the latest build for the FOURVAULT project?",
+    "agent": "commons",
+    "engine": "semantic",
+    "expect": [
+      "FOURVAULT",
+      "a70c5e5b"
+    ],
+    "note": "mined+validated from real commons ledger"
+  },
+  {
+    "id": "gm-096",
+    "query": "Who has the authority to independently manage financial postings for the reconstruction project?",
+    "agent": "commons",
+    "engine": "semantic",
+    "expect": [
+      "Matt",
+      "FULL AUTONOMY"
+    ],
+    "note": "mined+validated from real commons ledger"
   }
 ]
