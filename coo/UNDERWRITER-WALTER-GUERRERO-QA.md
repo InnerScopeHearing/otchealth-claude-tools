@@ -1,7 +1,7 @@
 # Underwriter Diligence Q&A — Walter Guerrero (My Bookkeeping Crew)
 
-**Status:** FINAL DRAFT, built question-by-question with Matt on 2026-07-13. Copy-paste ready
-into an email once Matt does a final read-through. Nothing has been sent externally yet.
+**Status:** FINAL. Built question-by-question with Matt on 2026-07-13, all open items resolved,
+Matt did a full read-through and confirmed. Copy-paste ready into an email to Walter.
 
 **Context:** Walter is underwriting a $200,000/24-month loan (contact: 754-234-1527,
 mybookkeepingcrew.com, 2385 NW Executive Center Dr., Suite 100, Boca Raton, FL 33431). He sent
@@ -43,7 +43,7 @@ mybookkeepingcrew.com, 2385 NW Executive Center Dr., Suite 100, Boca Raton, FL 3
 
 ---
 
-## FINAL reply email (built one question at a time with Matt, 2026-07-13)
+## FINAL reply email (built one question at a time with Matt, 2026-07-13; Matt confirmed after full read-through)
 
 Hi Walter,
 
@@ -114,30 +114,45 @@ in storage the rechargeable batteries inside degrade even in sealed, unopened un
 unit requires battery replacement and repackaging under the OTCHealth brand before resale. Our
 working estimate for that refurbishment and repackaging cost is approximately $27 per unit.
 
-The main gate to market readiness is the FDA OTC Hearing Aid Establishment Registration, which
-we do not yet hold. This is a straightforward administrative registration, not a premarket
-clinical review -- there is no trial and no FDA product approval process involved for this
-category, only the annual establishment registration fee, which for the current FDA fiscal year
-is $11,423. Once that fee is paid, registration is typically active within a few business days.
-This is one of the first items funded in this raise's use-of-proceeds schedule.
+None of our existing products are self-fitting -- they are all user-adjustable, so under the
+FDA's OTC hearing aid rule, no 510(k) clearance is required for any of our current inventory or
+product line. The only FDA requirement that applies is the annual OTC Hearing Aid Establishment
+Registration, which we do not yet hold. This is a straightforward administrative registration,
+not a premarket clinical review -- there is no trial and no FDA product approval process
+involved for this category, only the annual establishment registration fee, which for the
+current FDA fiscal year is $11,423. Once that fee is paid, registration is typically active
+within a few business days. This is one of the first items funded in this raise's use-of-
+proceeds schedule. If we introduce self-fitting products in the future, our plan is to bring
+those in through manufacturers that already hold their own 510(k) clearance, so we do not
+anticipate ever needing to complete a 510(k) submission ourselves.
+
+One product line within that inventory, iHEAR TReO, is a personal sound-amplifying product
+rather than an FDA-regulated hearing aid, so it carries no FDA registration requirement at all
+and can be sold immediately -- see below for how that shapes our sales sequencing.
 
 4. From an operational standpoint, what do you envision as the first revenue-producing
 activities following funding? What is the expected sequence from funding to first sales?
 
 - Weeks 0-2: We begin refurbishing the first batch of 1,000 units from our existing legacy
   inventory (battery replacement and repackaging). In parallel, we bring in already-compliant,
-  already-FDA-registered OTC hearing aid product from a third-party supplier -- product we can
-  begin selling immediately, without waiting on our own FDA registration, since it is sold under
-  that supplier's existing compliance.
-- Week 3: We begin selling that third-party OTC hearing aid product -- our first hardware
-  revenue, and it does not depend on our own FDA registration timeline.
+  already-FDA-registered OTC hearing aid product from a third-party supplier, sold under that
+  supplier's own brand and existing compliance -- our fastest path to market, since it does not
+  require our own FDA registration or any relabeling.
+- Week 3: We begin selling that third-party-branded OTC hearing aid product alongside our own
+  listings on OTCHealthMart.com -- our first hardware revenue.
 - Weeks 2-4: In parallel, we relaunch our distribution channels: the CVS.com listing, the
   Cardinal Health placement, Walmart.com and Amazon.com, and the Topco Associates pharmacy
   relaunch.
 - Weeks 5-6: The first refurbished units from our own legacy inventory come back online for
-  resale. By this point, our own FDA OTC Hearing Aid Establishment Registration is active.
+  resale under our own iHEAR and HearingAssist brands. By this point, our own FDA OTC Hearing
+  Aid Establishment Registration is active.
 - Weeks 8-10: OTCHealth CareNow telehealth membership signups and OTCHealth SaveRx prescription
   discount card signups go live.
+
+Beyond this initial ramp, the exact mix of third-party-branded versus our own
+iHEAR/HearingAssist-branded product will flex based on supplier minimum order quantities, cash
+flow, and timing -- our preference is always to sell under our own brand once feasible, but our
+first priority is simply the fastest path to real revenue, whichever combination gets us there.
 
 5. Are there any current discussions, letters of intent, purchase commitments, or strategic
 relationships that could help demonstrate market demand once operations resume?
@@ -168,21 +183,23 @@ are reactivating.
 6. Finally, from management's perspective, what do you see as the primary sources of cash flow
 that will support the business during its initial operating phase before it reaches full scale?
 
-Our primary near-term revenue driver is the launch of iHEAR TReO, our personal sound-amplifying
-product line. Unlike our OTC hearing aid line, TReO is not an FDA-regulated medical device and
-carries no FDA registration requirement, so it can go to market immediately. We are pricing TReO
-at $99 for a single unit and $149 for a pair, and we expect this to be our primary source of
-revenue in our first month of operations. Once that channel is moving, we plan to bring in
-additional inventory from a third-party supplier to keep pace with demand -- that inventory
-carries a higher cost of goods, but we still expect to hold a 50% to 60% margin on those units.
+Our existing inventory of 10,298 units is our single largest source of cash flow, and it comes
+to market in two tranches. The first is iHEAR TReO, our personal sound-amplifying product line,
+which makes up a portion of that inventory and -- unlike the rest of our hearing-aid inventory
+-- carries no FDA registration requirement, so it can be sold immediately. We are pricing TReO
+at $99 for a single unit and $149 for a pair, and expect it to be our fastest source of revenue
+in month one. Once that channel is moving, we plan to bring in additional inventory from a
+third-party supplier to keep pace with demand -- that inventory carries a higher cost of goods,
+but we still expect to hold a 50% to 60% margin on those units.
 
-The single largest source of cash flow during our initial operating phase, however, is our
-existing inventory of 10,298 units. At full, non-discounted price points, that inventory
+The remainder of the 10,298-unit inventory -- our iHEAR and HearingAssist branded OTC hearing
+aids -- becomes available once our FDA OTC Hearing Aid Establishment Registration is active. At
+full, non-discounted price points, our total existing inventory (TReO plus the rest of the line)
 represents approximately $4 million of potential gross revenue. If we prioritize speed and move
 the inventory through a faster, volume-focused sale, we estimate closer to $2 million in gross
 revenue, net of the battery-replacement and repackaging costs required to bring the units to
 sale-ready condition. Either way, this is inventory we already own and have already paid for,
-making it our most direct and fastest-available source of cash in this initial phase.
+making it our most direct and fastest-available source of cash as we scale.
 
 Thanks again for your patience and diligence on this -- happy to go deeper on any of the above.
 
@@ -192,33 +209,40 @@ President, OTCHealth Inc.
 
 ---
 
-## Open items flagged during drafting (not blocking, but worth Matt's confirmation before send)
+## Resolution log (all items closed, 2026-07-13)
 
 1. **Medvi comparison (Q1):** named explicitly per Matt's decision, despite the standing research
    caution that more has surfaced about Medvi since the original comparison was built (FDA
    warning letter, RICO suit, CAN-SPAM class action, fake-doctor-ad scandal, partner data
-   breach) -- Matt made this call knowingly.
+   breach). Matt made this call knowingly. RESOLVED.
 2. **3(a)(10)/Topco (Q2):** COO found that "Topco being part of the 3A10" actually refers to a
    ~$946,000 InnerScope trade-debt claim bought by Trillium/Southridge and settled via a
    court-supervised Section 3(a)(10) dilutive-stock settlement -- an InnerScope matter, not an
-   OTCHealth one, and one that reads as a red flag in lending/underwriting circles. Left out of
-   the final answer entirely per this finding; Topco is described purely as a forward-looking
-   distribution channel.
-3. **510(k) exemption (Q3):** "no 510(k) needed" was NOT written as an absolute claim -- FDA
-   distinguishes self-fitting (510(k) required) from non-self-fitting/user-adjustable
-   (510(k)-exempt) OTC hearing aids. Confirm which category each SKU (Matrix/EAZE/STREAM/Linx)
-   falls into before treating this as settled.
-4. **Third-party product resale (Q4):** answer assumes as-is resale under the third-party's own
-   brand (no registration triggered). If OTCHealth plans to repackage/relabel that product under
-   its own brand, that would trigger its own registration requirement -- confirm which model
-   applies.
-5. **Liquidation timing vs. FDA registration (Q6):** the $2-4M inventory liquidation figure is
-   framed under the TReO/PSAP no-registration-needed model. If any portion of that liquidation is
-   actually the OTC-hearing-aid-classified inventory from Q3/Q4, it would need the establishment
-   registration active first (weeks 5-6), not immediate. Confirm which applies before finalizing
-   the cash-flow timeline claim.
+   OTCHealth one. Left out of the final answer; Topco described purely as a forward-looking
+   distribution channel. RESOLVED.
+3. **510(k) exemption (Q3):** Matt confirmed none of OTCHealth's existing products are
+   self-fitting (all user-adjustable), so no 510(k) is required now; future self-fitting
+   products would leverage other manufacturers' existing 510(k) clearances rather than
+   OTCHealth filing its own. RESOLVED, memory saved.
+4. **Third-party product resale (Q4):** Matt confirmed the initial third-party product is sold
+   under its own brand as-is (no relabeling, no registration triggered); transition to
+   OTCHealth's own iHEAR/HearingAssist branding happens once own FDA registration is active,
+   with the brand mix flexing on MOQ/cash flow/timing thereafter. RESOLVED.
+5. **Liquidation timing vs. FDA registration (Q6):** Matt re-shared the inventory spreadsheet
+   ("3.6.26 - InnerScope Total Inventory Value.xlsx") which showed iHEAR TReO (Treo LEFT 1,294 +
+   Treo RIGHT 1,324 = 2,618 units) is a SUBSET of the 10,298 total, not a separate pool. TReO
+   carries no FDA registration requirement and sells immediately; the remaining ~7,680 units
+   (Axis/Linx/Matrix/HearingAssist line) need the FDA registration active first. Q6 rewritten as
+   two tranches of the same inventory. RESOLVED.
+
+**Separately confirmed (not an open item, a direct decision):** the spreadsheet's own wholesale
+value calculation for the 10,298 units computes to $1,543,165 (~$149.85/unit), which differs
+from the $1,810,868 (~$176/unit) figure already used in Q3 and elsewhere this session. Matt
+explicitly confirmed 2026-07-13 that $1,810,868 is the correct figure to keep using going
+forward -- do not silently swap to the spreadsheet-derived number.
 
 ---
 *Built section-by-section with Matt in the Hyperagent Document "Reply to Walter Guerrero --
 Underwriter Q&A" (documentId cmrjdcnl21i0x08advv6lpyi1). This file is the durable, committed
-copy for cross-session/cross-engine memory.*
+copy for cross-session/cross-engine memory. Matt did a full read-through on 2026-07-13 and
+confirmed this final version.*
