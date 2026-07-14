@@ -70,7 +70,9 @@ jobs:
       - name: drift-sentinel
         id: drift
         continue-on-error: true
-        run: node setup/drift-sentinel.mjs 2>&1 | tee "${GITHUB_WORKSPACE}/drift-sentinel.log"
+        run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
+          node setup/drift-sentinel.mjs 2>&1 | tee "${GITHUB_WORKSPACE}/drift-sentinel.log"
 
       - name: Upload sentinel logs
         if: always()

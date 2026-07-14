@@ -50,9 +50,12 @@ jobs:
           unset ANTHROPIC_API_KEY
           # Safety rails for the unattended run (this repo is non-PHI; main is push-protected).
           RAILS='Operating rules: work only on a claude/* branch and open DRAFT PRs; never push to main; never touch PHI (MedReview/FourVault) or INND/HearingAssist securities or financial data; if you hit a hard gate (payment, KYC, account signup, OAuth consent) stop and leave a note instead. '
+          # pipefail: without it the step's exit status is tee's, so a failed overnight agent reported GREEN.
+          set -o pipefail
           claude -p "${RAILS}${TASK}" \
             --permission-mode acceptEdits \
-            --output-format json | tee result.json
+            --output-format json | tee result.json \
+            || echo "::warning::[overnight-agent] agent exited non-zero; the safety-net step still persists any work."
 
       # SAFETY NET: persist whatever the agent left even if it never ran git itself, so an unattended
       # overnight run can never silently discard its work. Captures uncommitted changes (and local

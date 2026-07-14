@@ -56,6 +56,7 @@ jobs:
         continue-on-error: true
         working-directory: skills/agent-evals
         run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
           node run-evals.mjs --emit --json "${GITHUB_WORKSPACE}/nightly-scorecard.json" 2>&1 | tee "${GITHUB_WORKSPACE}/nightly-eval.log"
 
       - name: Baseline summary + floor guard (report-only)

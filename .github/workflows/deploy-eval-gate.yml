@@ -90,6 +90,7 @@ jobs:
         run: |
           AGENT_FLAG=""
           if [ -n "${{ inputs.agent }}" ]; then AGENT_FLAG="--agent ${{ inputs.agent }}"; fi
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
           node run-evals.mjs $AGENT_FLAG --json "${GITHUB_WORKSPACE}/deploy-gate-scorecard.json" 2>&1 | tee "${GITHUB_WORKSPACE}/deploy-gate.log"
 
       - name: Eval-gate vs last baseline
