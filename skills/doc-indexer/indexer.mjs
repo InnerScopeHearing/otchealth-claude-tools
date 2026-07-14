@@ -39,6 +39,7 @@ import { writeFileSync, readFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, extname } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { mergeSchemaAdditive } from "./schema-merge.mjs";
 
 const argv = process.argv.slice(2);
 function takeVal(name, def = null) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return def; }
@@ -481,7 +482,17 @@ async function aisCreateIndex() {
     },
     semantic: { configurations: [{ name: "sem", prioritizedFields: { titleField: { fieldName: "title" }, prioritizedContentFields: [{ fieldName: "summary" }, { fieldName: "content" }], prioritizedKeywordsFields: [{ fieldName: "category" }] } }] },
   };
-  const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}?api-version=${AIS_API}`, { method: "PUT", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(schema) });
+  // SKEW-PROOF (2026-07-14): a PUT that omits a field the LIVE index already has is rejected by Azure
+  // ("Existing field(s) 'X' cannot be deleted"), so a writer whose code schema lags the live index
+  // hard-fails push-search under set -e. This took down daily-digest the night indexed_at was
+  // backfilled onto commons while daily-digest still ran a pre-indexed_at image. GET the live index (if
+  // any) and merge additively so the PUT is always a non-destructive superset. See ./schema-merge.mjs.
+  let putSchema = schema;
+  try {
+    const g = await fetch(`${AIS_EP}/indexes/${IDXNAME}?api-version=${AIS_API}`, { headers: { "api-key": AIS_KEY } });
+    if (g.ok) putSchema = mergeSchemaAdditive(schema, await g.json());
+  } catch { /* index absent or a transient GET error -> PUT the code schema as-is (first-create path) */ }
+  const r = await fetch(`${AIS_EP}/indexes/${IDXNAME}?api-version=${AIS_API}`, { method: "PUT", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(putSchema) });
   if (!r.ok) throw new Error("create index " + r.status + " " + (await r.text()).slice(0, 220));
 }
 async function aisPush(batch) {
