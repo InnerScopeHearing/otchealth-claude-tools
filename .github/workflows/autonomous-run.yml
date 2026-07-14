@@ -88,7 +88,11 @@ jobs:
           You are working in THIS repository (you have write access to it only). This is iteration ${n};
           about ${REM} minutes remain in this autonomous run.
           ${RAILS_TEXT}"
-            claude -p "$PROMPT" $CONT --permission-mode acceptEdits --output-format json 2>&1 | tee -a /tmp/run.jsonl
+            # pipefail so the iteration's real exit code is SEEN; the `||` keeps the timed loop tolerant
+            # ON PURPOSE (one bad iteration must not kill the run) -- deliberate, not silently discarded.
+            set -o pipefail
+            claude -p "$PROMPT" $CONT --permission-mode acceptEdits --output-format json 2>&1 | tee -a /tmp/run.jsonl \
+              || echo "::warning::[autonomous-run] iteration ${n} exited non-zero; continuing the timed run."
             CONT="--continue"
             sleep 3
           done
