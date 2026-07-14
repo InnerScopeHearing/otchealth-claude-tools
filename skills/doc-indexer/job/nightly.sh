@@ -1,8 +1,10 @@
 #!/bin/sh
 # Nightly fleet learning loop (Container Apps Job, cron 59 23 * * *): generate the day's company
 # digest, stage it to the journal commons, and index it so it is cloud-searchable. The company
-# journals itself every night and the knowledge base compounds. One secret only: the claude-driver
-# SA (GCP_CLAUDE_DRIVER_SA_JSON) self-resolves the GitHub App key + all Azure keys from Secret Manager.
+# journals itself every night and the knowledge base compounds. Secrets resolve from Azure Key Vault
+# via the job's managed identity (UAMI id-otc-jobs-kv): the GitHub App key, all Azure keys, the
+# commons storage key. GCP Secret Manager is RETIRED; the optional B64 SA line below is a no-op unless
+# GCP_CLAUDE_DRIVER_SA_JSON_B64 is explicitly set (kept only as a break-glass fallback).
 set -e
 [ -n "$GCP_CLAUDE_DRIVER_SA_JSON_B64" ] && export GCP_CLAUDE_DRIVER_SA_JSON=$(printf "%s" "$GCP_CLAUDE_DRIVER_SA_JSON_B64" | base64 -d)
 # Resolve the repo root from this script's own location so it runs identically inside the
@@ -13,8 +15,12 @@ echo "[nightly] $DATE - generating digest"
 node "$ROOT/skills/daily-digest/digest.mjs" --out "/tmp/$DATE.md"
 echo "[nightly] staging to journal commons"
 node "$ROOT/skills/cfo-store/store.mjs" --azure --account otchealthcommons --key-secret azure-commons-storage-key --container company-journal put "/tmp/$DATE.md" "_DAILY/$DATE.md"
-echo "[nightly] regenerating the credential registry from Secret Manager (names+metadata, no values)"
-node "$ROOT/skills/vault-sync/vault-registry.mjs" || echo "[nightly] vault-registry non-fatal: $?"
+echo "[nightly] regenerating the credential registry from Key Vault (names+metadata, no values)"
+# HARD step (2026-07-14): vault-registry now reads the live Key Vault via the job's managed identity,
+# so it CAN succeed here (it read retired GCP Secret Manager before and process.exit(3)'d every night,
+# swallowed as "non-fatal: 3" -> the registry never regenerated). No `|| echo` mask: a real failure
+# now fails the run (set -e) so the dead-man's-switch pages instead of passing green.
+node "$ROOT/skills/vault-sync/vault-registry.mjs"
 echo "[nightly] indexing into the commons KB"
 node "$ROOT/skills/doc-indexer/indexer.mjs" index --no-ocr --profile commons --azure
 node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --azure
