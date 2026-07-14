@@ -24,6 +24,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { auditScheduledJob } from "./cron-exec.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GW = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
@@ -137,17 +138,30 @@ async function main() {
 
   const bearer = await ctoBearer();
 
-  // (1) dead-job sweep
+  // (1) DEAD-JOB SWEEP -- NOW CRON-AWARE.
+  //
+  // >>> 2026-07-14. This sweep used to ask for `top: 1` -- the LATEST execution, of ANY trigger type.
+  // >>> That single word is how `daily-digest` failed TEN CONSECUTIVE SCHEDULED RUNS (2026-07-04 ->
+  // >>> 2026-07-13) while every monitor in the fleet reported it healthy. Each time an engineer
+  // >>> re-kicked the job by hand to debug it, that MANUAL execution became "the latest execution" and
+  // >>> the canary went green. THE ACT OF DEBUGGING LAUNDERED THE FAILURE. Three sessions in a row
+  // >>> declared it fixed on the strength of a manual run that passed, while the 23:59 cron kept dying.
+  // >>> A MANUAL RE-KICK IS NOT A TEST OF A SCHEDULE.
+  // >>>
+  // >>> We now pull enough history to find the most recent CRON-TRIGGERED execution and judge THAT --
+  // >>> and separately assert that the schedule actually FIRED, because a cron that silently stops
+  // >>> producing executions leaves no failed run and no error behind, only a stale green. See
+  // >>> ./cron-exec.mjs for how a scheduled execution is identified (its name encodes its cron slot).
   const jl = await mcpCall(bearer, "azure_jobs_list", {});
   const jobs = jl?.jobs || [];
   const scheduled = jobs.filter((j) => j.triggerType === "Schedule");
   const failedJobs = [];
   for (const j of scheduled) {
     try {
-      const ex = await mcpCall(bearer, "azure_job_executions", { job_name: j.name, resource_group: j.resourceGroup, top: 1 });
-      const last = (ex?.executions || [])[0] || null;
-      if (!last) failedJobs.push(`${j.name}: NO EXECUTIONS EVER`);
-      else if (last.status !== "Succeeded") failedJobs.push(`${j.name}: ${last.status} @ ${last.startTime}`);
+      const ex = await mcpCall(bearer, "azure_job_executions", { job_name: j.name, resource_group: j.resourceGroup, top: 30 });
+      const execs = ex?.executions || [];
+      if (!execs.length) { failedJobs.push(`${j.name}: NO EXECUTIONS EVER`); continue; }
+      failedJobs.push(...auditScheduledJob({ name: j.name, executions: execs, nowMs: Date.now() }));
     } catch (e) { failedJobs.push(`${j.name}: executions-query-error (${e.message})`); }
   }
 
