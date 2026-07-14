@@ -78,8 +78,8 @@
       "index": "otchealth-brain",
       "service": "otchealth-brain-search",
       "writer_job": null,
-      "status": "ORPHAN -- SCHEDULED FOR DECOMMISSION (2026-07-13)",
-      "note": "NO WRITER, EVER. Ad-hoc one-time snapshot (~2026-07-01) created outside both repos and outside IaC; frozen at exactly 67,645 docs. Retired as a retrieval target by mcp-server PR #103 (brain_search now federates the live rooms above). Deliberately listed here, NOT in `indexes`, so index-writer-gate.mjs FAILS if any retrieval tool is ever re-pointed at it. ARM deletion of the index + the orphan `otchealth-brain-search` service requires a delete path the gateway does not expose (no azure_search_index_delete / no service delete) -- pending a human hand. Until then this entry is the tombstone."
+      "status": "DELETED 2026-07-14 (service otchealth-brain-search removed; ~$250/mo saved)",
+      "note": "NO WRITER, EVER. Ad-hoc one-time snapshot (~2026-07-01) created outside both repos and outside IaC; frozen at exactly 67,645 docs. Retired as a retrieval target by mcp-server PR #103 (brain_search now federates the live rooms above). DECOMMISSIONED 2026-07-14: verified a true orphan (brain_search federates the live rooms; no runtime code reads BRAIN_SEARCH_ENDPOINT/brain-search-key; fleet-backup iterates .indexes and excluded it), archived all 67,645 docs to azure://otchealthcommons/company-journal/_ARCHIVE/otchealth-brain-snapshot-2026-07-14.jsonl (2.91GB), then ARM-deleted the otchealth-brain-search service (azure-sp Owner; the gateway has no delete tool but the sandbox has direct ARM). Kept here as a permanent tombstone so index-writer-gate.mjs FAILS if any retrieval tool is ever re-pointed at this name. The dead BRAIN_SEARCH_ENDPOINT/BRAIN_SEARCH_KEY env still on the gateway is harmless (no runtime reader); remove on the next gateway env change."
     }
   ]
 }
