@@ -13,6 +13,7 @@
 //   node semantic.mjs reindex                 # (re)build the memory-exec index from the exec feed (resumable: skips already-indexed)
 //   node semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall]
 import crypto from "node:crypto";
+import { mergeSchemaAdditive } from "../doc-indexer/schema-merge.mjs";
 import { pathToFileURL } from "node:url";
 // Same-skill, dependency-free import: the near-duplicate similarity heuristic used to cluster like
 // recall hits across agents for trust scoring (see rankHitsByTrust). Always present alongside this file.
