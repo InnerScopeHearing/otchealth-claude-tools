@@ -90,7 +90,20 @@ async function ensureIndex() {
     vectorSearch: { algorithms: [{ name: "hnsw", kind: "hnsw" }], profiles: [{ name: "vp", algorithm: "hnsw" }] },
     semantic: { configurations: [{ name: "sem", prioritizedFields: { prioritizedContentFields: [{ fieldName: "text" }], prioritizedKeywordsFields: [{ fieldName: "tags" }] } }] },
   };
-  const r = await fetch(`${AIS_EP}/indexes/${IDX}?api-version=${AIS_API}`, { method: "PUT", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(schema) });
+  // SKEW-PROOF (2026-07-14). THIS IS THE SAME BUG CLASS THAT KILLED daily-digest ON 2026-07-13, and it
+  // was still armed here -- on `memory-exec`, THE FLEET'S ACTUAL LIVE BRAIN, written by brain-reindex
+  // every 6h and by the nightly digest. An index PUT that omits a field the LIVE index already has is
+  // rejected by Azure ("Existing field(s) 'X' cannot be deleted"), so the moment ANYONE adds a field to
+  // memory-exec, this writer -- whose schema is hardcoded below -- would hard-fail on every run, exactly
+  // as indexer.mjs did the night `indexed_at` was backfilled. indexer.mjs was fixed; this was not. The
+  // fix must be applied to the CLASS, not the instance: GET the live index and merge additively so the
+  // PUT is always a non-destructive superset.
+  let putSchema = schema;
+  try {
+    const g = await fetch(`${AIS_EP}/indexes/${IDX}?api-version=${AIS_API}`, { headers: { "api-key": AIS_KEY } });
+    if (g.ok) putSchema = mergeSchemaAdditive(schema, await g.json());
+  } catch { /* index absent or transient GET error -> PUT the code schema as-is (first-create path) */ }
+  const r = await fetch(`${AIS_EP}/indexes/${IDX}?api-version=${AIS_API}`, { method: "PUT", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(putSchema) });
   if (!r.ok) throw new Error("create index " + r.status + " " + (await r.text()).slice(0, 220));
 }
 async function existingIds() {
