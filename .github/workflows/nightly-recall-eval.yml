@@ -54,6 +54,7 @@ jobs:
         continue-on-error: true
         working-directory: skills/recall-evals
         run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
           node run-evals.mjs --emit --baseline baseline.json --tolerance 0.05 --json \
             2>&1 | tee "${GITHUB_WORKSPACE}/nightly-recall-eval.log"
 
