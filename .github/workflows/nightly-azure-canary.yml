@@ -54,6 +54,7 @@ jobs:
       - name: "Run Azure canary (--strict: RED on a stale index / dead job, or a dark sensor lane)"
         working-directory: skills/azure-canary
         run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
           node canary.mjs --json --strict 2>&1 | tee "${GITHUB_WORKSPACE}/azure-canary.log"
 
       - name: Upload canary log
