@@ -20,6 +20,7 @@
 // from Secret Manager via the claude-driver SA. Idempotent (mergeOrUpload by stable id) and fail-safe PER
 // ROW — one row's failure never blocks the others. Safe to run on a schedule.
 import crypto from "node:crypto";
+import { mergeSchemaAdditive } from "../doc-indexer/schema-merge.mjs";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
