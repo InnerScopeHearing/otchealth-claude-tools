@@ -192,7 +192,16 @@ async function ensureFleetIndex(AIS, AK) {
     { name: "contentVector", type: "Collection(Edm.Single)", searchable: true, retrievable: false, dimensions: DIMS, vectorSearchProfile: "vp" },
   ], vectorSearch: { algorithms: [{ name: "hnsw", kind: "hnsw" }], profiles: [{ name: "vp", algorithm: "hnsw" }] },
     semantic: { configurations: [{ name: "sem", prioritizedFields: { prioritizedContentFields: [{ fieldName: "text" }], prioritizedKeywordsFields: [{ fieldName: "tags" }] } }] } };
-  const r = await fetch(`${AIS}/indexes/${FLEET_INDEX}?api-version=${API}`, { method: "PUT", headers: { "api-key": AK, "Content-Type": "application/json" }, body: JSON.stringify(schema) });
+  // SKEW-PROOF (2026-07-14): a PUT that omits a field the LIVE index already has is a DELETION, and Azure
+  // rejects it ("Existing field(s) 'X' cannot be deleted") -- taking this writer down on EVERY run from
+  // that moment on. That is exactly how daily-digest died for a night when `indexed_at` was backfilled.
+  // GET the live index and merge additively so the PUT is always a non-destructive superset.
+  let putSchema = schema;
+  try {
+    const g = await fetch(`${AIS}/indexes/${FLEET_INDEX}?api-version=${API}`, { headers: { "api-key": AK } });
+    if (g.ok) putSchema = mergeSchemaAdditive(schema, await g.json());
+  } catch { /* absent / transient -> first-create path */ }
+  const r = await fetch(`${AIS}/indexes/${FLEET_INDEX}?api-version=${API}`, { method: "PUT", headers: { "api-key": AK, "Content-Type": "application/json" }, body: JSON.stringify(putSchema) });
   if (!r.ok && ![200, 201, 204].includes(r.status)) throw new Error(`ensureFleetIndex: ${r.status} ${(await r.text()).slice(0, 160)}`);
 }
 async function embed(AOAI, AOK, DEP, texts) {
