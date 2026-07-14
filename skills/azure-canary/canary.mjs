@@ -24,6 +24,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { auditScheduledJob } from "./cron-exec.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GW = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
