@@ -19,13 +19,21 @@
 // fleet ALREADY calls to kick off builds (see di_build.mjs's scheduleRun) gives the same answer for free.
 //
 // Usage:
-//   node setup/drift-recon.mjs [--json] [--strict]
+//   node setup/drift-recon.mjs [--json] [--strict]                 # DETECT (report-only)
+//   node setup/drift-recon.mjs --apply [--dry] [--include-unpinned] # FIX: repoint STALE jobs to :latest
 //     [--subscription <id>] [--resource-group <rg>] [--registry <name>] [--repository <repo>]
 //     [--jobs job1,job2,...]     # override the doc-indexer-family job list entirely
 //     [--rg-jobs <rg>]           # resource group to scan for jobs (default: same as --resource-group)
 //
-// Exit codes: 0 = report (default, always unless --strict); 3 = STALE pin(s) found AND --strict;
-// 1 = unexpected error; 78 = missing config/creds (EX_CONFIG, matches image-drift.mjs's convention).
+// --apply (2026-07-14) is the automated FIX for the "rebuild, then manually re-pin 9 jobs" treadmill:
+// it repoints every STALE job (pinned to an old digest) -- and, with --include-unpinned, mutable-:tag
+// jobs -- to the CURRENT :latest digest via a targeted image-only PATCH that preserves identity/env/
+// secrets (verified by a re-GET after each write). --dry shows the plan without writing. It runs from
+// the operator/CTO context (azure-sp Owner = ARM write); see the note by the --apply block for why it
+// is intentionally NOT a self-hosted cron. Pair with setup/rebuild-and-repoint.mjs (build + apply).
+//
+// Exit codes: 0 = report / clean apply; 3 = STALE pin(s) found AND --strict; 1 = unexpected error or a
+// failed --apply; 78 = missing config/creds (EX_CONFIG, matches image-drift.mjs's convention).
 
 // azure-sp creds: env fast-path, else the SHARED kvSecret resolver (managed-identity / az-CLI OIDC /
 // SP), NEVER an AZURE_SP-only read -- null under the GitHub Actions OIDC runtime (no AZURE_SP_* there),
@@ -125,7 +133,51 @@ async function listJobs(tok) {
   return out;
 }
 
-(async () => {
+// --- write side (--apply): fetch a single job, PATCH it, and preserve-check -------------------------
+async function armGet(tok, path) {
+  const r = await fetch(`https://management.azure.com${path}`, { headers: { Authorization: `Bearer ${tok}` } });
+  return r.ok ? r.json() : null;
+}
+async function armWrite(tok, method, path, body) {
+  const r = await fetch(`https://management.azure.com${path}`, { method, headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return { ok: r.ok, status: r.status, text: r.ok ? "" : (await r.text()).slice(0, 200) };
+}
+// Fingerprint the fields a repoint must NOT change (the exact 07-05 failure was a write that dropped
+// the job's identity/env). Compared before vs after each PATCH.
+function jobFp(job) {
+  const p = job?.properties || {}, c0 = (p.template?.containers || [])[0] || {};
+  return {
+    idType: job?.identity?.type || "None",
+    uami: Object.keys(job?.identity?.userAssignedIdentities || {}).sort().join(","),
+    env: (c0.env || []).map((e) => e.name).sort().join(","),
+    secrets: (p.configuration?.secrets || []).map((s) => s.name).sort().join(","),
+  };
+}
+function driftKeys(a, b) { return ["idType", "uami", "env", "secrets"].filter((k) => a[k] !== b[k]); }
+
+// Build the MINIMAL image-only PATCH for a Container Apps Job: the FULL existing containers array with
+// only [0].image swapped to the target digest, so identity/env/secrets/registries are preserved by
+// construction (JSON-merge-patch replaces the containers array wholesale, so a partial container would
+// drop env). Returns { patchBody, fromImage, toImage } or null if there is no container or the job is
+// already on the target digest. Pure + unit-tested. Same safe pattern as the mcp-server
+// azure_job_update tool -- a TARGETED PATCH, never a full-replace PUT (which is what dropped the UAMI
+// on 07-05). EXPORTED for tests; importing this module never runs the ARM flow (see the isMain guard).
+export function repointPatchBody(job, latestDigest) {
+  const containers = job?.properties?.template?.containers;
+  if (!Array.isArray(containers) || !containers.length) return null;
+  const fromImage = containers[0].image || "";
+  const targetDigest = latestDigest.startsWith("sha256:") ? latestDigest : "sha256:" + latestDigest;
+  const hasDigest = /@sha256:[0-9a-f]{64}/.test(fromImage);
+  const toImage = hasDigest
+    ? fromImage.replace(/@sha256:[0-9a-f]{64}/, "@" + targetDigest)      // stale pin -> new digest
+    : fromImage.replace(/:[^/@]+$/, "") + "@" + targetDigest;            // mutable :tag -> pin by digest
+  if (!toImage || toImage === fromImage) return null;                    // already current
+  const cloned = JSON.parse(JSON.stringify(containers));
+  cloned[0].image = toImage;
+  return { patchBody: { properties: { template: { containers: cloned } } }, fromImage, toImage };
+}
+
+async function main() {
   const tok = await armToken();
 
   const latest = await latestDigestFromAcrRuns(tok);
@@ -169,6 +221,36 @@ async function listJobs(tok) {
   const unpinned = rows.filter((r) => r.status === "UNPINNED");
   const missing = rows.filter((r) => r.status === "NO-JOB");
 
+  // --apply: repoint every STALE job (and, with --include-unpinned, mutable-tag jobs) to the current
+  // :latest digest via a TARGETED PATCH -- the automated FIX for the "rebuild, then manually re-pin 9
+  // jobs" treadmill. Runs from the operator/CTO context (azure-sp Owner has ARM write); deliberately
+  // NOT a self-hosted cron, which would need the KV-reader job identity (id-otc-jobs-kv) to gain
+  // job-write RBAC -- a blast-radius expansion -- and would blindly adopt whatever :latest points at.
+  // image-drift.mjs + this script's report remain the DETECTOR; --apply is the FIXER you run post-build.
+  if (flag("--apply")) {
+    const targets = flag("--include-unpinned") ? [...stale, ...unpinned] : stale;
+    if (!targets.length) { console.log(`[drift-recon --apply] nothing to reconcile -- all checked jobs already on ${REPOSITORY}:latest (${latestDigest.slice(0, 19)}...).`); process.exit(0); }
+    console.log(`[drift-recon --apply] reconciling ${targets.length} job(s) to ${latestDigest.slice(0, 19)}...${flag("--dry") ? " [DRY RUN]" : ""}`);
+    let failed = 0;
+    for (const r of targets) {
+      const job = byName.get(r.name);
+      const plan = repointPatchBody(job, latestDigest);
+      if (!plan) { console.log(`  ${r.name.padEnd(28)} already current -- skip`); continue; }
+      if (flag("--dry")) { console.log(`  ${r.name.padEnd(28)} [DRY] ${(plan.fromImage.split("@sha256:")[1] || plan.fromImage).slice(0, 12)} -> ${latestDigest.slice(7, 19)}`); continue; }
+      const before = jobFp(job);
+      const base = `/subscriptions/${SUB}/resourceGroups/${JOBS_RG}/providers/Microsoft.App/jobs/${r.name}?api-version=2024-03-01`;
+      const patch = await armWrite(tok, "PATCH", base, plan.patchBody);
+      const after = await armGet(tok, base);
+      const drift = after ? driftKeys(before, jobFp(after)) : ["<re-GET failed>"];
+      const imgOk = (after?.properties?.template?.containers?.[0]?.image || "").includes(latestDigest);
+      const ok = patch.ok && imgOk && drift.length === 0;
+      if (!ok) failed++;
+      console.log(`  ${r.name.padEnd(28)} HTTP ${patch.status} img->${latestDigest.slice(7, 19)} ${imgOk ? "OK" : "FAIL"} ${drift.length ? "DRIFT!! " + drift.join(",") : "(no drift)"}${patch.text ? " " + patch.text : ""}`);
+    }
+    console.log(failed ? `[drift-recon --apply] ${failed} job(s) FAILED -- inspect above` : `[drift-recon --apply] ALL reconciled clean (image swapped, zero identity/env/secret drift).`);
+    process.exit(failed ? 1 : 0);
+  }
+
   if (flag("--json")) {
     console.log(JSON.stringify({ registry: REGISTRY, repository: REPOSITORY, latestDigest, latestRunId: latest.runId, latestBuildTime: latest.finishTime, jobs: rows }, null, 2));
   } else {
@@ -180,11 +262,16 @@ async function listJobs(tok) {
     }
     if (stale.length) {
       console.log(`\nSTALE (pinned digest != current ${REPOSITORY}:latest — missing everything landed on main since the pin): ${stale.map((r) => r.name).join(", ")}`);
-      console.log(`Remediation: run the rebuild+re-pin script (di_build.mjs / the ACR scheduleRun build flow) against main, then re-pin these jobs' image to the new @sha256 digest.`);
+      console.log(`Remediation: run \`node setup/drift-recon.mjs --apply\` (repoints every STALE job to the current :latest digest via a targeted PATCH, preserving identity/env/secrets). Or run \`node setup/rebuild-and-repoint.mjs\` to rebuild the image AND repoint in one command.`);
     }
     if (unpinned.length) console.log(`\nUNPINNED (no @sha256 digest at all — image-drift.mjs should also be flagging these): ${unpinned.map((r) => r.name).join(", ")}`);
     if (missing.length) console.log(`\nNOT FOUND in ${JOBS_RG} (removed/renamed?): ${missing.map((r) => r.name).join(", ")}`);
   }
 
   process.exit(flag("--strict") && stale.length ? 3 : 0);
-})().catch((e) => { console.error("[drift-recon] ERROR: " + e.message); process.exit(1); });
+}
+
+// Only run the ARM flow when invoked as a script; importing this module (e.g. a unit test of
+// repointPatchBody) must NOT hit Azure. Standard ESM main-module guard.
+const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isMain) main().catch((e) => { console.error("[drift-recon] ERROR: " + e.message); process.exit(1); });
