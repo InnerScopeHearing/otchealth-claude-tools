@@ -1,59 +1,50 @@
 #!/usr/bin/env node
-// vault-registry: regenerate the credential REGISTRY (names + metadata, NEVER values) from Secret
-// Manager into the Azure brain (the commons), so "what credentials exist / by service / by ring /
-// added when" is answerable WITHOUT Notion. Part of the Notion retirement: the registry's source of
-// truth has always been Secret Manager; this writes the human/brain-readable view to Azure instead of
-// the Notion "API Tokens & Credentials (Registry)" DB. Secret VALUES never leave Secret Manager.
+// vault-registry: regenerate the credential REGISTRY (names + metadata, NEVER values) from the LIVE
+// secret store (Azure Key Vault) into the Azure brain (the commons), so "what credentials exist / by
+// service / by ring / added when" is answerable WITHOUT Notion. Part of the Notion retirement: this
+// writes the human/brain-readable view to the commons journal (the librarian indexes it into the
+// brain). Secret VALUES never leave Key Vault.
+//
+// SOURCE = Azure Key Vault (2026-07-14: was GCP Secret Manager, now RETIRED — billing off 2026-07).
+// KV secret NAMES are a 1:1 mirror of the old SM ids, so the classifier below is unchanged. Auth via
+// the shared vaultToken() resolver (managed identity in a Container Apps Job -> SP -> az/OIDC), so it
+// runs identically in the daily-digest job (UAMI id-otc-jobs-kv) and the local seat. Before this fix
+// it read GCP SM and process.exit(3)'d in the job ("no service account"), which nightly.sh swallowed
+// as "vault-registry non-fatal: 3" — the registry had NEVER regenerated. It does now.
 //
 // Usage: node skills/vault-sync/vault-registry.mjs            # write the registry into the commons
 //        node skills/vault-sync/vault-registry.mjs --print    # also print the table to stdout
 //        node skills/vault-sync/vault-registry.mjs --dry      # build but do not upload
 import crypto from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { kvSecret, vaultToken } from "../kb-memory/azure-secret.mjs";
 
-const SMPROJ = "otchealth-shared-prod";
+const VAULT = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
 const DRY = process.argv.includes("--dry");
 const PRINT = process.argv.includes("--print");
 
-// ---- claude-driver SA (env, else on-disk; the hardened resolution) ----
-function resolveSaJson() {
-  if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  const p = `${homedir()}/.gcp_claude_driver_sa.json`;
-  try { if (existsSync(p)) return readFileSync(p, "utf8"); } catch {}
-  return null;
-}
-let TOKEN = null;
-async function gcpToken() {
-  if (TOKEN) return TOKEN;
-  const raw = resolveSaJson();
-  if (!raw) { console.error("no service account (set GCP_CLAUDE_DRIVER_SA_JSON or place ~/.gcp_claude_driver_sa.json)"); process.exit(3); }
-  const sa = JSON.parse(raw), now = Math.floor(Date.now() / 1000);
-  const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
-  const jwt = i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
-  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}` });
-  TOKEN = (await r.json()).access_token; return TOKEN;
-}
-async function sm(id) {
-  const t = await gcpToken();
-  const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SMPROJ}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } });
-  if (!r.ok) return null;
-  return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
-}
+// ---- Key Vault secret enumeration (NAMES + created date only; values never read) ----
 async function listSecrets() {
-  const t = await gcpToken(); const out = []; let pt = "";
-  do {
-    const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SMPROJ}/secrets?pageSize=200${pt ? `&pageToken=${pt}` : ""}`, { headers: { Authorization: "Bearer " + t } });
+  const tok = await vaultToken();
+  if (!tok) { console.error(`vault-registry: no Key Vault token for ${VAULT} (no managed identity / AZURE_SP_* / az login)`); process.exit(3); }
+  const out = [];
+  let url = `https://${VAULT}.vault.azure.net/secrets?api-version=7.4&maxresults=25`;
+  while (url) {
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
+    if (!r.ok) { console.error(`vault-registry: KV list failed ${r.status} on ${VAULT}`); process.exit(3); }
     const j = await r.json();
-    for (const s of (j.secrets || [])) out.push({ id: s.name.split("/secrets/")[1], created: (s.createTime || "").slice(0, 10) });
-    pt = j.nextPageToken || "";
-  } while (pt);
+    for (const s of (j.value || [])) {
+      const id = s.id.split("/").pop();
+      // KV attributes.created is a unix epoch (seconds); mirror the old SM createTime YYYY-MM-DD view.
+      const created = s.attributes && s.attributes.created ? new Date(s.attributes.created * 1000).toISOString().slice(0, 10) : "";
+      out.push({ id, created });
+    }
+    url = j.nextLink || "";
+  }
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
 // ---- the credential classifier (kept in lockstep with vault-sync.mjs infer()) ----
-function infer(id) {
+export function infer(id) {
   const map = [["ebay", "eBay"], ["fourvault", "FourVault"], ["azure", "Azure"], ["acr-", "Azure"], ["asc-", "Apple"], ["apple-", "Apple"], ["amzn", "Amazon"], ["github", "GitHub"], ["graph-", "Microsoft Graph"], ["datadog", "Datadog"], ["depot", "Depot"], ["daytona", "Daytona"], ["cloudflare", "Cloudflare"], ["elevenlabs", "ElevenLabs"], ["openai", "OpenAI"], ["plaid", "Plaid"], ["qbo", "QuickBooks"], ["xero", "Xero"], ["revenuecat", "RevenueCat"], ["sentry", "Sentry"], ["netlify", "Netlify"], ["railway", "Railway"], ["replicate", "Replicate"], ["massive", "Massive"], ["n8n", "n8n"], ["make-", "Make"], ["miro", "Miro"], ["greptile", "Greptile"], ["context7", "Context7"], ["posthog", "PostHog"], ["plantid", "PlantID"], ["flatstick", "Flatstick"], ["companion", "Companion"], ["medreview", "MedReview"], ["gmail", "Gmail"], ["govinfo", "GovInfo"], ["courtlistener", "CourtListener"], ["notion", "Notion"]];
   let service = "Other"; for (const [p, s] of map) { if (id.startsWith(p)) { service = s; break; } } if (service === "Other") for (const [p, s] of map) { if (id.includes(p)) { service = s; break; } }
   let type;
@@ -84,33 +75,42 @@ function buildSas(acct, key) {
   return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
 
-(async () => {
-  const secrets = await listSecrets();
+// ---- the registry markdown/jsonl builder (pure; exported for tests) ----
+export function buildRegistry(secrets) {
   const rows = secrets.map((s) => ({ id: s.id, ...infer(s.id), created: s.created }));
   const byService = {};
   for (const r of rows) (byService[r.service] = byService[r.service] || []).push(r);
   const services = Object.keys(byService).sort();
   const phi = rows.filter((r) => r.ring === "PHI-BAA").length;
-
-  let md = `# Credential Registry (regenerated from Secret Manager)\n\n`;
-  md += `_Source of truth = Secret Manager project ${SMPROJ}. This is the names + metadata VIEW only; secret VALUES never leave Secret Manager (fetch by SM ID via setup/get-secret.mjs). Replaces the Notion "API Tokens & Credentials (Registry)" DB. Rotation flags are tracked in the ROTATE-BEFORE-LAUNCH lists (otchealth-cto/CLAUDE.md)._\n\n`;
+  let md = `# Credential Registry (regenerated from the live secret store, Azure Key Vault ${VAULT})\n\n`;
+  md += `_Source of truth = Azure Key Vault \`${VAULT}\`. This is the names + metadata VIEW only; secret VALUES never leave Key Vault (fetch by id via setup/get-secret.mjs). Replaces the Notion "API Tokens & Credentials (Registry)" DB. Rotation flags are tracked in the ROTATE-BEFORE-LAUNCH lists (otchealth-cto/CLAUDE.md)._\n\n`;
   md += `Generated ${new Date().toISOString()} | ${rows.length} credentials across ${services.length} services | ${phi} PHI-BAA, ${rows.length - phi} non-PHI.\n\n`;
   for (const svc of services) {
-    md += `## ${svc} (${byService[svc].length})\n\n| Secret Manager ID | Type | Ring | Env | Added |\n|---|---|---|---|---|\n`;
+    md += `## ${svc} (${byService[svc].length})\n\n| Key Vault secret name | Type | Ring | Env | Added |\n|---|---|---|---|---|\n`;
     for (const r of byService[svc].sort((a, b) => a.id.localeCompare(b.id))) md += `| \`${r.id}\` | ${r.type} | ${r.ring} | ${r.env} | ${r.created || "?"} |\n`;
     md += `\n`;
   }
   const jsonl = rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
+  return { md, jsonl, rows, services, phi };
+}
 
+async function main() {
+  const secrets = await listSecrets();
+  const { md, jsonl, rows, services, phi } = buildRegistry(secrets);
   if (PRINT) console.log(md);
   console.log(`[vault-registry] ${rows.length} credentials, ${services.length} services (${phi} PHI-BAA).`);
   if (DRY) { console.log("(dry: not uploaded)"); return; }
 
-  const acct = await sm("azure-commons-storage-account"), key = await sm("azure-commons-storage-key");
-  if (!acct || !key) { console.error("missing commons storage creds"); process.exit(2); }
+  const acct = await kvSecret("azure-commons-storage-account"), key = await kvSecret("azure-commons-storage-key");
+  if (!acct || !key) { console.error("vault-registry: missing commons storage creds (azure-commons-storage-account/-key) in Key Vault"); process.exit(2); }
   const SAS = buildSas(acct, key), C = "company-journal";
   const put = async (name, body, ct) => { const r = await fetch(`https://${acct}.blob.core.windows.net/${C}/${encPath(name)}?${SAS}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct }, body }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 140)); };
   await put("_VAULT/registry.md", md, "text/markdown; charset=utf-8");
   await put("_VAULT/registry.jsonl", jsonl, "application/x-ndjson");
   console.log(`[vault-registry] wrote otchealthcommons/${C}/_VAULT/registry.{md,jsonl} -> the commons librarian indexes it into the brain (journal room).`);
-})().catch((e) => { console.error("FATAL", e.message); process.exit(1); });
+}
+
+// Only run the live registry regeneration when invoked as a script; importing (e.g. from a test) must
+// not touch Key Vault or the commons. Standard ESM main-module guard.
+const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isMain) main().catch((e) => { console.error("FATAL", e.message); process.exit(1); });

@@ -126,6 +126,17 @@ async function azCliToken() {
 let _authMode = null;
 export function authMode() { return _authMode; }
 
+/** Mint a Key Vault (vault.azure.net) access token via the SAME three-path resolver kvSecret() uses
+ *  (managed identity -> SP client_credentials -> az-CLI/OIDC), returning the raw token string (or
+ *  null if no path yields one). kvSecret() reads ONE secret by name; callers that need to LIST
+ *  secrets (e.g. the credential registry) need the raw token to hit the vault's /secrets endpoint
+ *  themselves. Same auth ORDER as kvSecret so it works byte-for-byte in the same environments:
+ *  Container Apps Jobs (identity), the local/Hyperagent seat (AZURE_SP_*), and OIDC CI (az). Never
+ *  throws; returns null on total failure so callers can fail-loud on their own terms. */
+export async function vaultToken() {
+  return (await identityToken()) || (await spToken()) || (await azCliToken()) || null;
+}
+
 /** Write/overwrite a secret in Key Vault (whichever identity is used needs "Key Vault Secrets
  *  Officer"). Returns true on success, false otherwise. Never throws. This is the Azure replacement
  *  for the retired GCP Secret Manager addVersion() path used by OAuth token-rotation persistence
