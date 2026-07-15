@@ -3,15 +3,20 @@
 // no real decision-clock/child_process shell-out (the opener's `exec` is always a spy here).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import {
   normalizeAssertionRows,
   filterRecent,
   partitionBySubject,
   findContestedGroups,
+  hasGenuineValueConflict,
   buildProposalText,
   proposalsFor,
   openProposals,
   DEFAULT_PARTITION_THRESHOLD,
+  DEFAULT_CONFLICT_SUBJECT_THRESHOLD,
   MAX_PARTITION_SIZE,
 } from "../contradiction-scan.mjs";
 
@@ -198,4 +203,78 @@ test("buildProposalText names both sides, includes a trust rationale, evidence i
   assert.ok(!/[–—]/.test(built.text), "no em dash or en dash in proposal text");
   assert.deepEqual(built.majorityAgents, ["cfo"]);
   assert.deepEqual(built.minorityAgents, ["cto"]);
+});
+
+// ---------------------------- PRECISION GATE: templated-overlap false positives ----------------------------
+// Adversarial-review repro band (0.35 <= jaccard < 0.5): templated same-shape/different-IDENTIFIER
+// facts overlap enough to land in one topic partition, and would otherwise become a BOGUS "cross-agent
+// contradiction" proposal. The value-conflict gate (hasGenuineValueConflict) must suppress them while
+// keeping the genuine numeric-value conflict (the Xero rate-limit) firing. jaccard values below were
+// verified empirically against the real dedupe.mjs tokenize/jaccard.
+
+test("REPRO (HIGH): two ROTATE-BEFORE-LAUNCH lines naming DIFFERENT secrets produce ZERO proposals", () => {
+  // jaccard 0.385 -> DOES partition (>= 0.35), so this genuinely exercises the value-gate, not just the
+  // partition floor. Neither line carries a numeric value token, so it is correctly NOT a contradiction.
+  const execRows = [{ id: "e1", _agent: "cto", type: "fact", text: "ROTATE-BEFORE-LAUNCH: azure-storage-key, fingerprint-hmac-secret", ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "developer", kind: "fact", text: "ROTATE-BEFORE-LAUNCH: revenuecat-secret-key, plantid-client-api-key", ts: iso(10) }];
+  const rows = normalizeAssertionRows(execRows, cosmosRows);
+  assert.equal(partitionBySubject(rows).length, 1, "the two ROTATE lines share enough vocabulary to partition together");
+  assert.equal(findContestedGroups(rows, { nowMs: NOW }).length, 0, "different-secret lists are not a contradiction");
+});
+
+test("a HIGH-overlap templated PENDING pair (different items, no numbers) still produces ZERO proposals", () => {
+  // jaccard ~0.64 -> partitions strongly; the gate, not the partition floor, is what filters it.
+  const execRows = [{ id: "e1", _agent: "cto", type: "fact", text: "PENDING (Matt): rotate the azure storage key before public launch", ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "developer", kind: "fact", text: "PENDING (Matt): rotate the revenuecat secret key before public launch", ts: iso(10) }];
+  const rows = normalizeAssertionRows(execRows, cosmosRows);
+  assert.equal(partitionBySubject(rows).length, 1, "the high-overlap PENDING lines partition together");
+  assert.equal(findContestedGroups(rows, { nowMs: NOW }).length, 0, "different pending items are not a contradiction");
+});
+
+test("two 'the X endpoint is Y' facts about DIFFERENT services produce ZERO proposals", () => {
+  const execRows = [{ id: "e1", _agent: "cto", type: "fact", text: "the plantid-api endpoint is plantid-api.azurewebsites.net", ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "developer", kind: "fact", text: "the gateway endpoint is mcp.otchealth.app slash mcp", ts: iso(10) }];
+  const rows = normalizeAssertionRows(execRows, cosmosRows);
+  assert.equal(findContestedGroups(rows, { nowMs: NOW }).length, 0, "different-service endpoints are not a contradiction");
+});
+
+test("the genuine Xero rate-limit conflict (5000 vs 900) STILL fires exactly one proposal after the gate", () => {
+  const execRows = [{ id: "e1", _agent: "cfo", type: "fact", text: CLAIM_A, ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "cto", kind: "fact", text: CLAIM_B, ts: iso(10) }];
+  const groups = findContestedGroups(normalizeAssertionRows(execRows, cosmosRows), { nowMs: NOW });
+  assert.equal(groups.length, 1, "a real same-subject/different-value conflict must survive the value gate");
+});
+
+test("hasGenuineValueConflict: same subject + differing numeric value -> true; no numbers -> false", () => {
+  // same subject, values differ (5000 vs 900) -> a genuine conflict.
+  assert.equal(hasGenuineValueConflict(CLAIM_A, [{ row: { text: CLAIM_B, id: "c1" } }]), true);
+  // same shape, DIFFERENT identifiers, NO numbers -> not a value conflict.
+  assert.equal(
+    hasGenuineValueConflict(
+      "ROTATE-BEFORE-LAUNCH: azure-storage-key, fingerprint-hmac-secret",
+      [{ row: { text: "ROTATE-BEFORE-LAUNCH: revenuecat-secret-key, plantid-client-api-key", id: "c1" } }],
+    ),
+    false,
+  );
+  // same subject, SAME value (corroboration, not conflict) -> false.
+  assert.equal(hasGenuineValueConflict(CLAIM_A, [{ row: { text: "the xero core tier allows 5000 api calls each day", id: "c1" } }]), false);
+  // empty inputs -> false, never throws.
+  assert.equal(hasGenuineValueConflict("", [{ row: { text: CLAIM_B, id: "c" } }]), false);
+  assert.equal(hasGenuineValueConflict(CLAIM_A, []), false);
+});
+
+test("DEFAULT_CONFLICT_SUBJECT_THRESHOLD sits between a templated-overlap pair (~0.38) and the Xero pair (0.4545)", () => {
+  assert.ok(DEFAULT_CONFLICT_SUBJECT_THRESHOLD > 0.385 && DEFAULT_CONFLICT_SUBJECT_THRESHOLD <= 0.4545);
+});
+
+// ---------------------------- NEVER-MUTATE static regression (future-proofing) ----------------------------
+
+test("contradiction-scan.mjs source contains no memory-mutation tokens (mem.mjs / correct / --supersedes)", () => {
+  // A future edit must never be able to turn a PROPOSAL into an in-place memory edit. This asserts the
+  // source itself carries none of the mutation call tokens. `correction` (the memory TYPE this file
+  // READS) is deliberately allowed via the \bcorrect\b word boundary (it does not match "correction").
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "contradiction-scan.mjs"), "utf8");
+  assert.ok(!src.includes("mem.mjs"), "contradiction-scan.mjs must not reference mem.mjs (the memory-mutating CLI)");
+  assert.ok(!/\bcorrect\b/.test(src), "contradiction-scan.mjs must not contain the bare mutation verb 'correct' (the 'correction' TYPE is fine)");
+  assert.ok(!src.includes("--supersedes"), "contradiction-scan.mjs must not pass the --supersedes flag anywhere");
 });

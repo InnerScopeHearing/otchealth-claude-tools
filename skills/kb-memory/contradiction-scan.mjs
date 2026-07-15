@@ -5,10 +5,21 @@
 // where different agents have asserted CONFLICTING facts/decisions/corrections/pitfalls, and turns
 // each unresolved conflict into exactly ONE decision-clock proposal for a human/agent to confirm.
 //
-// HARD RULE: this script NEVER resolves a contradiction itself. It never calls mem.mjs correct or
-// passes --supersedes anywhere. It only ever OPENS a decision-clock proposal (category
-// "memory-contradiction"); a human or an agent, later, reviews the two claims and decides which one
-// (if either) is right. "Confirmable proposal, never silent mutation."
+// HARD RULE: this script NEVER resolves a contradiction itself. It never invokes any memory-mutating
+// verb and never overwrites, deletes, or amends an existing entry. It only ever OPENS a decision-clock
+// proposal (category "memory-contradiction"); a human or an agent, later, reviews the two claims and
+// decides which one (if either) is right. "Confirmable proposal, never silent mutation." A static test
+// (tests/contradiction-scan.test.mjs) asserts this file's source carries none of the mutation tokens,
+// so a future edit cannot quietly turn a proposal into an in-place edit.
+//
+// PRECISION GATE (added after an adversarial-review false-positive repro): a shared-vocabulary topic
+// cluster is NOT a contradiction just because two claims overlap in tokens. Templated same-shape,
+// different-IDENTIFIER facts (two "ROTATE-BEFORE-LAUNCH: <different secrets>" lines from different
+// agents; two "PENDING (Matt): <different item>" notes) score ~0.38 Jaccard and would otherwise become
+// a bogus proposal. So a contested group is only surfaced when a genuine VALUE conflict exists between
+// the majority claim and a contradiction, via dedupe.possibleContradiction (the same same-wording /
+// DIFFERENT-VALUE heuristic used elsewhere in kb-memory). Real conflicts (e.g. a Xero rate-limit stated
+// as 5000 vs 900) still fire; two lists of different secrets, or two different pending items, do not.
 //
 // WHY A TOPIC PARTITION STEP, NOT groupAssertions() ON THE RAW ROW LIST DIRECTLY: our rows carry no
 // subject/ekey field (unlike semantic-trust's own worked examples, which key on an explicit `ekey`).
@@ -41,7 +52,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { tokenize, jaccard } from "./dedupe.mjs";
+import { tokenize, jaccard, possibleContradiction } from "./dedupe.mjs";
 import { readExecFeed } from "./semantic.mjs";
 import * as cosmosMemory from "./cosmos-memory-read.mjs";
 import { groupAssertions, scoreClaim } from "../semantic-trust/trust.mjs";
@@ -153,15 +164,49 @@ export function partitionBySubject(rows, { threshold = DEFAULT_PARTITION_THRESHO
   return partitions.map((rowsInPartition, i) => rowsInPartition.map((r) => ({ ...r, subject: `cluster-${i}` })));
 }
 
+// PRECISION GATE subject-similarity floor. Deliberately >= a single templated-overlap pair (~0.38)
+// so two same-shape/different-identifier lines do not clear it on wording alone, yet <= a genuine
+// two-agent rate-limit conflict (the Xero 5000-vs-900 fixture pair jaccard = 0.4545) so real
+// contradictions still fire. Used only INSIDE the value-conflict gate; the coarse partition step keeps
+// its own looser DEFAULT_PARTITION_THRESHOLD for grouping.
+export const DEFAULT_CONFLICT_SUBJECT_THRESHOLD = 0.4;
+
+/**
+ * The genuine-conflict gate. Returns true only when the majority claim and at least one contradiction
+ * row are about the SAME subject (non-value wording overlap >= subjectThreshold) AND assert DIFFERENT
+ * numeric VALUE tokens, reusing dedupe.possibleContradiction verbatim (the exact same-wording /
+ * different-value heuristic kb-memory already uses at write time). A pair with NO numeric value tokens
+ * (e.g. two ROTATE-BEFORE-LAUNCH lines naming different secret NAMES) can never satisfy it, which is
+ * precisely how the templated-identifier false positives are filtered. Pure, no I/O.
+ * NOTE (precision-over-recall, by design): a purely lexical contradiction with no numbers (e.g. "TReO
+ * is a PSAP" vs "TReO is a hearing aid") will NOT fire here; the coordinator directed the differing-
+ * value heuristic as the gate because a false proposal erodes trust more than a missed lexical one.
+ */
+export function hasGenuineValueConflict(majorityText, contradictions, { subjectThreshold = DEFAULT_CONFLICT_SUBJECT_THRESHOLD } = {}) {
+  if (!majorityText) return false;
+  for (const c of contradictions || []) {
+    const cText = (c && c.row && c.row.text) || (c && c.text) || "";
+    if (!cText) continue;
+    const cId = (c && c.row && c.row.id) || (c && c.id) || "c";
+    // Pass a uniform synthetic type so possibleContradiction's type filter is a no-op here: we use it
+    // purely as a same-subject/different-value comparator over the two claim texts.
+    const hit = possibleContradiction(majorityText, [{ text: cText, type: "claim", id: cId }], { type: "claim", subjectThreshold });
+    if (hit) return true;
+  }
+  return false;
+}
+
 /**
  * The full pure pipeline: partition by topic, run the UNCHANGED groupAssertions()+scoreClaim() per
- * partition, keep only groups whose scored status is "contested". Pure (scoreClaim's nowMs defaults
- * to Date.now() unless passed, matching semantic-trust's own contract; tests always pass it).
+ * partition, keep groups whose scored status is "contested" AND that clear the value-conflict gate
+ * (so templated same-shape/different-identifier facts never become a proposal). Pure (scoreClaim's
+ * nowMs defaults to Date.now() unless passed, matching semantic-trust's own contract; tests pass it).
  * @returns {Array<{subject, claim, assertions, contradictions, scored}>}
  */
 export function findContestedGroups(rows, opts = {}) {
   const partitions = partitionBySubject(rows, { threshold: opts.partitionThreshold, maxPartitionSize: opts.maxPartitionSize });
   const nowMs = opts.nowMs ?? Date.now();
+  const conflictSubjectThreshold = opts.conflictSubjectThreshold ?? DEFAULT_CONFLICT_SUBJECT_THRESHOLD;
   const out = [];
   for (const partitionRows of partitions) {
     const groups = groupAssertions(partitionRows); // one synthetic subject per partition -> exactly one group
@@ -175,7 +220,11 @@ export function findContestedGroups(rows, opts = {}) {
         N: opts.N,
         halfLifeDays: opts.halfLifeDays,
       });
-      if (scored.status === "contested") out.push({ ...g, scored });
+      if (scored.status !== "contested") continue;
+      // GATE: a "contested" score off token overlap alone is not enough; require a real value conflict
+      // between the majority claim and a contradiction. Filters the templated-identifier false positive.
+      if (!hasGenuineValueConflict(g.claim, g.contradictions, { subjectThreshold: conflictSubjectThreshold })) continue;
+      out.push({ ...g, scored });
     }
   }
   return out;
@@ -189,7 +238,7 @@ export function buildProposalText(group) {
   const minorityAgents = [...new Set(group.contradictions.map((c) => c.agent))];
   const majoritySample = group.assertions[0] ? clip(group.assertions[0].row.text) : clip(group.claim);
   const minorityLines = group.contradictions.map((c) => `[${c.agent}] "${clip(c.row.text)}"`).join("; ");
-  const text = `Cross-agent memory contradiction. Majority (${majorityAgents.join(", ") || "unknown"}) asserts: "${majoritySample}". Contradicted by ${minorityAgents.join(", ") || "unknown"}: ${minorityLines}. Trust score ${group.scored.trust.toFixed(2)} (${group.scored.rationale}). Review both claims and either confirm the majority (close this, no action needed) or correct the record via mem.mjs correct with supersedes on the wrong entry. This proposal never auto-resolves.`;
+  const text = `Cross-agent memory contradiction. Majority (${majorityAgents.join(", ") || "unknown"}) asserts: "${majoritySample}". Contradicted by ${minorityAgents.join(", ") || "unknown"}: ${minorityLines}. Trust score ${group.scored.trust.toFixed(2)} (${group.scored.rationale}). Review both claims and either confirm the majority (close this, no action needed) or amend the record on the wrong entry by hand. This proposal never auto-resolves.`;
   const evidence = [...group.assertions, ...group.contradictions]
     .map((a) => `${a.agent}:${(a.row && a.row.source) || "?"}:${(a.row && a.row.id) || "?"}`)
     .join(",");

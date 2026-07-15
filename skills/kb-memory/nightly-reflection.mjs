@@ -147,7 +147,23 @@ export async function distillAgent(agent, clusters, { ask, knownRecentText = "",
   return parseDistillItems(raw, { maxItems });
 }
 
-// ================================== Impure: Cosmos + LLM + mem.mjs I/O ==================================
+// Ban guard for the two model env-overrides. gpt-4.1-mini is BANNED for quality synthesis work
+// (setup/model-routing.mjs, otchealth-cto/CLAUDE.md); if an operator points either override at it
+// (or any deployment in the banned set), IGNORE the override, log loudly, and use the safe default,
+// so the nightly distiller can never be silently misconfigured onto the banned model. Pure; exported
+// for tests.
+export const BANNED_MODELS = new Set(["gpt-4.1-mini", TIERS.cheap.deployment]);
+export function resolveModelOverride(envVal, defaultDep, label = "model") {
+  const v = (envVal || "").trim();
+  if (!v) return defaultDep;
+  if (BANNED_MODELS.has(v)) {
+    console.error(`[nightly-reflection] ${label}="${v}" is a BANNED model for quality synthesis (see setup/model-routing.mjs); ignoring the override and using ${defaultDep} instead.`);
+    return defaultDep;
+  }
+  return v;
+}
+
+// ================================== Impure: Cosmos + LLM I/O ==================================
 
 function saJwt(scope) {
   const raw = process.env.GCP_CLAUDE_DRIVER_SA_JSON;
@@ -186,12 +202,14 @@ async function initModel() {
   const fbKey = await sm("azure-foundry-key");
   // Primary: gpt-4o (TIERS.standard). Fallback: TIERS.quality (gpt-5.1, reasoning-family), the SAME
   // ban-compliant fallback company-brain uses -- never gpt-4.1-mini for this class of synthesis work.
+  // The env overrides are ban-guarded (resolveModelOverride) so an operator cannot point the distiller
+  // at gpt-4.1-mini via NIGHTLY_REFLECTION_MODEL / NIGHTLY_REFLECTION_FALLBACK_MODEL.
   if (primEp && primKey) {
-    const dep = process.env.NIGHTLY_REFLECTION_MODEL || TIERS.standard.deployment;
+    const dep = resolveModelOverride(process.env.NIGHTLY_REFLECTION_MODEL, TIERS.standard.deployment, "NIGHTLY_REFLECTION_MODEL");
     CHAT_PROVIDERS.push({ ep: primEp, key: primKey, dep, label: dep, modelFamily: modelFamilyOf(dep) });
   }
   if (fbEp && fbKey) {
-    const fbDep = process.env.NIGHTLY_REFLECTION_FALLBACK_MODEL || TIERS.quality.deployment;
+    const fbDep = resolveModelOverride(process.env.NIGHTLY_REFLECTION_FALLBACK_MODEL, TIERS.quality.deployment, "NIGHTLY_REFLECTION_FALLBACK_MODEL");
     CHAT_PROVIDERS.push({ ep: fbEp, key: fbKey, dep: fbDep, label: `foundry/${fbDep}`, modelFamily: modelFamilyOf(fbDep) });
   }
 }

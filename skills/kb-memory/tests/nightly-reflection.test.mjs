@@ -7,6 +7,8 @@ import {
   buildDistillPrompt,
   parseDistillItems,
   distillAgent,
+  resolveModelOverride,
+  BANNED_MODELS,
   DEFAULT_CLUSTER_THRESHOLD,
 } from "../nightly-reflection.mjs";
 
@@ -145,4 +147,24 @@ test("distillAgent returns [] and never calls ask() when there are no clusters (
 test("distillAgent throws a clear error if no ask() function is injected (programmer error, not a runtime skip)", async () => {
   const clusters = [{ repText: "x", count: 2, recurring: true, items: [] }];
   await assert.rejects(() => distillAgent("cfo", clusters, {}), /ask\(system, user\) function is required/);
+});
+
+// ---------------------------- resolveModelOverride (gpt-4.1-mini ban guard) ----------------------------
+
+test("resolveModelOverride ignores a BANNED model override and falls back to the safe default", () => {
+  const origErr = console.error; console.error = () => {}; // silence the intentional loud warn
+  try {
+    assert.equal(resolveModelOverride("gpt-4.1-mini", "gpt-4o", "NIGHTLY_REFLECTION_MODEL"), "gpt-4o");
+    assert.equal(resolveModelOverride("  gpt-4.1-mini  ", "gpt-4o"), "gpt-4o", "trims before the ban check");
+  } finally { console.error = origErr; }
+});
+
+test("resolveModelOverride honors a valid (non-banned) override and the unset default", () => {
+  assert.equal(resolveModelOverride("gpt-5.1", "gpt-4o"), "gpt-5.1");
+  assert.equal(resolveModelOverride("", "gpt-4o"), "gpt-4o");
+  assert.equal(resolveModelOverride(undefined, "gpt-4o"), "gpt-4o");
+});
+
+test("BANNED_MODELS contains gpt-4.1-mini (the model-routing.mjs cheap tier)", () => {
+  assert.ok(BANNED_MODELS.has("gpt-4.1-mini"));
 });
