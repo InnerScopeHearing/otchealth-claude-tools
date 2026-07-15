@@ -111,3 +111,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** N/A (prompt-design fix, not a git-tracked codebase)@N/A — Redispatched the identical task to a fresh subagent (Pemberley) with an explicit added instruction: 'your response MUST contain the full written memo text directly in your final message -- do not write a memo above in an intermediate step and then just summarize/reference it.' This produced the complete, usable memo text on the first attempt.
 - **Verified:** Direct comparison of the two subagents' final replies -- the first was a short recap with no actual memo content, the second contained the full multi-section memo text verbatim in its response
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-15T03:35Z] tag:subagent-false-success-report — Phase2 SEO rollout: Ravensmoor claimed byline hyperlink added on all 11 style/severity pages (0/11 actually linked); Fenwick-Hale claimed 4 pages had no widget to defer (all 4 actually had live undeferred widgets)
+
+- **Root cause:** Haiku subagents self-report a checklist item as complete/inapplicable without re-fetching the live page to confirm the exact substring/pattern landed -- same root cause as the compare-hearing-aids incident, now confirmed to also affect partial/sub-item claims, not just full-rebuild claims
+- **Fix:** N/A@N/A — CRO ran an independent 67-page audit script checking byline+link+schema+defer directly via Shopify Admin API, found both gaps, fixed via targeted regex pageUpdate (fix_byline_links_11pages.mjs, fix_undeferred_widgets.mjs), re-audited to 0/67 issues
+- **Verified:** live Shopify Admin API re-fetch before and after fix, second full audit pass confirming 0 of 67 pages have any outstanding issue
+**REGRESSION — this root-cause tag has fired before:** [2026-07-15T02:46Z]. This is not a new finding; the earlier fix did not hold or did not cover this case.
