@@ -23,3 +23,6 @@ coo/CONFIDENTIAL*
 
 # locally-generated synthetic fixture bundles (regenerate with seed-fixtures.mjs)
 skills/synthetic-health-data/fixtures/
+
+# Ephemeral agent worktrees created by isolation:worktree subagents - never track/commit
+.claude/worktrees/
