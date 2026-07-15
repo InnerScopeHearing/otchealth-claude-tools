@@ -1,0 +1,358 @@
+#!/usr/bin/env node
+/**
+ * s3-mirror.mjs — Phase 6 disaster-recovery mirror. Replicates the fleet's Azure-Blob backup
+ * artifacts (everything skills/fleet-backup/backup.mjs writes to the `ledger-backup` container) to
+ * AWS S3 as an OFF-AZURE cold copy, so a total loss of the Azure subscription/tenant is not also a
+ * total loss of the only durable copy of the Cosmos work-ledger and the live AI Search room dumps.
+ *
+ * THIS DOES NOT RE-EXPORT FROM SOURCE. It consumes backup.mjs's OUTPUT (the blobs already sitting in
+ * `ledger-backup`), never touches Cosmos or AI Search directly, and never duplicates backup.mjs's own
+ * export logic. Run this AFTER backup.mjs, on the same cadence or less frequently.
+ *
+ * VERIFIED AGAINST SOURCE (2026-07, this file was written after reading backup.mjs in full — see
+ * that file for the authoritative account): backup.mjs writes exactly three blob-name shapes into a
+ * single container, `ledger-backup`, on the account named by BACKUP_STORAGE_ACCOUNT —
+ *   tasks-<date>.jsonl              Cosmos work-ledger export (tasks + full event-log history)
+ *   index-<indexName>-<date>.jsonl  one per LIVE AI Search index in setup/expected-indexes.json
+ *   manifest-<date>.json            backup.mjs's own run manifest (blob names, row/byte counts, sha256)
+ * It does NOT write any separate "_TEXT" or "originals" path (those sidecars are a doc-indexer concept
+ * that lives in the SOURCE data-room containers, e.g. otchealthlegalstore/otchealthcfodata — outside
+ * `ledger-backup` entirely, and outside this mirror's scope, which is specifically backup.mjs's
+ * output). Rather than hardcode that blob-name shape, this script LISTS THE WHOLE CONTAINER and
+ * classifies whatever it finds by name, so it automatically covers backup.mjs's actual output whether
+ * or not it changes shape later, with no risk of drifting out of sync with a hardcoded pattern list.
+ *
+ * RING SEGREGATION (hard compliance requirement, not a style choice — see README.md "S3 DR mirror"):
+ *   v1 DEFAULT excludes every privileged/sensitive room from the mirror. A blob is privileged if its
+ *   name contains any of: legal-personal, legal-company, cfo, finance-, -personal, medreview, phi
+ *   (case-insensitive substring match — deliberately OVER-inclusive: a false positive just means a
+ *   safe room stays Azure-only a little longer, which is the fail-closed/safe direction; a false
+ *   negative would leak a privileged room into the wrong bucket, which is the direction that must
+ *   never happen). This is cross-checked against setup/expected-indexes.json's `queried_by` field
+ *   (anything gated behind "kb_search_privileged" is ALSO forced privileged) as a second, independent
+ *   signal — best-effort only, the substring check above is the primary, always-on gate.
+ *   Privileged rooms are mirrored ONLY when BOTH `--include-privileged` (this CLI flag) AND
+ *   `S3_DR_INCLUDE_PRIVILEGED=1` (this env var) are set, and even then go to a SEPARATE bucket/credential
+ *   (aws-dr-privileged-*), never co-mingled with the non-privileged bucket.
+ *
+ * INERT-SAFE (Matt gate): if any of the four base aws-dr-* secrets is missing from Key Vault, this
+ * prints a clear message and exits 0. No error, no partial state, safe to wire into a cron/Container
+ * Apps Job today and it will simply no-op until the AWS credential is provisioned.
+ *
+ * REQUIRED SECRETS (Key Vault, kv-otc-55c84f6bef by default):
+ *   aws-dr-access-key-id / aws-dr-secret-access-key / aws-dr-s3-bucket / aws-dr-region
+ *     -> the non-privileged DR mirror. ALL FOUR required or the run is a no-op (see INERT-SAFE above).
+ *   aws-dr-privileged-access-key-id / aws-dr-privileged-secret-access-key / aws-dr-privileged-s3-bucket
+ *     -> the privileged DR mirror, a DISTINCT credential + bucket (not just a different prefix) so a
+ *        leaked/over-scoped non-privileged key structurally cannot reach the privileged bucket.
+ *        aws-dr-privileged-region is optional and falls back to aws-dr-region (region is not sensitive).
+ *     -> only read/required when BOTH --include-privileged and S3_DR_INCLUDE_PRIVILEGED=1 are set.
+ *   None of these secrets exist yet as of this writing — that is expected; this script merges safely
+ *   and stays inert until Matt provisions them (see README.md for the exact `az keyvault secret set`
+ *   commands and the recommended least-privilege IAM policy).
+ *
+ * REQUIRED ENV (non-secret, same names backup.mjs already uses — deploy this as a sibling job with
+ * the identical env block):
+ *   BACKUP_STORAGE_ACCOUNT   e.g. stotc55c84f6bef (same account backup.mjs writes to)
+ *   BACKUP_CONTAINER         default "ledger-backup"
+ *   S3_DR_MAX_MB             default 500 — single-blob size guard (see MAX_MIRROR_BYTES below); a
+ *                            blob over this size is SKIPPED with a loud warning, not silently dropped,
+ *                            and not OOM-risked by an unbounded in-memory buffer.
+ *
+ * USAGE:
+ *   node s3-mirror.mjs run [--include-privileged] [--dry-run]
+ *   node s3-mirror.mjs selftest       # no writes: reports Azure auth, source container, AWS creds presence
+ */
+
+import { readFileSync } from "node:fs";
+import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { listBlobs, getBlob, putBlockBlob, containerExists, blobToken, blobAuthMode } from "./azure-blob-client.mjs";
+import { s3Put, s3Head, sha256Hex } from "./s3-client.mjs";
+
+const MAX_MIRROR_BYTES = Number(process.env.S3_DR_MAX_MB || 500) * 1024 * 1024;
+
+// ---------- ring segregation ----------
+const PRIVILEGED_SUBSTRINGS = ["legal-personal", "legal-company", "cfo", "finance-", "-personal", "medreview", "phi"];
+function isPrivilegedByName(blobName) {
+  const lower = blobName.toLowerCase();
+  return PRIVILEGED_SUBSTRINGS.some((s) => lower.includes(s));
+}
+
+function loadExpectedIndexRegistry() {
+  try {
+    const registry = JSON.parse(readFileSync(new URL("../../setup/expected-indexes.json", import.meta.url), "utf8"));
+    return registry.indexes || [];
+  } catch (e) {
+    console.warn(`[s3-mirror] WARN: could not read setup/expected-indexes.json (${e.message}) -- the ring-gated-index cross-check is skipped; the name-substring privileged check above is still fully active.`);
+    return [];
+  }
+}
+function ringGatedIndexNames(registry) {
+  const names = new Set();
+  for (const ix of registry) {
+    const queriedBy = (ix.queried_by || []).join(" ");
+    if (/privileged/i.test(queriedBy)) names.add(ix.index);
+  }
+  return names;
+}
+function isPrivileged(blobName, ringGatedNames) {
+  if (isPrivilegedByName(blobName)) return true;
+  for (const n of ringGatedNames) if (blobName.includes(n)) return true;
+  return false;
+}
+function indexNameFromBlob(blobName) {
+  const m = blobName.match(/^index-(.+)-\d{4}-\d{2}-\d{2}\.jsonl$/);
+  return m ? m[1] : null;
+}
+
+function todayStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// ---------- manifest sha256 lookup (reuse backup.mjs's own recorded hashes where available) ----------
+async function loadManifestShaMap(account, container, blobs) {
+  const manifestBlobs = blobs.filter((b) => /^manifest-\d{4}-\d{2}-\d{2}\.json$/.test(b.name));
+  const shaMap = new Map(); // blobName -> sha256 (as recorded by backup.mjs's own manifest)
+  for (const mb of manifestBlobs) {
+    try {
+      const buf = await getBlob(account, container, mb.name);
+      const manifest = JSON.parse(buf.toString("utf8"));
+      if (manifest.ledger && manifest.ledger.blob && manifest.ledger.sha256) shaMap.set(manifest.ledger.blob, manifest.ledger.sha256);
+      for (const ix of manifest.indexes || []) {
+        if (ix.blob && ix.sha256) shaMap.set(ix.blob, ix.sha256);
+      }
+    } catch (e) {
+      console.warn(`[s3-mirror] WARN: could not parse ${mb.name} (${e.message}) -- skipping it as a sha256 source; blobs it would have covered fall back to direct download+hash.`);
+    }
+  }
+  return shaMap;
+}
+
+async function run({ includePrivileged, dryRun }) {
+  const account = process.env.BACKUP_STORAGE_ACCOUNT;
+  const container = process.env.BACKUP_CONTAINER || "ledger-backup";
+  if (!account) {
+    console.error("[FATAL] BACKUP_STORAGE_ACCOUNT is not set. Refusing to run.");
+    process.exit(78);
+  }
+
+  // ---- INERT-SAFE gate: the base (non-privileged) AWS DR credential ----
+  const [akid, asecret, bucket, region] = await Promise.all([
+    kvSecret("aws-dr-access-key-id"),
+    kvSecret("aws-dr-secret-access-key"),
+    kvSecret("aws-dr-s3-bucket"),
+    kvSecret("aws-dr-region"),
+  ]);
+  const missingBase = [];
+  if (!akid) missingBase.push("aws-dr-access-key-id");
+  if (!asecret) missingBase.push("aws-dr-secret-access-key");
+  if (!bucket) missingBase.push("aws-dr-s3-bucket");
+  if (!region) missingBase.push("aws-dr-region");
+  if (missingBase.length) {
+    console.log(`[s3-mirror] AWS DR credentials not provisioned (Matt gate: store ${missingBase.join(", ")} in Key Vault) -- nothing mirrored.`);
+    process.exit(0);
+  }
+  const baseCreds = { accessKeyId: akid, secretAccessKey: asecret, bucket, region };
+
+  // ---- source: list + classify everything backup.mjs has written ----
+  const ok = await containerExists(account, container);
+  if (!ok) {
+    console.error(`[FATAL] source container '${container}' not reachable/does not exist on ${account} (auth mode tried: ${blobAuthMode() || "none minted"}).`);
+    process.exit(1);
+  }
+  console.log(`[s3-mirror] listing ${container} on ${account} ...`);
+  const blobs = await listBlobs(account, container);
+  if (!blobs.length) {
+    console.warn("[s3-mirror] WARNING: source container is empty -- nothing to mirror (has backup.mjs run yet?).");
+  }
+  const shaMap = await loadManifestShaMap(account, container, blobs);
+
+  const registry = loadExpectedIndexRegistry();
+  const ringGated = ringGatedIndexNames(registry);
+
+  const nonPrivileged = [];
+  const privileged = [];
+  for (const b of blobs) {
+    (isPrivileged(b.name, ringGated) ? privileged : nonPrivileged).push(b);
+  }
+  console.log(`[s3-mirror] classified ${blobs.length} blob(s): ${nonPrivileged.length} non-privileged, ${privileged.length} privileged.`);
+  if (privileged.length) {
+    console.log(`[s3-mirror] SKIPPED-as-privileged (excluded from the non-privileged mirror by default, never silently -- listed here): ${privileged.map((b) => b.name).join(", ")}`);
+  }
+
+  // ---- opt-in privileged lane: BOTH the flag AND the env var are required ----
+  let privCreds = null;
+  if (includePrivileged) {
+    if (process.env.S3_DR_INCLUDE_PRIVILEGED !== "1") {
+      console.warn("[s3-mirror] --include-privileged was passed but S3_DR_INCLUDE_PRIVILEGED=1 is NOT set in env -- BOTH are required. Privileged rooms stay EXCLUDED this run.");
+    } else if (privileged.length) {
+      const [pakid, pasecret, pbucket, pregionOwn] = await Promise.all([
+        kvSecret("aws-dr-privileged-access-key-id"),
+        kvSecret("aws-dr-privileged-secret-access-key"),
+        kvSecret("aws-dr-privileged-s3-bucket"),
+        kvSecret("aws-dr-privileged-region"),
+      ]);
+      const missingPriv = [];
+      if (!pakid) missingPriv.push("aws-dr-privileged-access-key-id");
+      if (!pasecret) missingPriv.push("aws-dr-privileged-secret-access-key");
+      if (!pbucket) missingPriv.push("aws-dr-privileged-s3-bucket");
+      if (missingPriv.length) {
+        console.warn(`[s3-mirror] --include-privileged + S3_DR_INCLUDE_PRIVILEGED=1 requested, but privileged AWS creds are not provisioned (${missingPriv.join(", ")}) -- privileged rooms stay SKIPPED; continuing with the non-privileged mirror only.`);
+      } else if (pbucket === bucket) {
+        console.error(`::error::[s3-mirror] aws-dr-privileged-s3-bucket resolves to the SAME bucket as aws-dr-s3-bucket (${bucket}) -- refusing to co-mingle privileged and non-privileged rooms in one bucket. Provision a genuinely separate bucket. Privileged rooms stay SKIPPED this run.`);
+      } else {
+        privCreds = { accessKeyId: pakid, secretAccessKey: pasecret, bucket: pbucket, region: pregionOwn || region };
+        console.log(`[s3-mirror] privileged mirror ENABLED -> separate bucket s3://${privCreds.bucket} (never co-mingled with the non-privileged bucket s3://${bucket}).`);
+      }
+    }
+  }
+
+  const manifest = {
+    ts: new Date().toISOString(),
+    source: { account, container },
+    dryRun: Boolean(dryRun),
+    nonPrivilegedBucket: bucket,
+    privilegedBucket: privCreds ? privCreds.bucket : null,
+    mirrored: [],
+    skippedUnchanged: [],
+    skippedPrivileged: privileged.map((b) => b.name),
+    skippedOversize: [],
+    failed: [],
+  };
+
+  async function mirrorGroup(list, creds, label) {
+    for (const b of list) {
+      try {
+        const known = shaMap.get(b.name);
+        // idempotent skip: if S3 already has this exact blob (matching sha256 recorded as custom
+        // metadata on a prior PUT), don't re-download from Azure or re-upload at all.
+        if (known) {
+          const head = await s3Head(creds, b.name);
+          if (head && head.metaSha256 === known) {
+            manifest.skippedUnchanged.push({ blob: b.name, sha256: known, bucket: creds.bucket });
+            console.log(`[s3-mirror] (${label}) SKIP (unchanged) ${b.name}`);
+            continue;
+          }
+        }
+        if (dryRun) {
+          console.log(`[s3-mirror] (${label}) DRY-RUN would mirror ${b.name}${known ? ` (known sha256 ${known.slice(0, 12)}...)` : " (no recorded sha256 -- would download+hash)"}`);
+          manifest.mirrored.push({ blob: b.name, bucket: creds.bucket, dryRun: true });
+          continue;
+        }
+        console.log(`[s3-mirror] (${label}) mirroring ${b.name} ...`);
+        const buf = await getBlob(account, container, b.name);
+        if (buf.length > MAX_MIRROR_BYTES) {
+          console.warn(`::warning::[s3-mirror] ${b.name} is ${buf.length} bytes, over the ${MAX_MIRROR_BYTES}-byte guard (S3_DR_MAX_MB=${process.env.S3_DR_MAX_MB || 500}) -- SKIPPED, NOT mirrored. Raise S3_DR_MAX_MB to include it.`);
+          manifest.skippedOversize.push({ blob: b.name, bytes: buf.length });
+          continue;
+        }
+        const actualSha = sha256Hex(buf);
+        if (known && known !== actualSha) {
+          console.warn(`::warning::[s3-mirror] ${b.name}: downloaded bytes sha256 (${actualSha}) does not match the manifest-recorded sha256 (${known}) -- the Azure blob may have changed since that manifest was written, or the manifest is stale. Uploading the ACTUAL bytes' hash; investigate the mismatch.`);
+        }
+        await s3Put(creds, b.name, buf, actualSha, { sourceAccount: account, sourceContainer: container, sourceBlob: b.name });
+        manifest.mirrored.push({ blob: b.name, bucket: creds.bucket, bytes: buf.length, sha256: actualSha });
+        console.log(`[s3-mirror] (${label}) OK ${b.name} -> s3://${creds.bucket}/${b.name} (${buf.length} bytes, sha256 ${actualSha.slice(0, 12)}...)`);
+      } catch (e) {
+        console.error(`::error::[s3-mirror] (${label}) FAILED ${b.name}: ${e.message}`);
+        manifest.failed.push({ blob: b.name, error: e.message });
+      }
+    }
+  }
+
+  await mirrorGroup(nonPrivileged, baseCreds, "non-privileged");
+  if (privCreds) await mirrorGroup(privileged, privCreds, "PRIVILEGED");
+
+  // ---- fail-loud coverage check: an expected non-privileged room with NO blob found at all is a
+  // real gap (backup.mjs may not have run for it), not just "0 rows inside a blob that exists" (that
+  // case is already backup.mjs's own concern via manifest.backup_incomplete). ----
+  const expectedNonPrivNames = registry.filter((ix) => !isPrivileged(ix.index, ringGated)).map((ix) => ix.index);
+  const foundNonPrivIndexNames = new Set(nonPrivileged.map((b) => indexNameFromBlob(b.name)).filter(Boolean));
+  const missingExpectedRooms = expectedNonPrivNames.filter((n) => !foundNonPrivIndexNames.has(n));
+  manifest.missingExpectedRooms = missingExpectedRooms;
+  if (missingExpectedRooms.length) {
+    console.error(`::error::[s3-mirror] expected non-privileged room(s) with NO blob found in ${container}: ${missingExpectedRooms.join(", ")} -- backup.mjs may not have run for them, or they are only present under a different date than what's in the container.`);
+  }
+  const hasTasksLedgerBlob = blobs.some((b) => /^tasks-\d{4}-\d{2}-\d{2}\.jsonl$/.test(b.name));
+  manifest.missingCosmosLedger = !hasTasksLedgerBlob;
+  if (!hasTasksLedgerBlob && blobs.length) {
+    console.error(`::error::[s3-mirror] no tasks-<date>.jsonl (Cosmos work-ledger export) found in ${container} -- expected non-privileged coverage per the task instructions is incomplete.`);
+  }
+
+  // ---- persist the manifest BEFORE failing (mirrors backup.mjs's own ordering: partial progress is
+  // always recorded even when the run ultimately reports a failure). Required destination: Azure Blob
+  // + stdout. Bonus (best-effort, non-fatal if it fails): also PUT to S3 so restore-drill.mjs can work
+  // from S3 alone if Azure itself were ever the thing that failed. ----
+  const manifestBuf = Buffer.from(JSON.stringify(manifest, null, 2), "utf8");
+  const manifestBlobName = `s3-mirror-manifest-${todayStamp()}.json`;
+  if (!dryRun) {
+    await putBlockBlob(account, container, manifestBlobName, manifestBuf, "application/json");
+    console.log(`[s3-mirror] manifest written: ${container}/${manifestBlobName} (Azure, required)`);
+    try {
+      await s3Put(baseCreds, manifestBlobName, manifestBuf, sha256Hex(manifestBuf), {});
+      console.log(`[s3-mirror] manifest also written: s3://${bucket}/${manifestBlobName} (bonus, makes restore-drill.mjs self-contained from S3 alone)`);
+    } catch (e) {
+      console.warn(`[s3-mirror] WARN: could not also upload the manifest to S3 (non-fatal, the Azure copy is authoritative): ${e.message}`);
+    }
+  }
+  console.log(JSON.stringify(manifest, null, 2));
+
+  const problems = [];
+  if (manifest.failed.length) problems.push(`${manifest.failed.length} blob(s) failed to mirror: ${manifest.failed.map((f) => f.blob).join(", ")}`);
+  if (missingExpectedRooms.length) problems.push(`${missingExpectedRooms.length} expected non-privileged room(s) missing entirely: ${missingExpectedRooms.join(", ")}`);
+  if (manifest.missingCosmosLedger && blobs.length) problems.push("Cosmos tasks ledger export (tasks-<date>.jsonl) missing entirely");
+  if (!dryRun && problems.length) {
+    throw new Error(`[s3-mirror] INCOMPLETE: ${problems.join("; ")}`);
+  }
+}
+
+async function selftest() {
+  const report = {};
+  try {
+    report.azureBlobTokenMinted = Boolean(await blobToken());
+  } catch (e) {
+    report.azureBlobTokenError = e.message;
+  }
+  report.azureBlobAuthMode = blobAuthMode();
+  const account = process.env.BACKUP_STORAGE_ACCOUNT;
+  report.backupStorageAccountSet = Boolean(account);
+  if (account) {
+    try {
+      report.sourceContainerReachable = await containerExists(account, process.env.BACKUP_CONTAINER || "ledger-backup");
+    } catch (e) {
+      report.sourceContainerError = e.message;
+    }
+  }
+  const [akid, asecret, bucket, region] = await Promise.all([
+    kvSecret("aws-dr-access-key-id"),
+    kvSecret("aws-dr-secret-access-key"),
+    kvSecret("aws-dr-s3-bucket"),
+    kvSecret("aws-dr-region"),
+  ]);
+  report.awsDrCredsProvisioned = Boolean(akid && asecret && bucket && region);
+  report.awsDrMissing = [!akid && "aws-dr-access-key-id", !asecret && "aws-dr-secret-access-key", !bucket && "aws-dr-s3-bucket", !region && "aws-dr-region"].filter(Boolean);
+  const [pakid, pasecret, pbucket] = await Promise.all([
+    kvSecret("aws-dr-privileged-access-key-id"),
+    kvSecret("aws-dr-privileged-secret-access-key"),
+    kvSecret("aws-dr-privileged-s3-bucket"),
+  ]);
+  report.awsDrPrivilegedCredsProvisioned = Boolean(pakid && pasecret && pbucket);
+  console.log(JSON.stringify(report, null, 2));
+}
+
+const cmd = process.argv[2] || "run";
+const flags = new Set(process.argv.slice(3));
+if (cmd === "selftest") {
+  selftest().catch((e) => {
+    console.error("ERR", e.message);
+    process.exit(1);
+  });
+} else if (cmd === "run") {
+  run({ includePrivileged: flags.has("--include-privileged"), dryRun: flags.has("--dry-run") }).catch((e) => {
+    console.error("ERR", e.message);
+    process.exit(1);
+  });
+} else {
+  console.error("usage: node s3-mirror.mjs run [--include-privileged] [--dry-run] | selftest");
+  process.exit(2);
+}
