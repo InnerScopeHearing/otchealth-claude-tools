@@ -154,3 +154,31 @@ owner's entries — the owner reconciles them on wake. This doubles as the inter
   `tail` and the per-prompt pack also surface a 📥 INBOUND banner automatically, so a fresh/compacted
   session sees inbound cross-agent input immediately.
 - clo-personal is excluded from cross-lane writes/sharing (attorney privilege, unwaivable).
+
+## Nightly self-maintenance (Phase 4B): distillation + contradiction proposals
+Two scheduled (Container Apps Job) scripts that keep the ledger itself healthy, on top of everything
+above. Both are dry-run by default (pass `--commit` to actually write) and always exit 0 (fail-open).
+
+- **`nightly-reflection.mjs`** reads the last ~24h of Cosmos "episode" memories (kind=episode, the
+  gateway's auto-journal -- one short marker per successful mutating tool call) across every agent,
+  clusters each agent's episodes by recurring topic, and distills genuinely RECURRING patterns into
+  0-N facts/decisions/pitfalls written back onto that same agent's own ledger, tagged
+  `nightly-reflection`. This is the CROSS-SESSION counterpart to `reflect.mjs` (which only ever sees
+  one session's transcript): a pattern that only shows up across a whole day of episodes would never
+  surface to any single reflect.mjs run. Quality-synthesis model routing (gpt-4o primary, the Foundry
+  "quality" tier as fallback); gpt-4.1-mini is never used here.
+  `node skills/kb-memory/nightly-reflection.mjs [--commit] [--hours 24] [--agent <lane>] [--max-items 5]`
+- **`contradiction-scan.mjs`** pulls recent assertion rows from BOTH memory stores (the shared exec
+  feed on Blob, and the gateway's Cosmos `memory` container), groups them by topic, and runs the
+  existing `semantic-trust` `groupAssertions()` + `scoreClaim()` to find genuine cross-agent
+  contradictions. For each contested claim it opens exactly ONE `decision-clock` proposal (category
+  `memory-contradiction`) with both claims and their trust rationale as evidence. It NEVER resolves a
+  contradiction itself: no `mem.mjs correct`, no `--supersedes`, ever. A human or agent reviews the
+  proposal later and either confirms the majority claim or corrects the record by hand.
+  `node skills/kb-memory/contradiction-scan.mjs [--commit] [--days 14] [--owner cto]`
+- Both read `cosmos-memory-read.mjs`, a READ-ONLY client scoped to the Cosmos `memory` container (no
+  create/replace/delete exported at all) so neither script can mutate the Cosmos memory-of-record
+  directly; every durable effect is a NEW row via `mem.mjs` or a NEW `decision.mjs open` proposal.
+  Job entrypoints: `job/nightly-reflection.sh`, `job/contradiction-scan.sh` (mirror
+  `skills/ledger-compaction/job/compaction.sh`'s shape). Not yet scheduled as Container Apps Jobs --
+  that is a CTO deploy step.

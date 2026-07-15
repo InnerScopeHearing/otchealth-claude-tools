@@ -120,8 +120,10 @@ async function aisPush(batch) {
   if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 200));
 }
 
-// read every shared exec-feed file
-async function readExecFeed() {
+// read every shared exec-feed file. Exported so other kb-memory tooling (e.g. contradiction-scan.mjs)
+// reuses the SAME Blob-listing + credential-resolution logic instead of duplicating it; behavior is
+// unchanged for the existing internal caller (reindex()).
+export async function readExecFeed() {
   const acct = (await sm("azure-commons-storage-account")) || "otchealthcommons";
   const key = await sm("azure-commons-storage-key");
   const container = "company-journal";
