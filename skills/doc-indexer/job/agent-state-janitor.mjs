@@ -42,6 +42,7 @@
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
+import { cosmosAuthHeader } from "../../kb-memory/cosmos-auth.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
 const COSMOS_API_VERSION = "2018-12-31";
@@ -59,13 +60,10 @@ const argv = process.argv.slice(2);
 const EPISODE_DECAY_DAYS = Number(process.env.EPISODE_DECAY_DAYS || 45);
 const EPISODE_DECAY_MAX_PER_RUN = Number(process.env.EPISODE_DECAY_MAX_PER_RUN || 500);
 
-// ---- Cosmos REST auth (mirrors decision-clock/cosmos-client.mjs and the gateway's cosmos.ts
-// exactly -- do NOT "tidy" the casing, it is load-bearing) ----
-function authToken(verb, resType, resourceLink, date, masterKey) {
-  const stringToSign = `${verb.toLowerCase()}\n${resType.toLowerCase()}\n${resourceLink}\n${date.toLowerCase()}\n\n`;
-  const sig = crypto.createHmac("sha256", Buffer.from(masterKey, "base64")).update(stringToSign, "utf8").digest("base64");
-  return encodeURIComponent(`type=master&ver=1.0&sig=${sig}`);
-}
+// ---- Cosmos REST auth: COSMOS_AUTH_MODE=key|aad, centralized in ../../kb-memory/cosmos-auth.mjs
+// (shared by all 4 job Cosmos clients; mirrors the gateway's cosmos.ts exactly). key mode (the
+// default) is BYTE-FOR-BYTE the master-key HMAC this file used to build inline -- do NOT "tidy" its
+// casing, it is load-bearing.
 
 // GCP Secret Manager fallback (claude-driver SA), same pattern as decision-clock/cosmos-client.mjs.
 import { readFileSync, existsSync } from "node:fs";
@@ -120,7 +118,7 @@ async function request(verb, resType, resourceLink, urlPath, opts = {}) {
   const c = await cfg();
   const date = new Date().toUTCString();
   const headers = {
-    Authorization: authToken(verb, resType, resourceLink, date, c.key),
+    Authorization: await cosmosAuthHeader({ verb, resType, resourceLink, date, masterKey: c.key }),
     "x-ms-date": date,
     "x-ms-version": COSMOS_API_VERSION,
     Accept: "application/json",
