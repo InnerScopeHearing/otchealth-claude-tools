@@ -90,3 +90,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** N/A (live Shopify Admin API config, not a git-tracked codebase)@N/A — CRO personally rewrote and pushed the correct comparison-table content plus the standard lead-capture widget directly, then verified via a fresh Admin API re-fetch (body contained the new competitor pricing table and widget tag) and a live curl of the public page before reporting success to the user.
 - **Verified:** Direct Shopify Admin API re-fetch of the page body + live curl of the public URL, independent of the subagent's own report
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-15T02:46Z] tag:shopify-nonexistent-webhook-topic — Two Haiku research subagents independently designed a Shopify-webhook-triggered n8n automation (blog article publish -> teaser email) assuming a webhook topic named articles/publish or articles/create exists in Shopify's Admin API.
+
+- **Root cause:** The research was done against secondary documentation/assumption rather than the live API's actual WebhookSubscriptionTopic enum. No ARTICLES_* topic exists at all in the current Shopify Admin GraphQL API -- confirmed exhaustively by attempting a real webhookSubscriptionCreate call and reading the full enum returned in the GraphQL validation error.
+- **Fix:** N/A (live Shopify Admin API design correction, not a git-tracked codebase)@N/A — Redesigned the pipeline to skip the nonexistent webhook/n8n hop entirely: a single script calls Shopify's articleCreate mutation, takes the article handle/URL directly from that same mutation's response, then immediately calls Customer.io's API-triggered broadcast endpoint with that data -- one script, two chained API calls, no missing infrastructure to wait on.
+- **Verified:** Live attempt to register the webhook subscription against the real Shopify Admin API; the GraphQL error response enumerated the complete, real WebhookSubscriptionTopic list with no articles/* entry
+**First recorded occurrence of this root-cause tag.**
