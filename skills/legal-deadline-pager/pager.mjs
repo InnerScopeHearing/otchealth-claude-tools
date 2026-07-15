@@ -27,10 +27,11 @@
 // access-controlled `personal` Azure Blob container (skills/legal-deadline-pager/personal-store.mjs),
 // keyed by an opaque hash so not even the cooldown blob carries cleartext case detail.
 //
-// Only VERIFIED rows page. legal.mjs's applyDocketRowDefaults() already defaults a row with neither
-// `source` nor `verified` to manual/verified:true (a human typed it in); a future extraction pipeline
-// (CourtListener / document parsing) is expected to write verified:false until a human confirms it, and
-// this pager will never page an unconfirmed row.
+// Only VERIFIED rows page. legal.mjs's normalizeDocketRow() already defaults a row with neither
+// `source` nor `verified` to manual/verified:true (a human typed it in); the extraction/watcher pipeline
+// (skills/legal/deadline-extract.mjs, skills/legal/courtlistener-watch.mjs) stages candidates as
+// verified:false until a human confirms them with `docket verify`, and this pager will never page an
+// unconfirmed row.
 //
 // Usage:
 //   node pager.mjs sweep [--commit] [--json] [--window-days N] [--due-days N] [--cooldown-hours N]
@@ -43,6 +44,7 @@ import { dirname, join } from "node:path";
 import * as cosmos from "../decision-clock/cosmos-client.mjs";
 import { mintToken } from "../gateway-connect/connect.mjs";
 import { getPersonalCooldown as _getPersonalCooldown, putPersonalCooldown as _putPersonalCooldown } from "./personal-store.mjs";
+import { normalizeDocketRow } from "../legal/legal.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LEGAL_MJS = join(HERE, "..", "legal", "legal.mjs");
@@ -70,13 +72,16 @@ export function daysUntil(row, nowIso) {
   return (due.getTime() - todayUtc) / 86400000;
 }
 
-/** Apply the source/verified default rule locally (mirrors legal.mjs's own applyDocketRowDefaults, kept
- *  independent so this file has no hard dependency on importing legal.mjs -- see fetchDocketRowsSync,
- *  which shells out to it rather than importing it). Pure. */
+/** Apply the source/verified default rule. Delegates to legal.mjs's own normalizeDocketRow() (the
+ *  single source of truth for this rule -- see skills/legal/legal.mjs, Phase 7b/7d) rather than
+ *  maintaining a second, independently-drifting copy of the same logic. legal.mjs is safely importable
+ *  (its CLI dispatch is isMain-guarded; importing it never touches the network or exits the process).
+ *  Pure (normalizeDocketRow itself does no I/O); null-guarded beyond what normalizeDocketRow does on
+ *  its own, since this pager may be handed a malformed row from an untrusted source. */
 export function resolveSourceVerified(row) {
-  const source = (row && row.source) || "manual";
-  const verified = !row || row.verified === undefined || row.verified === null ? true : !!row.verified;
-  return { source, verified };
+  if (!row) return { source: "manual", verified: true };
+  const n = normalizeDocketRow(row);
+  return { source: n.source, verified: n.verified };
 }
 
 /** True when a row is due within `windowDays` of now, INCLUDING already-overdue rows (a missed legal
