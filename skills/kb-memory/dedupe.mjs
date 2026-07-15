@@ -97,3 +97,39 @@ export function writeAdvisory(text, rows, type = "fact", log = (m) => process.st
   }
   return "";
 }
+
+// ============================ RING / PRIVILEGE WALL (shared, cross-file) ============================
+// The ONE fleet-wide MNPI/PHI content wall, kept BYTE-IDENTICAL to kb-memory/mem.mjs's own RING_DENY
+// (used for read-side cross-agent recall, mem.mjs:233) and company-brain/brain.mjs's RING_DENY (used
+// for diff-mode cross-lane reads, brain.mjs:170). Defined ONCE here (dedupe.mjs is pure, side-effect
+// free, and already imported by both mem.mjs's siblings and every other kb-memory script) so an
+// automated CROSS-lane process -- contradiction-scan.mjs's cross-agent comparison, nightly-reflection's
+// --share output path -- can hard-exclude privileged/MNPI/PHI content instead of relying on an LLM
+// prompt's soft instruction not to leak it. Can only ever REFUSE, never widen; never delete/redact
+// content in place, only decide whether a row is safe to read/compare/publish CROSS-lane.
+//
+// If a fourth copy of this regex is ever needed, import it from here instead of retyping it; the three
+// existing copies (mem.mjs, brain.mjs, and this one) must never be allowed to drift apart.
+export const RING_DENY = /\b(innd|inscope hearing|otcmkts|ticker|reg\s*[da]\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|materially?\s*non.?public|mnpi|reg\s*fd|dividend|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number)\b/i;
+
+// Privileged/personal AGENT lanes that must NEVER be read cross-lane, regardless of content (mirrors
+// kb-memory/mem.mjs's own NO_SHARE set). A Set, not a scattered literal string compare, so a future
+// privileged lane is a one-line addition everywhere that imports PRIVILEGED_AGENTS instead of a
+// grep-and-hope across every cross-lane script.
+export const PRIVILEGED_AGENTS = new Set(["clo-personal"]);
+
+/**
+ * True when `row` (shape: { agent?, text?, tags?, was? }) is safe to read, compare, or publish
+ * CROSS-lane: not from a privileged agent lane, AND its own text/tags/was carry no MNPI/PHI marker.
+ * This is a CONTENT check, not just an agent check: an otherwise-shareable agent (cfo/clo/capital/cto)
+ * can still assert an individual MNPI-flagged fact that must stay in ITS OWN lane, so agent identity
+ * alone is not a sufficient gate. Pure, no I/O, never throws. Mirrors mem.mjs's ringSafeCross /
+ * brain.mjs's ringSafeForDiff (this copy never carries the MNPI_AUTHORIZED viewer exception those two
+ * have, because a scheduled batch job's output has no reliable "authorized viewer" boundary).
+ */
+export function ringSafeCross(row) {
+  if (!row) return false;
+  if (PRIVILEGED_AGENTS.has(String(row.agent || "").toLowerCase())) return false;
+  const tags = Array.isArray(row.tags) ? row.tags.join(" ") : (row.tags || "");
+  return !RING_DENY.test(`${row.text || ""} ${tags} ${row.was || ""}`);
+}
