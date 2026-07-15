@@ -98,3 +98,9 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Verified:** Live attempt to register the webhook subscription against the real Shopify Admin API; the GraphQL error response enumerated the complete, real WebhookSubscriptionTopic list with no articles/* entry
 **First recorded occurrence of this root-cause tag.**
 
+### [2026-07-15T02:47Z] tag:ledger-tool-self-dedup — This ledger tool's own add call for tag:subagent-false-success-report reported 'Command failed' to me, but had actually already pushed successfully; I retried, creating a real duplicate entry for the same tag, which the tool itself then mislabeled as a REGRESSION (correctly detected two entries sharing the tag, but they described the same single finding, not two real occurrences of the underlying bug).
+
+- **Root cause:** Identical, already-documented gap: this exact tag (ledger-tool-self-dedup, first logged 2026-07-12) states the tool has no idempotency/dedup check on add, so a caller who cannot tell whether a prior call actually succeeded will retry and create a false-positive regression. I hit the documented gap again without checking this tag's own history first.
+- **Fix:** N/A (manual content dedup, not a code fix)@N/A — Manually deduplicated REGRESSION-LEDGER.md via a direct authenticated GitHub Contents API edit (commit cdbcc28), removing the redundant second subagent-false-success-report entry and keeping the original, non-regression-labeled one. The underlying tool gap (no idempotency check on add) remains unfixed in the tool itself, exactly as the prior 2026-07-12 entry for this same tag already stated.
+- **Verified:** Re-fetched REGRESSION-LEDGER.md directly after the edit and confirmed exactly 1 occurrence of the duplicate entry's marker text remains, down from 2
+**REGRESSION — this root-cause tag has fired before:** [2026-07-12T23:52Z]. This is not a new finding; the earlier fix did not hold or did not cover this case.
