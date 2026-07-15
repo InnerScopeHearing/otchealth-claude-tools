@@ -34,8 +34,47 @@ node skills/legal/legal.mjs matters                 # company matters
 node skills/legal/legal.mjs matters --personal      # confidential personal matters
 node skills/legal/legal.mjs docket add ca-divorce 2026-07-15 "FL-142/FL-150 disclosure due" --personal
 node skills/legal/legal.mjs docket due 30            # everything due/overdue in 30 days (all matters)
+node skills/legal/legal.mjs docket due 30 --json     # same, machine-readable (includes source/verified)
+node skills/legal/legal.mjs docket verify ca-divorce 2026-07-15 "FL-142" --personal   # confirm a staged candidate
 node skills/legal/legal.mjs note ainnova-deal "counsel reviewing disclosure timing"
 ```
+
+### Docket row provenance: source + verified
+Every docket row carries `source` (`manual` | `courtlistener` | `extracted`) and `verified`
+(bool). A row a human docketed directly (`docket add` with no flags) is `manual`/`verified:true`,
+exactly the original behavior; rows written before this field existed are treated the same way
+at read time (no migration touches old data). Rows staged by the two tools below land
+`verified:false` -- a CANDIDATE, not yet an actionable deadline -- until a human confirms them
+with `docket verify` (or, for an extracted candidate, `deadline-extract.mjs confirm`).
+`docket due` flags any unverified row inline (`[UNVERIFIED, courtlistener]`) so a CLO scanning
+the list never mistakes a candidate for a confirmed deadline.
+
+## Proposing deadlines from a document (never auto-committed)
+```
+node skills/legal/deadline-extract.mjs extract --file _TEXT/some-filing.txt --matter ainnova-deal
+node skills/legal/deadline-extract.mjs extract --text "Respond no later than July 15, 2026." --json
+cat _TEXT/some-filing.txt | node skills/legal/deadline-extract.mjs extract --matter ainnova-deal --label-llm
+node skills/legal/deadline-extract.mjs confirm ainnova-deal --date 2026-07-15 --what "Response to motion due"
+```
+`extract` runs a deterministic (regex + real calendar-date validation) scan over a document's
+TEXT -- produce that text first via doc-indexer's `_TEXT/<path>.txt` sidecar (`--profile legal`),
+which already does the OCR/PDF-extraction work; this tool takes text in, never a raw PDF. It only
+PRINTS candidates (`source:'extracted'`, `verified:false`); it never writes to a matter. Optional
+`--label-llm` rewrites a candidate's context into a short label via gpt-4o (never gpt-4.1-mini,
+banned for quality work) and fails open if unavailable. `confirm` is the human decision that adds
+ONE reviewed candidate to the docket (via legal.mjs's shared `docketAdd`, `verified:true`).
+
+## Watching a CourtListener docket for new entries
+```
+node skills/legal/courtlistener-watch.mjs poll ainnova-deal --docket 12345          # first poll, saves the docket id
+node skills/legal/courtlistener-watch.mjs poll ainnova-deal                         # reuses the saved docket id + last_checked
+node skills/legal/courtlistener-watch.mjs poll ainnova-deal --dry-run --json        # preview, writes nothing
+```
+Polls the CourtListener docket-entries API for anything filed since the matter's `last_checked`
+and stages new entries into the docket as `source:'courtlistener', verified:false`
+(confirm-before-page: real court activity, but not treated as an actionable deadline until a
+human confirms it with `docket verify`). Free without a token; set `LEGAL_COURTLISTENER_TOKEN`
+for reliable production polling (rate limits + PACER-backed dockets).
 
 ## Storage + confidentiality (HARD)
 - Store: **Azure Blob** (off Google), dedicated storage account `otchealthlegalstore` with
