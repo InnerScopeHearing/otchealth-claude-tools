@@ -233,3 +233,35 @@ test("enforceRingSafeShare is safe on an empty item list", () => {
   assert.deepEqual(enforceRingSafeShare("cfo", [], () => {}), []);
   assert.deepEqual(enforceRingSafeShare("cfo", undefined, () => {}), []);
 });
+
+// ---------------------------- ADVERSARIAL-REVIEW HOLE 2 FIXED (personal-legal vocabulary) ----------------------------
+// Before the fix, RING_DENY had ZERO personal-legal vocabulary, so clo-personal content mistagged under
+// the ordinary "clo" (company-legal) lane had no content-level backstop here, only the PRIVILEGED_AGENTS
+// agent-identity check (which this function also applies, but agent="clo" here, not "clo-personal", so
+// that check alone does not fire). This is the exact four-item leak repro from the adversarial review:
+// four distilled candidate items, agent "clo", all share:true, none of them privileged by AGENT identity.
+
+test("HOLE 2 FIXED: the exact four clo-tagged personal-legal items all get share:false, kept on clo's own ledger", () => {
+  const items = [
+    { type: "fact", text: "the custody hearing continued to next month", share: true },
+    { type: "fact", text: "the settlement offer in the civil case is 250000", share: true },
+    { type: "fact", text: "the deposition transcript mentions the community-property division", share: true },
+    { type: "fact", text: "the spousal support figure discussed in mediation is pending", share: true },
+  ];
+  let logCount = 0;
+  const out = enforceRingSafeShare("clo", items, () => { logCount++; });
+  assert.equal(out.length, 4, "no item is dropped, only downgraded");
+  for (const it of out) assert.equal(it.share, false, `expected share:false, got share:${it.share} for "${it.text}"`);
+  assert.equal(logCount, 4, "every downgrade is logged");
+  // The text itself is preserved (still lands on clo's own private ledger on --commit); only share flips.
+  assert.equal(out[0].text, items[0].text);
+  assert.equal(out[1].text, items[1].text);
+  assert.equal(out[2].text, items[2].text);
+  assert.equal(out[3].text, items[3].text);
+});
+
+test("HOLE 2: the clo agent's ordinary non-personal item stays share:true (no over-blocking of the CLO's own company docket)", () => {
+  const items = [{ type: "fact", text: "filed the trademark renewal on schedule", share: true }];
+  const out = enforceRingSafeShare("clo", items, () => { throw new Error("must not log when nothing is downgraded"); });
+  assert.equal(out[0].share, true);
+});

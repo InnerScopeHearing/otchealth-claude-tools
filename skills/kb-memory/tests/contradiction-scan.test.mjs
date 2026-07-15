@@ -127,6 +127,22 @@ test("findContestedGroups independently re-filters privileged/MNPI rows even whe
   assert.equal(groups.length, 0, "the clo-personal row must never reach a group, even bypassing normalizeAssertionRows");
 });
 
+test("ADVERSARIAL-REVIEW HOLE 1 FIXED: the exact 'innerscope ... runway 6000000 vs 900000' leak repro yields ZERO rows and ZERO contested groups", () => {
+  // Before this fix, RING_DENY matched the bare ticker "innd" but never the company's actual name
+  // "innerscope" (and the "inscope hearing" fragment was broken, missing the "n"). This pair carries
+  // NEITHER "innd" nor any other pre-existing marker, ONLY the new "innerscope"/"runway" vocabulary.
+  // Verified (offline, against the pre-fix code at this branch's prior commit) that this EXACT fixture
+  // produces a real contested group and a fully rendered decision-clock proposal quoting both raw
+  // numbers on old code: jaccard(A,B) = 0.4286, inside the "same topic, different claim" band (above the
+  // 0.35 partition floor, below groupAssertions' own 0.5 same-claim merge threshold), so this is not just
+  // a load-point check, it is the full "a proposal gets written" leak the adversarial review described.
+  const execRows = [{ id: "e1", _agent: "cto", type: "fact", text: "the innerscope runway number is 6000000", ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "developer", kind: "fact", text: "the innerscope runway is only 900000 per finance not 6000000", ts: iso(10) }];
+  const rows = normalizeAssertionRows(execRows, cosmosRows);
+  assert.deepEqual(rows, [], "both innerscope/runway rows must be excluded at the load point");
+  assert.equal(findContestedGroups(rows, { nowMs: NOW }).length, 0, "no contested group, hence no decision-clock proposal, can be produced from this pair");
+});
+
 test("findContestedGroups still finds a genuine ORDINARY (non-MNPI) cross-agent contradiction (the wall does not over-block)", () => {
   // Regression guard: the ring wall must only remove privileged/MNPI content, never ordinary claims.
   const execRows = [{ id: "e1", agent: "growth", type: "fact", text: CLAIM_A, ts: iso(20) }];
@@ -277,6 +293,56 @@ test("buildProposalText names both sides, includes a trust rationale, evidence i
   assert.ok(!/[–—]/.test(built.text), "no em dash or en dash in proposal text");
   assert.deepEqual(built.majorityAgents, ["cfo"]);
   assert.deepEqual(built.minorityAgents, ["cto"]);
+});
+
+// ---------------------------- HOLE 3: buildProposalText render-path self-defense ----------------------------
+// Not live-exploitable through main() today (normalizeAssertionRows + findContestedGroups already filter
+// every row before a group reaches here), but buildProposalText/proposalsFor previously performed NO
+// ringSafeCross check of their own on row.text/row.tags, trusting the group was pre-filtered. These tests
+// hand-build a group that BYPASSES both upstream gates (exactly the scenario the adversarial review
+// flagged: a future caller, or a refactor, that reaches this function some other way) and prove the
+// render step now refuses to format an unsafe row into a proposal, rather than trusting its input.
+
+test("HOLE 3 FIXED: buildProposalText refuses (returns null) an unsafe group handed to it directly, bypassing both upstream gates", () => {
+  const unsafeGroup = {
+    subject: "cluster-0",
+    claim: "innerscope confidential cash runway is 6000000",
+    scored: { trust: 0.5, rationale: "test", status: "contested" },
+    assertions: [{ agent: "cto", ts: iso(20), row: { id: "e1", text: "innerscope confidential cash runway is 6000000", source: "exec-feed" } }],
+    contradictions: [{ agent: "developer", ts: iso(10), row: { id: "c1", text: "innerscope confidential cash runway is actually 900000", source: "cosmos-memory" } }],
+  };
+  assert.equal(buildProposalText(unsafeGroup), null, "an unsafe row anywhere in assertions or contradictions must refuse the whole render");
+});
+
+test("HOLE 3 FIXED: an unsafe CONTRADICTION row alone (majority side safe) still refuses the render", () => {
+  const unsafeGroup = {
+    subject: "cluster-0",
+    claim: "the ordinary safe claim",
+    scored: { trust: 0.5, rationale: "test", status: "contested" },
+    assertions: [{ agent: "cto", ts: iso(20), row: { id: "e1", text: "the ordinary safe claim", source: "exec-feed" } }],
+    contradictions: [{ agent: "clo", ts: iso(10), row: { id: "c1", text: "the custody hearing continued to next month", source: "cosmos-memory" } }],
+  };
+  assert.equal(buildProposalText(unsafeGroup), null, "a privileged/MNPI row on the MINORITY side must also block the render, not just the majority side");
+});
+
+test("HOLE 3 FIXED: proposalsFor drops a group whose buildProposalText refuses to render, instead of a null/broken proposal entry", () => {
+  const safeGroup = {
+    subject: "cluster-0",
+    claim: CLAIM_A,
+    scored: { trust: 0.5, rationale: "test", status: "contested" },
+    assertions: [{ agent: "cfo", ts: iso(20), row: { id: "e1", text: CLAIM_A, source: "exec-feed" } }],
+    contradictions: [{ agent: "cto", ts: iso(10), row: { id: "c1", text: CLAIM_B, source: "cosmos-memory" } }],
+  };
+  const unsafeGroup = {
+    subject: "cluster-1",
+    claim: "innerscope confidential cash runway is 6000000",
+    scored: { trust: 0.5, rationale: "test", status: "contested" },
+    assertions: [{ agent: "cto", ts: iso(20), row: { id: "e2", text: "innerscope confidential cash runway is 6000000", source: "exec-feed" } }],
+    contradictions: [{ agent: "developer", ts: iso(10), row: { id: "c2", text: "innerscope confidential cash runway is actually 900000", source: "cosmos-memory" } }],
+  };
+  const proposals = proposalsFor([safeGroup, unsafeGroup], { owner: "cto" });
+  assert.equal(proposals.length, 1, "only the safe group produces a proposal; the unsafe group is dropped, not rendered as null/blank");
+  assert.match(proposals[0].text, /cfo/);
 });
 
 // ---------------------------- PRECISION GATE: templated-overlap false positives ----------------------------
