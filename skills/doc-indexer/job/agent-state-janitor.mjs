@@ -270,10 +270,25 @@ async function reportContainer(rule) {
 // eligible row is appended as one JSON line to
 //   azure://otchealthcommons/company-journal/_ARCHIVE/episodes/<agent>/<YYYY-MM>.jsonl
 // (grouped by the month the episode actually happened, see archiveBlobPathFor), and that write is
-// confirmed durable (the blob PUT resolves 2xx) BEFORE the row is deleted from Cosmos. If the
-// archive write fails for a row, that row is logged and skipped -- never deleted. Only after a
-// successful Cosmos delete does a best-effort cleanup remove the row's twin from the memory-exec
-// Azure AI Search index (same account/container/docId scheme skills/kb-memory/semantic.mjs's
+// confirmed durable (the append resolves 2xx) BEFORE the row is deleted from Cosmos. If the
+// archive write fails for a row, that row is logged and skipped -- never deleted.
+//
+// CONCURRENCY-SAFE ARCHIVE (Azure APPEND BLOB, no read-modify-write): the archive target is an
+// APPEND blob, not a block blob. archiveEpisodeRow does create-if-missing (PUT with
+// x-ms-blob-type: AppendBlob + If-None-Match:*, so two runs racing to create the same month/agent
+// blob resolve to exactly one creator and the losers treat 409/412 as "already there") then Append
+// Block (PUT ...?comp=appendblock). Append Block is atomic server-side, so two overlapping ARMED
+// runs (e.g. a manual azure_job_execute while the 6-hourly cron run is in flight) can NEVER
+// lose-update an already-archived line -- there is no read-then-overwrite window at all. This is the
+// exact durability the archive-before-delete design promises: an episode we are about to delete from
+// Cosmos must first be durably in the archive, and a concurrent writer must not be able to clobber
+// it. The append path uses the SAME account-SAS auth as every other blob call in this file (the SAS
+// just carries the `a`/Add permission in addition to r/w/l/c). NOTE these archive paths are brand-new
+// (this feature has never run armed), so no legacy block blob exists at them to conflict with the
+// append-blob type on first write.
+//
+// Only after a successful Cosmos delete does a best-effort cleanup remove the row's twin from the
+// memory-exec Azure AI Search index (same account/container/docId scheme skills/kb-memory/semantic.mjs's
 // reindex and the gateway's azure/search-write.ts indexMemoryNow() write into:
 // `${agent}__${id}`, sanitized -- see memoryExecDocId, reimplemented locally rather than imported
 // so this job stays dependency-free like the rest of the file); a failure there is logged but never
@@ -305,6 +320,16 @@ export function episodeDecayCommitMode(argvList, env) {
   const hasCommitFlag = Array.isArray(argvList) && argvList.includes("--commit");
   const envEnabled = String((env && env.EPISODE_DECAY_ENABLED) || "") === "1";
   return hasCommitFlag && envEnabled;
+}
+
+/** The COMPOSED production arming gate, exactly as runEpisodeDecay() uses it: episode-decay mutates
+ *  Cosmos/Blob/Search only when the double-gate (episodeDecayCommitMode) is satisfied AND the
+ *  file-wide JANITOR_DRY_RUN belt is NOT set. So JANITOR_DRY_RUN=1 forces the whole job (every rule,
+ *  including this one) into a safe report-only run even if someone armed --commit + EPISODE_DECAY_ENABLED=1.
+ *  Exported so the full composition is unit-tested, not just its two halves (DRY_RUN is a module-level
+ *  const, so testing the composition needs this seam). Pure. */
+export function resolveEpisodeDecayArmed(argvList, env) {
+  return episodeDecayCommitMode(argvList, env) && String((env && env.JANITOR_DRY_RUN) || "") !== "1";
 }
 
 /** Archive blob path for one episode row: grouped by the MONTH THE EPISODE ACTUALLY HAPPENED
@@ -409,10 +434,12 @@ export async function decayEpisodesForRule({
   };
 }
 
-// ---- real IO for decayEpisodesForRule (Azure Blob archive + memory-exec index cleanup). Mirrors
-// the getText/putText + account-SAS pattern in skills/ledger-compaction/job/run-compaction.mjs and
-// skills/cfo-store/store.mjs exactly, pointed at the same otchealthcommons/company-journal account +
-// container nightly.sh already writes into (assumed to already exist -- no create-container call). ----
+// ---- real IO for decayEpisodesForRule (Azure Blob archive + memory-exec index cleanup). Reuses the
+// same account-SAS + fetch pattern as skills/ledger-compaction/job/run-compaction.mjs and
+// skills/cfo-store/store.mjs, but uses an APPEND blob (create-if-missing + Append Block) instead of a
+// block-blob read-modify-write, so overlapping runs cannot lose an archived line. Pointed at the same
+// otchealthcommons/company-journal account + container nightly.sh already writes into (assumed to
+// already exist -- no create-container call). ----
 let _archiveCfg;
 async function archiveCfg() {
   if (_archiveCfg !== undefined) return _archiveCfg;
@@ -423,7 +450,10 @@ async function archiveCfg() {
   return _archiveCfg;
 }
 function archiveSas(acct, key) {
-  const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co";
+  // sp carries `a` (Add) IN ADDITION to r/w/l/c: Append Block requires the Add permission on an
+  // account SAS. Everything else matches the other blob calls in this file. Account SAS supports
+  // append blobs directly -- no different auth path than the account-SAS we already use.
+  const sv = "2021-12-02", sp = "racwl", ss = "b", srt = "co";
   const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
   const se = new Date(Date.now() + 3600 * 1000).toISOString().slice(0, 19) + "Z";
   const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
@@ -431,34 +461,61 @@ function archiveSas(acct, key) {
   return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
 const archiveEncPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-async function archiveGetText(acct, container, sas, name) {
-  const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${archiveEncPath(name)}?${sas}`);
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`agent-state-janitor: archive blob get ${name} -> HTTP ${r.status}`);
-  return await r.text();
-}
-async function archivePutText(acct, container, sas, name, body) {
+
+/** Create the append blob if it does not exist. If-None-Match:* makes this create-ONLY, so it never
+ *  resets an existing archive blob and two runs racing to create the same blob resolve to exactly
+ *  one creator (201); the losers get 409/412 (BlobAlreadyExists / precondition failed) which we
+ *  treat as "already present, fine". Any OTHER non-2xx is a real failure and throws. */
+async function archiveEnsureAppendBlob(acct, container, sas, name) {
   const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${archiveEncPath(name)}?${sas}`, {
     method: "PUT",
-    headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/x-ndjson; charset=utf-8" },
+    headers: { "x-ms-blob-type": "AppendBlob", "Content-Type": "application/x-ndjson; charset=utf-8", "If-None-Match": "*" },
+  });
+  if (r.ok) return;
+  if (r.status === 409 || r.status === 412) return; // already exists (another writer created it) -> fine
+  throw new Error(`agent-state-janitor: archive append-blob create ${name} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+}
+/** Atomically append one block (the ndjson line) to the append blob. Concurrent Append Block calls
+ *  to the same blob never clobber each other -- there is no read-modify-write. */
+async function archiveAppendBlock(acct, container, sas, name, body) {
+  const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${archiveEncPath(name)}?comp=appendblock&${sas}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/octet-stream" },
     body,
   });
-  if (!r.ok) throw new Error(`agent-state-janitor: archive blob put ${name} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) throw new Error(`agent-state-janitor: archive appendblock ${name} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
 }
 
-/** Append one episode row as a JSON line to its month/agent archive blob. Real IO used by
- *  runEpisodeDecay(); tests inject a mock in place of this (see tests/agent-state-janitor.test.mjs).
- *  Read-then-write per call: simple and obviously correct, matching this file's dependency-free
- *  style over cleverer batching -- a fine tradeoff for a rule that ships disarmed and, once armed,
- *  runs on a 6-hourly cadence against a bounded (maxPerRun) batch. */
+/**
+ * Pure orchestration of one episode's archive append over an INJECTED append-only blob interface
+ * ({ ensureAppendBlob, appendBlock }). No fetch, no SAS, no clock beyond the injectable nowIso, so
+ * the archive-append safety property (create-if-missing THEN atomic append, never read-modify-write)
+ * is directly unit-testable against an in-memory append store. runEpisodeDecay() wires the real
+ * fetch-based ops below; tests inject a store that models Azure append semantics and assert NO line
+ * is lost across concurrent appends to the same blob. Exported for those tests.
+ */
+export async function appendEpisodeToArchive({ ensureAppendBlob, appendBlock }, path, doc, nowIso) {
+  await ensureAppendBlob(path);
+  const line = JSON.stringify({ ...doc, archived_at: nowIso || new Date().toISOString() }) + "\n";
+  await appendBlock(path, line);
+}
+
+/** Append one episode row as a JSON line to its month/agent archive APPEND blob. Real IO used by
+ *  runEpisodeDecay(); tests exercise the pure appendEpisodeToArchive() above with a mock store
+ *  instead. Concurrency-safe by construction (create-if-missing + atomic Append Block, never a
+ *  read-modify-write), so overlapping armed runs cannot lose an archived line. */
 async function archiveEpisodeRow(doc) {
   const { acct, key, container } = await archiveCfg();
   const sas = archiveSas(acct, key);
   const path = archiveBlobPathFor(doc);
-  const existing = await archiveGetText(acct, container, sas, path);
-  const line = JSON.stringify({ ...doc, archived_at: new Date().toISOString() });
-  const next = (existing ? existing.replace(/\n?$/, "\n") : "") + line + "\n";
-  await archivePutText(acct, container, sas, path, next);
+  await appendEpisodeToArchive(
+    {
+      ensureAppendBlob: (p) => archiveEnsureAppendBlob(acct, container, sas, p),
+      appendBlock: (p, body) => archiveAppendBlock(acct, container, sas, p, body),
+    },
+    path,
+    doc,
+  );
 }
 
 /** Best-effort removal of one episode's twin row from the memory-exec Azure AI Search index. Real
@@ -469,7 +526,10 @@ async function deleteFromMemoryExecIndex(doc) {
   const aisKey = await sm("azure-search-admin-key");
   if (!aisEp || !aisKey) throw new Error("agent-state-janitor: memory-exec index creds unavailable (azure-search-endpoint/azure-search-admin-key)");
   const id = memoryExecDocId(doc.agent, doc.id);
-  const r = await fetch(`${aisEp}/indexes/memory-exec/docs/index?api-version=2023-11-01`, {
+  // api-version 2024-07-01 matches the gateway's azure/search-write.ts (indexMemoryNow writes the
+  // twin row) so read+delete of the same doc use one API version. Document delete is stable across
+  // both, so this is a consistency alignment, not a behavior change.
+  const r = await fetch(`${aisEp}/indexes/memory-exec/docs/index?api-version=2024-07-01`, {
     method: "POST",
     headers: { "api-key": aisKey, "Content-Type": "application/json" },
     body: JSON.stringify({ value: [{ "@search.action": "delete", id }] }),
@@ -489,7 +549,7 @@ async function runEpisodeDecay() {
     { name: "@kind", value: "episode" },
     { name: "@cutoff", value: cutoffTs },
   ]);
-  const commit = episodeDecayCommitMode(argv, process.env) && !DRY_RUN;
+  const commit = resolveEpisodeDecayArmed(argv, process.env);
   console.log(`[janitor] episode-decay: mode=${commit ? "COMMIT" : "REPORT-ONLY"} (--commit=${argv.includes("--commit")} EPISODE_DECAY_ENABLED=${process.env.EPISODE_DECAY_ENABLED === "1"} JANITOR_DRY_RUN=${DRY_RUN}) cutoffDays=${EPISODE_DECAY_DAYS} candidates=${rows.length}`);
   return decayEpisodesForRule({
     rows,

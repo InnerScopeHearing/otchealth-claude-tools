@@ -13,10 +13,16 @@ import {
   isEpisodeEligibleForDecay,
   selectEpisodesForDecay,
   episodeDecayCommitMode,
+  resolveEpisodeDecayArmed,
   archiveBlobPathFor,
   memoryExecDocId,
+  appendEpisodeToArchive,
   decayEpisodesForRule,
 } from "../skills/doc-indexer/job/agent-state-janitor.mjs";
+// Canonical docId source of truth (kb-memory semantic.mjs). Safe to import: semantic.mjs's isMain
+// guard means importing it defines exports without running its CLI (the same import the existing
+// tests/semantic-docid.test.mjs relies on).
+import { docId } from "../skills/kb-memory/semantic.mjs";
 
 const NOW_MS = Date.parse("2026-07-15T12:00:00Z");
 const NOW_TS = Math.floor(NOW_MS / 1000);
@@ -98,6 +104,25 @@ test("episodeDecayCommitMode ignores unrelated argv/env noise", () => {
   assert.equal(episodeDecayCommitMode([], undefined), false, "a missing env object must not throw");
 });
 
+// The COMPOSED production gate as actually used in runEpisodeDecay: episodeDecayCommitMode && !DRY_RUN.
+test("resolveEpisodeDecayArmed: --commit + EPISODE_DECAY_ENABLED=1 + no JANITOR_DRY_RUN -> ARMED", () => {
+  assert.equal(resolveEpisodeDecayArmed(["--commit"], { EPISODE_DECAY_ENABLED: "1" }), true);
+});
+
+test("resolveEpisodeDecayArmed: the JANITOR_DRY_RUN belt forces report-only even when both arming flags are set", () => {
+  assert.equal(
+    resolveEpisodeDecayArmed(["--commit"], { EPISODE_DECAY_ENABLED: "1", JANITOR_DRY_RUN: "1" }),
+    false,
+    "JANITOR_DRY_RUN=1 must win and force report-only"
+  );
+});
+
+test("resolveEpisodeDecayArmed: either arming flag missing -> report-only, regardless of JANITOR_DRY_RUN", () => {
+  assert.equal(resolveEpisodeDecayArmed([], { EPISODE_DECAY_ENABLED: "1" }), false, "no --commit -> report-only");
+  assert.equal(resolveEpisodeDecayArmed(["--commit"], {}), false, "no EPISODE_DECAY_ENABLED -> report-only");
+  assert.equal(resolveEpisodeDecayArmed([], {}), false, "neither -> report-only (the shipped default)");
+});
+
 // ============================ archive path shape ============================
 
 test("archiveBlobPathFor groups by the episode's created_at month and agent, not the archive-time month", () => {
@@ -121,9 +146,94 @@ test("archiveBlobPathFor sanitizes an unusual agent id and falls back to 'unknow
 
 // ============================ memory-exec index key derivation ============================
 
-test("memoryExecDocId matches skills/kb-memory/semantic.mjs's docId contract (agent__id, Azure-key-safe)", () => {
-  assert.equal(memoryExecDocId("cto", "20260715-001"), "cto__20260715-001");
-  assert.match(memoryExecDocId("clo-personal", "matter/2026:note 7"), /^[A-Za-z0-9_\-=]+$/);
+test("memoryExecDocId is byte-identical to kb-memory semantic.mjs's canonical docId() across representative inputs", () => {
+  // Derive the expectation from the CANONICAL source (semantic.mjs docId), not hardcoded strings, so
+  // any future drift in either implementation is caught here. Includes inputs that hit the sanitize
+  // regex (slash, colon, space, plus, dot) -- the delete would target the wrong memory-exec row if
+  // the two derivations ever diverged.
+  const cases = [
+    ["cto", "20260715-001"],
+    ["cfo", "20260621-042"],
+    ["clo-personal", "matter/2026:note 7"],
+    ["developer", "id.with.dots+plus"],
+    ["gateway", "m_abc=DEF-123"],
+    ["cto", "correlation:abc/def ghi"],
+  ];
+  for (const [agent, id] of cases) {
+    assert.equal(memoryExecDocId(agent, id), docId(agent, id), `docId parity for (${agent}, ${id})`);
+    assert.match(memoryExecDocId(agent, id), /^[A-Za-z0-9_\-=]+$/, "must be a valid Azure document key");
+  }
+});
+
+// ============================ archive append: concurrency-safe, no lost line ============================
+
+// In-memory store that models Azure APPEND-BLOB semantics: create-if-missing + ATOMIC append. The
+// `await` inside appendBlock happens BEFORE the synchronous get+set of the map entry, so the
+// read-and-write is one indivisible step (single-threaded JS) -- i.e. Append Block never clobbers a
+// concurrent append. Crucially this store exposes ONLY ensureAppendBlob + appendBlock (no full-blob
+// put), so appendEpisodeToArchive is structurally forced onto the append path (no read-modify-write
+// possible). ensureCalls/createCount let the tests assert the create raced correctly.
+function makeAppendStore() {
+  const blobs = new Map(); // name -> accumulated content string
+  let createCount = 0;
+  return {
+    blobs,
+    get createCount() { return createCount; },
+    ensureAppendBlob: async (name) => {
+      // simulate the create round-trip latency so two ensures can interleave
+      await new Promise((r) => setTimeout(r, Math.random() * 4));
+      if (!blobs.has(name)) { blobs.set(name, ""); createCount++; }
+    },
+    appendBlock: async (name, data) => {
+      // latency BEFORE the mutation forces interleave; the get+set below is synchronous => atomic
+      await new Promise((r) => setTimeout(r, Math.random() * 6));
+      blobs.set(name, (blobs.get(name) || "") + data);
+    },
+  };
+}
+
+test("two concurrent archive appends to the SAME agent/month blob lose NO line (append-blob atomicity)", async () => {
+  const store = makeAppendStore();
+  const docA = makeRow({ id: "epA", kind: "episode", ageDays: CUTOFF_DAYS + 5, agent: "cto" });
+  const docB = makeRow({ id: "epB", kind: "episode", ageDays: CUTOFF_DAYS + 5, agent: "cto" });
+  const path = archiveBlobPathFor(docA);
+  assert.equal(path, archiveBlobPathFor(docB), "both docs must target the same month/agent blob for this to be a real race");
+
+  // Fire both appends concurrently (this is the manual-run-during-cron-run scenario).
+  await Promise.all([
+    appendEpisodeToArchive(store, path, docA),
+    appendEpisodeToArchive(store, path, docB),
+  ]);
+
+  const lines = (store.blobs.get(path) || "").split("\n").filter(Boolean);
+  assert.equal(lines.length, 2, "BOTH archived lines must be present -- neither concurrent append clobbered the other");
+  const ids = lines.map((l) => JSON.parse(l).id).sort();
+  assert.deepEqual(ids, ["epA", "epB"]);
+});
+
+test("many concurrent archive appends to one blob all survive (no last-writer-wins loss)", async () => {
+  const store = makeAppendStore();
+  const path = "_ARCHIVE/episodes/cto/2026-05.jsonl";
+  const docs = Array.from({ length: 20 }, (_, i) => makeRow({ id: `ep${i}`, kind: "episode", ageDays: CUTOFF_DAYS + 5, agent: "cto" }));
+  // Force every doc onto the SAME blob path regardless of its created_at month.
+  await Promise.all(docs.map((d) => appendEpisodeToArchive(store, path, d)));
+
+  const lines = (store.blobs.get(path) || "").split("\n").filter(Boolean);
+  assert.equal(lines.length, 20, "all 20 concurrent appends must be present -- a read-modify-write would have lost some");
+  assert.equal(store.createCount, 1, "the create raced to exactly one winner; the rest were no-ops");
+  const ids = new Set(lines.map((l) => JSON.parse(l).id));
+  assert.equal(ids.size, 20, "every distinct episode id survived");
+});
+
+test("appendEpisodeToArchive writes each row as exactly one newline-terminated JSON line with an archived_at stamp", async () => {
+  const store = makeAppendStore();
+  const path = "_ARCHIVE/episodes/cfo/2026-05.jsonl";
+  await appendEpisodeToArchive(store, path, makeRow({ id: "ep1", kind: "episode", ageDays: CUTOFF_DAYS + 5, agent: "cfo" }), "2026-07-15T00:00:00.000Z");
+  const content = store.blobs.get(path);
+  assert.ok(content.endsWith("\n"), "line must be newline-terminated so appends never merge into one line");
+  const parsed = JSON.parse(content.trim());
+  assert.equal(parsed.id, "ep1");
+  assert.equal(parsed.archived_at, "2026-07-15T00:00:00.000Z", "the injected archive timestamp is recorded");
 });
 
 // ============================ orchestration: archive-before-delete, dry-run by default ============================
