@@ -23,7 +23,15 @@ echo "[nightly] regenerating the credential registry from Key Vault (names+metad
 node "$ROOT/skills/vault-sync/vault-registry.mjs"
 echo "[nightly] indexing into the commons KB"
 node "$ROOT/skills/doc-indexer/indexer.mjs" index --no-ocr --profile commons --azure
-node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --azure
+# push-search writes FLAT docs to commons-company-journal. After the Phase-3 S1 cutover that room is
+# CHUNKED + fed by a native S1 pull-indexer (it reads the _TEXT/ sidecars the index step just wrote),
+# so a flat push would be rejected. SKIP_PUSH_SEARCH=1 (set on the daily-digest job at cutover) drops
+# ONLY the push; the digest still lands in the blob + gets pulled. Default unset = push runs (no-op).
+if [ "$SKIP_PUSH_SEARCH" = "1" ]; then
+  echo "[nightly] SKIP_PUSH_SEARCH=1 -> skipping commons push-search (S1 pull-indexer-fed)"
+else
+  node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --azure
+fi
 echo "[nightly] refreshing the company-brain memory index (memory-exec)"
 # Keep the Billion Dollar Brain's agent-memory index fresh: embed any new shared exec-feed
 # entries (lessons, decisions, focus-group/shark catalog) into memory-exec. Resumable + cheap
