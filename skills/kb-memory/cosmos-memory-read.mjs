@@ -9,10 +9,12 @@
 // Code's kb-memory skill (mem.mjs) writes to Blob. Phase-4 B1 (nightly-reflection.mjs) and B2
 // (contradiction-scan.mjs) read BOTH stores to keep the two in sync / catch where they disagree.
 //
-// Mirrors the auth + cross-partition-query pattern already proven in
+// Mirrors the cross-partition-query pattern already proven in
 // skills/doc-indexer/job/agent-state-janitor.mjs and skills/decision-clock/cosmos-client.mjs exactly
-// (master-key HMAC auth, per-pkrange fan-out query) -- do NOT "tidy" the authToken() casing, it is
-// load-bearing (matches the gateway's own cosmos.ts auth scheme).
+// (per-pkrange fan-out query). Authorization-header construction (master-key HMAC by default, or
+// AAD/managed-identity when COSMOS_AUTH_MODE=aad) is centralized in
+// skills/kb-memory/cosmos-auth.mjs -- shared by all 4 job Cosmos clients, mirrors the gateway's own
+// cosmos.ts auth scheme -- do NOT "tidy" its casing, it is load-bearing.
 //
 // READ-ONLY BY CONSTRUCTION: this module exports exactly one query function and nothing that can
 // create, replace, or delete a document. The container allowlist has exactly one entry ("memory").
@@ -20,22 +22,15 @@
 // memory-of-record directly -- every durable write either of them makes goes through mem.mjs (a NEW
 // row on the Blob ledger) or decision.mjs (a NEW decision-clock proposal), never back into this
 // container. This is the mechanical enforcement of "never silently mutate memory."
-import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { kvSecret } from "./azure-secret.mjs";
+import { cosmosAuthHeader } from "./cosmos-auth.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
 const COSMOS_API_VERSION = "2018-12-31";
 const DB_NAME_DEFAULT = "agent-state";
 const CONTAINER = "memory"; // the ONLY container this module will ever touch
-
-// ---- Cosmos REST auth (mirrors agent-state-janitor.mjs / decision-clock/cosmos-client.mjs exactly) ----
-function authToken(verb, resType, resourceLink, date, masterKey) {
-  const stringToSign = `${verb.toLowerCase()}\n${resType.toLowerCase()}\n${resourceLink}\n${date.toLowerCase()}\n\n`;
-  const sig = crypto.createHmac("sha256", Buffer.from(masterKey, "base64")).update(stringToSign, "utf8").digest("base64");
-  return encodeURIComponent(`type=master&ver=1.0&sig=${sig}`);
-}
 
 // GCP Secret Manager fallback (claude-driver SA), same pattern as the two files above. kvSecret()
 // (Azure Key Vault) is tried FIRST; this is a harmless legacy path kept for parity with every other
@@ -98,7 +93,7 @@ async function request(verb, resType, resourceLink, urlPath, opts = {}) {
   if (!c) throw new Error("cosmos-memory-read: Cosmos agent-state not configured (cosmos-agent-state-endpoint/key unavailable via Key Vault or GCP Secret Manager).");
   const date = new Date().toUTCString();
   const headers = {
-    Authorization: authToken(verb, resType, resourceLink, date, c.key),
+    Authorization: await cosmosAuthHeader({ verb, resType, resourceLink, date, masterKey: c.key }),
     "x-ms-date": date,
     "x-ms-version": COSMOS_API_VERSION,
     Accept: "application/json",

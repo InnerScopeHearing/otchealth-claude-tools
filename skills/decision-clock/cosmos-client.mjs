@@ -10,7 +10,9 @@
 //                  resourceLink + "\n" + date.toLowerCase() + "\n" + "" + "\n"
 //   sig = base64( HMAC-SHA256( base64decode(masterKey), stringToSign ) )
 //   Authorization = urlencode("type=master&ver=1.0&sig=" + sig)
-// resourceLink keeps its original case (db/container/doc ids are case-sensitive).
+// resourceLink keeps its original case (db/container/doc ids are case-sensitive). Header
+// construction itself (this key-mode HMAC, or AAD/managed-identity when COSMOS_AUTH_MODE=aad) is
+// centralized in ../kb-memory/cosmos-auth.mjs, shared by all 4 job Cosmos clients.
 //
 // Inert without creds: isConfigured() is false if Secret Manager lacks cosmos-agent-state-*, and every
 // caller in this skill degrades to a clear "Cosmos not reachable, dry-run" note instead of throwing.
@@ -18,6 +20,7 @@ import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { cosmosAuthHeader } from "../kb-memory/cosmos-auth.mjs";
 
 const SM = "otchealth-shared-prod";
 const COSMOS_API_VERSION = "2018-12-31";
@@ -63,12 +66,11 @@ export async function isConfigured() {
   return (await cfg()) !== null;
 }
 
-/** The Cosmos master-key Authorization header value (URL-encoded token). Pure + testable. */
-export function authToken(verb, resType, resourceLink, date, masterKey) {
-  const stringToSign = `${verb.toLowerCase()}\n${resType.toLowerCase()}\n${resourceLink}\n${date.toLowerCase()}\n\n`;
-  const sig = crypto.createHmac("sha256", Buffer.from(masterKey, "base64")).update(stringToSign, "utf8").digest("base64");
-  return encodeURIComponent(`type=master&ver=1.0&sig=${sig}`);
-}
+/** The Cosmos master-key Authorization header value (URL-encoded token). Pure + testable. Kept as a
+ *  named export for backward compatibility (this module has always documented it as part of its
+ *  surface); delegates to the ONE real implementation in cosmos-auth.mjs so there is exactly one
+ *  place the HMAC formula lives. */
+export { keyAuthToken as authToken } from "../kb-memory/cosmos-auth.mjs";
 
 // Path-injection guard, same allowlist discipline as the gateway's cosmos.ts.
 const CONTAINERS = new Set(["decisions_pending"]);
@@ -81,7 +83,7 @@ async function request(verb, resType, resourceLink, urlPath, opts = {}) {
   if (!c) throw new Error("Cosmos agent-state not configured (cosmos-agent-state-endpoint/key unavailable).");
   const date = new Date().toUTCString();
   const headers = {
-    Authorization: authToken(verb, resType, resourceLink, date, c.key),
+    Authorization: await cosmosAuthHeader({ verb, resType, resourceLink, date, masterKey: c.key }),
     "x-ms-date": date,
     "x-ms-version": COSMOS_API_VERSION,
     Accept: "application/json",

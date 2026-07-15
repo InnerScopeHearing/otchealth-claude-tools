@@ -8,6 +8,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { cosmosAuthHeader } from "../kb-memory/cosmos-auth.mjs";
 
 export const SM = "otchealth-shared-prod";
 
@@ -161,13 +162,10 @@ export async function armToken() {
 
 // ------------------------------------ Cosmos DB for NoSQL (signals container) ------------------------------------
 // Dependency-free REST data-plane client, same auth scheme as otchealth-mcp-server's
-// src/agentstate/cosmos.ts (master-key HMAC). Kept local (not imported cross-repo) because this
-// repo is a plain-Node skills toolkit with no build step; the auth math is intentionally identical.
-function cosmosAuthToken(verb, resType, resourceLink, date, masterKey) {
-  const stringToSign = `${verb.toLowerCase()}\n${resType.toLowerCase()}\n${resourceLink}\n${date.toLowerCase()}\n\n`;
-  const sig = crypto.createHmac("sha256", Buffer.from(masterKey, "base64")).update(stringToSign, "utf8").digest("base64");
-  return encodeURIComponent(`type=master&ver=1.0&sig=${sig}`);
-}
+// src/agentstate/cosmos.ts (master-key HMAC by default, AAD/managed-identity when
+// COSMOS_AUTH_MODE=aad). Header construction is centralized in ../kb-memory/cosmos-auth.mjs, shared
+// by all 4 job Cosmos clients; kept dependency-free by design (no npm packages), matching the rest
+// of this file.
 
 let _cosmosCfg = null;
 /** Resolve {endpoint, key, db} from Secret Manager. Returns null (feature-detect) if not provisioned. */
@@ -186,7 +184,7 @@ async function cosmosRequest(verb, resType, resourceLink, urlPath, opts = {}) {
   if (!c) throw new Error("Cosmos not configured (cosmos-endpoint/cosmos-key/cosmos-db secrets missing)");
   const date = new Date().toUTCString();
   const headers = {
-    Authorization: cosmosAuthToken(verb, resType, resourceLink, date, c.key),
+    Authorization: await cosmosAuthHeader({ verb, resType, resourceLink, date, masterKey: c.key }),
     "x-ms-date": date, "x-ms-version": "2018-12-31", Accept: "application/json",
   };
   if (opts.pk !== undefined) headers["x-ms-documentdb-partitionkey"] = JSON.stringify([opts.pk]);
