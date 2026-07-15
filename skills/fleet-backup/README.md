@@ -1,0 +1,199 @@
+# fleet-backup
+
+Durable, offline copies of the fleet's two most central stores, decoupled from the live Azure
+resources they back up. This directory is a job-body skill (no SKILL.md by design, matching
+`xero-run`, `ocr-sweep`, `stripe-read`, and `agent-sunrise`): these scripts run as scheduled
+Container Apps Jobs or ad hoc from a session, not as interactively invoked Skill-tool skills.
+
+- `backup.mjs`: exports the Cosmos work ledger and every LIVE Azure AI Search index (per
+  `setup/expected-indexes.json`) to the Azure Blob container `ledger-backup`, with sha256 manifests
+  and fail loud, zero row discipline. Read its own header comment for the full design rationale.
+- `azure-blob-client.mjs`: shared Azure Blob Storage REST client (List Blobs, GET, PUT block blob,
+  container HEAD). Used by `s3-mirror.mjs` and `restore-drill.mjs` below.
+- `s3-client.mjs`: shared, dependency-free AWS S3 client (PutObject, HeadObject, GetObject), signed
+  with a hand-rolled AWS Signature Version 4 implementation (node:crypto only, no aws-sdk).
+- `s3-mirror.mjs` and `restore-drill.mjs`: the Phase 6 disaster-recovery mirror, documented below.
+
+## S3 DR mirror (Phase 6)
+
+Replicates everything `backup.mjs` writes to the Azure Blob container `ledger-backup` into AWS S3,
+as an off-Azure cold copy. The goal: a total loss of the Azure subscription or tenant should not also
+mean a total loss of the only durable copy of the Cosmos work ledger and the live AI Search room
+dumps. This mirror consumes `backup.mjs`'s output. It never re-exports from Cosmos or AI Search
+directly, and never duplicates `backup.mjs`'s own export logic.
+
+Run `s3-mirror.mjs` on the same cadence as `backup.mjs`, or less often. It is fully idempotent: a blob
+whose S3 copy already has a matching sha256 (recorded as S3 object metadata `x-amz-meta-sha256`) is
+skipped without re-download or re-upload.
+
+### What gets mirrored, and what does not (ring segregation, hard requirement)
+
+By default, this mirror EXCLUDES every privileged or sensitive room. A blob is classified privileged
+if its name contains any of, case insensitive: `legal-personal`, `legal-company`, `cfo`, `finance-`,
+`-personal`, `medreview`, `phi`. This is deliberately over inclusive: a false positive just delays a
+safe room reaching the off-Azure copy, which is the fail-closed direction; a false negative would leak
+a privileged room into the wrong bucket, which must never happen. As a second, independent signal,
+`s3-mirror.mjs` also cross-checks `setup/expected-indexes.json`, so any index gated behind
+`kb_search_privileged` is force classified privileged even if its name does not match the substring
+list above.
+
+With the current live room registry, this means:
+
+| Room / blob | Classification | Reaches S3 by default? |
+| --- | --- | --- |
+| `tasks-<date>.jsonl` (Cosmos work ledger) | non-privileged | yes |
+| `index-memory-exec-<date>.jsonl` | non-privileged | yes |
+| `index-commons-company-journal-<date>.jsonl` | non-privileged | yes |
+| `index-commerce-commerce-source-docs-<date>.jsonl` | non-privileged | yes |
+| `manifest-<date>.json` (backup.mjs's own manifest; metadata only) | non-privileged | yes |
+| `index-finance-cfo-source-docs-<date>.jsonl` | privileged (MNPI ring) | no, unless double opt-in |
+| `index-legal-company-<date>.jsonl` | privileged (attorney ring) | no, unless double opt-in |
+| `index-legal-personal-<date>.jsonl` | privileged (attorney-personal ring) | no, unless double opt-in |
+
+Every run logs which blobs were mirrored and which were skipped as privileged. Coverage is never
+silently dropped: a room that is expected (per the registry) but produces no blob at all, or a missing
+Cosmos ledger export, fails the run loudly (after the manifest is still persisted, so partial progress
+is never lost).
+
+### Including privileged rooms (double opt-in, separate bucket)
+
+Privileged rooms are mirrored only when BOTH of these are set on the same run:
+
+- CLI flag `--include-privileged`
+- Environment variable `S3_DR_INCLUDE_PRIVILEGED=1`
+
+When both are set, privileged blobs go to a SEPARATE bucket and a SEPARATE AWS credential
+(`aws-dr-privileged-*`), never co-mingled with the non-privileged bucket. `s3-mirror.mjs` refuses to
+run the privileged lane at all if `aws-dr-privileged-s3-bucket` resolves to the same bucket as
+`aws-dr-s3-bucket`.
+
+### The Matt gate: secrets to provision
+
+None of the secrets below exist yet as of this writing. Both scripts are inert safe: with the base
+four secrets absent, `s3-mirror.mjs run` prints a clear message and exits 0, no error, no partial
+state, safe to wire into a cron or Container Apps Job today. It will simply no-op until the credential
+lands.
+
+Store these in Azure Key Vault (`kv-otc-55c84f6bef` by default, override with `AZURE_KEYVAULT_NAME`).
+Prefer `--file` over `--value` so the secret never lands in shell history; write to a temp file, set
+the secret, then shred the temp file, matching the fleet's established credential hygiene pattern.
+
+Required for the base, non-privileged mirror (all four, or the whole run is a no-op). A small helper
+function keeps the value out of shell history and shreds the temp file after each write:
+
+```bash
+VAULT=kv-otc-55c84f6bef
+umask 077
+set_kv() { printf '%s' "$2" > /tmp/s.$$; az keyvault secret set --vault-name "$VAULT" \
+  --name "$1" --file /tmp/s.$$ >/dev/null; shred -u /tmp/s.$$; echo "set $1"; }
+
+set_kv aws-dr-access-key-id       "<AWS access key id, the non-privileged DR IAM user>"
+set_kv aws-dr-secret-access-key   "<matching secret access key>"
+set_kv aws-dr-s3-bucket           "<destination bucket name, no dots, see the bucket-naming note below>"
+set_kv aws-dr-region              "<e.g. us-east-1>"
+```
+
+Optional, only needed to enable the privileged lane (both `--include-privileged` and
+`S3_DR_INCLUDE_PRIVILEGED=1` must also be set):
+
+```bash
+set_kv aws-dr-privileged-access-key-id     "<a DISTINCT AWS access key, not the IAM user above>"
+set_kv aws-dr-privileged-secret-access-key "<matching secret access key>"
+set_kv aws-dr-privileged-s3-bucket         "<a SEPARATE bucket name from aws-dr-s3-bucket>"
+set_kv aws-dr-privileged-region            "<optional, falls back to aws-dr-region if unset>"
+```
+
+### Recommended IAM policy (least privilege)
+
+The mirror never calls `s3:ListBucket`. Every key it touches comes from the Azure side listing, never
+from asking S3 to enumerate itself, so the IAM policy can be this narrow:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FleetDRMirrorNonPrivileged",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Resource": "arn:aws:s3:::REPLACE-WITH-NON-PRIVILEGED-BUCKET/*"
+    }
+  ]
+}
+```
+
+Attach a copy of the same policy, with the Resource ARN pointed at the privileged bucket instead, to
+the separate `aws-dr-privileged-*` IAM user if the privileged lane is ever armed.
+
+A static access key and secret key pair is the simplest credential shape to wire into Key Vault and
+this dependency-free SigV4 client, and is what this v1 build expects. A more secure v2 upgrade path,
+not built here, is federated auth (AWS IAM Roles Anywhere, or GitHub Actions OIDC via
+`AssumeRoleWithWebIdentity`), which avoids long-lived key material entirely at the cost of a different
+STS-based auth flow this client does not implement yet.
+
+**Bucket-naming note:** avoid a literal `.` in either bucket name. A bucket name containing a dot
+breaks virtual-hosted-style HTTPS (TLS SNI and certificate wildcard matching do not cover
+`my.bucket.name.s3.<region>.amazonaws.com`), and this client only implements virtual-hosted-style
+requests, not the legacy path-style fallback.
+
+### Running it
+
+```bash
+# no writes, reports Azure auth reachability, source container reachability, and whether AWS creds
+# (base and privileged) are provisioned, without touching S3 at all
+node skills/fleet-backup/s3-mirror.mjs selftest
+
+# see what WOULD be mirrored without uploading anything (still requires real AWS creds, since it
+# HEADs the destination to report what would be skipped as already-unchanged)
+node skills/fleet-backup/s3-mirror.mjs run --dry-run
+
+# the real mirror run, non-privileged rooms only (the default posture)
+node skills/fleet-backup/s3-mirror.mjs run
+
+# the real mirror run, including privileged rooms to the separate bucket
+S3_DR_INCLUDE_PRIVILEGED=1 node skills/fleet-backup/s3-mirror.mjs run --include-privileged
+```
+
+Required environment (same names `backup.mjs` already uses; deploy this as a sibling job with an
+identical env block):
+
+```text
+BACKUP_STORAGE_ACCOUNT   e.g. stotc55c84f6bef, the same account backup.mjs writes to
+BACKUP_CONTAINER         default "ledger-backup"
+S3_DR_MAX_MB             default 500, a single blob over this size is skipped with a loud warning
+                         instead of risking an unbounded in-memory buffer
+```
+
+### Running the restore drill
+
+Proves the mirror is restorable, not just writable: pulls a blob back from S3, recomputes its sha256,
+and compares it to the sha256 recorded in the most recent `s3-mirror.mjs` manifest (read from Azure
+Blob, the copy `s3-mirror.mjs` is required to write there).
+
+```bash
+# drill EVERY blob recorded in the latest manifest, non-privileged bucket (the full proof)
+node skills/fleet-backup/restore-drill.mjs
+
+# drill just one blob
+node skills/fleet-backup/restore-drill.mjs index-memory-exec-2026-07-15.jsonl
+
+# drill the privileged bucket instead (only meaningful once the privileged lane has actually run)
+node skills/fleet-backup/restore-drill.mjs --privileged
+```
+
+Same inert-safe behavior: exits 0 with a clear message if the relevant `aws-dr-*` secrets are absent.
+If creds are present but no manifest can be found in Azure, or the manifest has nothing recorded for
+the requested bucket, that is a real failure (nothing to verify a restore against) and it exits
+non-zero.
+
+### Deployment note
+
+This is designed to run exactly like `backup.mjs`: as a Container Apps Job with the identical env
+block, on the same schedule cadence or a slower one. Deploying it as a scheduled job (Bicep or ARM
+job spec, granting its managed identity `Storage Blob Data Reader` on `ledger-backup`, mirroring
+`backup.mjs`'s own required grant) is a follow-up step, not built as part of this change. Until then,
+run it ad hoc from a session with `AZURE_SP_*` env set (the same fallback path
+`skills/kb-memory/azure-secret.mjs` uses), noting that an ad-hoc session identity may not itself hold
+the `Storage Blob Data Reader` role on `ledger-backup` even if it holds broad ARM-level access.
+Storage data-plane RBAC is a separate grant from ARM management-plane access in Azure, and the fastest
+path to a truly live test end to end is the same managed identity `backup.mjs` already runs under.
