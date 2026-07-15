@@ -77,7 +77,9 @@ export function blobAuthMode() {
 }
 
 function xmlUnescape(s) {
-  return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  // &amp; MUST be unescaped LAST: unescaping it first would let a literal "&amp;lt;" become "&lt;"
+  // and then "<" (double-unescape). Entity refs first, ampersand last, avoids that.
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
 }
 
 /**
