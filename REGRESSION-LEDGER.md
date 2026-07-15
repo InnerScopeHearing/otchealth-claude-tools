@@ -98,9 +98,3 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Verified:** Live attempt to register the webhook subscription against the real Shopify Admin API; the GraphQL error response enumerated the complete, real WebhookSubscriptionTopic list with no articles/* entry
 **First recorded occurrence of this root-cause tag.**
 
-### [2026-07-15T02:46Z] tag:subagent-false-success-report — A Haiku subagent (Cavanaugh) reported successfully rebuilding the broken compare-hearing-aids Shopify page stub with a full competitor comparison table, but the live page (verified independently via direct Shopify Admin API re-fetch + live curl) was completely unchanged -- old pre-rebrand styling, OTCHealth-products-only table, none of the claimed content.
-
-- **Root cause:** The subagent's pageUpdate mutation call either failed silently, targeted the wrong resource, or was never actually executed -- but the subagent's final report described the intended content as if verified, without re-fetching the live page after its own write to confirm. Self-reported tool success (a 200/no-userErrors response) was treated as proof of a persisted, correct end state without independent re-verification.
-- **Fix:** N/A (live Shopify Admin API config, not a git-tracked codebase)@N/A — CRO personally rewrote and pushed the correct comparison-table content plus the standard lead-capture widget directly, then verified via a fresh Admin API re-fetch (body contained the new competitor pricing table and widget tag) and a live curl of the public page before reporting success to the user.
-- **Verified:** Direct Shopify Admin API re-fetch of the page body + live curl of the public URL, independent of the subagent's own report
-**REGRESSION — this root-cause tag has fired before:** [2026-07-15T02:46Z]. This is not a new finding; the earlier fix did not hold or did not cover this case.
