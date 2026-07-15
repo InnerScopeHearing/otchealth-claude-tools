@@ -42,8 +42,23 @@
 //     this script performs exactly one kind of write: decision.mjs open (a NEW row in
 //     decisions_pending), gated behind --commit, via an INJECTABLE exec function (so tests never shell
 //     out or touch Cosmos).
-//   - clo-personal is excluded defensively (belt-and-suspenders; both source stores already keep it
-//     out: kb-memory's publishShared() never shares clo-personal, and Cosmos memory_write rejects it).
+//   - RING/PRIVILEGE WALL (hard gate, not advisory, not belt-and-suspenders on an upstream guarantee):
+//     the exec-feed / Cosmos sources CAN legally contain privileged/MNPI content (a clo-personal
+//     entry should never even be there, but a cfo/clo/capital/cto row legitimately CAN mention
+//     INND/securities detail in THEIR OWN lane). Without a filter, this file's whole PURPOSE -- compare
+//     rows ACROSS agents -- would read that content, and a "contested" MNPI claim would get its
+//     verbatim text quoted into a decision-clock proposal that any caller-supplied --owner (a free-text
+//     CLI flag, not a real auth boundary) could then read. So dedupe.mjs's ringSafeCross() (the SAME
+//     RING_DENY wall kb-memory's own memory-ledger CLI and company-brain/brain.mjs already enforce,
+//     byte-identical, imported from the one canonical copy) is applied THREE times, independently: once
+//     in normalizeAssertionRows() (the real production load point), again at the top of
+//     findContestedGroups() (so the pure core defends itself even if a future caller, or a test, hands
+//     it rows some other way), and a third time inside buildProposalText() itself, right before it
+//     formats row.text into the proposal string (so the RENDER step never blindly trusts that the first
+//     two gates already ran; an unsafe row makes buildProposalText/proposalsFor skip that group instead
+//     of rendering it). A privileged/MNPI-flagged row can therefore never become an input to, or an
+//     output of, the cross-agent scan. See dedupe.test.mjs + contradiction-scan.test.mjs for the
+//     enforcement tests.
 //   - Only ACTIVE (non-superseded) rows are considered per source, so a retracted belief cannot be
 //     flagged as still "contradicting" someone else's current claim.
 //
@@ -52,7 +67,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { tokenize, jaccard, possibleContradiction } from "./dedupe.mjs";
+import { tokenize, jaccard, possibleContradiction, ringSafeCross } from "./dedupe.mjs";
 import { readExecFeed } from "./semantic.mjs";
 import * as cosmosMemory from "./cosmos-memory-read.mjs";
 import { groupAssertions, scoreClaim } from "../semantic-trust/trust.mjs";
@@ -84,7 +99,11 @@ function dropSuperseded(rows) {
  * writer, not the ledger it was filed on), falling back to `_agent` (the ledger owner) for legacy rows.
  * Cosmos memory rows carry {id, agent, kind, text, tags, ts?, _ts, supersedes}. Only fact/decision/
  * correction/pitfall rows are kept from EITHER source (status/entity/alias/episode are not assertable
- * claims); clo-personal is dropped defensively; rows missing an agent or text are dropped. Pure.
+ * claims); rows missing an agent or text are dropped. This is also the RING/PRIVILEGE WALL load point:
+ * ringSafeCross() drops any row from a privileged agent lane (clo-personal) AND any row whose own
+ * text/tags matches the fleet's shared MNPI/PHI content wall, regardless of which agent asserted it --
+ * see the file-header "Ring/safety notes" for why a content check is required, not just an agent check.
+ * Pure.
  */
 export function normalizeAssertionRows(execFeedRows, cosmosRows) {
   const execActive = dropSuperseded(execFeedRows || []);
@@ -111,7 +130,7 @@ export function normalizeAssertionRows(execFeedRows, cosmosRows) {
       ts: r.ts || (r._ts ? new Date(r._ts * 1000).toISOString() : null),
       source: "cosmos-memory",
     }));
-  return [...fromExec, ...fromCosmos].filter((r) => r.agent && r.agent !== "clo-personal" && r.text);
+  return [...fromExec, ...fromCosmos].filter((r) => r.agent && r.text && ringSafeCross(r));
 }
 
 /** Recency filter for the exec-feed side (readExecFeed() itself returns the WHOLE ledger, unbounded;
@@ -201,10 +220,17 @@ export function hasGenuineValueConflict(majorityText, contradictions, { subjectT
  * partition, keep groups whose scored status is "contested" AND that clear the value-conflict gate
  * (so templated same-shape/different-identifier facts never become a proposal). Pure (scoreClaim's
  * nowMs defaults to Date.now() unless passed, matching semantic-trust's own contract; tests pass it).
+ *
+ * RING/PRIVILEGE WALL, SECOND independent gate: `rows` is re-filtered through ringSafeCross() at the
+ * very top, before partitioning. normalizeAssertionRows() already applies the identical filter at the
+ * real production load point (see its docstring), but this pure core enforces the SAME wall on its own
+ * terms too, so a privileged/MNPI-flagged row can never become an input here even if a future caller
+ * (or a test) hands findContestedGroups a row list assembled some other way. Never widens; only drops.
  * @returns {Array<{subject, claim, assertions, contradictions, scored}>}
  */
 export function findContestedGroups(rows, opts = {}) {
-  const partitions = partitionBySubject(rows, { threshold: opts.partitionThreshold, maxPartitionSize: opts.maxPartitionSize });
+  const safeRows = (rows || []).filter(ringSafeCross);
+  const partitions = partitionBySubject(safeRows, { threshold: opts.partitionThreshold, maxPartitionSize: opts.maxPartitionSize });
   const nowMs = opts.nowMs ?? Date.now();
   const conflictSubjectThreshold = opts.conflictSubjectThreshold ?? DEFAULT_CONFLICT_SUBJECT_THRESHOLD;
   const out = [];
@@ -231,8 +257,22 @@ export function findContestedGroups(rows, opts = {}) {
 }
 
 /** Render a decision-clock-ready { text, evidence, majorityAgents, minorityAgents } for one contested
- *  group. Pure. No em dashes or en dashes (published-copy rule). */
+ *  group, or `null` if the group must not be rendered (see the ring/privilege re-check below). Pure.
+ *  No em dashes or en dashes (published-copy rule).
+ *
+ * RING/PRIVILEGE WALL, THIRD independent gate (belt-and-suspenders on the RENDER path itself): both
+ * normalizeAssertionRows() and findContestedGroups() already filter every row through ringSafeCross()
+ * before a group ever reaches this function (see their own docstrings), so in the real pipeline every
+ * row here is already known-safe. This function re-checks anyway, on group.assertions/contradictions'
+ * own row.text/row.tags, so it never trusts that upstream filtering happened -- a future caller that
+ * hands buildProposalText a hand-built group (bypassing both upstream gates, exactly like a test or a
+ * refactor might) can still never have a privileged/MNPI/PHI row rendered into proposal text. Not
+ * currently reachable with an unsafe row in production (both upstream gates already close that path),
+ * but the render step that actually formats row.text into a human/agent-readable string should never be
+ * the one place in the file that blindly trusts its input. Skip (return null), never partially render. */
 export function buildProposalText(group) {
+  const rows = [...(group.assertions || []), ...(group.contradictions || [])].map((a) => a && a.row).filter(Boolean);
+  if (rows.some((r) => !ringSafeCross(r))) return null;
   const clip = (s, n = 140) => String(s || "").replace(/\s+/g, " ").trim().slice(0, n);
   const majorityAgents = [...new Set(group.assertions.map((a) => a.agent))];
   const minorityAgents = [...new Set(group.contradictions.map((c) => c.agent))];
@@ -245,20 +285,25 @@ export function buildProposalText(group) {
   return { text, evidence, majorityAgents, minorityAgents };
 }
 
-/** Map contested groups -> one decision-clock proposal descriptor each. Pure. */
+/** Map contested groups -> one decision-clock proposal descriptor each. Pure. A group that
+ *  buildProposalText refuses to render (ring/privilege re-check failed) produces NO proposal at all,
+ *  rather than a partial or empty one, so an unsafe group can never reach openProposals(). */
 export function proposalsFor(groups, { owner = "cto" } = {}) {
-  return (groups || []).map((g) => {
-    const built = buildProposalText(g);
-    return {
-      category: "memory-contradiction",
-      owner: String(owner || "cto").toLowerCase(),
-      text: built.text,
-      evidence: built.evidence,
-      majorityAgents: built.majorityAgents,
-      minorityAgents: built.minorityAgents,
-      claim: g.claim,
-    };
-  });
+  return (groups || [])
+    .map((g) => {
+      const built = buildProposalText(g);
+      if (!built) return null;
+      return {
+        category: "memory-contradiction",
+        owner: String(owner || "cto").toLowerCase(),
+        text: built.text,
+        evidence: built.evidence,
+        majorityAgents: built.majorityAgents,
+        minorityAgents: built.minorityAgents,
+        claim: g.claim,
+      };
+    })
+    .filter(Boolean);
 }
 
 // ================================== Impure: I/O ==================================

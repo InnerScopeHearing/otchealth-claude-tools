@@ -18,14 +18,31 @@
 // setup/model-routing.mjs and otchealth-cto/CLAUDE.md) and is never used, including as a fallback.
 //
 // Ring/safety notes:
-//   - The Cosmos `memory` container already rejects clo-personal writes at the source (memory_write's
-//     schema description), so anything readable here is already non-privileged by construction; this
-//     file ALSO skips agent === "clo-personal" defensively (belt-and-suspenders, matches kb-memory's
-//     own NO_SHARE set).
+//   - CORRECTED (was stale): this file used to claim "the Cosmos `memory` container already rejects
+//     clo-personal writes at the source", implying clusterEpisodes' PRIVILEGED_AGENTS skip below was
+//     defense-in-depth on top of an upstream guarantee. That is FALSE as of the fleet-wide ring
+//     suspension (2026-07-07): the gateway's FORBIDDEN_AGENTS set is empty, so memory_write does NOT
+//     reject a clo-personal write at the source today. The clusterEpisodes skip below is therefore the
+//     ONLY belt on the read side of this file, a single point of failure, not one layer of several. It
+//     still skips PRIVILEGED_AGENTS (today just clo-personal, kb-memory's own NO_SHARE set) via the SAME
+//     shared set dedupe.mjs exports (not a local hardcoded string, so a future privileged lane is a
+//     one-line addition everywhere that imports it), and enforceRingSafeShare() below is a SECOND,
+//     independent belt on the --share output path specifically. Do not re-add an "upstream already
+//     handles this" assumption anywhere in this file without first verifying FORBIDDEN_AGENTS is
+//     actually populated again.
 //   - Every distilled item is written back onto the SAME agent's OWN ledger (never cross-lane), so no
-//     new ring exposure is introduced versus what already existed in the source episodes. Cross-team
-//     sharing (--share) is still gated on the LLM's own non-sensitivity judgment, exactly like
-//     reflect.mjs.
+//     new ring exposure is introduced versus what already existed in the source episodes, PROVIDED it
+//     stays on that ledger. The one path that DOES cross a ring boundary is `--share`: a shared entry
+//     publishes to the exec-team feed (kb-memory's publishShared()), readable by the WHOLE exec roster
+//     (cfo/clo/cto/capital/commerce/growth/developer/...), most of whom are NOT MNPI-authorized (see
+//     company-brain/brain.mjs's MNPI_AUTHORIZED). The distillation PROMPT already asks the model not to
+//     mark MNPI/PHI/privileged content share=true, but that is a soft LLM instruction with no code-level
+//     backstop. enforceRingSafeShare() is the hard backstop: it force-downgrades share to false (never
+//     drops the item -- the fact still lands on the agent's OWN ledger, which is not a ring violation)
+//     whenever the distilled text matches the fleet's shared MNPI/PHI content wall (dedupe.mjs's
+//     ringSafeCross(), byte-identical to kb-memory/mem.mjs and company-brain/brain.mjs's RING_DENY), or
+//     when the agent itself is a privileged lane. Applied to every item BEFORE it is logged or written,
+//     so a privileged/MNPI-flagged item can never surface cross-lane regardless of what the model said.
 //   - cosmos-memory-read.mjs is READ-ONLY (no create/replace/delete exported at all); this file never
 //     mutates the Cosmos memory-of-record. The only durable writes are new rows on the Blob ledger via
 //     mem.mjs (never a correction/supersede -- that stays a human/agent judgment call elsewhere).
@@ -39,7 +56,7 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { tokenize, jaccard } from "./dedupe.mjs";
+import { tokenize, jaccard, ringSafeCross, PRIVILEGED_AGENTS } from "./dedupe.mjs";
 import { kvSecret } from "./azure-secret.mjs";
 import * as cosmosMemory from "./cosmos-memory-read.mjs";
 import { TIERS, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
@@ -74,7 +91,7 @@ export function clusterEpisodes(episodes, { threshold = DEFAULT_CLUSTER_THRESHOL
   for (const e of episodes || []) {
     if (!e || !e.agent || !e.text) continue;
     const agent = String(e.agent).toLowerCase();
-    if (agent === "clo-personal") continue; // defense in depth; Cosmos already rejects this lane at write time
+    if (PRIVILEGED_AGENTS.has(agent)) continue; // defense in depth; Cosmos already rejects this lane at write time
     if (!byAgent.has(agent)) byAgent.set(agent, []);
     byAgent.get(agent).push(e);
   }
@@ -145,6 +162,33 @@ export async function distillAgent(agent, clusters, { ask, knownRecentText = "",
     return [];
   }
   return parseDistillItems(raw, { maxItems });
+}
+
+/**
+ * RING/PRIVILEGE WALL for the --share output path (hard gate, not advisory). The distillation prompt
+ * (buildDistillPrompt) already ASKS the model to mark share=true "ONLY if it is non-sensitive ... no
+ * MNPI, no PHI, no privileged content", but that is a soft LLM instruction with no code-level backstop:
+ * a model that gets it wrong would publish MNPI/PHI/privileged text straight into the shared exec-team
+ * feed (kb-memory's publishShared()), which the WHOLE exec roster reads via tail/recall/team, most of
+ * whom are NOT MNPI-authorized (company-brain/brain.mjs's MNPI_AUTHORIZED is only clo/cfo/capital/cto).
+ *
+ * This function is the hard backstop, applied to EVERY item before it is logged or written: it
+ * force-downgrades share to false whenever (a) the agent itself is a privileged lane (PRIVILEGED_AGENTS
+ * -- defense in depth; clusterEpisodes already drops these agents' episodes upstream, so this fires
+ * only if a future caller reaches distillAgent some other way), or (b) the distilled TEXT matches the
+ * fleet's shared MNPI/PHI content wall (dedupe.mjs's ringSafeCross(), byte-identical to kb-memory/
+ * mem.mjs and company-brain/brain.mjs's RING_DENY). It NEVER drops the item itself and never widens
+ * (only ever flips share true -> false): the underlying fact still gets written to the agent's OWN
+ * private ledger when --commit is set, which is not a ring violation, it just never leaves that lane.
+ * Pure aside from an stderr note on downgrade (mirrors resolveModelOverride's own pattern below).
+ */
+export function enforceRingSafeShare(agent, items, log = (m) => console.error(m)) {
+  return (items || []).map((it) => {
+    if (!it || !it.share) return it;
+    if (ringSafeCross({ agent, text: it.text })) return it;
+    log(`[nightly-reflection] ${agent}: downgrading share=true -> false on a privileged/MNPI/PHI-flagged item (kept on ${agent}'s own private ledger only, never published to the shared exec-team feed): "${String(it.text || "").slice(0, 100)}"`);
+    return { ...it, share: false };
+  });
 }
 
 // Ban guard for the two model env-overrides. gpt-4.1-mini is BANNED for quality synthesis work
@@ -300,7 +344,10 @@ async function main() {
   let totalCandidates = 0, totalWritten = 0;
   for (const { agent, clusters } of byAgent) {
     const knownRecentText = recentMemory(agent);
-    const items = await distillAgent(agent, clusters, { ask, knownRecentText, maxItems: MAX_ITEMS });
+    const rawItems = await distillAgent(agent, clusters, { ask, knownRecentText, maxItems: MAX_ITEMS });
+    // RING/PRIVILEGE WALL: hard-downgrade share=true on any privileged/MNPI/PHI-flagged item BEFORE it
+    // is logged or written (see enforceRingSafeShare's doc comment). Never trust the model's own say-so.
+    const items = enforceRingSafeShare(agent, rawItems);
     if (!items.length) {
       console.log(`[nightly-reflection] ${agent}: no new durable lessons from ${clusters.length} cluster(s).`);
       continue;

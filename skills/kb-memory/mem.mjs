@@ -39,7 +39,7 @@ import { homedir } from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { writeAdvisory } from "./dedupe.mjs";
+import { writeAdvisory, RING_DENY } from "./dedupe.mjs";
 import { parseNdjson, serializeNdjson, nextId, isConflict, condHeaders } from "./blobwrite.mjs";
 import { kvSecret } from "./azure-secret.mjs";
 import { linkFields, walkGraph, formatEdge } from "./entity-graph.mjs";
@@ -230,7 +230,9 @@ function ageMs(p) { try { return Date.now() - statSync(p).mtimeMs; } catch { ret
 //      another lane's sensitive content. clo-personal / NO_SHARE agents do not read the shared feed at
 //      all; and any CROSS-agent line matching MNPI (INND securities) or PHI markers is dropped even if it
 //      was shared. The agent's OWN lane is never filtered (own ring). Can only REFUSE, never widen.
-const RING_DENY = /\b(innd|inscope hearing|otcmkts|ticker|reg\s*[da]\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|materially?\s*non.?public|mnpi|reg\s*fd|dividend|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number)\b/i;
+//      RING_DENY is IMPORTED from dedupe.mjs (the one canonical copy, see its own header comment for the
+//      full vocabulary and the adversarial-review hardening notes) instead of a local literal, so this
+//      file can never silently drift out of sync with the shared wall.
 const ringSafeCross = (r) => !RING_DENY.test(`${r.text || ""} ${(r.tags || []).join(" ")} ${r.was || ""}`);
 
 // ---- hot-path SEMANTIC tier: when an agent's LOCAL keyword pack is thin, reach into the shared exec
