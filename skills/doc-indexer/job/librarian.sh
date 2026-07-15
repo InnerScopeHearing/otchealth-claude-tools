@@ -13,5 +13,15 @@ shift 2>/dev/null || true
 echo "[librarian] profile=$PROFILE $*"
 node "$ROOT/skills/doc-indexer/indexer.mjs" index --profile "$PROFILE" --azure "$@"
 node "$ROOT/skills/doc-indexer/indexer.mjs" understand --profile "$PROFILE" --azure "$@"
-node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile "$PROFILE" --azure "$@"
+# push-search writes FLAT docs (contentVector, key=id) to the room index. After the Phase-3 S1
+# cutover the doc rooms are CHUNKED (text_vector, key=chunk_id) and fed by native S1 pull-indexers,
+# so a flat push would be rejected (schema mismatch) and turn the job RED for nothing. Set
+# SKIP_PUSH_SEARCH=1 on a doc-room librarian job at cutover to drop ONLY the push step; index +
+# understand still run, keeping the _TEXT/ sidecars fresh (that is exactly what the S1 pull-indexer
+# reads). Default (unset) = push-search runs as before, so this is a no-op until the flag is set.
+if [ "$SKIP_PUSH_SEARCH" = "1" ]; then
+  echo "[librarian] SKIP_PUSH_SEARCH=1 -> skipping push-search ($PROFILE is now S1 pull-indexer-fed)"
+else
+  node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile "$PROFILE" --azure "$@"
+fi
 echo "[librarian] done: $PROFILE refreshed"
