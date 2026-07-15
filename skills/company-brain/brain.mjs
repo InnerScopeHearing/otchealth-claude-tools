@@ -41,6 +41,11 @@ const ROOMS = {
   journal:  { index: "commons-company-journal",     label: "daily company journal + digests" },
 };
 const PERSONAL = { index: "legal-personal", label: "PRIVILEGED personal legal (CLO only)" };
+// Phase-3: on the S1 service these doc rooms are CHUNKED (one child doc per chunk; vector field
+// text_vector; parent_id links chunks -> parent). memory-exec stays FLAT. searchIndex() keys chunked
+// handling on the LIVE endpoint (S1 vs Basic), so this skill is a zero-op until the cutover flips
+// azure-search-endpoint and then self-switches with no coordinated deploy.
+const DOC_ROOMS = new Set(["legal-company", "finance-cfo-source-docs", "commons-company-journal", "legal-personal", "commerce-commerce-source-docs"]);
 
 // The attorney-privilege wall, isolated as a PURE function so tests/brain-rooms.test.mjs can prove it
 // without any Azure call. legal-personal joins the target rooms ONLY when the caller is the CLO AND
@@ -78,15 +83,39 @@ async function searchIndex(index, vec, query) {
   // (every room index carries the "sem" semantic config). This is the Microsoft-benchmarked default
   // that fixes weak keyword-only recall. Falls back to plain hybrid if semantic errors (missing
   // config / quota exhausted) so recall NEVER regresses below what we had.
-  const base = { search: query, top: PERK, vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: PERK }] };
+  // CHUNK AWARENESS keyed on the LIVE endpoint (S1 vs Basic): zero-op while pointed at Basic (flat),
+  // self-switches when azure-search-endpoint flips to S1 at the Phase-3 cutover. Chunked doc rooms use
+  // the text_vector field and store one child doc per chunk, so we over-fetch then collapse to parents.
+  const chunked = /otchealth-dataroom-s1/i.test(AIS_EP) && DOC_ROOMS.has(index);
+  const vecField = chunked ? "text_vector" : "contentVector";
+  const perk = chunked ? Math.min(50, PERK * 3) : PERK;
+  const base = { search: query, top: perk, vectorQueries: [{ kind: "vector", vector: vec, fields: vecField, k: perk }] };
+  if (chunked) base.select = "chunk_id,parent_id,title,path,chunk";
   const url = `${AIS_EP}/indexes/${index}/docs/search?api-version=${AIS_API}`;
   const hdr = { "api-key": AIS_KEY, "Content-Type": "application/json" };
   let r = await fetch(url, { method: "POST", headers: hdr, body: JSON.stringify({ ...base, queryType: "semantic", semanticConfiguration: "sem" }) });
   if (!r.ok) r = await fetch(url, { method: "POST", headers: hdr, body: JSON.stringify(base) });
+  // Keyword-only last resort: if BOTH vector attempts fail (e.g. text_vector not present because the
+  // endpoint has not cut over yet), drop the vectorQueries AND the select (a select that names a field
+  // absent on the live index is itself a 400 cause) so recall degrades to keyword, never to empty.
+  if (!r.ok) { const { vectorQueries, select, ...kw } = base; r = await fetch(url, { method: "POST", headers: hdr, body: JSON.stringify(kw) }); }
   if (!r.ok) return [];
   // With the semantic reranker present, @search.rerankerScore (0-4) is the authoritative relevance;
-  // fall back to @search.score when a room had to use plain hybrid.
-  return ((await r.json()).value || []).map(h => ({ score: h["@search.rerankerScore"] ?? h["@search.score"] ?? 0, text: (h.content || h.text || "").slice(0, 1200), path: h.path || h.title || "", entity: h.entity || "", agent: h.agent || "", type: h.type || "" }));
+  // fall back to @search.score when a room had to use plain hybrid. `chunk` is the chunked-room text field.
+  let hits = ((await r.json()).value || []).map((h, i) => ({
+    score: h["@search.rerankerScore"] ?? h["@search.score"] ?? 0,
+    text: (h.content || h.text || h.chunk || "").slice(0, 1200),
+    path: h.path || h.title || "", entity: h.entity || "", agent: h.agent || "", type: h.type || "",
+    _parent: String(h.parent_id ?? h.path ?? h.id ?? h.chunk_id ?? `__row${i}`),
+  }));
+  if (chunked) {
+    // Collapse chunks to one hit per parent doc (keep the best-scored chunk), then trim to PERK so a
+    // single document cannot flood the fused pool with N of its own chunks.
+    const best = new Map();
+    for (const h of hits) { const c = best.get(h._parent); if (!c || h.score > c.score) best.set(h._parent, h); }
+    hits = [...best.values()].sort((a, b) => b.score - a.score).slice(0, PERK);
+  }
+  return hits.map(({ _parent, ...h }) => h);
 }
 async function callChat(p, system, user, tries) {
   // Request-body shape (max_completion_tokens vs max_tokens+temperature) is decided ONCE, centrally,
