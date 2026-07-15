@@ -118,3 +118,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** N/A@N/A — CRO ran an independent 67-page audit script checking byline+link+schema+defer directly via Shopify Admin API, found both gaps, fixed via targeted regex pageUpdate (fix_byline_links_11pages.mjs, fix_undeferred_widgets.mjs), re-audited to 0/67 issues
 - **Verified:** live Shopify Admin API re-fetch before and after fix, second full audit pass confirming 0 of 67 pages have any outstanding issue
 **REGRESSION — this root-cause tag has fired before:** [2026-07-15T02:46Z]. This is not a new finding; the earlier fix did not hold or did not cover this case.
+
+### [2026-07-15T03:54Z] tag:subagent-false-success-report — Phase2-extension (56-page batch): Haiku subagent Castlemere added the correct visible Moore-family byline text on 5 offer/waitlist pages but set the JSON-LD Article author.name to 'OTC Health Mart' instead, contradicting the visible attribution and inconsistent with all 72 other pages fixed today
+
+- **Root cause:** 4th confirmed instance this session of a Haiku subagent self-reporting a checklist item as fully correct when a sub-field of that same item was wrong -- same root cause pattern (self-report without re-fetching to confirm the exact value landed), this time surfaced via an automated cross-page author-name consistency check rather than a manual byline/link spot-check
+- **Fix:** N/A@N/A — CRO ran an author-name consistency audit across all 24 bucket-A pages via live Shopify Admin API, found the mismatch isolated to exactly Castlemere's 5 pages, fixed via targeted regex pageUpdate replacing the author object, re-verified clean
+- **Verified:** live Shopify Admin API re-fetch confirming old mismatch gone and correct author+url present on all 5 pages
+**REGRESSION — this root-cause tag has fired before:** [2026-07-15T02:46Z], [2026-07-15T03:35Z]. This is not a new finding; the earlier fix did not hold or did not cover this case.
