@@ -40,6 +40,7 @@
 //   - Fails LOUD: any credential/network/query error throws and exits non-zero, so the Container Apps
 //     Job's own retry/alerting reflects a real failure instead of a green checkmark over broken state.
 import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
@@ -49,6 +50,14 @@ const DRY_RUN = process.env.JANITOR_DRY_RUN === "1"; // opt into dry-run; defaul
 // scheduled janitor, not an interactive tool -- Matt asked for it deployed and actually cleaning, not
 // logging forever). Every deletion is still logged individually either way.
 const MAX_DELETES_PER_CONTAINER = Number(process.env.JANITOR_MAX_DELETES || 2000);
+
+// ---- Episode-decay config (Phase 4B3; see the EPISODE DECAY section below for the full design
+// note). Read once here, same style as DRY_RUN/MAX_DELETES_PER_CONTAINER above. The shipped
+// defaults are the SAFE (disarmed) values: EPISODE_DECAY_ENABLED unset and no --commit flag both
+// mean report-only, see episodeDecayCommitMode(). ----
+const argv = process.argv.slice(2);
+const EPISODE_DECAY_DAYS = Number(process.env.EPISODE_DECAY_DAYS || 45);
+const EPISODE_DECAY_MAX_PER_RUN = Number(process.env.EPISODE_DECAY_MAX_PER_RUN || 500);
 
 // ---- Cosmos REST auth (mirrors decision-clock/cosmos-client.mjs and the gateway's cosmos.ts
 // exactly -- do NOT "tidy" the casing, it is load-bearing) ----
@@ -224,6 +233,276 @@ async function reportContainer(rule) {
   return { container: rule.container, count, oldestAgeDays };
 }
 
+// ============================ EPISODE DECAY (Phase 4B3 -- SHIPPED DISARMED) ============================
+// A narrow, ADDITIVE carve-out layered on top of the `memory` REPORT_ONLY entry above. That entry
+// is UNCHANGED: it still reports every kind in the `memory` container (fact/decision/correction/
+// pitfall/status/episode) as a simple count + oldest-age, and never deletes anything. This section
+// adds a SEPARATE rule that is the only thing in this file allowed to touch the `memory` container's
+// contents, and it is scoped as narrowly as possible: kind='episode' ONLY, ever.
+//
+// WHAT AN "episode" IS: the gateway's safety/journal.ts auto-journals a best-effort one-line record
+// of every successful, mutating, non-dry-run tool call ("agent called tool X (success)"), plus
+// tools/memory/checkpoint.ts's explicit session-end markers. The gateway's agentstate/agents.ts
+// MEMORY_KINDS comment calls this "OPERATIONAL EXHAUST for knowledge retrieval", and
+// memory/room-hygiene.ts's EXHAUST_RECORD_TYPES already excludes it from brain_search/kb_search by
+// default. It is high-volume and low-value-per-row BY DESIGN -- exactly the class of row that should
+// not accumulate forever in the hot `memory` container / memory-exec search index diluting real
+// recall precision -- but it is also shaped exactly like a durable fact/decision/correction/pitfall/
+// status row (same MemoryRecord interface, same container, same partition key), so this rule is
+// deliberately paranoid about touching ONLY kind='episode'.
+//
+// DOUBLE-ENFORCED KIND FILTER (defense in depth): the Cosmos query below already filters
+// `WHERE c.kind = @kind AND c._ts < @cutoff`, but every row it returns is filtered AGAIN, client-side,
+// through isEpisodeEligibleForDecay/selectEpisodesForDecay before anything is archived or deleted.
+// Two independent layers must both agree a row is an old episode. Unit-tested directly with one
+// fixture of every kind (see tests/agent-state-janitor.test.mjs) -- a fact/decision/correction/
+// pitfall/status row is NEVER selected, at any age.
+//
+// SHIPPED DISARMED: episodeDecayCommitMode() requires BOTH an explicit `--commit` CLI arg AND the
+// EPISODE_DECAY_ENABLED=1 env var. Neither is part of this job's current default invocation, so
+// merging + deploying this section changes NOTHING about production behavior today -- it only starts
+// LOGGING what it would archive and delete (report-only), the same posture every other rule in this
+// file already has. Arming is a deliberate later step: set EPISODE_DECAY_ENABLED=1 on the Container
+// Apps Job's env AND add --commit to its args/command.
+//
+// ARCHIVE BEFORE DELETE, ALWAYS: mirrors the otchealth-brain snapshot precedent (archived to
+// azure://otchealthcommons/company-journal/_ARCHIVE/... before that index was ever deleted). Each
+// eligible row is appended as one JSON line to
+//   azure://otchealthcommons/company-journal/_ARCHIVE/episodes/<agent>/<YYYY-MM>.jsonl
+// (grouped by the month the episode actually happened, see archiveBlobPathFor), and that write is
+// confirmed durable (the blob PUT resolves 2xx) BEFORE the row is deleted from Cosmos. If the
+// archive write fails for a row, that row is logged and skipped -- never deleted. Only after a
+// successful Cosmos delete does a best-effort cleanup remove the row's twin from the memory-exec
+// Azure AI Search index (same account/container/docId scheme skills/kb-memory/semantic.mjs's
+// reindex and the gateway's azure/search-write.ts indexMemoryNow() write into:
+// `${agent}__${id}`, sanitized -- see memoryExecDocId, reimplemented locally rather than imported
+// so this job stays dependency-free like the rest of the file); a failure there is logged but never
+// blocks or reverses the Cosmos delete, matching search-write.ts's own "indexing is a convenience
+// over the durable store" law.
+
+const EPISODE_QUERY =
+  "SELECT c.id, c.agent, c.kind, c.text, c.tags, c.source, c.supersedes, c.created_at, c._ts FROM c WHERE c.kind = @kind AND c._ts < @cutoff";
+
+/** True when a Cosmos `memory` row is eligible for episode-decay: kind === 'episode' AND its Cosmos
+ *  _ts (epoch seconds) is older than cutoffTs. Every other kind -- fact, decision, correction,
+ *  pitfall, status -- is NEVER eligible, regardless of age. Tolerates null/undefined/malformed rows
+ *  (never throws). Pure. */
+export function isEpisodeEligibleForDecay(doc, cutoffTs) {
+  return Boolean(doc) && doc.kind === "episode" && typeof doc._ts === "number" && doc._ts < cutoffTs;
+}
+
+/** Filter a batch of Cosmos `memory` rows down to exactly the episode-decay-eligible ones. Pure;
+ *  the application-level safety net behind the Cosmos WHERE clause -- see the section note above. */
+export function selectEpisodesForDecay(rows, cutoffTs) {
+  return (rows || []).filter((d) => isEpisodeEligibleForDecay(d, cutoffTs));
+}
+
+/** Both an explicit --commit CLI flag AND the EPISODE_DECAY_ENABLED=1 env kill-switch must be set
+ *  for episode-decay to mutate anything; either being absent means report-only (the safe default
+ *  this ships with). Exported so the double-gate itself is directly unit-tested, not just its
+ *  downstream effect. Pure. */
+export function episodeDecayCommitMode(argvList, env) {
+  const hasCommitFlag = Array.isArray(argvList) && argvList.includes("--commit");
+  const envEnabled = String((env && env.EPISODE_DECAY_ENABLED) || "") === "1";
+  return hasCommitFlag && envEnabled;
+}
+
+/** Archive blob path for one episode row: grouped by the MONTH THE EPISODE ACTUALLY HAPPENED
+ *  (created_at), not the month it happens to be archived, so the archive reads as a real timeline.
+ *  Falls back to the Cosmos _ts, then to "now", if created_at is missing or malformed. Pure. */
+export function archiveBlobPathFor(doc, nowMs = Date.now()) {
+  const agentRaw = (doc && (doc.agent || doc.pk)) || "unknown";
+  const agent = String(agentRaw).toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "unknown";
+  let ym;
+  if (doc && typeof doc.created_at === "string" && /^\d{4}-\d{2}/.test(doc.created_at)) {
+    ym = doc.created_at.slice(0, 7);
+  } else if (doc && typeof doc._ts === "number" && Number.isFinite(doc._ts)) {
+    ym = new Date(doc._ts * 1000).toISOString().slice(0, 7);
+  } else {
+    ym = new Date(nowMs).toISOString().slice(0, 7);
+  }
+  return `_ARCHIVE/episodes/${agent}/${ym}.jsonl`;
+}
+
+/** Same key derivation as skills/kb-memory/semantic.mjs's docId() and the gateway's
+ *  azure/search-write.ts memoryDocId() -- MUST match exactly, or this would delete the wrong
+ *  memory-exec row (or silently delete nothing). Reimplemented locally, not imported, to keep this
+ *  job dependency-free like the rest of the file. Pure. */
+export function memoryExecDocId(agent, id) {
+  return `${agent}__${id}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
+}
+
+/**
+ * Orchestrate episode-decay for one batch of Cosmos `memory` rows. PURE INPUT / INJECTED IO: rows,
+ * cutoffTs, and commit are plain data; archiveRow/deleteRow/deleteFromIndex are async callbacks the
+ * caller supplies (real Azure calls from runEpisodeDecay() below, simple mocks in tests) -- this
+ * keeps the archive-before-delete safety property directly unit-testable with zero live Cosmos/
+ * Blob/Search credentials.
+ *
+ *   - Only rows selectEpisodesForDecay() returns are ever touched.
+ *   - commit=false (report-only, the shipped default) calls neither archiveRow nor deleteRow; it
+ *     only logs what it would do.
+ *   - commit=true: for each eligible row (capped at maxPerRun), archiveRow() is awaited FIRST; only
+ *     on its success is deleteRow() called. archiveRow() throwing skips deleteRow() for that row
+ *     entirely (logged, counted, not fatal to the rest of the batch) -- archive-before-delete is
+ *     atomic per row.
+ *   - deleteFromIndex() runs best-effort AFTER a successful deleteRow(); its failure is logged and
+ *     counted but never reverses or blocks the already-completed Cosmos delete.
+ *   - maxPerRun bounds worst-case blast radius per invocation (mirrors MAX_DELETES_PER_CONTAINER);
+ *     any remainder is left for the next scheduled run.
+ */
+export async function decayEpisodesForRule({
+  rows,
+  cutoffTs,
+  commit,
+  archiveRow,
+  deleteRow,
+  deleteFromIndex,
+  maxPerRun = Infinity,
+  log = () => {},
+}) {
+  const eligible = selectEpisodesForDecay(rows, cutoffTs);
+  const batch = eligible.slice(0, maxPerRun);
+  if (eligible.length > batch.length) {
+    log(`episode-decay: ${eligible.length} eligible, capped to ${batch.length} this run (maxPerRun=${maxPerRun}); remainder retried next run`);
+  }
+  let archived = 0, deleted = 0, archiveErrors = 0, deleteErrors = 0, indexErrors = 0;
+  for (const doc of batch) {
+    if (!commit) {
+      log(`DRY-RUN episode-decay would archive+delete ${doc.id} (agent=${doc.agent})`);
+      continue;
+    }
+    try {
+      await archiveRow(doc);
+      archived++;
+    } catch (e) {
+      archiveErrors++;
+      log(`episode-decay ARCHIVE FAILED for ${doc.id}: ${e.message} -- skipping delete (archive-before-delete)`);
+      continue;
+    }
+    try {
+      await deleteRow(doc);
+      deleted++;
+      log(`episode-decay DELETED ${doc.id} (agent=${doc.agent}) after successful archive`);
+    } catch (e) {
+      deleteErrors++;
+      log(`episode-decay DELETE FAILED for ${doc.id} after successful archive: ${e.message}`);
+      continue; // still live in Cosmos -- do not attempt index cleanup
+    }
+    try {
+      await deleteFromIndex(doc);
+    } catch (e) {
+      indexErrors++;
+      log(`episode-decay index cleanup FAILED for ${doc.id} (best-effort, non-fatal): ${e.message}`);
+    }
+  }
+  return {
+    mode: commit ? "COMMIT" : "REPORT-ONLY",
+    scanned: rows.length,
+    eligible: eligible.length,
+    processed: batch.length,
+    archived,
+    deleted,
+    archiveErrors,
+    deleteErrors,
+    indexErrors,
+  };
+}
+
+// ---- real IO for decayEpisodesForRule (Azure Blob archive + memory-exec index cleanup). Mirrors
+// the getText/putText + account-SAS pattern in skills/ledger-compaction/job/run-compaction.mjs and
+// skills/cfo-store/store.mjs exactly, pointed at the same otchealthcommons/company-journal account +
+// container nightly.sh already writes into (assumed to already exist -- no create-container call). ----
+let _archiveCfg;
+async function archiveCfg() {
+  if (_archiveCfg !== undefined) return _archiveCfg;
+  const acct = (await sm("azure-commons-storage-account")) || "otchealthcommons";
+  const key = await sm("azure-commons-storage-key");
+  if (!key) throw new Error("agent-state-janitor: episode-decay archive creds unavailable (azure-commons-storage-key not resolvable via Key Vault or GCP Secret Manager)");
+  _archiveCfg = { acct, key, container: "company-journal" };
+  return _archiveCfg;
+}
+function archiveSas(acct, key) {
+  const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co";
+  const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
+  const se = new Date(Date.now() + 3600 * 1000).toISOString().slice(0, 19) + "Z";
+  const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
+  const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64");
+  return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
+}
+const archiveEncPath = (name) => name.split("/").map(encodeURIComponent).join("/");
+async function archiveGetText(acct, container, sas, name) {
+  const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${archiveEncPath(name)}?${sas}`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`agent-state-janitor: archive blob get ${name} -> HTTP ${r.status}`);
+  return await r.text();
+}
+async function archivePutText(acct, container, sas, name, body) {
+  const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${archiveEncPath(name)}?${sas}`, {
+    method: "PUT",
+    headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/x-ndjson; charset=utf-8" },
+    body,
+  });
+  if (!r.ok) throw new Error(`agent-state-janitor: archive blob put ${name} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+}
+
+/** Append one episode row as a JSON line to its month/agent archive blob. Real IO used by
+ *  runEpisodeDecay(); tests inject a mock in place of this (see tests/agent-state-janitor.test.mjs).
+ *  Read-then-write per call: simple and obviously correct, matching this file's dependency-free
+ *  style over cleverer batching -- a fine tradeoff for a rule that ships disarmed and, once armed,
+ *  runs on a 6-hourly cadence against a bounded (maxPerRun) batch. */
+async function archiveEpisodeRow(doc) {
+  const { acct, key, container } = await archiveCfg();
+  const sas = archiveSas(acct, key);
+  const path = archiveBlobPathFor(doc);
+  const existing = await archiveGetText(acct, container, sas, path);
+  const line = JSON.stringify({ ...doc, archived_at: new Date().toISOString() });
+  const next = (existing ? existing.replace(/\n?$/, "\n") : "") + line + "\n";
+  await archivePutText(acct, container, sas, path, next);
+}
+
+/** Best-effort removal of one episode's twin row from the memory-exec Azure AI Search index. Real
+ *  IO used by runEpisodeDecay(); tests inject a mock. Reuses the Cosmos-creds resolver (sm) already
+ *  defined above, pointed at the search-specific secrets instead. */
+async function deleteFromMemoryExecIndex(doc) {
+  const aisEp = ((await sm("azure-search-endpoint")) || "").replace(/\/$/, "");
+  const aisKey = await sm("azure-search-admin-key");
+  if (!aisEp || !aisKey) throw new Error("agent-state-janitor: memory-exec index creds unavailable (azure-search-endpoint/azure-search-admin-key)");
+  const id = memoryExecDocId(doc.agent, doc.id);
+  const r = await fetch(`${aisEp}/indexes/memory-exec/docs/index?api-version=2023-11-01`, {
+    method: "POST",
+    headers: { "api-key": aisKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ value: [{ "@search.action": "delete", id }] }),
+  });
+  if (!r.ok) throw new Error(`agent-state-janitor: memory-exec index delete ${id} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+}
+
+/** The real (network-touching) runner main() calls. Queries Cosmos for candidate episode rows
+ *  (server-side kind+age filter), then hands them to decayEpisodesForRule with the real archive/
+ *  delete/index-cleanup IO wired in. See the section note above for the full safety story. `commit`
+ *  additionally respects the file's existing JANITOR_DRY_RUN belt: if that is set, episode-decay
+ *  stays report-only even when --commit + EPISODE_DECAY_ENABLED=1 are both present, so one env var
+ *  reliably forces the whole job (every rule) into a safe dry-run. */
+async function runEpisodeDecay() {
+  const cutoffTs = Math.floor(Date.now() / 1000 - EPISODE_DECAY_DAYS * 86400);
+  const rows = await queryAll("memory", EPISODE_QUERY, [
+    { name: "@kind", value: "episode" },
+    { name: "@cutoff", value: cutoffTs },
+  ]);
+  const commit = episodeDecayCommitMode(argv, process.env) && !DRY_RUN;
+  console.log(`[janitor] episode-decay: mode=${commit ? "COMMIT" : "REPORT-ONLY"} (--commit=${argv.includes("--commit")} EPISODE_DECAY_ENABLED=${process.env.EPISODE_DECAY_ENABLED === "1"} JANITOR_DRY_RUN=${DRY_RUN}) cutoffDays=${EPISODE_DECAY_DAYS} candidates=${rows.length}`);
+  return decayEpisodesForRule({
+    rows,
+    cutoffTs,
+    commit,
+    archiveRow: archiveEpisodeRow,
+    deleteRow: (doc) => deleteDoc("memory", doc.agent, doc.id),
+    deleteFromIndex: deleteFromMemoryExecIndex,
+    maxPerRun: EPISODE_DECAY_MAX_PER_RUN,
+    log: (msg) => console.log(`[janitor] ${msg}`),
+  });
+}
+
 async function main() {
   console.log(`[janitor] agent-state-janitor starting -- mode=${DRY_RUN ? "DRY_RUN" : "APPLY"} db=${(await cfg()).db}`);
   const results = { cleaned: [], reported: [], startedAt: new Date().toISOString() };
@@ -233,9 +512,13 @@ async function main() {
   for (const rule of REPORT_ONLY) {
     results.reported.push(await reportContainer(rule));
   }
+  results.episodeDecay = await runEpisodeDecay();
   results.finishedAt = new Date().toISOString();
   console.log("[janitor] SUMMARY", JSON.stringify(results));
-  const totalErrors = results.cleaned.reduce((s, r) => s + r.errors, 0);
+  const totalErrors =
+    results.cleaned.reduce((s, r) => s + r.errors, 0) +
+    results.episodeDecay.archiveErrors +
+    results.episodeDecay.deleteErrors;
   if (totalErrors > 0) {
     console.error(`[janitor] completed with ${totalErrors} delete error(s) -- exiting non-zero so the Job surfaces this as a real failure, not a silent success`);
     process.exit(1);
@@ -243,7 +526,13 @@ async function main() {
   console.log("[janitor] done, clean run");
 }
 
-main().catch((e) => {
-  console.error("[janitor] FATAL:", e.message);
-  process.exit(1);
-});
+// Only auto-run when executed directly (node agent-state-janitor.mjs, how the Container Apps Job
+// invokes this), never on import -- so tests can import the pure/injectable exports above without
+// triggering a real Cosmos/Blob/Search run. Mirrors skills/kb-memory/semantic.mjs's isMain guard.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  main().catch((e) => {
+    console.error("[janitor] FATAL:", e.message);
+    process.exit(1);
+  });
+}
