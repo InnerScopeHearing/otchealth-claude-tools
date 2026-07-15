@@ -109,8 +109,32 @@ export function writeAdvisory(text, rows, type = "fact", log = (m) => process.st
 // content in place, only decide whether a row is safe to read/compare/publish CROSS-lane.
 //
 // If a fourth copy of this regex is ever needed, import it from here instead of retyping it; the three
-// existing copies (mem.mjs, brain.mjs, and this one) must never be allowed to drift apart.
-export const RING_DENY = /\b(innd|inscope hearing|otcmkts|ticker|reg\s*[da]\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|materially?\s*non.?public|mnpi|reg\s*fd|dividend|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number)\b/i;
+// existing copies (mem.mjs, brain.mjs, and this one) must never be allowed to drift apart. As of the
+// adversarial-review hardening pass below, mem.mjs and brain.mjs no longer hold their own literal copy
+// at all: they IMPORT this constant, so there is exactly ONE place the pattern can drift.
+//
+// ADVERSARIAL-REVIEW HARDENING (vocabulary gap closed): the original pattern matched the bare ticker
+// "innd" but never the company's actual name "innerscope", and had a broken "inscope hearing" fragment
+// (missing the "n") that never matched anything. It also carried ZERO personal-legal vocabulary, so
+// clo-personal content that got mistagged under any other agent (e.g. the legitimate "clo" company-legal
+// lane) had no content-level backstop at all, only the agent-tag check. Both gaps are closed below by
+// widening the vocabulary, never by changing how the wall is applied. Two deliberate scoping calls, so
+// the wall stays precise instead of nuking unrelated legitimate content in THIS fleet's own vocabulary:
+//   - "raise" is NOT added bare (it would trip on "raise a PR" / "raise an issue", constant developer
+//     language); only specific capital-raise phrasings are matched.
+//   - "settlement" is NOT added bare (Flatstick's whole product is a "debt-minimized settlement engine",
+//     see flatstick/CLAUDE.md; a bare match would ring-deny nearly every Flatstick engineering note).
+//     Only the personal-legal phrasings (settlement offer/agreement/talks/conference/negotiation) match.
+//   - "litigation" is NOT added bare either, for the same reason: the CLO agent's OWN non-personal
+//     docket includes company litigation (an FLSA employment matter; see dream-team/agents/clo.md
+//     section E, "company is defendant") that must stay readable in the clo lane. Only "civil case" /
+//     "civil litigation" match, which is how this company's own docs frame Matt's PERSONAL matter
+//     (dream-team/agents/clo.md section D, "California civil litigation (Matt, personal)").
+// "insolven\w*" (not a bare "insolven" fragment) is deliberate too: the whole pattern is wrapped in a
+// trailing \b, so an UN-suffixed fragment like "insolven" can never actually match inside "insolvent" or
+// "insolvency" (no word boundary exists between "n" and the following "t"/"c"); \w* lets it match the
+// whole word it starts, exactly like "divorc\w*" for divorce/divorced/divorcing.
+export const RING_DENY = /\b(innd|innerscope|inscope hearing|otcmkts|ticker|reg\s*(cf|d|a|c)\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|price\s*per\s*share|materially?\s*non.?public|mnpi|reg\s*fd|dividend|capital\s*raise|raise\s*round|the\s*raise\s*of|financing|term\s*sheet|convertible\s*note|safe\s*note|warrants?|insiders?|runway|insolven\w*|dilution|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number|divorc\w*|custody|dissolution|spousal\s*support|child\s*support|alimony|deposition|opposing\s*counsel|settlement\s*(offer|agreement|talks|conference|negotiation)|mediation|family\s*court|community[\s-]*property|marital|restraining\s*order|civil\s*case|civil\s*litigation)\b/i;
 
 // Privileged/personal AGENT lanes that must NEVER be read cross-lane, regardless of content (mirrors
 // kb-memory/mem.mjs's own NO_SHARE set). A Set, not a scattered literal string compare, so a future

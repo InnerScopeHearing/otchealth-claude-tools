@@ -50,11 +50,15 @@
 //     verbatim text quoted into a decision-clock proposal that any caller-supplied --owner (a free-text
 //     CLI flag, not a real auth boundary) could then read. So dedupe.mjs's ringSafeCross() (the SAME
 //     RING_DENY wall kb-memory's own memory-ledger CLI and company-brain/brain.mjs already enforce,
-//     byte-identical) is applied TWICE, independently: once in normalizeAssertionRows() (the real
-//     production load point) and again at the top of findContestedGroups() (so the pure core defends
-//     itself even if a future caller, or a test, hands it rows some other way). A privileged/MNPI-
-//     flagged row can therefore never become an input to, or an output of, the cross-agent scan. See
-//     dedupe.test.mjs + contradiction-scan.test.mjs for the enforcement tests.
+//     byte-identical, imported from the one canonical copy) is applied THREE times, independently: once
+//     in normalizeAssertionRows() (the real production load point), again at the top of
+//     findContestedGroups() (so the pure core defends itself even if a future caller, or a test, hands
+//     it rows some other way), and a third time inside buildProposalText() itself, right before it
+//     formats row.text into the proposal string (so the RENDER step never blindly trusts that the first
+//     two gates already ran; an unsafe row makes buildProposalText/proposalsFor skip that group instead
+//     of rendering it). A privileged/MNPI-flagged row can therefore never become an input to, or an
+//     output of, the cross-agent scan. See dedupe.test.mjs + contradiction-scan.test.mjs for the
+//     enforcement tests.
 //   - Only ACTIVE (non-superseded) rows are considered per source, so a retracted belief cannot be
 //     flagged as still "contradicting" someone else's current claim.
 //
@@ -253,8 +257,22 @@ export function findContestedGroups(rows, opts = {}) {
 }
 
 /** Render a decision-clock-ready { text, evidence, majorityAgents, minorityAgents } for one contested
- *  group. Pure. No em dashes or en dashes (published-copy rule). */
+ *  group, or `null` if the group must not be rendered (see the ring/privilege re-check below). Pure.
+ *  No em dashes or en dashes (published-copy rule).
+ *
+ * RING/PRIVILEGE WALL, THIRD independent gate (belt-and-suspenders on the RENDER path itself): both
+ * normalizeAssertionRows() and findContestedGroups() already filter every row through ringSafeCross()
+ * before a group ever reaches this function (see their own docstrings), so in the real pipeline every
+ * row here is already known-safe. This function re-checks anyway, on group.assertions/contradictions'
+ * own row.text/row.tags, so it never trusts that upstream filtering happened -- a future caller that
+ * hands buildProposalText a hand-built group (bypassing both upstream gates, exactly like a test or a
+ * refactor might) can still never have a privileged/MNPI/PHI row rendered into proposal text. Not
+ * currently reachable with an unsafe row in production (both upstream gates already close that path),
+ * but the render step that actually formats row.text into a human/agent-readable string should never be
+ * the one place in the file that blindly trusts its input. Skip (return null), never partially render. */
 export function buildProposalText(group) {
+  const rows = [...(group.assertions || []), ...(group.contradictions || [])].map((a) => a && a.row).filter(Boolean);
+  if (rows.some((r) => !ringSafeCross(r))) return null;
   const clip = (s, n = 140) => String(s || "").replace(/\s+/g, " ").trim().slice(0, n);
   const majorityAgents = [...new Set(group.assertions.map((a) => a.agent))];
   const minorityAgents = [...new Set(group.contradictions.map((c) => c.agent))];
@@ -267,20 +285,25 @@ export function buildProposalText(group) {
   return { text, evidence, majorityAgents, minorityAgents };
 }
 
-/** Map contested groups -> one decision-clock proposal descriptor each. Pure. */
+/** Map contested groups -> one decision-clock proposal descriptor each. Pure. A group that
+ *  buildProposalText refuses to render (ring/privilege re-check failed) produces NO proposal at all,
+ *  rather than a partial or empty one, so an unsafe group can never reach openProposals(). */
 export function proposalsFor(groups, { owner = "cto" } = {}) {
-  return (groups || []).map((g) => {
-    const built = buildProposalText(g);
-    return {
-      category: "memory-contradiction",
-      owner: String(owner || "cto").toLowerCase(),
-      text: built.text,
-      evidence: built.evidence,
-      majorityAgents: built.majorityAgents,
-      minorityAgents: built.minorityAgents,
-      claim: g.claim,
-    };
-  });
+  return (groups || [])
+    .map((g) => {
+      const built = buildProposalText(g);
+      if (!built) return null;
+      return {
+        category: "memory-contradiction",
+        owner: String(owner || "cto").toLowerCase(),
+        text: built.text,
+        evidence: built.evidence,
+        majorityAgents: built.majorityAgents,
+        minorityAgents: built.minorityAgents,
+        claim: g.claim,
+      };
+    })
+    .filter(Boolean);
 }
 
 // ================================== Impure: I/O ==================================

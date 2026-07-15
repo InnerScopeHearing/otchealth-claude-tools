@@ -22,6 +22,7 @@ import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { TIERS, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { RING_DENY } from "../kb-memory/dedupe.mjs";
 const SM = "otchealth-shared-prod";
 const AIS_API = "2023-11-01";
 const argv = process.argv.slice(2);
@@ -166,8 +167,10 @@ async function ask() {
 const isPersonalLane = (agent) => String(agent).toLowerCase() === "clo-personal";
 // MNPI/PHI content wall (mirrors kb-memory's ringSafeCross): INND/securities and PHI-adjacent rows
 // are internal-only, and only surfaced in a diff to an MNPI-authorized caller (clo/cfo/capital/cto).
-// Every OTHER agent never sees them in a diff, even if they otherwise match the topic.
-const RING_DENY = /\b(innd|inscope hearing|otcmkts|ticker|reg\s*[da]\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|materially?\s*non.?public|mnpi|reg\s*fd|dividend|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number)\b/i;
+// Every OTHER agent never sees them in a diff, even if they otherwise match the topic. RING_DENY is
+// IMPORTED from kb-memory/dedupe.mjs (the one canonical copy) instead of a local literal, so this file
+// can never silently drift out of sync with the shared wall; the MNPI_AUTHORIZED viewer exception below
+// is specific to this file (a scheduled batch job has no such "authorized viewer" concept) and stays.
 const MNPI_AUTHORIZED = new Set(["clo", "cfo", "capital", "cto"]);
 export function ringSafeForDiff(row, agent) {
   if (MNPI_AUTHORIZED.has(String(agent).toLowerCase())) return true;

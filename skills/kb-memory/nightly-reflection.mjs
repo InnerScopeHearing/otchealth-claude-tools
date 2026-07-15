@@ -18,11 +18,18 @@
 // setup/model-routing.mjs and otchealth-cto/CLAUDE.md) and is never used, including as a fallback.
 //
 // Ring/safety notes:
-//   - The Cosmos `memory` container already rejects clo-personal writes at the source (memory_write's
-//     schema description), so anything readable here is already non-privileged by construction; this
-//     file ALSO skips PRIVILEGED_AGENTS (today just clo-personal, kb-memory's own NO_SHARE set)
-//     defensively, via the SAME shared set dedupe.mjs exports (not a local hardcoded string, so a
-//     future privileged lane is a one-line addition everywhere that imports it).
+//   - CORRECTED (was stale): this file used to claim "the Cosmos `memory` container already rejects
+//     clo-personal writes at the source", implying clusterEpisodes' PRIVILEGED_AGENTS skip below was
+//     defense-in-depth on top of an upstream guarantee. That is FALSE as of the fleet-wide ring
+//     suspension (2026-07-07): the gateway's FORBIDDEN_AGENTS set is empty, so memory_write does NOT
+//     reject a clo-personal write at the source today. The clusterEpisodes skip below is therefore the
+//     ONLY belt on the read side of this file, a single point of failure, not one layer of several. It
+//     still skips PRIVILEGED_AGENTS (today just clo-personal, kb-memory's own NO_SHARE set) via the SAME
+//     shared set dedupe.mjs exports (not a local hardcoded string, so a future privileged lane is a
+//     one-line addition everywhere that imports it), and enforceRingSafeShare() below is a SECOND,
+//     independent belt on the --share output path specifically. Do not re-add an "upstream already
+//     handles this" assumption anywhere in this file without first verifying FORBIDDEN_AGENTS is
+//     actually populated again.
 //   - Every distilled item is written back onto the SAME agent's OWN ledger (never cross-lane), so no
 //     new ring exposure is introduced versus what already existed in the source episodes, PROVIDED it
 //     stays on that ledger. The one path that DOES cross a ring boundary is `--share`: a shared entry
