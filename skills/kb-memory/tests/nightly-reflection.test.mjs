@@ -7,6 +7,7 @@ import {
   buildDistillPrompt,
   parseDistillItems,
   distillAgent,
+  enforceRingSafeShare,
   resolveModelOverride,
   BANNED_MODELS,
   DEFAULT_CLUSTER_THRESHOLD,
@@ -167,4 +168,68 @@ test("resolveModelOverride honors a valid (non-banned) override and the unset de
 
 test("BANNED_MODELS contains gpt-4.1-mini (the model-routing.mjs cheap tier)", () => {
   assert.ok(BANNED_MODELS.has("gpt-4.1-mini"));
+});
+
+// ---------------------------- enforceRingSafeShare (Defect 1: ring leak, --share output path) ----------------------------
+// The real cross-lane vector in this file: --share publishes to the exec-team feed, readable by the
+// WHOLE roster (not just MNPI-authorized agents). The distillation PROMPT already asks the model not to
+// mark MNPI/PHI/privileged content share=true, but that is soft; enforceRingSafeShare is the hard
+// code-level backstop and must not trust the model's own say-so.
+
+test("enforceRingSafeShare downgrades share=true -> false on an MNPI-flagged item, keeping the item itself", () => {
+  const items = [{ type: "fact", text: "INND closed a Reg D raise at a share price the board approved", share: true }];
+  let logged = "";
+  const out = enforceRingSafeShare("cfo", items, (m) => { logged = m; });
+  assert.equal(out.length, 1, "the item itself must NOT be dropped");
+  assert.equal(out[0].share, false, "share must be force-downgraded");
+  assert.equal(out[0].type, "fact");
+  assert.equal(out[0].text, items[0].text, "the text is preserved, only share changes");
+  assert.match(logged, /downgrading share=true -> false/);
+  assert.match(logged, /cfo/);
+});
+
+test("enforceRingSafeShare downgrades share=true -> false on a PHI-adjacent item", () => {
+  const items = [{ type: "pitfall", text: "do not log the hearing number in analytics", share: true }];
+  const out = enforceRingSafeShare("cto", items, () => {});
+  assert.equal(out[0].share, false);
+});
+
+test("enforceRingSafeShare downgrades share=true -> false when the AGENT itself is a privileged lane", () => {
+  // Defense in depth: clusterEpisodes already drops clo-personal episodes upstream, but this proves the
+  // output gate independently enforces the same wall if distillAgent is ever reached another way.
+  const items = [{ type: "fact", text: "an entirely ordinary, non-sensitive sentence", share: true }];
+  const out = enforceRingSafeShare("clo-personal", items, () => {});
+  assert.equal(out[0].share, false, "a privileged agent's item must never be shared, regardless of text");
+});
+
+test("enforceRingSafeShare leaves an ordinary non-sensitive share=true item UNCHANGED (no over-blocking)", () => {
+  const items = [{ type: "pitfall", text: "the depot macos runner needs the Xcode 26 guard step", share: true }];
+  const out = enforceRingSafeShare("cto", items, () => { throw new Error("must not log when nothing is downgraded"); });
+  assert.deepEqual(out, items);
+});
+
+test("enforceRingSafeShare leaves share=false / share=undefined items unchanged and never logs for them", () => {
+  const items = [
+    { type: "fact", text: "INND MNPI content but share was already false", share: false },
+    { type: "decision", text: "some decision with no share key at all" },
+  ];
+  let logCalls = 0;
+  const out = enforceRingSafeShare("cfo", items, () => { logCalls++; });
+  assert.deepEqual(out, items, "unshared items pass through byte-identical, even if their text is MNPI-flagged");
+  assert.equal(logCalls, 0, "only an actual share=true -> false downgrade should log");
+});
+
+test("enforceRingSafeShare processes a mixed batch item-by-item (only the unsafe one is downgraded)", () => {
+  const items = [
+    { type: "fact", text: "the ios-depot workflow needs depot-macos-26", share: true },
+    { type: "fact", text: "INND reg d raise details must stay internal", share: true },
+  ];
+  const out = enforceRingSafeShare("cto", items, () => {});
+  assert.equal(out[0].share, true, "the ordinary item stays shared");
+  assert.equal(out[1].share, false, "only the MNPI item is downgraded");
+});
+
+test("enforceRingSafeShare is safe on an empty item list", () => {
+  assert.deepEqual(enforceRingSafeShare("cfo", [], () => {}), []);
+  assert.deepEqual(enforceRingSafeShare("cfo", undefined, () => {}), []);
 });

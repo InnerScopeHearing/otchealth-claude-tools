@@ -49,12 +49,12 @@
 //     rows ACROSS agents -- would read that content, and a "contested" MNPI claim would get its
 //     verbatim text quoted into a decision-clock proposal that any caller-supplied --owner (a free-text
 //     CLI flag, not a real auth boundary) could then read. So dedupe.mjs's ringSafeCross() (the SAME
-//     RING_DENY wall kb-memory/mem.mjs and company-brain/brain.mjs already enforce, byte-identical) is
-//     applied TWICE, independently: once in normalizeAssertionRows() (the real production load point)
-//     and again at the top of findContestedGroups() (so the pure core defends itself even if a future
-//     caller, or a test, hands it rows some other way). A privileged/MNPI-flagged row can therefore
-//     never become an input to, or an output of, the cross-agent scan. See dedupe.test.mjs +
-//     contradiction-scan.test.mjs for the enforcement tests.
+//     RING_DENY wall kb-memory's own memory-ledger CLI and company-brain/brain.mjs already enforce,
+//     byte-identical) is applied TWICE, independently: once in normalizeAssertionRows() (the real
+//     production load point) and again at the top of findContestedGroups() (so the pure core defends
+//     itself even if a future caller, or a test, hands it rows some other way). A privileged/MNPI-
+//     flagged row can therefore never become an input to, or an output of, the cross-agent scan. See
+//     dedupe.test.mjs + contradiction-scan.test.mjs for the enforcement tests.
 //   - Only ACTIVE (non-superseded) rows are considered per source, so a retracted belief cannot be
 //     flagged as still "contradicting" someone else's current claim.
 //

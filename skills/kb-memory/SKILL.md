@@ -173,12 +173,24 @@ above. Both are dry-run by default (pass `--commit` to actually write) and alway
   existing `semantic-trust` `groupAssertions()` + `scoreClaim()` to find genuine cross-agent
   contradictions. For each contested claim it opens exactly ONE `decision-clock` proposal (category
   `memory-contradiction`) with both claims and their trust rationale as evidence. It NEVER resolves a
-  contradiction itself: no `mem.mjs correct`, no `--supersedes`, ever. A human or agent reviews the
+  contradiction itself: no memory-CLI `correct`, no `--supersedes`, ever. A human or agent reviews the
   proposal later and either confirms the majority claim or corrects the record by hand.
   `node skills/kb-memory/contradiction-scan.mjs [--commit] [--days 14] [--owner cto]`
+- **RING/PRIVILEGE WALL on both:** dedupe.mjs's `ringSafeCross()` (the same `RING_DENY` content wall
+  used read-side elsewhere in kb-memory and in company-brain) hard-excludes any privileged-agent-lane
+  row (clo-personal) AND any row whose own text/tags matches an MNPI/PHI marker, REGARDLESS of which
+  agent asserted it -- agent identity alone is not a sufficient gate, since an otherwise-shareable
+  agent (cfo/clo/capital/cto) can still assert one MNPI-flagged fact that must stay in its own lane.
+  `contradiction-scan.mjs` applies it at the row-normalize load point AND again inside
+  `findContestedGroups()` (two independent gates), so a privileged/MNPI row can never become an input
+  to, or an output of, the cross-agent comparison. `nightly-reflection.mjs` applies it to the
+  `--share` output path via `enforceRingSafeShare()` (a hard code-level backstop on top of the
+  distillation prompt's own soft instruction), force-downgrading `share: true` to `false` on any
+  privileged/MNPI/PHI-flagged item -- the fact still lands on the agent's own private ledger, it just
+  never publishes to the shared exec-team feed.
 - Both read `cosmos-memory-read.mjs`, a READ-ONLY client scoped to the Cosmos `memory` container (no
   create/replace/delete exported at all) so neither script can mutate the Cosmos memory-of-record
-  directly; every durable effect is a NEW row via `mem.mjs` or a NEW `decision.mjs open` proposal.
+  directly; every durable effect is a NEW row via the memory CLI or a NEW `decision.mjs open` proposal.
   Job entrypoints: `job/nightly-reflection.sh`, `job/contradiction-scan.sh` (mirror
   `skills/ledger-compaction/job/compaction.sh`'s shape). Not yet scheduled as Container Apps Jobs --
-  that is a CTO deploy step.
+  that is a CTO deploy step, pending review of the ring/privilege wall above.

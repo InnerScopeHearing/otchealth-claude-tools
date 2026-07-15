@@ -78,6 +78,80 @@ test("normalizeAssertionRows drops clo-personal defensively and drops rows missi
   assert.deepEqual(rows.map((r) => r.id), ["p4"]);
 });
 
+// ---------------------------- RING/PRIVILEGE WALL (Defect 1: ring leak) ----------------------------
+// The scan's whole purpose is to compare rows ACROSS agents, so a privileged/MNPI-flagged row must
+// never become an input to that comparison, no matter which agent asserted it (agent identity alone is
+// not a sufficient gate -- an otherwise-shareable agent like cfo/cto can still assert one MNPI fact).
+
+test("normalizeAssertionRows drops an MNPI-flagged row from an ALLOWED agent (cfo), not just clo-personal", () => {
+  const execRows = [
+    { id: "m1", _agent: "cfo", type: "fact", text: "INND closed a $2M Reg D raise at a share price the board approved", ts: iso(1) },
+    { id: "m2", _agent: "cfo", type: "fact", text: "the ordinary Q3 marketing budget is finalized", ts: iso(1) },
+  ];
+  const rows = normalizeAssertionRows(execRows, []);
+  assert.deepEqual(rows.map((r) => r.id), ["m2"], "the MNPI-flagged cfo row must be excluded even though cfo is a normal, shareable agent");
+});
+
+test("normalizeAssertionRows drops an MNPI-flagged row asserted by a NON-MNPI-authorized agent too", () => {
+  // The content wall is agent-agnostic: it protects the SUBJECT MATTER, not just certain writers.
+  const cosmosRows = [{ id: "m1", agent: "growth", kind: "fact", text: "materially non-public information leaked into a growth campaign brief", ts: iso(1) }];
+  const rows = normalizeAssertionRows([], cosmosRows);
+  assert.deepEqual(rows, []);
+});
+
+test("normalizeAssertionRows drops a PHI-adjacent row even outside the clo/cfo lanes", () => {
+  const execRows = [{ id: "h1", _agent: "developer", type: "fact", text: "a patient audiogram was attached to the wrong ticket", ts: iso(1) }];
+  const rows = normalizeAssertionRows(execRows, []);
+  assert.deepEqual(rows, []);
+});
+
+test("a synthetic cross-agent MNPI 'contradiction' produces ZERO proposals (the actual leak repro)", () => {
+  // Before the fix: two agents disagreeing about an INND number would partition, contest, and get
+  // BOTH claims' verbatim text quoted into a decision-clock proposal. After the fix: the MNPI content
+  // never becomes an input at all, so there is nothing left to compare or propose.
+  const execRows = [{ id: "e1", _agent: "cfo", type: "fact", text: "the INND reg d raise closed at a share price of 5000 per the term sheet", ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "capital", kind: "fact", text: "the INND reg d raise closed at a share price of 900 per the term sheet", ts: iso(10) }];
+  const rows = normalizeAssertionRows(execRows, cosmosRows);
+  assert.deepEqual(rows, [], "both MNPI rows must be excluded at the load point, not merely at the proposal step");
+  assert.equal(findContestedGroups(rows, { nowMs: NOW }).length, 0);
+});
+
+test("findContestedGroups independently re-filters privileged/MNPI rows even when called directly, bypassing normalizeAssertionRows", () => {
+  // Proves the PURE CORE defends itself: a future caller (or a bug elsewhere) that hands
+  // findContestedGroups an unfiltered row list can still never leak privileged content into a group.
+  const unfilteredRows = [
+    { id: "e1", agent: "clo-personal", type: "fact", text: "the INND reg d raise closed at a share price of 5000 per the term sheet", ts: iso(20) },
+    { id: "c1", agent: "cfo", type: "fact", text: "the INND reg d raise closed at a share price of 900 per the term sheet", ts: iso(10) },
+  ];
+  const groups = findContestedGroups(unfilteredRows, { nowMs: NOW });
+  assert.equal(groups.length, 0, "the clo-personal row must never reach a group, even bypassing normalizeAssertionRows");
+});
+
+test("findContestedGroups still finds a genuine ORDINARY (non-MNPI) cross-agent contradiction (the wall does not over-block)", () => {
+  // Regression guard: the ring wall must only remove privileged/MNPI content, never ordinary claims.
+  const execRows = [{ id: "e1", agent: "growth", type: "fact", text: CLAIM_A, ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "commerce", type: "fact", text: CLAIM_B, ts: iso(10) }];
+  const groups = findContestedGroups([...execRows, ...cosmosRows], { nowMs: NOW });
+  assert.equal(groups.length, 1, "an ordinary non-MNPI contradiction between two non-MNPI-authorized agents must still fire");
+});
+
+test("a genuine Xero ACCOUNT BALANCE conflict (5000 vs 900, same account) still fires exactly one proposal", () => {
+  // The literal example from the spec: same subject (the account), different numeric value -> a real
+  // conflict that the ring wall (which only removes MNPI/PHI/privileged content) must not suppress.
+  // jaccard(A,B) = 0.4444 -- verified empirically: above the 0.35 partition floor and the 0.4
+  // conflict-subject threshold, below groupAssertions' own 0.5 merge threshold, so this genuinely
+  // exercises "contested, not merged" rather than accidentally corroborating.
+  const execRows = [{ id: "e1", _agent: "cfo", type: "fact", text: "the cfo confirmed the xero otchealth balance is 5000", ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "cto", kind: "fact", text: "the cto heard the xero otchealth balance is 900 not 5000", ts: iso(10) }];
+  const rows = normalizeAssertionRows(execRows, cosmosRows);
+  const groups = findContestedGroups(rows, { nowMs: NOW });
+  assert.equal(groups.length, 1, "a genuine same-account balance conflict must still be flagged");
+  const proposals = proposalsFor(groups, { owner: "cto" });
+  assert.equal(proposals.length, 1);
+  assert.match(proposals[0].text, /5000/);
+  assert.match(proposals[0].text, /900/);
+});
+
 test("normalizeAssertionRows maps a Cosmos row's kind to type and falls back _ts -> ISO ts", () => {
   const cosmosRows = [{ id: "c1", agent: "cto", kind: "pitfall", text: "kept", _ts: Math.floor(NOW / 1000) }];
   const rows = normalizeAssertionRows([], cosmosRows);
