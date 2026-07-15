@@ -25,6 +25,8 @@
 //   status   "<what I'm working on / project status>" --agent cfo    # ALWAYS shared to the exec team
 //   entity   set <key> "<value>" --agent cfo [--source ..] [--share]  # deterministic current-value ("what is X now")
 //   entity   get <key> --agent cfo | list | alias "<from>" <to>       # latest-wins per key; alias many phrasings -> 1 key
+//   entity   link <from-key> <relation> <to-key> --agent cfo [--source ..] [--share]  # append a relationship edge (from -relation-> to)
+//   entity   graph <key> --agent cfo [--hops 1|2]                     # 1-2 hop neighborhood walk over links, both directions ("what depends on X")
 //   recall   "<query>"  --agent cfo [--n 25]    # searches YOUR lane + the shared TEAM feed
 //   tail     --agent cfo [--n 40]               # YOUR pitfalls/recent + the TEAM feed (company-wide)
 //   team     [--agent x] [--n 60]               # the whole exec team feed: who is working on what
@@ -40,6 +42,7 @@ import { dirname, join } from "node:path";
 import { writeAdvisory } from "./dedupe.mjs";
 import { parseNdjson, serializeNdjson, nextId, isConflict, condHeaders } from "./blobwrite.mjs";
 import { kvSecret } from "./azure-secret.mjs";
+import { linkFields, walkGraph, formatEdge } from "./entity-graph.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
 
 const SM = "otchealth-shared-prod";
@@ -446,7 +449,38 @@ async function entityCmd() {
     console.log(`[kb-memory] entity ${keyRef} = ${value} -> ${AGENT} id=${entry.id}${prevRef ? ` (was: ${prevRef.evalue})` : ""}${shared ? "; shared+indexed" : ""}.`);
     return;
   }
-  console.error('usage: mem.mjs entity set <key> "<value>" | get <key> | list | alias "<from>" <to>   --agent <a> [--share]');
+  // ---- entity RELATIONSHIP (edge) layer, Phase 4D: the smallest viable extension so the ledger can
+  // answer "what depends on X" with a 1-2 hop walk. A link is just another ledger row (type
+  // "entity_link"), so it rides the SAME append/publish/index plumbing as `entity set` above; the walk
+  // is a PURE in-memory traversal over rows already loaded by load() (see entity-graph.mjs). No new
+  // data store, no graph DB, no index: deliberately the thinnest extension that answers the question.
+  if (sub === "link") {
+    const fromRaw = positional[1] || "", relRaw = positional[2] || "", toRaw = positional[3] || "";
+    if (!fromRaw || !relRaw || !toRaw) { console.error('usage: mem.mjs entity link <from-key> <relation> <to-key> --agent <a> [--source "..."] [--share]'); process.exit(2); }
+    // Resolve both endpoint aliases from the FRESH rows on each attempt (same concurrency-safety
+    // pattern as `entity set` above), so links work through aliases exactly like get/set do.
+    const { entry } = await commitAppend((freshRows) => {
+      const fromKey = resolveAlias(freshRows, fromRaw);
+      const toKey = resolveAlias(freshRows, toRaw);
+      return { id: newId(freshRows), ts: new Date().toISOString(), ...linkFields(fromKey, relRaw, toKey), tags: TAGS, by: AGENT, source: SOURCE || undefined };
+    });
+    let shared = false;
+    if (SHARE) shared = await publishShared(AGENT, entry);
+    maybeIndex(entry, shared);
+    console.log(`[kb-memory] entity link ${entry.ekey} -${entry.relation}-> ${entry.evalue} -> ${AGENT} id=${entry.id}${shared ? "; shared+indexed" : ""}.`);
+    return;
+  }
+  if (sub === "graph") {
+    const k = resolveAlias(rows, positional[1] || "");
+    if (!k) { console.error('usage: mem.mjs entity graph <key> --agent <a> [--hops 1|2]'); process.exit(2); }
+    const hops = parseInt(takeVal("--hops", "2"), 10) || 2;
+    const g = walkGraph(rows, k, { hops });
+    console.log(`# entity graph for '${k}' (${g.hops} hop(s), ${AGENT} ledger): ${g.edges.length} edge(s), ${g.nodes.length} node(s)`);
+    if (!g.edges.length) { console.log(`(no links found for '${k}' within ${g.hops} hop(s))`); return; }
+    for (const e of g.edges.slice().sort((a, b) => a.depth - b.depth)) console.log(`  [hop ${e.depth}] ${formatEdge(e)}`);
+    return;
+  }
+  console.error('usage: mem.mjs entity set <key> "<value>" | get <key> | list | alias "<from>" <to> | link <from-key> <relation> <to-key> | graph <key> [--hops 1|2]   --agent <a> [--share]');
   process.exit(2);
 }
 
