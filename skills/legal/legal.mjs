@@ -16,10 +16,31 @@
 //   node legal.mjs matter show <id> [--personal]
 //   node legal.mjs matters [--personal]                           # list matters (company by default)
 //   node legal.mjs docket add <id> <YYYY-MM-DD> "<what>" [--personal]
-//   node legal.mjs docket due [days]                              # due/overdue across all matters (default 30)
+//   node legal.mjs docket due [days] [--json]                     # due/overdue across all matters (default 30)
 //   node legal.mjs note <id> "<text>" [--personal]
+//
+// `docket due --json` emits each row with a `source` ('manual'|'courtlistener'|'extracted') and a
+// `verified` boolean (see applyDocketRowDefaults below). Rows written by today's `docket add` carry
+// neither field; they default to source:"manual", verified:true (a human typed it in directly, so it
+// is trusted without a separate confirmation step). A future extraction pipeline (CourtListener /
+// document parsing) is expected to write source:"courtlistener"|"extracted" with verified:false until
+// a human confirms it, so downstream consumers (e.g. skills/legal-deadline-pager) never page on an
+// unconfirmed, machine-extracted deadline.
+//
+// This file is both a CLI (guarded by the isMain check at the bottom) and an importable module (the
+// pure applyDocketRowDefaults helper below has no I/O and is safe to import standalone).
 
 import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
+
+/** Pure: apply the source/verified default rule to one docket row. No I/O; safe to import + unit-test. */
+export function applyDocketRowDefaults(row) {
+  return {
+    ...row,
+    source: row.source || "manual",
+    verified: row.verified === undefined || row.verified === null ? true : !!row.verified,
+  };
+}
 
 // Store lives on AZURE (off Google): dedicated storage account otchealthlegalstore, with
 // separate `company` and `personal` blob containers. The personal container holds the
@@ -136,63 +157,70 @@ async function listMatterNames(container) {
 }
 const matterBlob = (id) => `matters/${id}.json`;
 
-// ---- main ----
-const cmd = pos[0];
-try {
-  if (cmd === "cite") { await cite(pos.slice(1).join(" ")); process.exit(0); }
-  if (cmd === "caselaw") { await caselaw(pos.slice(1).join(" ")); process.exit(0); }
-  if (cmd === "edgar") { await edgar(pos.slice(1).join(" ")); process.exit(0); }
+// ---- main (CLI only; applyDocketRowDefaults above is importable without triggering this) ----
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  const cmd = pos[0];
+  try {
+    if (cmd === "cite") { await cite(pos.slice(1).join(" ")); process.exit(0); }
+    if (cmd === "caselaw") { await caselaw(pos.slice(1).join(" ")); process.exit(0); }
+    if (cmd === "edgar") { await edgar(pos.slice(1).join(" ")); process.exit(0); }
 
-  ensureStore();
+    ensureStore();
 
-  if (cmd === "matter" && pos[1] === "new") {
-    const id = pos[2];
-    if (!id) { console.error("usage: legal.mjs matter new <id> --client <c> --jur <j> --type <t> [--personal]"); process.exit(2); }
-    const m = { id, namespace: NS, client: flag("client") || (personal ? "Matthew Moore (personal)" : "?"), jurisdiction: flag("jur") || flag("jurisdiction") || "?", type: flag("type") || "?", status: "open", opened: new Date().toISOString(), adverse: flag("adverse") || "", docket: [], notes: [] };
-    await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
-    console.log(`opened matter ${NS}/${id} (${m.client}, ${m.jurisdiction}, ${m.type})${personal ? " [CONFIDENTIAL]" : ""}`);
+    if (cmd === "matter" && pos[1] === "new") {
+      const id = pos[2];
+      if (!id) { console.error("usage: legal.mjs matter new <id> --client <c> --jur <j> --type <t> [--personal]"); process.exit(2); }
+      const m = { id, namespace: NS, client: flag("client") || (personal ? "Matthew Moore (personal)" : "?"), jurisdiction: flag("jur") || flag("jurisdiction") || "?", type: flag("type") || "?", status: "open", opened: new Date().toISOString(), adverse: flag("adverse") || "", docket: [], notes: [] };
+      await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
+      console.log(`opened matter ${NS}/${id} (${m.client}, ${m.jurisdiction}, ${m.type})${personal ? " [CONFIDENTIAL]" : ""}`);
 
-  } else if (cmd === "matter" && pos[1] === "show") {
-    const id = pos[2]; const m = await getBlob(NS, matterBlob(id));
-    if (!m) { console.log("no such matter"); } else console.log(JSON.stringify(m, null, 2));
+    } else if (cmd === "matter" && pos[1] === "show") {
+      const id = pos[2]; const m = await getBlob(NS, matterBlob(id));
+      if (!m) { console.log("no such matter"); } else console.log(JSON.stringify(m, null, 2));
 
-  } else if (cmd === "matters") {
-    const names = await listMatterNames(NS);
-    console.log(`${NS} matters: ${names.length}`);
-    for (const n of names) { const m = await getBlob(NS, n); if (m) console.log(`  ${m.id} | ${m.client} | ${m.jurisdiction} | ${m.type} | ${m.status} | deadlines: ${(m.docket || []).length}`); }
-    if (!personal) console.log("(personal matters are confidential; list with --personal)");
+    } else if (cmd === "matters") {
+      const names = await listMatterNames(NS);
+      console.log(`${NS} matters: ${names.length}`);
+      for (const n of names) { const m = await getBlob(NS, n); if (m) console.log(`  ${m.id} | ${m.client} | ${m.jurisdiction} | ${m.type} | ${m.status} | deadlines: ${(m.docket || []).length}`); }
+      if (!personal) console.log("(personal matters are confidential; list with --personal)");
 
-  } else if (cmd === "docket" && pos[1] === "add") {
-    const id = pos[2], date = pos[3], what = pos.slice(4).join(" ");
-    if (!id || !date || !what) { console.error('usage: legal.mjs docket add <id> <YYYY-MM-DD> "<what>" [--personal]'); process.exit(2); }
-    const m = await getBlob(NS, matterBlob(id)); if (!m) { console.error("no such matter " + id); process.exit(1); }
-    m.docket = m.docket || []; m.docket.push({ date, what, added: new Date().toISOString().slice(0, 10) });
-    m.docket.sort((a, b) => a.date < b.date ? -1 : 1);
-    await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
-    console.log(`docketed ${date} "${what}" on ${NS}/${id}`);
+    } else if (cmd === "docket" && pos[1] === "add") {
+      const id = pos[2], date = pos[3], what = pos.slice(4).join(" ");
+      if (!id || !date || !what) { console.error('usage: legal.mjs docket add <id> <YYYY-MM-DD> "<what>" [--personal]'); process.exit(2); }
+      const m = await getBlob(NS, matterBlob(id)); if (!m) { console.error("no such matter " + id); process.exit(1); }
+      m.docket = m.docket || []; m.docket.push({ date, what, added: new Date().toISOString().slice(0, 10) });
+      m.docket.sort((a, b) => a.date < b.date ? -1 : 1);
+      await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
+      console.log(`docketed ${date} "${what}" on ${NS}/${id}`);
 
-  } else if (cmd === "docket" && pos[1] === "due") {
-    const days = parseInt(pos[2] || "30", 10);
-    const cutoff = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
-    const today = new Date().toISOString().slice(0, 10);
-    const rows = [];
-    for (const ns of ["company", "personal"]) {
-      for (const n of await listMatterNames(ns)) { const m = await getBlob(ns, n); for (const d of (m?.docket || [])) if (d.date <= cutoff) rows.push({ ns, id: m.id, ...d, overdue: d.date < today }); }
+    } else if (cmd === "docket" && pos[1] === "due") {
+      const days = parseInt(pos[2] || "30", 10);
+      const cutoff = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = [];
+      for (const ns of ["company", "personal"]) {
+        for (const n of await listMatterNames(ns)) { const m = await getBlob(ns, n); for (const d of (m?.docket || [])) if (d.date <= cutoff) rows.push({ ns, id: m.id, ...d, overdue: d.date < today }); }
+      }
+      rows.sort((a, b) => a.date < b.date ? -1 : 1);
+      if (argv.includes("--json")) {
+        console.log(JSON.stringify(rows.map(applyDocketRowDefaults), null, 2));
+      } else {
+        console.log(`deadlines through ${cutoff} (${rows.length}):`);
+        for (const r of rows) console.log(`  ${r.overdue ? "OVERDUE" : "due    "} ${r.date} | ${r.ns}/${r.id} | ${r.what}`);
+      }
+
+    } else if (cmd === "note") {
+      const id = pos[1], text = pos.slice(2).join(" ");
+      if (!id || !text) { console.error('usage: legal.mjs note <id> "<text>" [--personal]'); process.exit(2); }
+      const m = await getBlob(NS, matterBlob(id)); if (!m) { console.error("no such matter " + id); process.exit(1); }
+      m.notes = m.notes || []; m.notes.push({ ts: new Date().toISOString(), text });
+      await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
+      console.log(`noted on ${NS}/${id}`);
+
+    } else {
+      console.error('commands: cite "<q>" | matter new <id> --client --jur --type [--personal] | matter show <id> | matters [--personal] | docket add <id> <date> "<what>" | docket due [days] [--json] | note <id> "<text>"');
+      process.exit(2);
     }
-    rows.sort((a, b) => a.date < b.date ? -1 : 1);
-    console.log(`deadlines through ${cutoff} (${rows.length}):`);
-    for (const r of rows) console.log(`  ${r.overdue ? "OVERDUE" : "due    "} ${r.date} | ${r.ns}/${r.id} | ${r.what}`);
-
-  } else if (cmd === "note") {
-    const id = pos[1], text = pos.slice(2).join(" ");
-    if (!id || !text) { console.error('usage: legal.mjs note <id> "<text>" [--personal]'); process.exit(2); }
-    const m = await getBlob(NS, matterBlob(id)); if (!m) { console.error("no such matter " + id); process.exit(1); }
-    m.notes = m.notes || []; m.notes.push({ ts: new Date().toISOString(), text });
-    await putBlob(NS, matterBlob(id), JSON.stringify(m, null, 2));
-    console.log(`noted on ${NS}/${id}`);
-
-  } else {
-    console.error('commands: cite "<q>" | matter new <id> --client --jur --type [--personal] | matter show <id> | matters [--personal] | docket add <id> <date> "<what>" | docket due [days] | note <id> "<text>"');
-    process.exit(2);
-  }
-} catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+  } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+}
