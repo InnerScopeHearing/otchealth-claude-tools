@@ -33,6 +33,8 @@ node skills/kb-memory/mem.mjs entity set <key> "<value>"   --agent cfo [--source
 node skills/kb-memory/mem.mjs entity get <key>             --agent cfo            # the CURRENT value + provenance (resolves aliases)
 node skills/kb-memory/mem.mjs entity list                  --agent cfo            # all current-values + aliases
 node skills/kb-memory/mem.mjs entity alias "<phrasing>" <canonical-key> --agent cfo  # point many phrasings at one key
+node skills/kb-memory/mem.mjs entity link <from-key> <relation> <to-key> --agent cfo [--source "..."] [--share]  # append a relationship edge (thin, no graph DB)
+node skills/kb-memory/mem.mjs entity graph <key>            --agent cfo [--hops 1|2]  # 1-2 hop neighborhood walk: "what depends on X" (both directions)
 node skills/kb-memory/mem.mjs recall   "<query>"           --agent cfo [--n 25]    # searches YOUR lane + the TEAM feed
 node skills/kb-memory/mem.mjs tail     --agent cfo [--n 40]     # YOUR pitfalls/recent + the TEAM feed (company-wide)
 node skills/kb-memory/mem.mjs team     [--n 60]                # the whole exec team feed: who is working on what
