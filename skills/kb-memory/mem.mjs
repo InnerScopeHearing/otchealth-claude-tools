@@ -91,6 +91,22 @@ function resolveSaJson() {
   try { if (existsSync(p)) return readFileSync(p, "utf8"); } catch {}
   return null;
 }
+// ---- "is the memory backend reachable?" (Azure-native; GCP is fully RETIRED) ----
+// The store + shared feed live on Azure (Key Vault -> storage account key -> Blob SAS via sm()/initStore();
+// see azure-secret.mjs). So the real availability signal is "can we mint an Azure credential", NOT "is the
+// GCP claude-driver SA present". The old resolveSaJson()-only check false-negatived EVERY Azure-native seat
+// (no GCP SA) into "MEMORY OFF": whoami printed "service-account: MISSING", sunrise printed "attach FAIL",
+// AND the pack silently stopped refreshing + team-awareness went blank + the semantic warm was skipped --
+// even though reads and writes were working fine over Azure. Probe the actual write path, not a retired var.
+function azureCredsPresent() {
+  return !!(
+    (process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID) ||
+    (process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER) // Container Apps managed identity
+  );
+}
+// True when SOME credential can reach the Azure memory backend. Azure first (the norm); a still-hydrated
+// GCP SA is accepted last purely as harmless legacy (retired, never required).
+function memoryBackendPresent() { return azureCredsPresent() || !!resolveSaJson(); }
 function saJwt(scope) {
   const raw = resolveSaJson();
   if (!raw) { console.error("kb-memory: MEMORY IS OFF - no service account. Set GCP_CLAUDE_DRIVER_SA_JSON, or place ~/.gcp_claude_driver_sa.json (run /tmp/octools/setup/session-start.sh)."); process.exit(3); }
@@ -506,8 +522,8 @@ async function runPack() {
   // own ledger: LOCAL cache fast-path; refresh from Blob only when stale AND the SA exists (no hard exit).
   let rows = readCacheRows(kb), refreshed = false;
   if (!rows || ageMs(cacheFile(kb)) > THROTTLE) {
-    if (resolveSaJson()) { try { await initStore(); rows = await load(); writeCacheRows(kb, rows); refreshed = true; } catch { rows = rows || []; } }
-    else { rows = rows || []; } // no SA -> stale-local, fail-open (never the saJwt hard exit on the hot path)
+    if (memoryBackendPresent()) { try { await initStore(); rows = await load(); writeCacheRows(kb, rows); refreshed = true; } catch { rows = rows || []; } }
+    else { rows = rows || []; } // no memory backend -> stale-local, fail-open (never a hard exit on the hot path)
   }
   // query terms: UserPromptSubmit stdin JSON (safe parse, no shell interpolation) or --query.
   // Score by term-OVERLAP (not strict AND) so a long natural-language prompt still ranks; drop short
@@ -535,7 +551,7 @@ async function runPack() {
 
   // team awareness: latest status per OTHER exec agent, RING-DENY-filtered. Privileged lanes never read it.
   let team = [];
-  if (!NO_SHARE.has(AGENT) && resolveSaJson()) {
+  if (!NO_SHARE.has(AGENT) && memoryBackendPresent()) {
     let shared = readTeamCache();
     if (!shared || ageMs(TEAM_CACHE) > 300 * 1000) { try { shared = await readSharedAll(); writeTeamCache(shared); } catch { shared = shared || []; } }
     const { latestStatus } = teamLines(shared || []);
@@ -554,7 +570,7 @@ async function runPack() {
       try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(SEM_STAMP, String(Date.now())); } catch {} // stamp EARLY so a slow/failed call still respects the window
       const excl = new Set([...ranked, ...recent, ...pitfalls, ...decisions, ...corrections, ...entities].map((r) => (r.text || "").slice(0, 40).toLowerCase()));
       semantic = await semanticHits(rawPrompt, creds, excl);
-    } else if (resolveSaJson()) spawnSemRefresh(); // not cached -> warm it off the hot path for next time; skip this turn
+    } else if (memoryBackendPresent()) spawnSemRefresh(); // not cached -> warm it off the hot path for next time; skip this turn
   }
 
   // beacon: LIVE only if the ledger is actually readable + non-empty (proves FUNCTION, not just wiring).
@@ -619,11 +635,11 @@ async function runPack() {
     const envAg = (process.env.KB_AGENT || "").trim();
     const resolved = sessMark || repoMark || envAg;
     const src = sessMark ? "session marker (~/.claude/.kb-agent)" : repoMark ? "repo .kb-agent" : envAg ? "env KB_AGENT" : "(none)";
-    const saOk = !!resolveSaJson();
+    const saOk = memoryBackendPresent();
     console.log("# kb-memory whoami");
     console.log(`resolved identity (the hooks use this): ${resolved || "(NONE - auto-recall OFF)"}  [via ${src}]`);
     if (sessMark && envAg && sessMark !== envAg) console.log(`note: session marker '${sessMark}' overrides shared env KB_AGENT '${envAg}' (correct when agents share one environment).`);
-    console.log(`service-account: ${saOk ? "present" : "MISSING - writes will fail"}`);
+    console.log(`memory backend: ${saOk ? "present (Azure Key Vault + Blob)" : "MISSING - no Azure creds (AZURE_SP_* or managed identity); writes will fail"}`);
     if (!AGENT) { console.log(resolved ? `tip: run 'whoami --agent ${resolved}' to probe its ledger, or 'use <role>' to claim.` : "RESULT: FAIL - no identity. Run 'mem.mjs use <role>' then re-run."); return; }
     if (resolved && resolved !== AGENT) console.log(`WARNING: this session resolves to '${resolved}', not '${AGENT}'. Claim it: mem.mjs use ${AGENT}`);
     try {

@@ -13,8 +13,15 @@ SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 
 # Only meaningful on a Desktop with the Claude CLI (that's where an MCP server gets registered).
 command -v claude >/dev/null 2>&1 || { exit 0; }
-# Need the SA to mint the lane token.
-[ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ] || [ -f "${HOME}/.gcp_claude_driver_sa.json" ] || exit 0
+# Need SOME credential to mint the lane token. Azure Key Vault is the store now (GCP is RETIRED), and
+# connect.mjs resolves the lane creds KV-first (managed identity -> AZURE_SP_* -> az-CLI/OIDC). Accept any
+# of those; a still-present GCP SA is honored last, purely as harmless legacy. The old GCP-SA-only gate
+# made this hook a silent no-op on every Azure-native seat, so the session never auto-connected.
+{ [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; } \
+  || { [ -n "${IDENTITY_ENDPOINT:-}" ] && [ -n "${IDENTITY_HEADER:-}" ]; } \
+  || command -v az >/dev/null 2>&1 \
+  || [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ] || [ -f "${HOME}/.gcp_claude_driver_sa.json" ] \
+  || exit 0
 
 # Resolve this agent (reuse the kb-memory resolver; do NOT auto-claim here — an unidentified session
 # should not guess a privileged lane).

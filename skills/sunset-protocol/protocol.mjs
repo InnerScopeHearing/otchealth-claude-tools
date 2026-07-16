@@ -256,7 +256,7 @@ async function sunrise() {
   let l3 = [];
   try { await commonsInit(false); l3 = computeLast3(await readLedger(agent)); } catch { /* fail-open */ }
   console.log(`================ SUNRISE TRANSFER PROTOCOL - ${agent.toUpperCase()} ================`);
-  console.log(`attach: memory ${attach}` + (attach !== "PASS" ? "  (if FAIL: the claude-driver SA is missing from this environment - tell Matt)" : ""));
+  console.log(`attach: memory ${attach}` + (attach !== "PASS" ? "  (if FAIL: no memory-backend creds resolved - check AZURE_SP_* / managed identity, or run session-start; this is NOT a GCP-SA issue, GCP is retired)" : ""));
   console.log(`\nThe agent must now greet Matt EXACTLY:\n  "I am fully updated and ready to go, Sir."`);
   console.log(`\nThen present THE LAST 3 THINGS WE WORKED ON (from the live ledger):`);
   if (l3.length) l3.forEach((x, i) => console.log(`  ${i + 1}. [${x.ts}] ${x.title}`));

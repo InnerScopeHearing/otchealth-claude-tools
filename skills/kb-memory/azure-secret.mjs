@@ -48,6 +48,12 @@ import { execFileSync } from "node:child_process";
 let _identityTok = null, _identityExp = 0;
 let _spTok = null, _spExp = 0;
 let _azTok = null, _azExp = 0;
+// The "OK (fallback): ... via the SP credential" notice is per-secret-fetch noise that agents on a seat
+// with no managed identity (the norm) see on EVERY read/write. It is informational, not a failure, and
+// three agents (CFO, CRO, and the migrated Developer) misread it as an error. Emit it ONCE per process
+// per direction, then stay silent -- the diagnostic value (which credential path worked) is fully
+// conveyed by the first line; repeating it on every fetch adds nothing but log spam.
+let _spFallbackNotedRead = false, _spFallbackNotedWrite = false;
 
 /** Container Apps managed-identity token, via the platform-injected sidecar endpoint. Returns null
  *  (never throws) if the container has no identity attached (IDENTITY_ENDPOINT unset) or the call
@@ -156,13 +162,14 @@ export async function kvSecretSet(name, value) {
       });
       if (r.ok) {
         _authMode = mode;
-        if (mode === "sp") {
+        if (mode === "sp" && !_spFallbackNotedWrite) {
+          _spFallbackNotedWrite = true;
           // CLARIFIED 2026-07-10 (real fleet incident, 2nd occurrence -- CFO then CRO both misread
           // this exact line as evidence of a broken/failing write, when in fact the write ALREADY
           // SUCCEEDED (r.ok is true) by the time this prints -- it's a diagnostic note about WHICH
-          // credential worked, not an error. Wording fixed to say so explicitly rather than let a
-          // third agent repeat the same misdiagnosis.
-          console.warn(`[kv-secret] OK (fallback): WRITE "${name}" succeeded via the SP credential, not identity (identity token was rejected -- likely missing Key Vault Secrets Officer on the identity, harmless on Hyperagent which has no managed identity anyway). The write completed normally; this is informational, not a failure.`);
+          // credential worked, not an error. Emitted ONCE per process (2026-07-16): the same misread
+          // recurred, and repeating it on every write was pure spam.
+          console.warn(`[kv-secret] note (once): WRITEs are succeeding via the SP credential, not a managed identity (identity token rejected -- expected on a seat with no managed identity). This is informational, not a failure; suppressing further per-write notices.`);
         }
         return true;
       }
@@ -192,13 +199,14 @@ export async function kvSecret(name) {
       const r = await fetch(`https://${vault}.vault.azure.net/secrets/${name}?api-version=7.4`, { headers: { Authorization: `Bearer ${tok}` } });
       if (r.ok) {
         _authMode = mode;
-        if (mode === "sp") {
+        if (mode === "sp" && !_spFallbackNotedRead) {
+          _spFallbackNotedRead = true;
           // CLARIFIED 2026-07-10 (real fleet incident, 2nd occurrence -- CFO then CRO both misread
           // this exact line as evidence of a broken/failing read, when in fact the read ALREADY
           // SUCCEEDED (r.ok is true) by the time this prints -- it's a diagnostic note about WHICH
-          // credential worked, not an error. Wording fixed to say so explicitly rather than let a
-          // third agent repeat the same misdiagnosis.
-          console.warn(`[kv-secret] OK (fallback): READ "${name}" succeeded via the SP credential, not identity (identity token was rejected -- likely missing Key Vault Secrets User on the identity, harmless on Hyperagent which has no managed identity anyway). The value was retrieved normally; this is informational, not a failure.`);
+          // credential worked, not an error. Emitted ONCE per process (2026-07-16): the same misread
+          // recurred (migrated Developer seat), and repeating it on every read was pure spam.
+          console.warn(`[kv-secret] note (once): READs are succeeding via the SP credential, not a managed identity (identity token rejected -- expected on a seat with no managed identity). This is informational, not a failure; suppressing further per-read notices.`);
         }
         const v = (await r.json()).value;
         return v == null ? null : String(v).trim() || null;
