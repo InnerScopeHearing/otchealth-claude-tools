@@ -3,6 +3,17 @@ name: xero
 description: Drive the CFO's Xero books across all entities (OTCHealth, InnerScope/INND, HearingAssist, Matthew personal) through ONE multi-tenant OAuth connection. Xero is multi-tenant, one app + one refresh token reaches many organizations; each API call sets a Xero-tenant-id. Read (get) and write (request) per org. Wielded by the CFO / finance agent. Entity scoping: all four orgs are in the CFO write lane. INND deregistered from SEC reporting in 2021 and self-discloses under the OTC Markets Alternative Reporting Standard with no counsel or accounting staff, so the CFO has full authority to prepare and post INND + HearingAssist books (Matt directive 2026-06-18); the money gate + securities firewall still apply. Personal books carry the related-party / due-to-officer loans that must reconcile against the company side. INND is SELF-PREPARED (not audited), so no auditor-continuity constraint.
 ---
 
+> **THE GATEWAY IS THE SOLE XERO CONSUMER (2026-07-16). Do not use this CLI skill for the 4 orgs.**
+> For otchealth / innd / hearingassist / personal, the LIVE rotate-on-use token chain is owned by the
+> gateway (`otchealth-mcp-server`, in its Cosmos `cache` container). Use the gateway `xero_*` tools on an
+> exec lane instead: `xero_orgs`, `xero_report`, `xero_accounts`, `xero_manual_journals`,
+> `xero_bank_transactions`, `xero_invoices`. This skill now HARD-REFUSES those orgs (guard in
+> `xero-token.mjs`): a second consumer of the single-use chain forks it and breaks the gateway's live
+> connection (the "refresh token has been consumed" failure). The re-seed path still works, operator
+> re-consent (`consent-exchange.mjs`, authorization_code) mints a fresh KV `xero-refresh-token-<org>`
+> and the gateway adopts it via bootstrapHash supersede. Escape hatch for a genuinely gateway-independent
+> org or an operator emergency: set `XERO_ALLOW_DIRECT=1`.
+
 # Xero, multi-org (CFO)
 
 Chosen platform for the CFO (Brex perk: 100% off 6 months). Xero is QBO-class, multi-entity,
