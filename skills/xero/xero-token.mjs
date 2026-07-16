@@ -43,6 +43,26 @@ const LOCK_WAIT_MS = 20000; // max time to wait for another process's refresh be
 const b64url = (b) => Buffer.from(b).toString("base64url");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// GATEWAY SOLE-CONSUMER GUARD (2026-07-16). The gateway (otchealth-mcp-server, src/tools/xero) is now
+// the SOLE consumer of the live rotate-on-use Xero chain for all 4 orgs: it maintains the live token in
+// its Cosmos `cache` container, and the KV `xero-refresh-token-<org>` secrets are now SPENT bootstraps.
+// Running THIS skill against those orgs would read a spent token and FORK / break the gateway's live
+// chain (the exact "refresh token has been consumed" failure). Refuse by default at every rotation path.
+// Escape hatch XERO_ALLOW_DIRECT=1 is only for a genuinely gateway-independent org, or an operator-run
+// emergency re-seed. The consent flow (consent-exchange.mjs, authorization_code) does NOT pass through
+// here, so operator re-consent to mint a fresh KV bootstrap still works and the gateway adopts it.
+function guardGatewayOwnedOrg(org) {
+  if (ORGS_ALL.includes(org) && process.env.XERO_ALLOW_DIRECT !== "1") {
+    throw new Error(
+      `xero skill refuses org '${org}': the gateway is the SOLE Xero consumer since 2026-07-16 ` +
+      `(it owns the live rotate-on-use chain in Cosmos). Use the gateway xero_* tools on an exec lane ` +
+      `(xero_orgs / xero_report / xero_accounts / xero_manual_journals / xero_bank_transactions / xero_invoices). ` +
+      `Running this skill would fork and break the gateway's live token. Override ONLY for a ` +
+      `gateway-independent org or an operator emergency re-seed: set XERO_ALLOW_DIRECT=1.`
+    );
+  }
+}
+
 function loadSA() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) { try { return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); } catch {} }
   for (const p of [`${os.homedir()}/.gcp_claude_driver_sa.json`, "/agent/.gcp_claude_driver_sa.json"]) {
@@ -117,6 +137,7 @@ async function clientBasic() {
   return Buffer.from(`${id}:${sec}`).toString("base64");
 }
 async function refreshAndPersist(org) {
+  guardGatewayOwnedOrg(org); // the rotation primitive: hard-stop a fork of the gateway-owned chain
   const secretId = `xero-refresh-token-${org}`;
   let persistId = secretId;
   let refresh = await smRead(secretId);
@@ -138,6 +159,7 @@ async function refreshAndPersist(org) {
 }
 // ---- public: cached + locked access context ----
 export async function getAccessContext(org, opts = {}) {
+  guardGatewayOwnedOrg(org); // library entry: steer all skill data-ops to the gateway xero_* tools
   await requireSecrets(["xero-client-id", "xero-client-secret"]);
   const now = Date.now();
   // 1) fast path: a still-valid cached access token
