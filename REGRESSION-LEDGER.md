@@ -146,3 +146,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** N/A@N/A — Live Shopify Admin API pageUpdate across 67 pages: buttons given a reversed treatment (bone background #FBF7EE + terracotta text) for visible button affordance; badges/table-headers given bone text on the existing terracotta background. Verified via exact-string-match-before-write (zero mismatches) plus live screenshots on 3 sample pages.
 - **Verified:** Independent re-fetch of each page body post-fix + Browserbase screenshots confirming visible, readable button/label text on buyer-guide-oticon, matrix-vs-eargo-8, and gift-of-hearing
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-16T04:34Z] tag:shopify-breadcrumb-self-url-wrong — BreadcrumbList JSON-LD's final itemListElement (the current page itself) pointed to the wrong URL on 49 of 67 buyer-guide/compare/matrix-vs/review pages -- either the raw or slugified page title text instead of a real URL, or a duplicate of the parent hub's URL (e.g. all 16 review-* pages pointed to /pages/reviews instead of themselves)
+
+- **Root cause:** The original SEO Phase-2 breadcrumb-generation pass (2026-07-15 earlier same day) built the self-referencing URL from the page title string rather than the actual page handle, and for the review-* page family, copy-pasted the parent hub's URL into the child's slot instead of substituting the child's own handle. No post-generation validation compared the generated URL against the real page handle.
+- **Fix:** N/A@N/A — Live Shopify Admin API pageUpdate across 49 pages: parsed each page's BreadcrumbList JSON-LD, corrected the last itemListElement's item field to https://otchealthmart.com/pages/{realHandle}, re-serialized, pushed. Handles both compact and pretty-printed JSON-LD formats found across different pages.
+- **Verified:** Independent full re-scan via a fresh detection script (not reusing the fix script) confirmed 0 of 67 pages have the wrong-self-URL pattern afterward, down from 49
+**First recorded occurrence of this root-cause tag.**
