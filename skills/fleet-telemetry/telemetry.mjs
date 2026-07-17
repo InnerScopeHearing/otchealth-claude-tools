@@ -14,8 +14,9 @@
 //   node telemetry.mjs session-end --transcript <path> [--agent cto]
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-const SM = "otchealth-shared-prod";
 const INGEST = "https://us.i.posthog.com/capture/";
 // approx Claude pricing $/Mtok [input, output, cache-write, cache-read]
 const PRICE = {
@@ -27,21 +28,27 @@ const argv = process.argv.slice(2);
 const cmd = argv[0];
 const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 function readStdin() { try { return readFileSync(0, "utf8"); } catch { return ""; } }
+function read1(p) { try { return readFileSync(p, "utf8").split("\n")[0].trim(); } catch { return ""; } }
+/** Resolve the agent role for attribution. process.env.KB_AGENT is often ABSENT in the Stop-hook env
+ *  (that is why every pre-blackout event was attributed to "unknown": 38/38). Fall back to the durable
+ *  on-disk session marker written by `mem.mjs use <role>` (~/.claude/.kb-agent), then the per-repo
+ *  marker, mirroring mem.mjs's own resolution, before giving up to "unknown". */
+export function resolveAgent() {
+  const explicit = (process.env.KB_AGENT || takeVal("--agent", "")).trim();
+  if (explicit) return explicit.toLowerCase();
+  const mark = read1(`${homedir()}/.claude/.kb-agent`) || read1(`${process.env.CLAUDE_PROJECT_DIR || "."}/.kb-agent`);
+  return (mark || "unknown").toLowerCase();
+}
 
-function saJwt(scope) {
-  const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;}
-  const now = Math.floor(Date.now() / 1000);
-  const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
-  return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
-}
-async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
-  const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` });
-  const t = (await r0.json()).access_token;
-  const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
-  if (!r.ok) return null;
-  return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
-}
+// Secret resolution: Azure Key Vault ONLY. The GCP Secret Manager fallback that used to live here
+// was removed after the 2026-07 GCP retirement -- GCP_CLAUDE_DRIVER_SA_JSON is unset fleet-wide, so
+// the fallback could only ever return null, and its presence made a genuine "key unresolvable"
+// failure look like there was still a backup. That silent-null path is exactly what let the
+// 2026-07-02 telemetry blackout hide for 15 days: the old code fetched the ingest key via the GCP
+// SA; when the SA left session hydration the fetch went dark and every session exited 0 unnoticed.
+// kvSecret() is itself fail-open (returns null, never throws), so callers must treat null as
+// "not resolved" and surface it loudly rather than swallow it.
+async function sm(id) { return await kvSecret(id); }
 
 function parseTranscript(path) {
   const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
@@ -78,11 +85,18 @@ async function sessionEnd() {
   let stdin = {}; try { stdin = JSON.parse(readStdin() || "{}"); } catch {}
   const path = takeVal("--transcript", "") || stdin.transcript_path;
   const sid = (stdin.session_id || takeVal("--session", "") || crypto.randomUUID()).slice(0, 64);
-  const agent = (process.env.KB_AGENT || takeVal("--agent", "") || "unknown").toLowerCase();
+  const agent = resolveAgent();
   if (!path) { console.error("no transcript_path"); process.exit(0); } // never block session end
   let m; try { m = parseTranscript(path); } catch (e) { console.error("parse: " + e.message); process.exit(0); }
   const key = await sm("posthog-fleet-ingest-key");
-  if (!key) { console.error("no posthog-fleet-ingest-key"); process.exit(0); }
+  if (!key) {
+    // LOUD + distinctive (not the old terse "no posthog-fleet-ingest-key"): an unresolvable ingest
+    // key is the silent-failure CLASS that caused the 2026-07-02 blackout. We still exit 0 (a Stop
+    // hook must never block a session from ending), but this line is greppable, and the nightly
+    // stream-freshness pager (skills/azure-canary) is the real detector for a sustained outage.
+    console.error("[fleet-telemetry][BLACKOUT-RISK] posthog-fleet-ingest-key did not resolve via Azure Key Vault -- telemetry NOT sent this session. Check the vault + the session KV auth path (managed identity / AZURE_SP_*).");
+    process.exit(0);
+  }
   const now = new Date().toISOString();
   const base = { distinct_id: agent, timestamp: now };
   // callsite_id: the prompt-surface identifier for this session (defaults to the agent role, matching
@@ -95,7 +109,13 @@ async function sessionEnd() {
   console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} tools=${m.toolCalls} tok=${m.totalTok} ~$${m.cost.toFixed(3)} -> PostHog Fleet Agents`);
 }
 
-try {
-  if (cmd === "session-end") await sessionEnd();
-  else { console.error("usage: telemetry.mjs session-end [--transcript <path>] [--agent <a>]"); process.exit(2); }
-} catch (e) { console.error("ERROR: " + e.message); process.exit(0); }
+// Only run the CLI dispatch when executed directly (node telemetry.mjs ...), NOT when imported by a
+// test. Without this guard, importing the module to unit-test resolveAgent() would run sessionEnd()
+// (or the usage branch) and process.exit() on load.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  try {
+    if (cmd === "session-end") await sessionEnd();
+    else { console.error("usage: telemetry.mjs session-end [--transcript <path>] [--agent <a>]"); process.exit(2); }
+  } catch (e) { console.error("ERROR: " + e.message); process.exit(0); }
+}
