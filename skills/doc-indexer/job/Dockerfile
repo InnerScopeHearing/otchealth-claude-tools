@@ -55,4 +55,12 @@ COPY skills/fleet-telemetry/ /app/skills/fleet-telemetry/
 # CFO finance) into its own AI Search index, so ring agents recall their OWN memory by meaning (the
 # per-ring equivalent of memory-exec). Self-resolves each ring store's creds from SM via the SA; ring-safe.
 COPY skills/ring-memory-index/ /app/skills/ring-memory-index/
+# cfo-reconstruction (cron nightly): reconstruct.mjs sweep -- advances the CFO's book-reconstruction
+# ANALYSIS (read-only Xero snapshots + an optional staged manifest drain) and stages a batch for
+# sign-off. See runbooks/cfo-reconstruction-job.md. Needs gateway-connect (the cfo-lane bearer) and
+# cfo-onedrive (the CFO Incoming mirror) below; cfo-store/decision-clock/kb-memory are already
+# copied above.
+COPY skills/cfo-reconstruction/ /app/skills/cfo-reconstruction/
+COPY skills/gateway-connect/ /app/skills/gateway-connect/
+COPY skills/cfo-onedrive/ /app/skills/cfo-onedrive/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]
