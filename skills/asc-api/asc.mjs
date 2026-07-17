@@ -15,7 +15,7 @@
 // (versions, localizations, images) are developer-lane safe: they create a NEW draft
 // version and never touch what is currently live on the App Store.
 
-import { createPrivateKey, sign, randomUUID } from "node:crypto";
+import { createPrivateKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
