@@ -119,6 +119,13 @@ async function aisPush(batch) {
   const r = await fetch(`${AIS_EP}/indexes/${IDX}/docs/index?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
   if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 200));
 }
+async function aisDelete(ids) {
+  for (let i = 0; i < (ids || []).length; i += 1000) {
+    const batch = ids.slice(i, i + 1000).map((id) => ({ "@search.action": "delete", id }));
+    const r = await fetch(`${AIS_EP}/indexes/${IDX}/docs/index?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
+    if (!r.ok) throw new Error("delete " + r.status + " " + (await r.text()).slice(0, 200));
+  }
+}
 
 // read every shared exec-feed file. Exported so other kb-memory tooling (e.g. contradiction-scan.mjs)
 // reuses the SAME Blob-listing + credential-resolution logic instead of duplicating it; behavior is
@@ -143,6 +150,45 @@ export async function readExecFeed() {
 // sanitizes the rest so reindex is idempotent (same entry -> same key -> mergeOrUpload, never a dup).
 // Exported for tests/semantic-docid.test.mjs (stability + key-charset safety). Pure.
 export const docId = (agent, id) => `${agent}__${id}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
+
+// Stable short content hash for collision disambiguation (assignDocIds below). Not security-sensitive;
+// it only has to be deterministic and well-distributed so two DIFFERENT texts sharing one base key get
+// different suffixes. sha1 -> first 12 hex chars, already inside the Azure AI Search key charset.
+const shortHash = (text) => crypto.createHash("sha1").update(String(text == null ? "" : text)).digest("hex").slice(0, 12);
+
+// Assign a STABLE, INJECTIVE index doc-key to every entry (tagging each with `_docId`) and return the
+// set of base keys that had a genuine collision (>=2 entries with DIFFERENT text under one base key).
+//
+// THE BUG THIS FIXES (gs-10 -- a real data-integrity loss in the live brain): nextId() historically
+// produced un-salted 2-segment ids (e.g. "20260701-044"), so two different ledger entries could share
+// an id. docId() maps both to the SAME base key `agent__id`, and reindex()'s mergeOrUpload (plus its
+// skip-if-already-indexed filter) then silently keeps only ONE of them -- the other fact is permanently
+// absent from `memory-exec` and can never be recalled. Measured 18 such suppressed facts on the live
+// feed. (nextId() now appends a random salt, so new ids do not collide; this handles the historical
+// ones and is future-proof against any residual collision.)
+//
+// Minimal-churn by design: the common (unique) case KEEPS its bare `agent__id` key, so the ~4.7k
+// healthy docs stay in the index untouched (no re-embed). ONLY the colliding entries get a
+// `__<contentHash>` suffix so each distinct fact gets its own key. Idempotent: same entry -> same key
+// every run. Same-text entries within a colliding group still share a key (correct -- they are the same
+// fact). Pure (no I/O); exported for tests.
+export function assignDocIds(entries) {
+  const groups = new Map(); // baseKey -> entries[]
+  for (const e of entries || []) {
+    if (!e || !e.id) continue;
+    const base = docId(e._agent, e.id);
+    if (!groups.has(base)) groups.set(base, []);
+    groups.get(base).push(e);
+  }
+  const collidedBaseKeys = new Set();
+  for (const [base, arr] of groups) {
+    const distinctText = new Set(arr.map((e) => (e.text || "").trim()));
+    if (distinctText.size < 2) { for (const e of arr) e._docId = base; continue; }
+    collidedBaseKeys.add(base);
+    for (const e of arr) e._docId = `${base}__${shortHash(e.text)}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
+  }
+  return collidedBaseKeys;
+}
 
 // Trust-rank + annotate recall hits using an INJECTED semantic-trust module (so this is pure and unit-
 // testable offline: the caller passes the dynamically-imported trust module, or null). Returns:
@@ -196,17 +242,36 @@ async function reindex() {
   await init(); await ensureIndex();
   const entries = await readExecFeed();
   const have = await existingIds();
-  const todo = entries.filter(e => e.id && !have.has(docId(e._agent, e.id)));
-  console.error(`[memory-semantic] ${entries.length} exec entries; ${have.size} already indexed; ${todo.length} to embed`);
-  let n = 0, buf = [];
+  // Assign a stable, injective key to every entry: bare `agent__id` for the unique common case (kept
+  // as-is in the index, no re-embed), a content-hash-suffixed key ONLY for genuinely colliding entries
+  // so no distinct fact is silently dropped (the gs-10 id-collision bug).
+  const collidedBaseKeys = assignDocIds(entries);
+  const todo = entries.filter(e => e.id && e._docId && !have.has(e._docId));
+  console.error(`[memory-semantic] ${entries.length} exec entries; ${have.size} already indexed; ${todo.length} to embed; ${collidedBaseKeys.size} colliding base key(s) to de-duplicate`);
+  let n = 0, buf = [], bufIds = [];
+  const embedded = new Set(); // _docIds confirmed upserted this run (added only after a successful push)
+  const flush = async () => { if (!buf.length) return; await aisPush(buf); for (const id of bufIds) embedded.add(id); n += buf.length; buf = []; bufIds = []; };
   for (const e of todo) {
     const text = `[${e.type}] ${e.text || ""} ${(e.tags || []).join(" ")}`.slice(0, 8000);
     let vec; try { vec = (await embed([text]))[0]; } catch (err) { console.error("  embed fail " + e.id + ": " + err.message); continue; }
-    buf.push({ "@search.action": "mergeOrUpload", id: docId(e._agent, e.id), agent: e._agent, type: e.type || "", ts: e.ts || "", tags: (e.tags || []).join(", "), text: (e.text || "").slice(0, 16000), contentVector: vec });
-    if (buf.length >= 64) { await aisPush(buf); n += buf.length; buf = []; console.error(`  indexed ${n}/${todo.length}`); }
+    buf.push({ "@search.action": "mergeOrUpload", id: e._docId, agent: e._agent, type: e.type || "", ts: e.ts || "", tags: (e.tags || []).join(", "), text: (e.text || "").slice(0, 16000), contentVector: vec });
+    bufIds.push(e._docId);
+    if (buf.length >= 64) { await flush(); console.error(`  indexed ${n}/${todo.length}`); }
   }
-  if (buf.length) { await aisPush(buf); n += buf.length; }
-  console.log(`memory-semantic: indexed ${n} new entries into ${IDX} (${have.size + n} total).`);
+  await flush();
+  // Prune the now-stale bare `agent__id` doc of each collided group: its fact has just been re-indexed
+  // under a `__<hash>` key (alongside the sibling the collision previously hid), so the bare key is a
+  // duplicate. SAFETY: delete a base key ONLY when EVERY entry of its group is confirmed present under
+  // its hashed key -- already in the index (have) OR successfully upserted this run (embedded). If an
+  // embed failed for any group member, keep the bare key as a fallback so no fact is lost; the next run
+  // retries. (Deletes run AFTER all upserts, so a partial feed read / embed failure can never orphan a
+  // live fact.)
+  const groupDocIds = new Map(); // base -> Set(_docId) over the FULL feed
+  for (const e of entries) { if (e.id && e._docId) { const b = docId(e._agent, e.id); if (!groupDocIds.has(b)) groupDocIds.set(b, new Set()); groupDocIds.get(b).add(e._docId); } }
+  const groupSafe = (b) => [...(groupDocIds.get(b) || [])].every(d => have.has(d) || embedded.has(d));
+  const orphans = [...collidedBaseKeys].filter(b => have.has(b) && groupSafe(b));
+  if (orphans.length) { await aisDelete(orphans); console.error(`  pruned ${orphans.length} stale bare-key duplicate(s)`); }
+  console.log(`memory-semantic: indexed ${n} new entries into ${IDX} (~${have.size + n - orphans.length} total after pruning ${orphans.length} duplicate(s)).`);
 }
 
 async function recall() {

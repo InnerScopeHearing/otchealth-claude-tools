@@ -471,5 +471,16 @@
       "iHEAR trademark"
     ],
     "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gs-10",
+    "query": "using GitHub as the agent team memory and coordination layer",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "GitHub",
+      "wrong substrate"
+    ],
+    "note": "RESTORED + FIXED 2026-07-17. Was DROPPED in #369: cto id 20260701-044 collided with an AWS-access decision, so this pitfall was absent from the memory-exec index and always MISSED. semantic.mjs assignDocIds() now disambiguates colliding ids with a content-hash suffix; reindex re-indexed both facts; verified recallable at rank 1."
   }
 ]

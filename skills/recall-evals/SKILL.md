@@ -101,16 +101,19 @@ freshly-mined 43-item set scores **hit@5 = 100%, MRR = 0.753, precision@5(mean) 
    because of text density, not recall quality. FIX: `scoring.mjs`'s new `groupHitLines()` groups raw
    output into one array entry per retrieved memory before scoring (used by both `run-evals.mjs` and
    `mine-cases.mjs`'s `validate()`, so mining and evaluation agree on what "top-K" means).
-3. **One item, `gs-10` ("GitHub is the wrong substrate..."), was DROPPED, not fixed.** Its source fact
-   (`cto` id `20260701-044`, verified present in `cto.jsonl` verbatim) is provably **absent from the
-   `memory-exec` search index** -- a direct index lookup on its expected doc id
-   (`cto__20260701-044`) returns a DIFFERENT row (an unrelated `20260701-044`-id AWS-access decision),
-   meaning two distinct ledger entries collided on the same generated id and `semantic.mjs reindex()`'s
-   skip-if-already-indexed upsert silently kept only the first. This is a real, separate kb-memory data-
-   integrity bug (id collision + non-merging reindex) -- **not fixed here** (out of scope for this PR;
-   flagged for a follow-up to kb-memory's id generation / `semantic.mjs reindex()`'s upsert semantics).
-   Testing recall against a fact that was never indexed would always MISS regardless of recall quality,
-   so the item was retired rather than kept as permanent dead weight.
+3. **`gs-10` ("GitHub is the wrong substrate...") was DROPPED in #369, then FIXED + RESTORED 2026-07-17.**
+   Its source fact (`cto` id `20260701-044`, present in `cto.jsonl` verbatim) was provably absent from
+   the `memory-exec` index: a direct lookup on its expected doc id (`cto__20260701-044`) returned a
+   DIFFERENT row (an unrelated `20260701-044`-id AWS-access decision), because two distinct ledger
+   entries collided on the same generated id and `semantic.mjs reindex()`'s skip-if-already-indexed
+   upsert silently kept only the first (18 such suppressed facts measured fleet-wide). ROOT CAUSE:
+   `nextId()` historically produced un-salted 2-segment ids, so different entries could share one; it
+   now appends a random salt. THE FIX (`semantic.mjs assignDocIds()`): entries whose base key
+   `agent__id` collides get a `__<contentHash>` suffix so each distinct fact is indexed separately (the
+   unique common case keeps its bare key, so the ~4.7k healthy docs are untouched), and reindex prunes
+   the now-duplicate bare key AFTER upserting the replacements. Live reindex re-indexed both facts and
+   the gs-10 pitfall is now recallable at rank 1, so the case was restored to the golden set as a
+   regression guard. See `tests/semantic-docid.test.mjs` (`assignDocIds` cases).
 
 ## Extending the golden set
 Prefer `mine-cases.mjs` (below) over hand-authoring: it generates a paraphrased query (tests semantic
