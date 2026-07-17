@@ -38,8 +38,15 @@ case "$MODE" in
   session)
     if [ -z "$AG" ]; then
       # No agent resolved => working memory is OFF (no ledger recall, no write-through). This is the
-      # silent-disable that bit the CFO. Warn LOUDLY. KB_MEMORY_OPTOUT=1 silences for a no-memory session.
+      # silent-disable that bit the CFO. Warn LOUDLY. KB_MEMORY_OPTOUT=1 silences for a no-memory session
+      # (an explicit, accepted opt-out is not an anomaly, so it silences the durable beacon below too).
       [ -n "${KB_MEMORY_OPTOUT:-}" ] && exit 0
+      # W1-5 KB_AGENT PROPAGATION FIX: the stdout banner below only reaches a human reading THIS exact
+      # output at THIS exact moment -- it leaves no durable trace (there's no agent identity to write a
+      # ledger entry OR a memory_beacon under). Make it CANARY-DETECTABLE: fire a best-effort, throttled
+      # kb_agent_unset PostHog event so "a session ran with memory silently off" is queryable later, not
+      # just an eyeball-only banner. Backgrounded + fail-open; never delays or blocks the session.
+      [ -f "$DIR/agent-unset-beacon.mjs" ] && (node "$DIR/agent-unset-beacon.mjs" --reason "session start: no marker, no repo default, KB_AGENT unset" >/dev/null 2>&1 &) || true
       echo "================================ WORKING MEMORY IS OFF ================================"
       echo "No agent resolved for this session: no ~/.claude/.kb-agent marker, no repo .kb-agent, and"
       echo "KB_AGENT is unset. This session will NOT recall from or write to any persistent ledger, and"
@@ -151,7 +158,19 @@ case "$MODE" in
     # count tool calls instead of attempting to derive real token usage. The counter file is SHARED
     # with the stop) case below (one "activity since last checkpoint" counter, reset by whichever
     # trigger fires first) so the two hooks can never drift out of sync with independent counts.
-    [ -z "$AG" ] && exit 0
+    if [ -z "$AG" ]; then
+      # W1-5 KB_AGENT PROPAGATION FIX: this used to be a SILENT exit -- the exact gap for a long
+      # single-turn (or auto-mode) session that never resolves an identity: it would run for however
+      # long with memory off and get NOT ONE reminder past the SessionStart banner (easy to scroll past,
+      # and this hook fires far more often, every ~15min/100 tool-calls, than SessionStart's one-shot).
+      # Re-fire the SAME throttled, durable beacon SessionStart uses (its own internal throttle -- default
+      # 30 min -- makes calling it on every periodic-check cheap/safe; KB_MEMORY_OPTOUT is honored the
+      # same way). Still exits 0 immediately after: there is no agent identity to capture/reflect under.
+      if [ -z "${KB_MEMORY_OPTOUT:-}" ] && [ -f "$DIR/agent-unset-beacon.mjs" ]; then
+        (node "$DIR/agent-unset-beacon.mjs" --reason "periodic-check: still no agent resolved mid-session" >/dev/null 2>&1 &) || true
+      fi
+      exit 0
+    fi
     PTHROT="$HOME/.claude/kb-journal/.last-periodic-checkpoint"
     CALLCOUNT="$HOME/.claude/kb-journal/.checkpoint-call-count"
     mkdir -p "$HOME/.claude/kb-journal" 2>/dev/null

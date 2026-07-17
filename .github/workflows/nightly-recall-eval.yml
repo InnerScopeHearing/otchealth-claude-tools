@@ -1,12 +1,24 @@
-# Nightly Recall-Quality Eval — scheduled hit@5 regression tripwire for fleet memory recall (REPORT-ONLY).
+# Nightly Recall-Quality Eval — scheduled hit@5 regression PAGER for fleet memory recall (W1-4).
 #
 # P0-3b (Cosmos Brain review F3): recall quality was ASSERTED not MEASURED — the old 12-case suite
-# saturated at hit@5 = 12/12 / MRR 1.0, so it could never detect a regression. This runs the EXPANDED
-# recall-evals golden set (100+ hard cases mined + validated from the real ledger; see
-# skills/recall-evals/mine-cases.mjs) nightly through the real semantic recall path, emits recall_eval
-# to the PostHog Fleet Agents project (the durable trend), and compares hit@5 to a stored baseline —
-# emitting recall_eval_regression + an ::warning:: if it drops more than the tolerance. NEVER blocks
-# anything (report-mode; run-evals.mjs exits 0 without --enforce).
+# saturated at hit@5 = 12/12 / MRR 1.0, so it could never detect a regression. This runs the recall-evals
+# golden set (43 cases: 11 hand-authored + 32 mined + validated from the real cto/coo/commons ledgers;
+# see skills/recall-evals/mine-cases.mjs) nightly through the real semantic recall path, emits recall_eval
+# to the PostHog Fleet Agents project (the durable trend), and compares hit@5 to the recorded baseline —
+# the baseline IS the SLO.
+#
+# W1-4 (2026-07-17): flipped from report-only to a REAL PAGER, same --strict exit-code convention as
+# nightly-azure-canary.yml (skills/azure-canary/canary.mjs). Before this, TWO real miscalibrations made
+# the "0.333 baseline" this workflow used to compare against meaningless: (1) 12 of the original 18 golden
+# items were tagged agent=commons, a nearly-empty pseudo-lane (3 rows total) that could never surface the
+# CTO/COO/CCO facts they actually referenced — fixed by retagging each item to its real originating agent
+# lane; (2) run-evals.mjs scored hit@K over raw recall-CLI stdout LINES, but semantic.mjs recall() renders
+# each hit as 2-3 lines, so a "top-5" cutoff was silently only evaluating the first ~2 real hits —
+# fixed by scoring.mjs's groupHitLines(). The corrected, freshly-mined 43-item set now genuinely hits
+# 100% (baseline.json), so a REAL regression (index staleness, embedding drift, a ranking bug, a ledger-
+# compaction dropping a cited fact) has real room to show up and page, instead of a permanently-broken
+# baseline masking it. continue-on-error is REMOVED: a hit@5 drop past the tolerance now makes this run
+# RED (--strict), matching the acceptance bar "a recall-quality drop PAGES, not a dashboard void."
 #
 # Azure auth = SECRETLESS OIDC (same pattern as nightly-eval.yml): run-evals.mjs / semantic.mjs resolve
 # the AI Search + Azure OpenAI + PostHog secrets from Key Vault via kvSecret(); claude-tools CI logs in
@@ -29,7 +41,7 @@ concurrency:
 
 jobs:
   recall-eval:
-    name: recall hit@5 tripwire (report-only)
+    name: recall hit@5 SLO pager
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -48,14 +60,13 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Run recall-eval (semantic) + emit + hit@5 baseline check
-        # Report-mode: exits 0 even on a low score / regression. The recall_eval_regression PostHog
-        # event + the ::warning:: line ARE the alert. --enforce is intentionally NOT passed here.
-        continue-on-error: true
+      - name: "Run recall-eval (--strict: RED on a hit@5 drop past the baseline SLO, or a dark sensor)"
+        # NO continue-on-error: a real regression (--strict) or a can't-run fatal now fails this step,
+        # so the job goes RED and pages instead of writing to a dashboard nobody watches.
         working-directory: skills/recall-evals
         run: |
           set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
-          node run-evals.mjs --emit --baseline baseline.json --tolerance 0.05 --json \
+          node run-evals.mjs --emit --baseline baseline.json --tolerance 0.05 --strict --json \
             2>&1 | tee "${GITHUB_WORKSPACE}/nightly-recall-eval.log"
 
       - name: Upload scorecard log

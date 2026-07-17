@@ -1,0 +1,33 @@
+{
+  "_comment": "W1-5 FLYWHEEL SELF-MONITORING registry. The PostHog-stream sibling of expected-indexes.json: declares every PostHog event stream the fleet's self-improving loop depends on being ALIVE, with a max_age_h freshness SLO, consumed by skills/azure-canary/canary.mjs (the same monitor that already covers Azure AI Search index freshness + scheduled-job liveness). WHY IT EXISTS: on 2026-07-17, while wiring this exact check, we found $ai_generation/agent_session (fleet-telemetry's Stop-hook emit) silent for ~367h (~15 days) and medic_dispatch silent for ~331h (~14 days) fleet-wide -- nothing had ever asserted these streams' FRESHNESS, only their per-event shape (see tests/groundedness-injection.test.mjs-style shape guards elsewhere). A dead stream just stops; only AGE catches that, the same lesson expected-indexes.json already encodes for search indexes. THE RULE: a stream any monitor/dashboard/detector relies on for currency MUST be registered here with a real max_age_h, or its silence goes unnoticed exactly like otchealth-brain did.",
+  "streams": [
+    {
+      "stream": "eval_result",
+      "project": "Fleet Agents (posthog-fleet-project-id)",
+      "emitted_by": "skills/agent-evals/run-evals.mjs --emit, via .github/workflows/nightly-eval.yml (daily cron 30 6 * * *)",
+      "max_age_h": 30,
+      "note": "A hard daily cron with no legitimate quiet day (there is always a golden-task suite to run); 30h = the daily cadence plus a half-day grace for a late/retried run, not a full extra day like the doc-room indexes get (those can go quiet on content, this can't)."
+    },
+    {
+      "stream": "$ai_generation",
+      "project": "Fleet Agents (posthog-fleet-project-id)",
+      "emitted_by": "skills/fleet-telemetry/telemetry.mjs session-end, wired as a Stop hook in .claude/settings.json (every Claude Code session)",
+      "max_age_h": 30,
+      "note": "PostHog's own LLM-Observability event; the fleet-wide agent-activity heartbeat. 2026-07-17: found STALE at ~367h -- the real, live incident this check exists to catch. 30h gives one calendar day of legitimate low activity before paging."
+    },
+    {
+      "stream": "agent_session",
+      "project": "Fleet Agents (posthog-fleet-project-id)",
+      "emitted_by": "skills/fleet-telemetry/telemetry.mjs session-end (same Stop hook as $ai_generation; both come from one capture pass over the transcript)",
+      "max_age_h": 30,
+      "note": "Same emit path and same 2026-07-17 STALE finding as $ai_generation (they are emitted together from the same hook call); kept as a separate registry row because it is a distinct PostHog event name a detector could depend on independently."
+    },
+    {
+      "stream": "medic_dispatch",
+      "project": "Fleet Agents (posthog-fleet-project-id)",
+      "emitted_by": "skills/fleet-medic/medic.mjs scan --dispatch, via the fleet-medic Container Apps Job (cron */30, otchealth-automation-rg)",
+      "max_age_h": 168,
+      "note": "DELIBERATELY LOOSE, NOT A HEARTBEAT. medic_dispatch fires ONLY when fleet-medic actually dispatches a self-heal directive or escalates (see classify() in medic.mjs) -- zero dispatches across a healthy fleet is GOOD news, not staleness, so this must never be tuned tight like the other three streams. The medic JOB's own liveness (is the scheduled Container Apps Job still Succeeded) is already covered by canary.mjs's existing dead-job pager; THIS check is a secondary, belt-and-suspenders signal for a job that keeps running green but silently stops finding real problems (a false-negative-forever bug in its own detection, not a crashed job). 168h (7 days) is long enough that a genuinely healthy quiet week never false-pages, but short enough to have already caught the real ~14-day gap found 2026-07-17 with 2x margin. If this ever pages, verify the fleet-medic job itself is Succeeded (if so, this is the interesting case: the job runs but its own classify() logic may be broken) before assuming an agent is actually dark."
+    }
+  ]
+}

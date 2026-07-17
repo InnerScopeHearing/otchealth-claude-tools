@@ -69,6 +69,34 @@ export function reciprocalRank(results, expect) {
 }
 
 /**
+ * Group raw recall-CLI stdout lines into one string per RETRIEVED MEMORY, not one string per line of
+ * text. Why this exists: semantic.mjs recall() renders each hit as 2-3 output lines (a "[agent] [type]
+ * date (score ...)" header, the text, and an optional "tags: ..." line). Before this helper, the
+ * runner fed every raw line straight into precisionAtK/hitAtK with a line-based cutoff k -- so "top-5"
+ * silently meant "top ~2 retrieved memories" (5 lines / ~2.5 lines-per-hit), not the 5 documents the
+ * search actually returned. That shrank the effective eval window by more than half and produced
+ * false MISSes on memories that were genuinely retrieved, just not within the first 5 raw lines.
+ * Grouping restores the intended meaning of k: "did a relevant memory appear in the top-k RESULTS."
+ *
+ * Detection rule: a line matching HEADER_RE starts a new hit block; every following line is appended
+ * to the current block until the next header (or the array ends). The very first line always starts
+ * a block even if it doesn't match (defensive: never drop a line if the caller's format ever drifts).
+ * Pure (no IO); the CLI-output framing recall-evals happens to consume for now.
+ * @param {string[]} rawLines - already trimmed, non-empty, non-comment lines (as run-evals.mjs already filters).
+ * @returns {string[]} one entry per hit block.
+ */
+const HIT_HEADER_RE = /^\[[^\]]+\]\s*\[[^\]]+\]\s/; // "[agent] [type] ..." - semantic.mjs recall()'s header line
+export function groupHitLines(rawLines) {
+  const lines = Array.isArray(rawLines) ? rawLines : [];
+  const hits = [];
+  for (const l of lines) {
+    if (HIT_HEADER_RE.test(l) || hits.length === 0) hits.push(l);
+    else hits[hits.length - 1] += " " + l;
+  }
+  return hits;
+}
+
+/**
  * Aggregate a full run: array of { results: string[], expect: string[] } (one per golden item) into
  * mean precision@k, hit-rate, and MRR across the whole golden set. Pure aggregation, no IO.
  * @param {Array<{results: string[], expect: string[]}>} items

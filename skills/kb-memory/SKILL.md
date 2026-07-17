@@ -105,6 +105,24 @@ Fail-safe: if NO agent resolves (no marker, no repo file, `KB_AGENT` unset) Sess
 (set `KB_MEMORY_OPTOUT=1` to silence a deliberately memory-less session). **Shared-environment rule:**
 each exec session claims its identity with the marker; per-app repos carry a committed `.kb-agent`.
 
+### KB_AGENT propagation, made robust + canary-detectable (W1-5, 2026-07-17)
+The stdout banner above only reaches a human reading that exact output at that exact moment -- it left
+NO durable trace (no agent identity means no ledger write and no `memory_beacon`, since `beacon.mjs`
+itself no-ops when its `--agent` is empty by design). Two fixes:
+- **`agent-unset-beacon.mjs`** -- a tiny, fire-and-forget script that emits a `kb_agent_unset` event to
+  the same PostHog Fleet Agents project every other fleet signal uses, throttled (default 30 min) via a
+  pure `shouldEmit(lastEmitMs, nowMs, throttleMs)` helper (tests: `tests/agent-unset-beacon.test.mjs`).
+  Fires from `kb-inject.sh`'s `session` mode (once per session, unless `KB_MEMORY_OPTOUT=1`) AND,
+  re-throttled, from `periodic-check` mode -- closing the second, quieter gap: `periodic-check` used to
+  `exit 0` SILENTLY when no agent resolved, so a long single-turn (or auto-mode) session with memory off
+  got exactly ONE reminder (the SessionStart banner, easy to scroll past) and then nothing for its entire
+  duration, even though this hook fires roughly every 15 min / 100 tool calls.
+- **Deliberately NOT wired into azure-canary's freshness registry.** `kb_agent_unset` is an
+  ANOMALY-shaped event (an occurrence is the problem; zero occurrences is healthy) -- the opposite shape
+  from a freshness SLO (silence is the problem). The natural home for "did this fire more than expected"
+  is a future signal-radar detector (count/rate-based), not azure-canary; not built here, but the durable
+  event now exists for it.
+
 ## The discipline (the SOP, enforced by the hooks + each agent's CLAUDE.md)
 1. **Wake:** read `tail`, then `recall` the topic. Reconstruct, don't recall.
 2. **Write-through:** the instant a fact/decision/correction happens, append it BEFORE continuing.

@@ -2,134 +2,123 @@
   {
     "id": "gs-01",
     "query": "kb-memory ledger source of truth",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "cto",
+    "engine": "semantic",
     "expect": [
       "source of truth",
       "ledger"
     ],
-    "note": "Fleet Super-Brain protocol status entries assert the shared ledger is the source of truth."
+    "note": "Fleet Super-Brain protocol status entries assert the shared ledger is the source of truth. FIXED 2026-07-17: was tagged agent=commons, which silently misses (commons.jsonl has only 3 unrelated FourVault rows; this fact lives in cto.jsonl)."
   },
   {
     "id": "gs-02",
     "query": "self-repair draft PR promptcheck",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "cto",
+    "engine": "semantic",
     "expect": [
       "selfrepair.mjs",
       "draft pr"
     ],
-    "note": "CTO fact entry on self-repair item #1 (PR #266), report-only + draft-PR mode."
+    "note": "CTO fact entry on self-repair item #1 (PR #266), report-only + draft-PR mode. FIXED 2026-07-17: agent commons -> cto (see gs-01)."
   },
   {
     "id": "gs-03",
     "query": "contradiction staleness signal radar detector",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "cto",
+    "engine": "semantic",
     "expect": [
       "signal radar",
       "detector #6"
     ],
-    "note": "CTO fact entry on the contradiction+staleness Signal Radar detector #6 shipping."
+    "note": "CTO fact entry on the contradiction+staleness Signal Radar detector #6 shipping. FIXED 2026-07-17: agent commons -> cto (see gs-01)."
   },
   {
     "id": "gs-04",
     "query": "PostHog gateway ops observability sink",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "cto",
+    "engine": "semantic",
     "expect": [
       "gateway ops",
       "posthog"
     ],
-    "note": "CTO decision entry on the PostHog Gateway Ops sink (self-improving-loop item A)."
+    "note": "CTO decision entry on the PostHog Gateway Ops sink (self-improving-loop item A). FIXED 2026-07-17: agent commons -> cto (see gs-01)."
   },
   {
     "id": "gs-05",
     "query": "Front Door WAF alphanumeric hyphens deploy",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "cto",
+    "engine": "semantic",
     "expect": [
       "waf policy names must be alphanumeric",
       "no hyphens"
     ],
-    "note": "CTO pitfall entry: WAF policy names must be alphanumeric only, no hyphens."
+    "note": "CTO pitfall entry: WAF policy names must be alphanumeric only, no hyphens. FIXED 2026-07-17: agent commons -> cto (see gs-01)."
   },
   {
     "id": "gs-06",
     "query": "published copy dash-clean compliance",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "coo",
+    "engine": "semantic",
     "expect": [
       "dash-clean",
       "no em/en dashes"
     ],
-    "note": "COO pitfall entry: published copy must be dash-clean (no em/en dashes)."
+    "note": "COO pitfall entry: published copy must be dash-clean (no em/en dashes). FIXED 2026-07-17: agent commons -> coo (see gs-01)."
   },
   {
     "id": "gs-07",
     "query": "agents merge approved work to main CEO git",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "coo",
+    "engine": "semantic",
     "expect": [
       "merge approved work to main themselves",
       "ceo does not handle"
     ],
-    "note": "COO decision entry: agents merge their own approved work; the CEO doesn't handle git/PR merges."
+    "note": "COO decision entry: agents merge their own approved work; the CEO doesn't handle git/PR merges. FIXED 2026-07-17: agent commons -> coo (see gs-01)."
   },
   {
     "id": "gs-08",
     "query": "Hyperagent CTO primary lead command change",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "cto",
+    "engine": "semantic",
     "expect": [
       "hyperagent cto is now the primary lead",
       "claude cto is standby"
     ],
-    "note": "CTO decision entry recording the 2026-07-01 command change (Matt directive)."
+    "note": "CTO decision entry recording the 2026-07-01 command change (Matt directive). FIXED 2026-07-17: agent commons -> cto (see gs-01)."
   },
   {
     "id": "gs-09",
     "query": "keeping a draft PR open protect main",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "cco",
+    "engine": "semantic",
     "expect": [
       "draft pr open does not protect main",
       "only merge"
     ],
-    "note": "CCO fact entry: a draft PR does not protect main, only merging deploys the CI workflow."
-  },
-  {
-    "id": "gs-10",
-    "query": "GitHub as agent memory coordination substrate",
-    "agent": "commons",
-    "engine": "keyword",
-    "expect": [
-      "wrong substrate",
-      "agent state"
-    ],
-    "note": "CTO pitfall entry: GitHub is the wrong substrate for agent team memory/coordination."
+    "note": "CCO fact entry: a draft PR does not protect main, only merging deploys the CI workflow. FIXED 2026-07-17: agent commons -> cco (see gs-01)."
   },
   {
     "id": "gs-11",
     "query": "Cosmos vector similarity threshold near-duplicate cache",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "cto",
+    "engine": "semantic",
     "expect": [
       "0.97",
       "near-duplicates"
     ],
-    "note": "CTO decision entry: Phase 4 HOT-cache Cosmos vector similarity threshold >=0.97."
+    "note": "CTO decision entry: Phase 4 HOT-cache Cosmos vector similarity threshold >=0.97. FIXED 2026-07-17: agent commons -> cto (see gs-01)."
   },
   {
     "id": "gs-12",
     "query": "onboarding continue handler white screen overlay hang",
-    "agent": "commons",
-    "engine": "keyword",
+    "agent": "developer",
+    "engine": "semantic",
     "expect": [
       "overlay hang",
       "boot-ready signal"
     ],
-    "note": "Developer pitfall entry on the onboarding Continue handler white-screen hang + fix."
+    "note": "Developer pitfall entry on the onboarding Continue handler white-screen hang + fix. FIXED 2026-07-17: agent commons -> developer (see gs-01)."
   },
   {
     "id": "gm-013",
@@ -196,5 +185,291 @@
       "FULL AUTONOMY"
     ],
     "note": "mined+validated from real commons ledger"
+  },
+  {
+    "id": "gm-cto-001",
+    "query": "How can we quickly increase the daily API call limit for all connected organizations without changing the app setup?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "5,000/day",
+      "client 44B1...E7B1"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-002",
+    "query": "What steps are needed to verify a new API connection for HearingAssist?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "scratchpad/xero-cc-verify.mjs",
+      "client_id/secret"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-003",
+    "query": "What is the most cost-effective way to achieve 5,000 API calls per day for multiple organizations?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "Core tier",
+      "client 44B1...E7B1"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-004",
+    "query": "What happened when the shared app was upgraded to the Core tier?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "5,000/day",
+      "client 44B1...E7B1"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-005",
+    "query": "How was the job governor adjusted after upgrading to the Core plan?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "DAILY_CAP=4800",
+      "Claude CTO"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-006",
+    "query": "What corrections were made to the latest iOS app build before its release?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "v1.5.21",
+      "ICON_CHECK"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-007",
+    "query": "What is the daily API call limit for the custom connection created through the developer portal, and what does the monthly fee cover?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "1,000 API calls per day",
+      "$5/month"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-008",
+    "query": "How can we increase the daily API call limit for the shared Xero app, and what is the cost of the upgrade?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "Core tier",
+      "$22/month"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-009",
+    "query": "What is the current status of the Stripe rail for charges and payouts, and what action is needed to enable payouts?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "charges_enabled=true",
+      "payouts_enabled=FALSE"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-010",
+    "query": "What were the findings of the recent audit regarding the Gateway and Datadog integration?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "LLM-Obs = DONE-NOT-DEPLOYED",
+      "otc.fleet.ledger_flush metric NOT flowing"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-011",
+    "query": "What critical issue has caused a legal and financial document processing pipeline to stop functioning?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "docintel-ocr-sweep",
+      "26+ hours"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-012",
+    "query": "What token related to Claude was confirmed as resolved and already set in GitHub Actions?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "claude-code-oauth-token",
+      "108 bytes"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-013",
+    "query": "Which coding agent was confirmed to be assignable to issues and PRs in the organization?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "anthropic-code-agent",
+      "claude"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-014",
+    "query": "Which Azure OpenAI resource is throttled, and what is the recommended alternative for routing inference?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "aoai-4701",
+      "otchealth-foundry"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-015",
+    "query": "What was the outcome of the recent comprehensive test of the system's components?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "5 parallel testers",
+      "838 tools"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-cto-016",
+    "query": "What changes were made to address the Azure OpenAI throttling and the OCR job failures?",
+    "agent": "cto",
+    "engine": "semantic",
+    "expect": [
+      "10K->50K TPM",
+      "MAX_MB size guard"
+    ],
+    "note": "mined+validated from real cto ledger"
+  },
+  {
+    "id": "gm-coo-001",
+    "query": "Why hasn't the online store made any sales this year despite having visitors?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "$0 revenue",
+      "0 real customer orders"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-002",
+    "query": "What is the current financial situation of the company, including its bank balance and revenue status?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "Mercury bank ~$2.41",
+      "~0 runway"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-003",
+    "query": "What is causing the online store's checkout process to fail, preventing sales?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "Stripe card payments complete 0",
+      "NO US zone"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-004",
+    "query": "Which product is ready to sell and ship to US customers without any blockers?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "TReO",
+      "USPS Priority free"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-005",
+    "query": "What is the verified sales funnel for the email campaign promoting the hearing aid offer?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "PAIR99",
+      "$99 at checkout"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-006",
+    "query": "What are the current priorities for the COO in fixing the store and preparing for email traffic?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "COO-26",
+      "COO-27"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-007",
+    "query": "How does the COO coordinate tasks and communicate updates within the organization?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "Notion 'COO Tasks'",
+      "coo@innd.com"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-008",
+    "query": "What is the current status of the checkout issue resolution, and what is needed to confirm it works?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "UNDERWAY",
+      "ONE real full-price TReO customer order"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-009",
+    "query": "What change was made to the Gumroad strategy involving the compliance store?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "PIVOTED",
+      "From the Chair"
+    ],
+    "note": "mined+validated from real coo ledger"
+  },
+  {
+    "id": "gm-coo-010",
+    "query": "Why is the TReO listing blocked on Amazon, and what action is required to resolve it?",
+    "agent": "coo",
+    "engine": "semantic",
+    "expect": [
+      "BLOCKED",
+      "iHEAR trademark"
+    ],
+    "note": "mined+validated from real coo ledger"
   }
 ]

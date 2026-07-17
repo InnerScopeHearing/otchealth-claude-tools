@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { TIERS, chatBody } from "../../setup/model-routing.mjs";
-import { hitAtK } from "./scoring.mjs";
+import { hitAtK, groupHitLines } from "./scoring.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MEM = join(HERE, "..", "kb-memory", "mem.mjs");
@@ -80,7 +80,13 @@ function validate(item) {
     child.on("close", (code) => {
       clearTimeout(to);
       if (code !== 0) return resolve(false);
-      const lines = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      const rawLines = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      // GROUP into one entry per retrieved memory (same fix as run-evals.mjs's runRecall) so a case
+      // validated here HITS under the exact same k-means-top-k-memories scoring the nightly eval uses.
+      // Without this, mine-cases.mjs and run-evals.mjs disagreed on what "top-K" meant (line vs memory),
+      // which could keep a genuinely-retrievable case out of the golden set, or waste an LLM-generation
+      // call on one that "hit" under a stale line-based check but not under the real scoring.
+      const lines = groupHitLines(rawLines);
       resolve(hitAtK(lines, item.expect, K));
     });
     child.on("error", () => { clearTimeout(to); resolve(false); });
@@ -122,7 +128,9 @@ async function main() {
       const q = c.query.toLowerCase();
       if (haveQ.has(q)) continue;
       haveQ.add(q); generated++;
-      candidates.push({ id: `gm-${String(++idn).padStart(3, "0")}`, query: c.query, agent: AGENT, engine: "semantic", expect: c.expect.slice(0, 2), note: "mined+validated from real commons ledger" });
+      // note interpolates the REAL scanned agent (was hardcoded "commons" regardless of --agent, so
+      // every mined case's own documentation lied about its source lane once mined against cto/coo/etc).
+      candidates.push({ id: `gm-${String(++idn).padStart(3, "0")}`, query: c.query, agent: AGENT, engine: "semantic", expect: c.expect.slice(0, 2), note: `mined+validated from real ${AGENT} ledger` });
     }
     const hits = await validateConcurrent(candidates, 10);
     for (const h of hits) { if (kept.length - existing.length >= TARGET) break; kept.push(h); validated++; }

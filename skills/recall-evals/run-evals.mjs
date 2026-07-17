@@ -25,6 +25,14 @@
 //   node run-evals.mjs --k 5                  # precision@k cutoff (default 5)
 //   node run-evals.mjs --set /path/other.json # use a different golden-set file
 //   node run-evals.mjs --json                 # also print the raw scorecard as JSON (for CI logs)
+//   node run-evals.mjs --baseline baseline.json --strict   # PAGE (exit 1) if hit@K drops past the
+//                                              # baseline SLO by more than --tolerance. Same --strict /
+//                                              # *_STRICT=1 exit-code convention as azure-canary.mjs:
+//                                              # report-only by default (always emits + ::warning::),
+//                                              # --strict or RECALL_EVAL_STRICT=1 turns a real regression
+//                                              # into a non-zero exit so the nightly run goes RED and
+//                                              # pages instead of writing to a dashboard nobody watches.
+//                                              # --enforce is a back-compat alias for --strict.
 //
 // Requires: GCP_CLAUDE_DRIVER_SA_JSON in env (kb-memory self-resolves from ~/.gcp_claude_driver_sa.json
 // too) -- run via `bash skills/kb-memory/run.sh node skills/recall-evals/run-evals.mjs`.
@@ -32,7 +40,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { aggregate, precisionAtK, hitAtK, reciprocalRank } from "./scoring.mjs";
+import { aggregate, precisionAtK, hitAtK, reciprocalRank, groupHitLines } from "./scoring.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -46,15 +54,28 @@ const K = parseInt(takeVal("--k", "5"), 10) || 5;
 const SET_PATH = takeVal("--set", join(HERE, "golden-set.json"));
 const PRINT_JSON = argv.includes("--json");
 const EMIT = argv.includes("--emit");                       // emit recall_eval to PostHog Fleet Agents
-const BASELINE_PATH = takeVal("--baseline", "");            // compare hit@K to a stored baseline
+const BASELINE_PATH = takeVal("--baseline", "");            // compare hit@K to a stored baseline (the SLO)
 const UPDATE_BASELINE = argv.includes("--update-baseline"); // overwrite the baseline with this run (nightly seeds/rolls it)
 const TOLERANCE = parseFloat(takeVal("--tolerance", "0.05")) || 0.05; // allowed hit@K drop (5pp) before flagging a regression
-const ENFORCE = argv.includes("--enforce");                 // exit 1 on regression (report-mode default = exit 0)
+// STRICT: page (non-zero exit) on a regression past the baseline SLO, the SAME --strict / *_STRICT=1
+// exit-code convention azure-canary.mjs uses (report-only PostHog+::warning:: always; --strict makes an
+// anomaly RED so the nightly run pages instead of writing to a dashboard nobody watches). --enforce is
+// kept as a back-compat alias (recall-evals shipped it first); either flag/env sets strict mode.
+const STRICT = argv.includes("--strict") || argv.includes("--enforce") || process.env.RECALL_EVAL_STRICT === "1";
 const N_RECALL = 10; // how many rows to ask the underlying recall verb for, per query
 
 // PHI-exclusion guard: hard-fail loudly (not a ledger write, just a refusal to run) if the golden
 // set or the CLI ever names a PHI-adjacent target. Defensive; the golden set should never need this.
 const PHI_DENY = /\b(medreview|phi\b|patient|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number)\b/i;
+
+/** Exit-code policy (pure, unit-tested): mirrors azure-canary.mjs's pageExitCode(summaryOk, strict)
+ *  EXACTLY -- strict mode pages (exit 1) only on a real regression past the baseline SLO; report-only
+ *  mode (no --strict/RECALL_EVAL_STRICT) never pages on a regression, it only ever writes the
+ *  ::warning:: + PostHog event (the durable trend). A genuine can't-run failure (the golden set is
+ *  missing/malformed, or a required write fails) is a SEPARATE class handled by the outer catch
+ *  handler below, which -- like azure-canary's -- pages UNCONDITIONALLY (a dark sensor cannot certify
+ *  anything, so it must not stay quiet just because --strict was omitted from a manual run). */
+export function pageExitCode(regressed, strict) { return strict && regressed ? 1 : 0; }
 
 function loadGoldenSet(path) {
   const raw = readFileSync(path, "utf8");
@@ -87,10 +108,18 @@ function runRecall(item) {
   const latencyMs = Date.now() - start;
   if (child.error) return { lines: [], latencyMs, ok: false, error: String(child.error.message || child.error) };
   if (child.status !== 0) return { lines: [], latencyMs, ok: false, error: (child.stderr || "").trim().slice(0, 300) || `exit ${child.status}` };
-  const lines = (child.stdout || "")
+  const rawLines = (child.stdout || "")
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#") && !l.startsWith("##"));
+  // GROUP raw stdout lines into one entry per retrieved memory (semantic.mjs renders each hit as 2-3
+  // lines: header/text/tags). Without this, a line-based --k cutoff silently evaluates only the first
+  // ~k/2.5 hits instead of the top-k retrieved memories (see scoring.mjs's groupHitLines doc comment
+  // for the full story -- this was a real miscalibration found 2026-07-17 that made ~40% of the
+  // original golden set MISS regardless of actual recall quality). The keyword engine is hard-
+  // deprecated (mem.mjs recall always exits 1), so grouping only matters for the semantic path today;
+  // applying it unconditionally is harmless for keyword's (currently unreachable) output too.
+  const lines = groupHitLines(rawLines);
   return { lines, latencyMs, ok: true, error: null };
 }
 
@@ -144,12 +173,17 @@ async function main() {
   console.log(`  MRR:                  ${agg.mrr.toFixed(3)}`);
   console.log(`  latency mean/p50/p95: ${fmtMs(meanLat)} / ${fmtMs(p50)} / ${fmtMs(p95)}`);
   if (runErrors) console.log(`  runner errors:         ${runErrors}/${agg.n} queries errored (see ERR rows above)`);
-  console.log(`\nREPORT-MODE: measurement only. No ledger writes. Never exits non-zero on a low score.`);
+  console.log(STRICT
+    ? `\nSTRICT MODE: a hit@${K} drop past the baseline SLO tolerance will page (non-zero exit).`
+    : `\nREPORT-MODE: measurement only. No ledger writes. Never exits non-zero on a low score (pass --strict to page).`);
 
   const scorecard = { engine: ENGINE, k: K, n: agg.n, hitRate: agg.hitRate, mrr: agg.mrr, meanPrecisionAtK: agg.meanPrecisionAtK, latencyMeanMs: Math.round(meanLat), runErrors, recordedAt: new Date().toISOString() };
 
-  // BASELINE regression check on hit@K (the blunt "did recall get worse" signal). Report-mode:
-  // prints an ::warning:: on regression; exits non-zero ONLY with --enforce.
+  // BASELINE regression check on hit@K (the blunt "did recall get worse" signal) -- the baseline IS the
+  // SLO: this run's hit@K must not drop more than --tolerance below the last recorded baseline. Always
+  // prints an ::warning:: on regression (the durable trend); exits non-zero ONLY with --strict/--enforce
+  // (see pageExitCode below) -- the SAME convention azure-canary.mjs uses so a real regression makes the
+  // nightly run RED instead of writing to a dashboard nobody watches.
   let regressed = false;
   if (BASELINE_PATH) {
     let baseline = null;
@@ -157,10 +191,11 @@ async function main() {
     if (baseline && typeof baseline.hitRate === "number" && (baseline.n || 0) > 0) {
       const delta = agg.hitRate - baseline.hitRate;
       regressed = delta < -TOLERANCE;
-      console.log(`\n## BASELINE (${BASELINE_PATH}): hit@${K} ${fmtPct(baseline.hitRate)} -> ${fmtPct(agg.hitRate)} (delta ${(delta * 100).toFixed(1)}pp; tolerance ${(TOLERANCE * 100).toFixed(0)}pp)`);
-      console.log(regressed ? `  ::warning:: RECALL REGRESSION: hit@${K} dropped ${(-delta * 100).toFixed(1)}pp below baseline.` : `  OK: within tolerance.`);
+      console.log(`\n## BASELINE SLO (${BASELINE_PATH}): hit@${K} ${fmtPct(baseline.hitRate)} -> ${fmtPct(agg.hitRate)} (delta ${(delta * 100).toFixed(1)}pp; tolerance ${(TOLERANCE * 100).toFixed(0)}pp)`);
+      if (regressed) console.log(`  ::warning:: RECALL REGRESSION: hit@${K} dropped ${(-delta * 100).toFixed(1)}pp below the baseline SLO.${STRICT ? " STRICT: this run will exit non-zero (paging)." : ""}`);
+      else console.log(`  OK: within tolerance.`);
     } else {
-      console.log(`\n## BASELINE (${BASELINE_PATH}): no usable baseline yet (n=0) -- seed it with --update-baseline.`);
+      console.log(`\n## BASELINE SLO (${BASELINE_PATH}): no usable baseline yet (n=0) -- seed it with --update-baseline.`);
     }
   }
 
@@ -180,10 +215,19 @@ async function main() {
     console.log(JSON.stringify({ ...scorecard, latencyP50Ms: p50, latencyP95Ms: p95, regressed, items: perItem.map((r) => ({ id: r.id, query: r.query, ok: r.ok, hit: r.hit, precisionAtK: r.precisionAtK, rr: r.rr, latencyMs: r.latencyMs })) }, null, 2));
   }
 
-  // Report-mode default: exit 0 even on a low score / regression. --enforce turns a regression into a
-  // non-zero exit (the future hard gate a deploy/CI workflow can require).
-  process.exit(ENFORCE && regressed ? 1 : 0);
+  // Report-mode default: exit 0 even on a low score / regression. --strict (or --enforce, or
+  // RECALL_EVAL_STRICT=1) turns a regression PAST THE BASELINE SLO into a non-zero exit -- the pager.
+  process.exit(pageExitCode(regressed, STRICT));
 }
 
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
-if (isMain) main().catch((e) => { console.error("recall-evals error:", e.message); process.exit(0); });
+if (isMain) main().catch(async (e) => {
+  // DARK SENSOR: the check could not run at all (malformed/PHI-flagged golden set, a required write
+  // failed, etc). Mirrors azure-canary.mjs's fatal handler EXACTLY: exit 1 UNCONDITIONALLY, regardless
+  // of --strict, with a clear ::error:: message -- a monitor that cannot run cannot certify recall
+  // quality, so it must not stay quiet just because report-mode was requested. Best-effort PostHog emit
+  // so the outage itself is in the same durable trend as a real regression.
+  try { await emitPosthog("recall_eval_fatal", { error: e.message, strict: STRICT }); } catch { /* best-effort */ }
+  console.error(`::error::[recall-evals] FATAL (dark sensor): ${e.message}`);
+  process.exit(1);
+});

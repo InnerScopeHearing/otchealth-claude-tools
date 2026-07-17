@@ -1,11 +1,11 @@
 {
   "engine": "semantic",
   "k": 5,
-  "n": 18,
-  "hitRate": 0.3333333333333333,
-  "mrr": 0.13611111111111113,
-  "meanPrecisionAtK": 0.08888888888888888,
-  "latencyMeanMs": 1599,
+  "n": 43,
+  "hitRate": 1,
+  "mrr": 0.7527131782945735,
+  "meanPrecisionAtK": 0.37054263565891454,
+  "latencyMeanMs": 1112,
   "runErrors": 0,
-  "recordedAt": "2026-07-13T17:08:03.600Z"
+  "recordedAt": "2026-07-17T21:41:39.024Z"
 }
