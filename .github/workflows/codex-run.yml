@@ -57,6 +57,12 @@ jobs:
       - name: Install Codex CLI
         run: npm install -g @openai/codex
 
+      # Codex's websocket transport (wss://api.openai.com/v1/responses) 401s on env-only auth even
+      # when the key is valid for REST (verified 2026-07-17: /v1/responses REST = 200, ws = 401).
+      # A real `codex login --with-api-key` mints the session the ws transport expects.
+      - name: Authenticate Codex (API-key login)
+        run: printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key
+
       - name: Bounded Codex run (API-key auth, draft PRs only)
         run: |
           set +e
@@ -89,9 +95,20 @@ jobs:
           $(cat /tmp/rails.txt)"
 
           set -o pipefail
-          timeout "${MIN}m" codex exec --full-auto "$PROMPT" 2>&1 | tee /tmp/codex-run.log \
+          timeout "${MIN}m" codex exec --sandbox workspace-write "$PROMPT" 2>&1 | tee /tmp/codex-run.log \
             || echo "::warning::[codex-run] codex exec exited non-zero (timeout or error); the safety net will persist any work."
-          echo "Codex hedge run finished."
+
+          # ANTI-SILENT-SUCCESS GATE (the first run went green while codex 401'd and did zero work -
+          # never again): the job only passes if the log shows evidence of a real model turn. A run
+          # that only errored/reconnected is a FAILURE even though the tolerant `||` above kept the
+          # loop alive for the safety net.
+          if grep -qiE "tokens used|total tokens|turn completed|assistant" /tmp/codex-run.log \
+             && ! grep -qi "failed to connect to websocket.*5/5" /tmp/codex-run.log; then
+            echo "Codex hedge run finished with evidence of real work."
+          else
+            echo "::error::[codex-run] no evidence of a completed model turn in the log (auth/transport failure?). Failing the job so this cannot pass silently."
+            exit 1
+          fi
 
       # SAFETY NET: identical contract to autonomous-run.yml - deterministically persist whatever the
       # agent left as a DRAFT PR on a claude/* branch, never the default branch.
