@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 290" role="img" aria-label="Hearing aid style guide: BTE, RIC, ITE, and CIC">
+  <title>Hearing Aid Style Guide</title>
+  <rect x="0" y="0" width="480" height="290" fill="#F7F1E4"/>
+  <text x="240" y="24" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="10" letter-spacing="2" fill="#B5603C">HEARING AID STYLE GUIDE</text>
+
+  <g transform="translate(40,60)">
+    <path d="M5,20 C5,8 20,0 35,0 C50,0 65,8 65,20 L65,55 C65,80 55,100 45,110 L45,140 L25,140 L25,110 C15,100 5,80 5,55 Z" fill="#FFFDF8" stroke="#241F19" stroke-width="1.6"/>
+    <path d="M20,-12 C26,-3 31,7 33,18" stroke="#B5603C" stroke-width="3" stroke-linecap="round" fill="none"/>
+    <rect x="2" y="-30" width="30" height="17" rx="8.5" fill="#B5603C"/>
+  </g>
+  <text x="75" y="228" text-anchor="middle" font-family="'Fraunces', Georgia, serif" font-size="16" font-weight="600" fill="#241F19">BTE</text>
+  <text x="75" y="246" text-anchor="middle" font-family="'Inter', sans-serif" font-size="9.5" fill="#241F19">Behind-the-Ear</text>
+  <text x="75" y="262" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7.5" fill="#8A7A6C">Sits behind the ear</text>
+
+  <g transform="translate(160,60)">
+    <path d="M5,20 C5,8 20,0 35,0 C50,0 65,8 65,20 L65,55 C65,80 55,100 45,110 L45,140 L25,140 L25,110 C15,100 5,80 5,55 Z" fill="#FFFDF8" stroke="#241F19" stroke-width="1.6"/>
+    <path d="M22,-9 C27,2 31,18 33,45 C34,60 34,72 34,84" stroke="#B5603C" stroke-width="1.8" stroke-linecap="round" fill="none"/>
+    <rect x="6" y="-24" width="22" height="13" rx="6.5" fill="#B5603C"/>
+    <circle cx="34" cy="90" r="4.2" fill="#B5603C"/>
+  </g>
+  <text x="195" y="228" text-anchor="middle" font-family="'Fraunces', Georgia, serif" font-size="16" font-weight="600" fill="#241F19">RIC</text>
+  <text x="195" y="246" text-anchor="middle" font-family="'Inter', sans-serif" font-size="9.5" fill="#241F19">Receiver-in-Canal</text>
+  <text x="195" y="262" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7.5" fill="#8A7A6C">Slim tube, tiny wire</text>
+
+  <g transform="translate(280,60)">
+    <path d="M5,20 C5,8 20,0 35,0 C50,0 65,8 65,20 L65,55 C65,80 55,100 45,110 L45,140 L25,140 L25,110 C15,100 5,80 5,55 Z" fill="#FFFDF8" stroke="#241F19" stroke-width="1.6"/>
+    <path d="M12,22 C12,12 22,6 35,6 C48,6 58,12 58,22 L58,50 C58,66 50,78 42,84 L28,84 C20,78 12,66 12,50 Z" fill="#B5603C"/>
+  </g>
+  <text x="315" y="228" text-anchor="middle" font-family="'Fraunces', Georgia, serif" font-size="16" font-weight="600" fill="#241F19">ITE</text>
+  <text x="315" y="246" text-anchor="middle" font-family="'Inter', sans-serif" font-size="9.5" fill="#241F19">In-the-Ear</text>
+  <text x="315" y="262" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7.5" fill="#8A7A6C">Fills the outer bowl</text>
+
+  <g transform="translate(400,60)">
+    <path d="M5,20 C5,8 20,0 35,0 C50,0 65,8 65,20 L65,55 C65,80 55,100 45,110 L45,140 L25,140 L25,110 C15,100 5,80 5,55 Z" fill="#FFFDF8" stroke="#241F19" stroke-width="1.6"/>
+    <rect x="27" y="112" width="16" height="24" rx="6" fill="#B5603C"/>
+  </g>
+  <text x="435" y="228" text-anchor="middle" font-family="'Fraunces', Georgia, serif" font-size="16" font-weight="600" fill="#241F19">CIC</text>
+  <text x="435" y="246" text-anchor="middle" font-family="'Inter', sans-serif" font-size="9.5" fill="#241F19">Completely-in-Canal</text>
+  <text x="435" y="262" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7.5" fill="#8A7A6C">Hidden deep in canal</text>
+
+  <text x="240" y="280" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" fill="#8A7A6C">General style reference — actual devices vary by manufacturer.</text>
+</svg>

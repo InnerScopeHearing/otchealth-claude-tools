@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" role="img" aria-label="HearingAssist — device case">
+  <title>HearingAssist</title>
+  <rect x="4.5" y="7" width="15" height="11" rx="2.5" stroke="#241F19" stroke-width="1.75"/>
+  <path d="M4.5 10.75H19.5" stroke="#241F19" stroke-width="1.75"/>
+  <path d="M9.5 7V5.6C9.5 4.7 10.2 4 11.1 4H12.9C13.8 4 14.5 4.7 14.5 5.6V7" stroke="#241F19" stroke-width="1.75" stroke-linecap="round" fill="none"/>
+  <circle cx="16.25" cy="14.25" r="1.15" fill="#B5603C"/>
+</svg>

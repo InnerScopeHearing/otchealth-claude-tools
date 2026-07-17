@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Secure checkout">
+  <title>Secure Checkout</title>
+  <circle cx="48" cy="48" r="44" fill="#F7F1E4" stroke="#241F19" stroke-width="2"/>
+  <rect x="36" y="46" width="24" height="18" rx="3" stroke="#241F19" stroke-width="2" fill="none"/>
+  <path d="M40 46V39C40 34.6 43.6 31 48 31C52.4 31 56 34.6 56 39V46" stroke="#241F19" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <circle cx="48" cy="55" r="2.6" fill="#B5603C"/>
+  <text x="48" y="76" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7.5" letter-spacing="1" fill="#241F19">SECURE CHECKOUT</text>
+</svg>

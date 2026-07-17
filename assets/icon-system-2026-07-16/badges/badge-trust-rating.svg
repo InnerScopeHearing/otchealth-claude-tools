@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Customer trust rating">
+  <title>Trust Rating</title>
+  <circle cx="48" cy="48" r="44" fill="#F7F1E4" stroke="#241F19" stroke-width="2"/>
+  <g fill="#B5603C">
+    <path d="M28 40l1.6 3.3 3.6.5-2.6 2.5.6 3.6L28 48l-3.2 1.9.6-3.6-2.6-2.5 3.6-.5L28 40z"/>
+    <path d="M38 40l1.6 3.3 3.6.5-2.6 2.5.6 3.6L38 48l-3.2 1.9.6-3.6-2.6-2.5 3.6-.5L38 40z"/>
+    <path d="M48 40l1.6 3.3 3.6.5-2.6 2.5.6 3.6L48 48l-3.2 1.9.6-3.6-2.6-2.5 3.6-.5L48 40z"/>
+    <path d="M58 40l1.6 3.3 3.6.5-2.6 2.5.6 3.6L58 48l-3.2 1.9.6-3.6-2.6-2.5 3.6-.5L58 40z"/>
+    <path d="M68 40l1.6 3.3 3.6.5-2.6 2.5.6 3.6L68 48l-3.2 1.9.6-3.6-2.6-2.5 3.6-.5L68 40z"/>
+  </g>
+  <text x="48" y="64" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" letter-spacing="1" fill="#241F19">CUSTOMER RATED</text>
+  <text x="48" y="73" text-anchor="middle" font-family="'Inter', sans-serif" font-size="5.2" letter-spacing="0.2" fill="#241F19">VERIFIED REVIEWS</text>
+</svg>

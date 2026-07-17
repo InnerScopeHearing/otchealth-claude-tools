@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 200" role="img" aria-label="Hearing loss severity scale from normal to profound">
+  <title>Hearing Loss Severity Scale</title>
+  <rect x="0" y="0" width="480" height="200" fill="#F7F1E4"/>
+  <text x="240" y="24" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="10" letter-spacing="2" fill="#B5603C">HEARING LOSS SEVERITY SCALE</text>
+
+  <rect x="40" y="60" width="80" height="60" fill="#F3E4D3"/>
+  <rect x="120" y="60" width="80" height="60" fill="#E0AD8C"/>
+  <rect x="200" y="60" width="80" height="60" fill="#C9805A"/>
+  <rect x="280" y="60" width="80" height="60" fill="#B5603C"/>
+  <rect x="360" y="60" width="80" height="60" fill="#6B3320"/>
+  <rect x="40" y="60" width="400" height="60" fill="none" stroke="#241F19" stroke-width="1.5"/>
+  <path d="M120,60V120M200,60V120M280,60V120M360,60V120" stroke="#F7F1E4" stroke-width="1.5"/>
+
+  <text x="80" y="52" text-anchor="middle" font-family="'Inter', sans-serif" font-size="10" font-weight="600" fill="#241F19">Normal</text>
+  <text x="160" y="52" text-anchor="middle" font-family="'Inter', sans-serif" font-size="10" font-weight="600" fill="#241F19">Mild</text>
+  <text x="240" y="52" text-anchor="middle" font-family="'Inter', sans-serif" font-size="10" font-weight="600" fill="#241F19">Moderate</text>
+  <text x="320" y="52" text-anchor="middle" font-family="'Inter', sans-serif" font-size="10" font-weight="600" fill="#241F19">Severe</text>
+  <text x="400" y="52" text-anchor="middle" font-family="'Inter', sans-serif" font-size="10" font-weight="600" fill="#241F19">Profound</text>
+
+  <text x="80" y="138" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="8.5" fill="#241F19">0–15 dB</text>
+  <text x="160" y="138" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="8.5" fill="#241F19">16–40 dB</text>
+  <text x="240" y="138" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="8.5" fill="#241F19">41–60 dB</text>
+  <text x="320" y="138" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="8.5" fill="#241F19">61–80 dB</text>
+  <text x="400" y="138" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="8.5" fill="#241F19">81+ dB</text>
+
+  <text x="240" y="170" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" fill="#8A7A6C">Standard audiometric severity bands (HL) — for general education only.</text>
+</svg>
