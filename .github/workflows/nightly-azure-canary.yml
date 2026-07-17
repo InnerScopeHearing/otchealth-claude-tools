@@ -4,8 +4,11 @@
 # the way the Chat CTO does -- a cto-lane client_credentials bearer against the live gateway /mcp over
 # public HTTPS -- and alerts if (1) the tools are unreachable / erroring (gateway down or the gateway
 # managed identity lost its RBAC), (2) any scheduled Container Apps Job's latest run != Succeeded (the
-# dead-job pager -- the failure family that let daily-digest fail silently for 9 days), or (3) the
-# otchealth-brain index doc count dropped below a floor (broken reindex). See skills/azure-canary/.
+# dead-job pager -- the failure family that let daily-digest fail silently for 9 days), (3) any live AI
+# Search index has gone stale (age-based, replacing the old doc-count floor), or (4) W1-5: any of the
+# fleet's own PostHog telemetry streams (eval_result, $ai_generation, agent_session, medic_dispatch) has
+# gone stale -- caught $ai_generation/agent_session silent ~367h and medic_dispatch ~331h the day this
+# check was built. See skills/azure-canary/.
 #
 # Behaviour (2026-07-13, --strict): the canary emits the PostHog azure_canary event + ::warning:: lines on
 # every run (the durable trend), AND runs with --strict so a real ANOMALY -- any index STALE/NO_DATE/

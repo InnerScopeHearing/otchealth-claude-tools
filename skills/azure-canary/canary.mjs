@@ -12,6 +12,11 @@
 //       never drops below a floor -- it stays identical forever. Age can only be measured because the
 //       room indexes now carry a sortable indexed_at field (indexer.mjs, 2026-07-13) + the backfill.
 //   (3) TOMBSTONE GUARD -- otchealth-brain must stay in `decommissioning`, never re-adopted as live.
+//   (4) PER-STREAM FRESHNESS (W1-5, 2026-07-17) -- for every stream in setup/expected-streams.json, the
+//       newest PostHog event's timestamp must be younger than that stream's max_age_h SLO. Same
+//       AGE-not-FLOOR lesson as (2), applied to the fleet's telemetry/eval/medic streams instead of AI
+//       Search indexes: this is what caught $ai_generation/agent_session sitting silent ~367h (~15 days)
+//       and medic_dispatch ~331h (~14 days) -- see stream-freshness.mjs's header for the full story.
 //
 // REPORT-ONLY on an anomaly (PostHog azure_canary event + ::warning::); exits non-zero ONLY if it cannot
 // run at all (sensor lane dark), which is itself the page.
@@ -19,12 +24,15 @@
 // Auth: cto-lane bearer (gateway /mcp) for the job sweep; azure-sp (read via the shared kvSecret, NEVER a
 // local AZURE_SP-only reader) -> ARM listQueryKeys -> a read-only AI Search query key for the freshness
 // probe. The freshness probe reads ONLY the newest timestamp + doc count -- never document CONTENT, so it
-// does not breach the privileged (finance/legal) rings. No secret value is ever printed.
+// does not breach the privileged (finance/legal) rings. The stream-freshness probe reads the SAME
+// posthog-personal-api-key / posthog-fleet-project-id secrets fleet-medic already uses, and likewise reads
+// only the newest event timestamp + count, never event property content. No secret value is ever printed.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { auditScheduledJob } from "./cron-exec.mjs";
+import { assessStreamFreshness, newestStreamEventTs, resolvePosthogCreds } from "./stream-freshness.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GW = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
@@ -135,6 +143,8 @@ async function main() {
   const registry = JSON.parse(readFileSync(join(HERE, "..", "..", "setup", "expected-indexes.json"), "utf8"));
   const liveIndexes = registry.indexes || [];
   const tombstoned = (registry.decommissioning || []).map((d) => d.index);
+  const streamRegistry = JSON.parse(readFileSync(join(HERE, "..", "..", "setup", "expected-streams.json"), "utf8"));
+  const liveStreams = streamRegistry.streams || [];
 
   const bearer = await ctoBearer();
 
@@ -181,9 +191,30 @@ async function main() {
     }
   }
 
+  // (4) PER-STREAM FRESHNESS (W1-5) -- the PostHog-stream sibling of (2). One shared creds resolve (the
+  // SAME posthog-personal-api-key / posthog-fleet-project-id fleet-medic already reads); a creds failure
+  // marks every stream QUERY_ERROR rather than silently skipping the whole check (dark-sensor discipline
+  // applied per-stream, not just at the top level).
+  const streamFreshness = [];
+  const staleStreams = [];
+  const posthogCreds = await resolvePosthogCreds();
+  for (const sd of liveStreams) {
+    try {
+      if (!posthogCreds) throw new Error("posthog-personal-api-key / posthog-fleet-project-id unavailable");
+      const { newestIso } = await newestStreamEventTs(sd.stream, posthogCreds);
+      const v = assessStreamFreshness(sd, newestIso, now);
+      streamFreshness.push(v);
+      if (v.state !== "FRESH") staleStreams.push(`${sd.stream}: ${v.state}${v.ageH != null ? ` (${v.ageH}h > ${v.maxAgeH}h)` : " (event never seen)"}`);
+    } catch (e) {
+      streamFreshness.push({ stream: sd.stream, state: "QUERY_ERROR", error: e.message });
+      staleStreams.push(`${sd.stream}: QUERY_ERROR (${e.message})`);
+    }
+  }
+
   const anomalies = [];
   if (failedJobs.length) anomalies.push(`${failedJobs.length} scheduled job(s) not-Succeeded`);
   if (stale.length) anomalies.push(`${stale.length} index(es) not FRESH`);
+  if (staleStreams.length) anomalies.push(`${staleStreams.length} PostHog stream(s) not FRESH`);
 
   const summary = {
     ok: anomalies.length === 0,
@@ -191,18 +222,22 @@ async function main() {
     indexes_total: liveIndexes.length,
     indexes_fresh: freshness.filter((f) => f.state === "FRESH").length,
     stale, freshness, tombstoned,
+    streams_total: liveStreams.length,
+    streams_fresh: streamFreshness.filter((f) => f.state === "FRESH").length,
+    stale_streams: staleStreams, stream_freshness: streamFreshness,
   };
   await emitPosthog(summary);
 
   if (JSONOUT) console.log(JSON.stringify(summary, null, 2));
   else {
-    console.log(`[azure-canary] jobs ${scheduled.length - failedJobs.length}/${scheduled.length} ok | indexes ${summary.indexes_fresh}/${liveIndexes.length} FRESH | tombstoned: ${tombstoned.join(",") || "none"}`);
+    console.log(`[azure-canary] jobs ${scheduled.length - failedJobs.length}/${scheduled.length} ok | indexes ${summary.indexes_fresh}/${liveIndexes.length} FRESH | streams ${summary.streams_fresh}/${liveStreams.length} FRESH | tombstoned: ${tombstoned.join(",") || "none"}`);
     for (const f of freshness) console.log(`  ${f.state.padEnd(12)} ${f.index}${f.ageH != null ? ` (${f.ageH}h/${f.maxAgeH}h)` : ""}${f.error ? " " + f.error : ""}`);
+    for (const f of streamFreshness) console.log(`  ${f.state.padEnd(12)} ${f.stream}${f.ageH != null ? ` (${f.ageH}h/${f.maxAgeH}h)` : ""}${f.error ? " " + f.error : ""}`);
     for (const f of failedJobs) console.log(`  DEAD JOB: ${f}`);
   }
   for (const a of anomalies) warn(a);
-  console.log(summary.ok ? "[azure-canary] OK (jobs green, all indexes fresh)" : `[azure-canary] ANOMALIES: ${anomalies.join("; ")}`);
-  if (STRICT && !summary.ok) console.error(`::error::[azure-canary] STRICT: paging on the above anomalies (stale index or dead job); the nightly run goes RED so a frozen index cannot sit silent.`);
+  console.log(summary.ok ? "[azure-canary] OK (jobs green, all indexes fresh, all streams fresh)" : `[azure-canary] ANOMALIES: ${anomalies.join("; ")}`);
+  if (STRICT && !summary.ok) console.error(`::error::[azure-canary] STRICT: paging on the above anomalies (stale index, dead job, or dead telemetry stream); the nightly run goes RED so nothing can sit silent.`);
   process.exit(pageExitCode(summary.ok, STRICT)); // strict => page on anomaly; default => report-only
 }
 
