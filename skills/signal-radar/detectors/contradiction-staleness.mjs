@@ -153,7 +153,7 @@ const FIRING_LABELS = new Set(["contradict", "stale-with-material-drift"]);
  * Returns a normalized verdict { fires, label, citedId, citedRow, reason } - fires is true ONLY when the
  * label is a firing label AND the citedId is a REAL row present in `slice`. Pure/testable.
  */
-export function gateVerdict(verdict, slice) {
+export function gateVerdict(verdict, slice, nowMs = Date.now()) {
   const label = String((verdict && verdict.label) || "").toLowerCase().trim();
   const citedId = (verdict && verdict.citedId) || null;
   const reason = (verdict && verdict.reason) || "";
@@ -163,7 +163,7 @@ export function gateVerdict(verdict, slice) {
   if (!citedRow) return { fires: false, label, citedId, citedRow: null, reason: "discarded: cited id not in slice (ungrounded)" };
   // STALE needs a genuinely OLD prior row (a fresh row is not "stale").
   if (label === "stale-with-material-drift") {
-    const ageDays = citedRow.ts ? (Date.now() - Date.parse(citedRow.ts)) / 86400000 : 0;
+    const ageDays = citedRow.ts ? (nowMs - Date.parse(citedRow.ts)) / 86400000 : 0;
     if (ageDays < STALE_MIN_AGE_DAYS) return { fires: false, label, citedId, citedRow, reason: `discarded: cited row only ${Math.round(ageDays)}d old (< ${STALE_MIN_AGE_DAYS}d stale floor)` };
   }
   return { fires: true, label, citedId, citedRow, reason };
@@ -208,7 +208,7 @@ export async function scanRows(rows, entail, opts = {}) {
     let verdict;
     try { verdict = await entail(r, slice); }
     catch (e) { notes.push(`entail failed on ${r.agent || "?"}/${r.id}: ${e.message}`); continue; }
-    const gated = gateVerdict(verdict, slice);
+    const gated = gateVerdict(verdict, slice, nowMs);
     if (!gated.fires) continue;
 
     const prior = gated.citedRow;

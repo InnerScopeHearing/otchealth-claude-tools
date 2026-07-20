@@ -281,9 +281,25 @@ async function recall() {
   const filters = [];
   if (AGENT_FILTER) filters.push(`agent eq '${AGENT_FILTER.replace(/'/g, "''")}'`);
   if (TYPE_FILTER) filters.push(`type eq '${TYPE_FILTER.replace(/'/g, "''")}'`);
-  const body = { search: QUERY, top: N, select: "agent,type,ts,text,tags", vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: N }] };
-  if (filters.length) body.filter = filters.join(" and ");
-  const r = await fetch(`${AIS_EP}/indexes/${IDX}/docs/search?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const baseBody = { search: QUERY, top: N, select: "agent,type,ts,text,tags", vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: N }] };
+  if (filters.length) baseBody.filter = filters.join(" and ");
+  // Invoke the Azure AI Search L2 SEMANTIC RERANKER. The memory-exec index provisions a "sem" semantic
+  // config (see ensureIndex above) but this recall path never used it -- it returned pure hybrid
+  // BM25+vector. queryType:"semantic" reorders the fused top-k by a cross-encoder relevance model:
+  // materially better recall at $0 (the S1 service already bills for semantic capacity). Mirrors the
+  // gateway's own hybridSearch (otchealth-mcp-server src/azure/search.ts). FAIL-OPEN, exactly like the
+  // gateway: a semantic-ranker 400 (config/capacity/tier) must never take recall down, so retry once as
+  // plain hybrid and carry on.
+  const doSearch = (semantic) => fetch(`${AIS_EP}/indexes/${IDX}/docs/search?api-version=${AIS_API}`, {
+    method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(semantic ? { ...baseBody, queryType: "semantic", semanticConfiguration: "sem" } : baseBody),
+  });
+  let r = await doSearch(true);
+  // FAIL-OPEN on ANY semantic failure, not just 400: the semantic ranker can also return 402 (monthly
+  // free-tier quota exhausted before semantic billing is enabled) or 403, and recall must NEVER break
+  // just because the reranker is unavailable -- fall straight back to the plain hybrid query that has
+  // always worked.
+  if (!r.ok) { console.error(`[recall] semantic ranker unavailable (${r.status}); falling back to plain hybrid`); r = await doSearch(false); }
   if (!r.ok) { console.error("search " + r.status + " " + (await r.text()).slice(0, 200)); process.exit(1); }
   const hits = (await r.json()).value || [];
 
