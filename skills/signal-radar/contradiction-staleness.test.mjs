@@ -118,7 +118,7 @@ test("gateVerdict NEVER fires for agree / supersede / paraphrase (materiality fl
 
 test("gateVerdict discards a stale verdict when the cited row is younger than the stale floor", () => {
   const freshSlice = [{ id: "20260628-001", type: "status", ts: iso(3 * DAY), text: "recent status" }];
-  const g = gateVerdict({ label: "stale-with-material-drift", citedId: "20260628-001" }, freshSlice);
+  const g = gateVerdict({ label: "stale-with-material-drift", citedId: "20260628-001" }, freshSlice, NOW);
   assert.equal(g.fires, false, "a 3-day-old row is not stale");
   assert.match(g.reason, /stale floor/);
 });
