@@ -62,6 +62,16 @@ export function assessFreshness(ix, newestIso, nowMs) {
   return { index: ix.index, state: ageH <= ix.max_age_h ? "FRESH" : "STALE", ageH: Math.round(ageH * 10) / 10, maxAgeH: ix.max_age_h, newest: newestIso };
 }
 
+/** PURE freshness verdict for a PULL-INDEXER-fed room (S1 chunked doc rooms carry no doc timestamp, so
+ * freshness = the newest SUCCESSFUL indexer run). newestSuccessIso = newest lastResult.endTime with
+ * status 'success' across the room's indexer(s); anyFailed = at least one recent run was not success. */
+export function assessIndexerFreshness(ix, newestSuccessIso, anyFailed, nowMs) {
+  if (!newestSuccessIso) return { index: ix.index, state: anyFailed ? "FAILED" : "NO_RUN", ageH: null, maxAgeH: ix.max_age_h };
+  const ageH = (nowMs - Date.parse(newestSuccessIso)) / 3.6e6;
+  if (ageH > ix.max_age_h) return { index: ix.index, state: "STALE", ageH: Math.round(ageH * 10) / 10, maxAgeH: ix.max_age_h, newest: newestSuccessIso };
+  return { index: ix.index, state: "FRESH", ageH: Math.round(ageH * 10) / 10, maxAgeH: ix.max_age_h, newest: newestSuccessIso, warnFailed: anyFailed };
+}
+
 async function ctoBearer() {
   const cid = await kvSecret("oauth-lane-cto-id");
   const csec = await kvSecret("oauth-lane-cto-secret");
@@ -115,6 +125,21 @@ async function searchKeyFor(service) {
   return (_keyCache[service] = key);
 }
 
+// Indexer STATUS is a management-plane read that query keys cannot reach (they only see /docs), so it
+// needs an admin key. The canary's identity (MI with Search Service Contributor, or local azure-sp)
+// already holds that privilege via ARM listAdminKeys; the key is used ONLY for read-only status GETs
+// and is never logged. Cached per service.
+const _adminKeyCache = {};
+async function searchAdminKeyFor(service) {
+  if (_adminKeyCache[service]) return _adminKeyCache[service];
+  const tok = await armToken();
+  const r = await fetch(`https://management.azure.com/subscriptions/${SUB}/resourceGroups/${SEARCH_RG}/providers/Microsoft.Search/searchServices/${service}/listAdminKeys?api-version=2023-11-01`, { method: "POST", headers: { Authorization: `Bearer ${tok}` } });
+  if (!r.ok) throw new Error(`listAdminKeys(${service}) -> ${r.status}`);
+  const key = (await r.json()).primaryKey;
+  if (!key) throw new Error(`no admin key for ${service}`);
+  return (_adminKeyCache[service] = key);
+}
+
 /** Newest value of `field` in `index` on `service`, or null. Reads only that one field (metadata, not content). */
 async function newestTimestamp(service, index, field) {
   const key = await searchKeyFor(service);
@@ -125,6 +150,63 @@ async function newestTimestamp(service, index, field) {
   if (!r.ok) throw new Error(`freshness query ${index} -> ${r.status}: ${(await r.text()).slice(0, 120)}`);
   const j = await r.json();
   return j.value?.[0]?.[field] ?? null;
+}
+
+/** Newest SUCCESSFUL pull-indexer run for a room. `name` is an exact indexer, or (isPrefix) a prefix
+ * matching several (commons has ~15 ixr-commons-* indexers). Reads only run STATUS + endTime, never
+ * document content, so it is ring-safe even for the privileged legal/finance rooms. */
+async function indexerFreshness(service, name, isPrefix) {
+  const key = await searchAdminKeyFor(service); // indexer status needs an admin key (query keys see only /docs)
+  let names = [name];
+  if (isPrefix) {
+    const lr = await fetch(`https://${service}.search.windows.net/indexers?api-version=2023-11-01&$select=name`, { headers: { "api-key": key } });
+    names = ((await lr.json()).value || []).map((x) => x.name).filter((n) => n.startsWith(name));
+  }
+  let newestSuccess = null, anyFailed = false, checked = 0;
+  for (const n of names) {
+    const r = await fetch(`https://${service}.search.windows.net/indexers/${encodeURIComponent(n)}/status?api-version=2023-11-01`, { headers: { "api-key": key } });
+    if (!r.ok) { anyFailed = true; continue; }
+    checked++;
+    const last = (await r.json()).lastResult;
+    if (last?.status === "success" && last.endTime) {
+      if (!newestSuccess || Date.parse(last.endTime) > Date.parse(newestSuccess)) newestSuccess = last.endTime;
+    } else if (last && last.status && last.status !== "success") anyFailed = true;
+  }
+  if (!checked && !newestSuccess) throw new Error(`no indexer matched ${isPrefix ? name + "*" : name}`);
+  return { newestSuccess, anyFailed };
+}
+
+// --- (3) SEMANTIC HEALTH (2026-07-20) -----------------------------------------------------------
+// The semantic ranker is the layer whose free-quota 402 SILENTLY took down brain_search + kb_search
+// fleet-wide (the CFO FY2021 outage: the shared 1000/mo free semantic quota on the S1 service ran
+// out, so every semantic query 402'd for every agent, and NOTHING alerted -- a human hit the wall).
+// These two checks make that class of outage loud.
+
+/** PURE verdict on a service's semanticSearch setting. 'standard' = billed, no monthly cap (safe).
+ * 'free' = a 1000/mo quota that WILL 402 once exhausted (re-arms the outage). 'disabled'/unset = the
+ * ranker is unavailable. Only 'standard' is OK. */
+export function assessSemanticSetting(setting) {
+  return { ok: setting === "standard", setting: setting || "unset" };
+}
+
+/** Service-level semanticSearch setting via ARM control-plane GET. Read-only; no key printed. */
+async function semanticSetting(service) {
+  const tok = await armToken();
+  const r = await fetch(`https://management.azure.com/subscriptions/${SUB}/resourceGroups/${SEARCH_RG}/providers/Microsoft.Search/searchServices/${service}?api-version=2023-11-01`, { headers: { Authorization: `Bearer ${tok}` } });
+  if (!r.ok) throw new Error(`GET service ${service} -> ${r.status}`);
+  return (await r.json()).properties?.semanticSearch ?? null;
+}
+
+/** Run ONE live semantic query (the exact call brain_search/kb_search make) and return its HTTP status.
+ * 200 = OK; 402 = free semantic quota exhausted (THE outage); 5xx = service fault. top:1 and we read
+ * only the status code, never document content, so it never breaches a ring. */
+async function semanticProbe(service, index) {
+  const key = await searchKeyFor(service);
+  const r = await fetch(`https://${service}.search.windows.net/indexes/${encodeURIComponent(index)}/docs/search?api-version=2023-11-01`, {
+    method: "POST", headers: { "api-key": key, "Content-Type": "application/json" },
+    body: JSON.stringify({ search: "healthcheck", top: 1, queryType: "semantic", semanticConfiguration: "sem" }),
+  });
+  return r.status;
 }
 
 async function emitPosthog(props) {
@@ -181,13 +263,46 @@ async function main() {
   const stale = [];
   for (const ix of liveIndexes) {
     try {
-      const newest = await newestTimestamp(ix.service, ix.index, ix.timestamp_field);
-      const v = assessFreshness(ix, newest, now);
+      let v;
+      if (ix.writer_indexer || ix.writer_indexer_prefix) {
+        // S1 chunked doc room: freshness = the newest SUCCESSFUL pull-indexer run (no doc timestamp exists).
+        const { newestSuccess, anyFailed } = await indexerFreshness(ix.service, ix.writer_indexer || ix.writer_indexer_prefix, !!ix.writer_indexer_prefix);
+        v = assessIndexerFreshness(ix, newestSuccess, anyFailed, now);
+        if (v.state === "FRESH" && v.warnFailed) warn(`${ix.index}: newest indexer run OK (${v.ageH}h) but a concurrent run is not success`);
+      } else {
+        // timestamp-based room (memory-exec has a sortable `ts`).
+        v = assessFreshness(ix, await newestTimestamp(ix.service, ix.index, ix.timestamp_field), now);
+      }
       freshness.push(v);
-      if (v.state !== "FRESH") stale.push(`${ix.index}: ${v.state}${v.ageH != null ? ` (${v.ageH}h > ${v.maxAgeH}h)` : ` (no ${ix.timestamp_field})`}`);
+      if (v.state !== "FRESH") stale.push(`${ix.index}: ${v.state}${v.ageH != null ? ` (${v.ageH}h > ${v.maxAgeH}h)` : ""}`);
     } catch (e) {
       freshness.push({ index: ix.index, state: "QUERY_ERROR", error: e.message });
       stale.push(`${ix.index}: QUERY_ERROR (${e.message})`);
+    }
+  }
+
+  // (3) SEMANTIC HEALTH -- billing setting per service + a live semantic query per index (the exact
+  // call that 402'd for the CFO). Pages under --strict so a semantic-quota outage can never sit silent.
+  const semanticHealth = [];
+  const semAnoms = [];
+  for (const svc of [...new Set(liveIndexes.map((ix) => ix.service))]) {
+    try {
+      const v = assessSemanticSetting(await semanticSetting(svc));
+      semanticHealth.push({ service: svc, kind: "billing", setting: v.setting, ok: v.ok });
+      if (!v.ok) semAnoms.push(`${svc}: semanticSearch='${v.setting}' (must be 'standard'; 'free' re-arms the 402 quota outage)`);
+    } catch (e) {
+      semanticHealth.push({ service: svc, kind: "billing", state: "ARM_ERROR", error: e.message });
+      semAnoms.push(`${svc}: semantic-setting ARM error (${e.message})`);
+    }
+  }
+  for (const ix of liveIndexes) {
+    try {
+      const status = await semanticProbe(ix.service, ix.index);
+      semanticHealth.push({ service: ix.service, index: ix.index, kind: "query", status, ok: status === 200 });
+      if (status !== 200) semAnoms.push(`${ix.index}@${ix.service}: semantic query HTTP ${status}${status === 402 ? " (free quota exhausted -> enable standard billing)" : ""}`);
+    } catch (e) {
+      semanticHealth.push({ service: ix.service, index: ix.index, kind: "query", state: "PROBE_ERROR", error: e.message });
+      semAnoms.push(`${ix.index}: semantic-probe error (${e.message})`);
     }
   }
 
@@ -215,6 +330,7 @@ async function main() {
   if (failedJobs.length) anomalies.push(`${failedJobs.length} scheduled job(s) not-Succeeded`);
   if (stale.length) anomalies.push(`${stale.length} index(es) not FRESH`);
   if (staleStreams.length) anomalies.push(`${staleStreams.length} PostHog stream(s) not FRESH`);
+  if (semAnoms.length) anomalies.push(`${semAnoms.length} semantic-health issue(s)`);
 
   const summary = {
     ok: anomalies.length === 0,
@@ -225,14 +341,16 @@ async function main() {
     streams_total: liveStreams.length,
     streams_fresh: streamFreshness.filter((f) => f.state === "FRESH").length,
     stale_streams: staleStreams, stream_freshness: streamFreshness,
+    semantic_ok: semAnoms.length === 0, semantic_anomalies: semAnoms, semantic_health: semanticHealth,
   };
   await emitPosthog(summary);
 
   if (JSONOUT) console.log(JSON.stringify(summary, null, 2));
   else {
-    console.log(`[azure-canary] jobs ${scheduled.length - failedJobs.length}/${scheduled.length} ok | indexes ${summary.indexes_fresh}/${liveIndexes.length} FRESH | streams ${summary.streams_fresh}/${liveStreams.length} FRESH | tombstoned: ${tombstoned.join(",") || "none"}`);
+    console.log(`[azure-canary] jobs ${scheduled.length - failedJobs.length}/${scheduled.length} ok | indexes ${summary.indexes_fresh}/${liveIndexes.length} FRESH | streams ${summary.streams_fresh}/${liveStreams.length} FRESH | semantic ${semAnoms.length ? "ISSUES(" + semAnoms.length + ")" : "OK"} | tombstoned: ${tombstoned.join(",") || "none"}`);
     for (const f of freshness) console.log(`  ${f.state.padEnd(12)} ${f.index}${f.ageH != null ? ` (${f.ageH}h/${f.maxAgeH}h)` : ""}${f.error ? " " + f.error : ""}`);
     for (const f of streamFreshness) console.log(`  ${f.state.padEnd(12)} ${f.stream}${f.ageH != null ? ` (${f.ageH}h/${f.maxAgeH}h)` : ""}${f.error ? " " + f.error : ""}`);
+    for (const s of semAnoms) console.log(`  SEMANTIC: ${s}`);
     for (const f of failedJobs) console.log(`  DEAD JOB: ${f}`);
   }
   for (const a of anomalies) warn(a);

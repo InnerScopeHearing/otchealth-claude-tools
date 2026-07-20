@@ -51,8 +51,8 @@ export function auditIndexWriters(indexRegistry, resourceManifest) {
     } else if (!jobs.has(ix.writer_job)) {
       violations.push(`${at}: writer_job "${ix.writer_job}" is NOT a containerAppJob in setup/expected-resources.json. A writer that is not tracked there is a writer that can silently go absent (that manifest is what resource-reconcile.mjs proves against live ARM). Add it, or fix the name.`);
     }
-    if (!ix.timestamp_field) {
-      violations.push(`${at}: no timestamp_field. Freshness is then UNMEASURABLE and this index can freeze silently forever. Add a sortable time field to its schema and declare it here.`);
+    if (!ix.timestamp_field && !ix.writer_indexer && !ix.writer_indexer_prefix) {
+      violations.push(`${at}: no freshness mechanism. Freshness is then UNMEASURABLE and this index can freeze silently forever. Declare a sortable timestamp_field, OR a writer_indexer / writer_indexer_prefix (the S1 pull-indexer whose newest successful run is the freshness signal for a chunked room that carries no doc timestamp).`);
     }
     if (!(Number(ix.max_age_h) > 0)) {
       violations.push(`${at}: no positive max_age_h. Without a staleness SLO the freshness canary has nothing to assert.`);
