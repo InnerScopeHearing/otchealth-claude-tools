@@ -16,13 +16,23 @@ test("the LIVE registry passes: every queryable index has a real, tracked writer
   assert.deepEqual(auditIndexWriters(registry, resources), []);
 });
 
-test("every live index declares a sortable timestamp field (freshness must be MEASURABLE)", () => {
+test("every live index declares a MEASURABLE freshness mechanism (timestamp field OR pull-indexer)", () => {
   // The room indexes carried no time field of any kind until 2026-07-13, which is why staleness was
-  // structurally undetectable. You cannot monitor what you did not instrument.
+  // structurally undetectable. You cannot monitor what you did not instrument. Post-Phase-3 (2026-07-20)
+  // the S1 chunked doc rooms carry NO doc timestamp, so their freshness signal is the pull-indexer's
+  // newest successful run (writer_indexer / writer_indexer_prefix) rather than a doc field. Either is
+  // measurable; an index with NEITHER can freeze silently forever.
   for (const ix of registry.indexes) {
-    assert.ok(ix.timestamp_field, `${ix.index} has no timestamp_field`);
+    assert.ok(ix.timestamp_field || ix.writer_indexer || ix.writer_indexer_prefix, `${ix.index} has no freshness mechanism (timestamp_field or writer_indexer)`);
     assert.ok(ix.max_age_h > 0, `${ix.index} has no staleness SLO`);
   }
+});
+
+test("REGRESSION: an index with NO freshness mechanism FAILS the gate", () => {
+  // A tracked writer is not enough -- without a measurable freshness signal, a frozen index looks alive.
+  const bad = { indexes: [{ index: "memory-exec", service: "s", writer_job: "brain-reindex", max_age_h: 24 }], decommissioning: [] };
+  const v = auditIndexWriters(bad, resources);
+  assert.ok(v.some((m) => /no freshness mechanism/.test(m)), "an index with neither timestamp_field nor writer_indexer must fail the gate");
 });
 
 test("REGRESSION: an index with NO writer FAILS the gate (this is otchealth-brain)", () => {
