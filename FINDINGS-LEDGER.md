@@ -17,10 +17,10 @@ means the work is not actually done yet, say so plainly rather than reporting it
 finding with `node ledger.mjs finding add`, close one with
 `node ledger.mjs finding close <id> --status fixed|wontfix`.
 
-### finding:FND-20260721-a4e7 severity:medium status:open | continuity-canary live-verified 2 stale continuity docs: CTO-KICKOFF-PROMPT.md (32.6d, SLO 10d) and claude-tools CLAUDE.md (8.1d, SLO 7d) -- refresh both, then close
+### finding:FND-20260721-a4e7 severity:medium status:fixed | continuity-canary live-verified 2 stale continuity docs: CTO-KICKOFF-PROMPT.md (32.6d, SLO 10d) and claude-tools CLAUDE.md (8.1d, SLO 7d) -- refresh both, then close
 
 - **Source audit doc:** runbooks/research-pass-2026-07-21/00-FINAL.md
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** c2f2e2d
+- **Verified by:** refreshed otchealth-cto/CLAUDE.md with a dated entry documenting Waves 0-1; commit c2f2e2d merged to main
 - **Opened:** 2026-07-21T23:04:34.960Z
-- **Closed:** (open)
+- **Closed:** 2026-07-21T23:07:44.935Z
