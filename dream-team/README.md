@@ -53,7 +53,7 @@ The human moves from *operator* (doing every handoff by hand) to *coach*
 | 1 | **Architect** | Plan / spec | Spec Kit (`/specify /plan /tasks`), App-Kit build standards, PHI-ring decisions |
 | 2 | **Builder** | Implement | **Capacitor Agent Skills pack** (70%->92% correct native code), the format/lint hooks, web-layer-first for OTA |
 | 3 | **QA** | Test / gate | **Vitest 4 Browser Mode + Playwright + axe + visual + Lighthouse CI**, Maestro/CDP smoke, **Promptfoo** for AI features |
-| 4 | **Release Captain** | Ship | **Capgo / Capawesome OTA**, Codemagic native builds, phased rollout, RevenueCat go-live |
+| 4 | **Release Captain** | Ship | **Capgo OTA**, Depot macOS native builds, phased rollout, RevenueCat go-live |
 | 5 | **Growth** | Revenue | **PostHog flags/experiments**, RevenueCat/Superwall paywall A/B, **RTM billing codes 98975-98981**, Customer.io reactivation (designer + avatar assets) |
 | 6 | **Guardian** | Security / compliance | **Dependency cooldowns + no auto-merge + SHA-pinned Actions**, Gitleaks/TruffleHog, cdxgen SBOM, Semgrep, PHI/BAA enforcement (gate veto) |
 | 7 | **Medic** | Reliability / SRE | **Sentry Seer autofix loop**, release-health gates, dependency sweeps, **Daytona parallel maintenance**, bug-hunting playbook |
@@ -91,7 +91,7 @@ ARCHITECT → BUILDER  →    QA      →  RELEASE CAP. →  GROWTH     GUARDIAN
                                           │
         TECH STACK (the infrastructure the team runs on)
    OpenAI · Vertex · ElevenLabs · Azure · PostHog · Sentry · RevenueCat ·
-   Customer.io · Capgo/Capawesome · Codemagic · Daytona · Greptile · Replicate ·
+   Customer.io · Capgo · Depot · Daytona · Greptile · Replicate ·
    Cloudflare R2 · MongoDB · GitHub Actions · Notion
 ```
 
@@ -109,7 +109,7 @@ Skills pack, hooks auto-format/lint each edit, clinical logic stays web-layer ->
 **QA** runs Vitest+Playwright+axe+visual+Lighthouse and (if the feature uses an
 LLM) Promptfoo, and either gates green or hands failures back to Builder ->
 **Guardian** checks PHI leakage + dependency diff + secrets -> **Release Captain**
-ships the web layer via Capgo OTA (no App Review) or cuts a Codemagic native
+ships the web layer via Capgo OTA (no App Review) or cuts a Depot macOS native
 build for phased rollout -> **Growth** wraps it in a PostHog experiment ->
 **Medic** watches release health. The human approved two gates; the team did the
 eleven handoffs.

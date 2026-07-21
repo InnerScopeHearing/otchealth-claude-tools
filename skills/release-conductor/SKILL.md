@@ -1,6 +1,6 @@
 ---
 name: release-conductor
-description: Release Captain's equipment. Executes the ship path, Capgo/Capawesome OTA for web-layer changes vs a Codemagic native build, with phased rollout and automatic rollback. Use to take a green, Guardian-cleared change to production. iOS is cloud-only (no Mac); never attempt a local build.
+description: Release Captain's equipment. Executes the ship path, Capgo OTA for web-layer changes vs a Depot macOS native build, with phased rollout and automatic rollback. Use to take a green, Guardian-cleared change to production. iOS is cloud-only (no Mac); never attempt a local build.
 ---
 
 # release-conductor — pick the path, roll out safely
@@ -13,7 +13,6 @@ AND Guardian cleared. PHI app: `gates.phiReview = pass`. Run the Pre-launch chec
 - **Web-layer-only change** (JS/CSS/HTML, incl. clinical copy/thresholds, AI prompt and
   disclaimer text): ship via **OTA**, no App Review.
   - Capgo: `npx @capgo/cli bundle upload -c <channel>` (self-host + E2E encryption).
-  - Capawesome: code-signed bundles + automatic rollback + audit logs.
   - Use channels; gate health-critical flows with auto-rollback on crash-rate.
   - Migrate any app still on **Appflow** first (it sunsets Dec 31 2027).
 - **Native change** (new plugin, native code, store metadata): build iOS on **Depot macOS runners via GitHub Actions** — the org standard as of 2026-06-13 (spends the $5k Depot grant instead of Codemagic cash; operator has no Mac, so it stays cloud). Android native builds run on **Depot ubuntu** Linux CI. Signing uses an App Store Connect API key + distribution cert/profile (ideally fastlane match) stored as GitHub Actions secrets. Codemagic is DEPRECATED and cut over per app once a green Depot iOS build is proven. Phased rollout; watch release health.

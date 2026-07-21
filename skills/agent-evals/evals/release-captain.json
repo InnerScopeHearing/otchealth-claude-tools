@@ -24,7 +24,7 @@
     "agent": "release-captain",
     "task": "A typo fix in web-layer copy needs to reach users fast. Native build or OTA?",
     "rubric": [
-      "Chooses an OTA update (Capgo/Capawesome) for the web-layer-only change",
+      "Chooses an OTA update (Capgo) for the web-layer-only change",
       "Avoids a full native build/review cycle for a web-layer fix",
       "Uses phased rollout with rollback"
     ]
