@@ -1,0 +1,33 @@
+{
+  "_comment": "THE CONTINUITY-DOC REGISTRY. Declarative list of the fleet's load-bearing hand-authored continuity docs (the ones agents read as ground truth every session start) + the max_age_days each is allowed to go without a commit before continuity-canary.mjs flags it STALE. WHY IT EXISTS: these docs are exactly the class of artifact expected-indexes.json and expected-streams.json already cover for search indexes and telemetry streams, an AGE-not-FLOOR blind spot, except here the underlying thing is prose a human/agent wrote, not a machine-fed index. A doc nobody has touched in weeks while the kb-memory ledger keeps moving is silent DRIFT: every session that reads it inherits a stale picture with no warning. This registry is intentionally small and hand-curated (unlike the auto-discovered skill/index registries) because continuity docs are added rarely and deliberately. Session sandboxes across the fleet consistently mount each repo at a fixed /home/user/<repo> path (see every app CLAUDE.md's own session-start conventions), so absolute paths here are stable, not fragile, the same assumption the fleet's other cross-repo tooling (setup/add-repo.sh, octools-sync.sh) already makes.",
+  "docs": [
+    {
+      "path": "/home/user/otchealth-cto/CLAUDE.md",
+      "max_age_days": 4,
+      "topic": "CTO current state, standing facts, and the latest dated reconciliation notes",
+      "optional": false,
+      "note": "The CTO session's own home file. Its header says to update it 'before you stop' every session, and its own dated-entry history shows a near-daily cadence, so a 4-day-old commit is already a miss."
+    },
+    {
+      "path": "/home/user/otchealth-cto/CAPABILITY-INDEX.md",
+      "max_age_days": 7,
+      "topic": "CTO capability index",
+      "optional": true,
+      "note": "Referenced by the wave-1.3 work order as 'if present'; it does not exist yet as of 2026-07-21. optional:true means its ABSENCE is informational, not an anomaly, distinct from a doc that exists but has gone stale."
+    },
+    {
+      "path": "/home/user/otchealth-cto/CTO-KICKOFF-PROMPT.md",
+      "max_age_days": 10,
+      "topic": "CTO kickoff prompt and portfolio state snapshot",
+      "optional": false,
+      "note": "The paste-ready new-CTO launch prompt; the CTO's own CLAUDE.md says to 'keep it current as state moves'. Refreshed periodically rather than every session, so the SLO is looser than CLAUDE.md's."
+    },
+    {
+      "path": "/home/user/otchealth-claude-tools/CLAUDE.md",
+      "max_age_days": 7,
+      "topic": "fleet toolkit operating facts and portfolio-wide standing rules",
+      "optional": false,
+      "note": "The toolkit repo's own operating-facts doc, live-synced to every agent via octools-sync.sh. Its own convention (FLEET-BULLETIN.md) is to update it when a fleet-affecting change closes, not on a fixed cadence, so the SLO is a week, not a few days."
+    }
+  ]
+}
