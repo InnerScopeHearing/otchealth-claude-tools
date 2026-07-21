@@ -31,6 +31,7 @@ const DIR = join(HOME, ".claude");
 const F = join(DIR, "settings.json");
 const KBI = '"$HOME/.claude/skills/kb-memory/kb-inject.sh"';
 const KBR = '"$HOME/.claude/skills/kb-memory/kb-recall.sh"';
+const TEL = '"$HOME/.claude/skills/fleet-telemetry/telemetry.mjs"';
 // Each hook is guarded so a session that has not installed the skill yet just no-ops (no error).
 const HOOKS = [
   { event: "UserPromptSubmit", match: "octools-sync.sh", cmd: "[ -f /tmp/octools/setup/octools-sync.sh ] && bash /tmp/octools/setup/octools-sync.sh || true" },
@@ -39,6 +40,13 @@ const HOOKS = [
   { event: "SessionStart", match: "repo-freshen.sh", cmd: "[ -f /tmp/octools/setup/repo-freshen.sh ] && bash /tmp/octools/setup/repo-freshen.sh || true" }, // keep the agent's own repo current with main, safely
   { event: "PreCompact", match: "kb-inject.sh", cmd: `[ -f ${KBI} ] && bash ${KBI} precompact || true` },
   { event: "Stop", match: "kb-inject.sh", cmd: `[ -f ${KBI} ] && bash ${KBI} stop || true` },
+  // Fleet telemetry ($ai_generation + agent_session -> PostHog). This was previously wired ONLY in
+  // claude-tools' own project settings.json, so it fired in claude-tools sessions but NOT in any app
+  // repo or exec-agent session -- leaving the $ai_generation/agent_session streams fleet-blind. Installing
+  // it user-scope here (like the kb-inject hooks) makes every session emit. Guarded + fail-open; attributes
+  // via the ~/.claude/.kb-agent marker. To avoid a double-count it is removed from claude-tools' project
+  // settings.json in the same change (this user-scope copy is now the single source).
+  { event: "Stop", match: "fleet-telemetry/telemetry.mjs", cmd: `[ -f ${TEL} ] && node ${TEL} session-end || true` },
 ];
 
 try {

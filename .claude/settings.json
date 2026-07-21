@@ -85,10 +85,6 @@
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/skills/fleet-telemetry/telemetry.mjs\" session-end"
-          },
-          {
-            "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/kb-memory/reflect.mjs\" --commit"
           }
         ]
