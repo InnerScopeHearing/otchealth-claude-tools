@@ -52,6 +52,17 @@ for skdir in "${TOOLS_DIR}/skills/"*/; do
   cp -R "$skdir" "${SKILLS_DST}/${sk}"
 done
 
+# ─── Governed-skills audit: surface "shadow-doctrine" skills ────────
+# The copy loop above (and octools-sync.sh's live-refresh equivalent) only ever copies FROM the git
+# skills/ tree INTO ~/.claude/skills; neither ever enumerates or removes a destination-only directory.
+# So a skill dir that lands there some other way (an agent authoring one ad hoc, a stale leftover) is
+# never touched again by either sync path and persists forever, silently, fully outside governance,
+# while still loading and steering every session same as a real skill. Report-only here (never prunes);
+# best-effort and fail-open so a stat/read hiccup can never block session start. See
+# setup/governed-skills-audit.mjs for the full rationale, the --detail classification, and the guarded
+# --prune (dry-run by default; a human decides delete-vs-PR-in per orphan, this never auto-deletes).
+node "${TOOLS_DIR}/setup/governed-skills-audit.mjs" --report 2>/dev/null || true
+
 # Record the commit the skills were installed from, so a long-running session can later detect it is
 # stale (origin/main moved on after it started). `octools-version.sh` compares this to origin/main.
 if git -C "$TOOLS_DIR" rev-parse HEAD >/dev/null 2>&1; then
