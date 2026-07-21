@@ -12,6 +12,19 @@
 #
 # Each sentinel beats via setup/heartbeat.mjs, so from here on their SILENCE is itself detectable by the
 # heartbeat sweep (fleet-medic) -- the monitors are now monitored.
+#
+# ITEM 2.3 (Wave 2, AI-OS research-pass 2026-07-21) ADDED a third sentinel: nightly-workflow schedule
+# canary (skills/nightly-schedule-canary/schedule-canary.mjs). gateway-canary/drift-sentinel above solved
+# "these two SPECIFIC monitors were registered but never scheduled anywhere"; the new sentinel generalizes
+# that same idea to the fleet's other nightly workflows (nightly-azure-canary, nightly-continuity-canary,
+# nightly-embedding-drift, nightly-eval, this workflow itself, nightly-recall-eval, oauth-clients-canary):
+# each of those now self-beats its own "kind":"nightly-workflow" heartbeat-registry entry on every
+# execution (regardless of its own content check's verdict), and the new sentinel pages if any of those
+# beats has gone stale -- catching a workflow whose cron stopped firing entirely, a failure class no
+# content check can ever see on its own (a workflow that never runs never gets the chance to go red).
+# Deliberately NOT folded into drift-sentinel.mjs's own --strict: drift-sentinel's other two sub-checks
+# (image-drift, drift-recon) can carry real, unrelated findings that would otherwise cause false paging
+# on schedule staleness. See skills/nightly-schedule-canary/SKILL.md for the full design.
 name: Nightly Fleet Sentinels
 
 on:
@@ -29,7 +42,7 @@ concurrency:
 
 jobs:
   sentinels:
-    name: gateway-canary + drift-sentinel (the two monitors that never ran)
+    name: gateway-canary + drift-sentinel + nightly-workflow schedule canary
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -74,6 +87,20 @@ jobs:
           set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
           node setup/drift-sentinel.mjs 2>&1 | tee "${GITHUB_WORKSPACE}/drift-sentinel.log"
 
+      # ITEM 2.3 (Wave 2, AI-OS research-pass 2026-07-21): nightly-workflow schedule canary. Reads every
+      # setup/heartbeat-registry.json entry tagged "kind":"nightly-workflow" (the 7 nightly monitors,
+      # including this workflow itself) and pages if any has gone LATE/DEAD -- its own GitHub Actions cron
+      # stopped firing, a different failure class than that workflow's own content check going red.
+      # continue-on-error so a dark reading here cannot mask the other two sentinels above, matching their
+      # own convention exactly. See skills/nightly-schedule-canary/SKILL.md for why this is a separate
+      # script rather than drift-sentinel.mjs --strict.
+      - name: nightly-workflow schedule canary
+        id: schedule
+        continue-on-error: true
+        run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
+          node skills/nightly-schedule-canary/schedule-canary.mjs --json --strict 2>&1 | tee "${GITHUB_WORKSPACE}/schedule-canary.log"
+
       - name: Upload sentinel logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -82,28 +109,40 @@ jobs:
           path: |
             gateway-canary.log
             drift-sentinel.log
+            schedule-canary.log
           retention-days: 90
           if-no-files-found: warn
 
-      # The run goes RED if either sentinel could not complete. A sentinel that cannot run is a dark
-      # sensor, and a dark sensor is the thing we are here to stop tolerating.
+      # The run goes RED if any sentinel could not complete (or, for schedule-canary, found a real
+      # staleness anomaly -- --strict above already turns that into a non-zero exit). A sentinel that
+      # cannot run is a dark sensor, and a dark sensor is the thing we are here to stop tolerating.
       - name: Fail if a sentinel was dark
         if: always()
         run: |
-          gw="${{ steps.gwcanary.outcome }}"; dr="${{ steps.drift.outcome }}"
-          echo "gateway-canary=$gw drift-sentinel=$dr"
-          if [ "$gw" != "success" ] || [ "$dr" != "success" ]; then
-            echo "::error::[fleet-sentinels] a sentinel failed to run (gateway-canary=$gw drift-sentinel=$dr). A monitor that cannot run is a dark sensor."
+          gw="${{ steps.gwcanary.outcome }}"; dr="${{ steps.drift.outcome }}"; sc="${{ steps.schedule.outcome }}"
+          echo "gateway-canary=$gw drift-sentinel=$dr schedule-canary=$sc"
+          if [ "$gw" != "success" ] || [ "$dr" != "success" ] || [ "$sc" != "success" ]; then
+            echo "::error::[fleet-sentinels] a sentinel failed to run or found a real anomaly (gateway-canary=$gw drift-sentinel=$dr schedule-canary=$sc). A monitor that cannot run is a dark sensor; a stale nightly-workflow schedule is exactly what schedule-canary exists to catch."
             exit 1
           fi
-          echo "[fleet-sentinels] both sentinels ran and beat."
+          echo "[fleet-sentinels] all three sentinels ran, beat, and found nothing needing attention."
 
       # THE THING THIS FILE WAS MISSING: red above pages nobody who isn't already watching the Actions
       # tab. Fires ONLY on failure (the step above, or an earlier hard failure like Azure login, already
-      # failed this job) and emails matthew@otchealth.app the run URL + both sentinels' own log tails via
-      # the gateway's graph_send_email tool (falls back to a PostHog 'canary_red' capture event if the
-      # mail path itself is unavailable). See setup/page-on-failure.mjs's header for the full reasoning
-      # (incl. why not skills/m365-mail, which is read-only). No secret value is ever printed.
+      # failed this job) and emails matthew@otchealth.app the run URL + all three sentinels' own log
+      # tails via the gateway's graph_send_email tool (falls back to a PostHog 'canary_red' capture event
+      # if the mail path itself is unavailable). See setup/page-on-failure.mjs's header for the full
+      # reasoning (incl. why not skills/m365-mail, which is read-only). No secret value is ever printed.
       - name: Page on failure (email, PostHog fallback)
         if: failure()
-        run: node setup/page-on-failure.mjs --workflow "Nightly Fleet Sentinels" --log "${GITHUB_WORKSPACE}/gateway-canary.log" --log "${GITHUB_WORKSPACE}/drift-sentinel.log"
+        run: node setup/page-on-failure.mjs --workflow "Nightly Fleet Sentinels" --log "${GITHUB_WORKSPACE}/gateway-canary.log" --log "${GITHUB_WORKSPACE}/drift-sentinel.log" --log "${GITHUB_WORKSPACE}/schedule-canary.log"
+
+      # ITEM 2.3: schedule-liveness heartbeat FOR THIS WORKFLOW ITSELF ("nightly-fleet-sentinels" in
+      # setup/heartbeat-registry.json), distinct from the gateway-canary/drift-sentinel beats above (which
+      # track the two SUB-monitors this workflow runs, not this workflow's own cron). Fires unconditionally
+      # (if: always()), regardless of whether any sentinel above passed or failed, because this beat means
+      # "this workflow's own cron fired today". See skills/nightly-schedule-canary/SKILL.md.
+      - name: "Heartbeat: mark this workflow's own schedule as alive"
+        if: always()
+        continue-on-error: true
+        run: node setup/heartbeat.mjs beat nightly-fleet-sentinels ok >/dev/null 2>&1 || true
