@@ -27,6 +27,7 @@ human-facing **coo**.
 | Skill | What it does | Wielded by | Org/dev use | Flag |
 |---|---|---|---|---|
 | digital-products | Writes + lists Gumroad info products ($49-149 SOPs) | digital-products | Fastest clean cash, no medical/securities exposure; launch-day dollars | safest fully-autonomous lane |
+| app-factory | The Medvi Playbook, 7-layer growth+release methodology; internal app checklist + the B2B "App Factory as a Service" offer (licensable SOP or run-it-for-you service) | cro (offer), cto (pipeline), digital-products (SOP production) | Sells the fleet's own hardened release pipeline as a second, near-zero-marginal-cost revenue line, or bundles into AWARE's audiologist licensing | GATE: clo contracts every SOW/MSA; securities firewall on any INND framing |
 | storefront-cro | OTCHealthMart Shopify CRO (listings, bundles, upsell, cart) | commerce | Turn the ~10,298-unit owned inventory into cash | GATE: no device claims; FDA/Stripe prereqs |
 | lifecycle-crm | Customer.io email/SMS lifecycle, reactivation of the 85K list | lifecycle | Cheapest cash lever (winback, abandoned-cart, post-purchase) | GATE: CAN-SPAM; TCPA for SMS |
 | monetization | Paywall/pricing A/B (RevenueCat/Superwall), RTM billing 98975-98981 | growth, commerce | App recurring revenue + medication-adherence billing | GATE: RTM clinically gated |

@@ -212,6 +212,12 @@ main; pending Azure redeploy + env (Matt gate).
 ---
 
 ## 3. SKILLS (`Skill` tool; installed by session-start.sh)
+**app-factory** (the productized Medvi Playbook, 7 layers, acquisition/onboarding/distribution/
+trust/monetization/reliability-audit/release, mapped to real fleet capabilities; run it to plan
+or audit any app's growth+release setup, or to build the B2B "App Factory as a Service" offer,
+licensable SOP via digital-products/Gumroad or a run-it-for-you service alongside AWARE's
+audiologist licensing; CRO owns the offer, CTO owns the pipeline, CLO gates contracts; helper
+`node skills/app-factory/scripts/checklist.mjs --app <id> --mode internal|b2b-sop|b2b-managed`),
 aso-growth, content-engine, coo, daily-briefing, designer, devkit, digital-products,
 eval-runner, grant-tracker, growth-pr, ir-support, lifecycle-crm, monetization, paid-ads,
 partnerships, raise-ops, release-conductor, scaffolder, storefront-cro, supply-chain-guard,
