@@ -63,4 +63,9 @@ COPY skills/ring-memory-index/ /app/skills/ring-memory-index/
 COPY skills/cfo-reconstruction/ /app/skills/cfo-reconstruction/
 COPY skills/gateway-connect/ /app/skills/gateway-connect/
 COPY skills/cfo-onedrive/ /app/skills/cfo-onedrive/
+# growth-room (cron nightly): growth-room.mjs sweep -- pulls read-only cross-app growth signal
+# (Capgo OTA statistics, RevenueCat subscription/MRR, PostHog per-app funnel) and stages ONE dated
+# digest into the commons brain. Only needs kb-memory (already copied above) + cfo-store (already
+# copied above) for its own imports/execFileSync calls.
+COPY skills/growth-room/ /app/skills/growth-room/
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]
