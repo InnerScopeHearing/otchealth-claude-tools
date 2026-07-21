@@ -5,6 +5,7 @@
     { "name": "ring-memory-index-daily",  "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json", "note": "THE incident resource -- provision-ring-memory-job.yml is workflow_dispatch-only; if nobody clicks Run this job silently does not exist. This is exactly the failure mode A6-RESOURCE-CI exists to catch." },
     { "name": "memory-librarian",         "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
     { "name": "daily-digest",             "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
+    { "name": "growth-room-nightly",      "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "skills/growth-room/SKILL.md", "note": "Nightly cross-app growth digest. ARM-deployed 2026-07-21 (cron 50 8, id-otc-jobs-kv). Direct entrypoint, no heartbeat wrapper; azure-canary dead-job pager (azure_jobs_list) tracks it. Smoke run growth-room-nightly-rou1un9 Succeeded." },
     { "name": "brain-reindex",            "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
     { "name": "librarian-finance",        "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
     { "name": "librarian-commerce",       "type": "containerAppJob", "resourceGroup": "otchealth-automation-rg", "source": "setup/heartbeat-registry.json" },
