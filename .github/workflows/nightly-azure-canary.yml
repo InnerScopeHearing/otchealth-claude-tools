@@ -68,3 +68,14 @@ jobs:
           path: azure-canary.log
           retention-days: 90
           if-no-files-found: warn
+
+      # THE THING THIS FILE WAS MISSING: everything above turns a real anomaly RED, but red on its own
+      # pages nobody who isn't already watching the Actions tab. This is the paging step -- it fires
+      # ONLY on failure (a prior step in this job already failed) and emails matthew@otchealth.app the
+      # run URL + the canary's own JSON summary tail via the gateway's graph_send_email tool (falls back
+      # to a PostHog 'canary_red' capture event if the mail path itself is unavailable). See
+      # setup/page-on-failure.mjs's header for the full reasoning (incl. why not skills/m365-mail, which
+      # is read-only). No secret value is ever printed.
+      - name: Page on failure (email, PostHog fallback)
+        if: failure()
+        run: node setup/page-on-failure.mjs --workflow "Nightly Azure Canary" --log "${GITHUB_WORKSPACE}/azure-canary.log"

@@ -97,3 +97,13 @@ jobs:
             exit 1
           fi
           echo "[fleet-sentinels] both sentinels ran and beat."
+
+      # THE THING THIS FILE WAS MISSING: red above pages nobody who isn't already watching the Actions
+      # tab. Fires ONLY on failure (the step above, or an earlier hard failure like Azure login, already
+      # failed this job) and emails matthew@otchealth.app the run URL + both sentinels' own log tails via
+      # the gateway's graph_send_email tool (falls back to a PostHog 'canary_red' capture event if the
+      # mail path itself is unavailable). See setup/page-on-failure.mjs's header for the full reasoning
+      # (incl. why not skills/m365-mail, which is read-only). No secret value is ever printed.
+      - name: Page on failure (email, PostHog fallback)
+        if: failure()
+        run: node setup/page-on-failure.mjs --workflow "Nightly Fleet Sentinels" --log "${GITHUB_WORKSPACE}/gateway-canary.log" --log "${GITHUB_WORKSPACE}/drift-sentinel.log"

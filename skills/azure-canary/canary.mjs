@@ -17,6 +17,13 @@
 //       AGE-not-FLOOR lesson as (2), applied to the fleet's telemetry/eval/medic streams instead of AI
 //       Search indexes: this is what caught $ai_generation/agent_session sitting silent ~367h (~15 days)
 //       and medic_dispatch ~331h (~14 days) -- see stream-freshness.mjs's header for the full story.
+//   (5) PER-LANE SYNTHETIC PROBE (2026-07-21) -- everything above only ever authenticates as the CTO
+//       lane, so a DIFFERENT lane's OAuth client_credentials (cfo/clo/developer) could rot -- an expired
+//       or rotated secret, a client silently dropped from the gateway's oauth-clients registry (see
+//       setup/oauth-clients-canary.mjs's own regression story), or a ring-gating change that empties the
+//       rooms a lane can see -- with ZERO sensor coverage. One real brain_search per lane, mint-to-
+//       response; a lane with no creds yet is a SKIP (not provisioned is not an anomaly), a real
+//       mint/transport failure, HTTP 4xx/5xx, or JSON-RPC isError is an anomaly. See probeLane()'s header.
 //
 // REPORT-ONLY on an anomaly (PostHog azure_canary event + ::warning::); exits non-zero ONLY if it cannot
 // run at all (sensor lane dark), which is itself the page.
@@ -26,7 +33,10 @@
 // probe. The freshness probe reads ONLY the newest timestamp + doc count -- never document CONTENT, so it
 // does not breach the privileged (finance/legal) rings. The stream-freshness probe reads the SAME
 // posthog-personal-api-key / posthog-fleet-project-id secrets fleet-medic already uses, and likewise reads
-// only the newest event timestamp + count, never event property content. No secret value is ever printed.
+// only the newest event timestamp + count, never event property content. The per-lane probe reads only
+// the response envelope (http status, isError, the rooms_searched NAME list) for its own lane's creds --
+// never any matched document's content -- so it stays ring-safe even for the cfo/clo lanes. No secret
+// value is ever printed.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -98,6 +108,82 @@ async function mcpCall(bearer, name, args) {
   const err = j?.result?.structuredContent?.error || j?.error;
   if (err) throw new Error(`${name} error: ${err.message || JSON.stringify(err)}`);
   return j?.result?.structuredContent?.result ?? j?.result?.structuredContent ?? null;
+}
+
+// --- (5) PER-LANE SYNTHETIC PROBE (2026-07-21) --------------------------------------------------
+// Everything above (the dead-job sweep) only ever proves the CTO lane's OAuth client + gateway access
+// are healthy -- it is the ONLY lane this file has ever authenticated as. A cfo/clo/developer lane's
+// client_credentials can independently break (an expired/rotated secret, a client dropped from the
+// gateway's oauth-clients registry -- see setup/oauth-clients-canary.mjs's own regression story -- or a
+// ring-gating change that silently empties the rooms a lane is allowed to search) with ZERO sensor
+// coverage: "the gateway is up" and "every lane's OAuth client actually works end to end" are different
+// claims, and until now only the first one was ever tested. This runs one real brain_search per lane,
+// mint-to-response, and classifies it exactly like the other checks in this file (missing creds are a
+// SKIP -- a lane that was never provisioned is not an anomaly; a real 4xx/5xx or isError response is one).
+export const LANE_PROBE_LANES = ["cto", "cfo", "clo", "developer"];
+
+/** Mint a bearer for an arbitrary lane via the SAME client_credentials flow ctoBearer() uses for cto,
+ * generalized to any lane name (oauth-lane-<lane>-id/-secret via the shared kvSecret resolver). Returns
+ * null -- not a throw -- when the lane's creds are simply absent from Key Vault, so the caller can tell
+ * "never provisioned" (SKIP) apart from "provisioned but the mint failed" (a real anomaly). */
+async function laneBearer(lane) {
+  const cid = await kvSecret(`oauth-lane-${lane}-id`);
+  const csec = await kvSecret(`oauth-lane-${lane}-secret`);
+  if (!cid || !csec) return null;
+  const r = await fetch(`${GW}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: cid, client_secret: csec }),
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j?.access_token) throw new Error(`token mint HTTP ${r.status}${j?.error ? ` (${j.error})` : ""}`);
+  return j.access_token;
+}
+
+/**
+ * One lane's live brain_search smoke test: mint -> POST /mcp tools/call -> classify. Never throws --
+ * every failure mode (absent creds, mint error, transport error, HTTP 4xx/5xx, JSON-RPC isError, a
+ * malformed/empty rooms_searched) comes back as a same-shaped { lane, state, ... } record so main() can
+ * log and tally uniformly, the same convention as assessFreshness/assessIndexerFreshness above.
+ * state: "SKIPPED" (no creds -- not an anomaly) | "OK" | "ERROR" (an anomaly under --strict).
+ * Reads only the response ENVELOPE (http status, isError, the rooms_searched NAME list) -- never any
+ * matched document's content -- so this stays ring-safe even for the cfo/clo lanes that can see
+ * privileged rooms; a lane probe can prove a room resolved without ever reading what is in it.
+ */
+export async function probeLane(lane) {
+  let bearer;
+  try {
+    bearer = await laneBearer(lane);
+  } catch (e) {
+    return { lane, state: "ERROR", detail: `token mint failed: ${e.message}` };
+  }
+  if (!bearer) return { lane, state: "SKIPPED", detail: `oauth-lane-${lane}-id/secret unavailable (lane not provisioned)` };
+  try {
+    const r = await fetch(`${GW}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "brain_search", arguments: { query: "lane probe", top: 1 } } }),
+    });
+    const body = await r.text();
+    let j = null;
+    try { j = JSON.parse(body); } catch { for (const l of body.split("\n")) if (l.startsWith("data:")) { try { j = JSON.parse(l.slice(5)); } catch {} } }
+    if (r.status < 200 || r.status >= 300) {
+      return { lane, state: "ERROR", httpStatus: r.status, detail: `HTTP ${r.status}` };
+    }
+    const isError = !!j?.result?.isError;
+    if (isError) {
+      const msg = j?.result?.content?.[0]?.text || j?.result?.structuredContent?.error?.message || "isError with no detail";
+      return { lane, state: "ERROR", httpStatus: r.status, detail: `isError: ${String(msg).slice(0, 160)}` };
+    }
+    const data = j?.result?.structuredContent?.result ?? null;
+    const rooms = data?.rooms_searched;
+    if (!Array.isArray(rooms) || rooms.length === 0) {
+      return { lane, state: "ERROR", httpStatus: r.status, detail: `rooms_searched empty/missing (${JSON.stringify(rooms)})` };
+    }
+    return { lane, state: "OK", httpStatus: r.status, rooms_searched: rooms };
+  } catch (e) {
+    return { lane, state: "ERROR", detail: `request failed: ${e.message}` };
+  }
 }
 
 // --- azure-sp -> ARM token -> per-service AI Search query key (cached). Read-only query key; never logged. ---
@@ -326,11 +412,23 @@ async function main() {
     }
   }
 
+  // (5) PER-LANE SYNTHETIC PROBE -- see probeLane()'s header. A lane with no creds yet is logged as a
+  // warning (dark-sensor discipline: never silently skip without a trace) but NOT counted as an anomaly.
+  const laneProbes = [];
+  const laneAnoms = [];
+  for (const lane of LANE_PROBE_LANES) {
+    const p = await probeLane(lane);
+    laneProbes.push(p);
+    if (p.state === "SKIPPED") warn(`lane probe ${lane}: ${p.detail}`);
+    else if (p.state === "ERROR") laneAnoms.push(`${lane}: ${p.detail}`);
+  }
+
   const anomalies = [];
   if (failedJobs.length) anomalies.push(`${failedJobs.length} scheduled job(s) not-Succeeded`);
   if (stale.length) anomalies.push(`${stale.length} index(es) not FRESH`);
   if (staleStreams.length) anomalies.push(`${staleStreams.length} PostHog stream(s) not FRESH`);
   if (semAnoms.length) anomalies.push(`${semAnoms.length} semantic-health issue(s)`);
+  if (laneAnoms.length) anomalies.push(`${laneAnoms.length} gateway lane probe(s) failed`);
 
   const summary = {
     ok: anomalies.length === 0,
@@ -342,20 +440,25 @@ async function main() {
     streams_fresh: streamFreshness.filter((f) => f.state === "FRESH").length,
     stale_streams: staleStreams, stream_freshness: streamFreshness,
     semantic_ok: semAnoms.length === 0, semantic_anomalies: semAnoms, semantic_health: semanticHealth,
+    lane_probes_total: LANE_PROBE_LANES.length,
+    lane_probes_ok: laneProbes.filter((p) => p.state === "OK").length,
+    lane_probes_skipped: laneProbes.filter((p) => p.state === "SKIPPED").length,
+    lane_probe_anomalies: laneAnoms, lane_probes: laneProbes,
   };
   await emitPosthog(summary);
 
   if (JSONOUT) console.log(JSON.stringify(summary, null, 2));
   else {
-    console.log(`[azure-canary] jobs ${scheduled.length - failedJobs.length}/${scheduled.length} ok | indexes ${summary.indexes_fresh}/${liveIndexes.length} FRESH | streams ${summary.streams_fresh}/${liveStreams.length} FRESH | semantic ${semAnoms.length ? "ISSUES(" + semAnoms.length + ")" : "OK"} | tombstoned: ${tombstoned.join(",") || "none"}`);
+    console.log(`[azure-canary] jobs ${scheduled.length - failedJobs.length}/${scheduled.length} ok | indexes ${summary.indexes_fresh}/${liveIndexes.length} FRESH | streams ${summary.streams_fresh}/${liveStreams.length} FRESH | semantic ${semAnoms.length ? "ISSUES(" + semAnoms.length + ")" : "OK"} | lanes ${summary.lane_probes_ok}/${LANE_PROBE_LANES.length} OK (${summary.lane_probes_skipped} skipped) | tombstoned: ${tombstoned.join(",") || "none"}`);
     for (const f of freshness) console.log(`  ${f.state.padEnd(12)} ${f.index}${f.ageH != null ? ` (${f.ageH}h/${f.maxAgeH}h)` : ""}${f.error ? " " + f.error : ""}`);
     for (const f of streamFreshness) console.log(`  ${f.state.padEnd(12)} ${f.stream}${f.ageH != null ? ` (${f.ageH}h/${f.maxAgeH}h)` : ""}${f.error ? " " + f.error : ""}`);
     for (const s of semAnoms) console.log(`  SEMANTIC: ${s}`);
     for (const f of failedJobs) console.log(`  DEAD JOB: ${f}`);
+    for (const p of laneProbes) console.log(`  LANE ${p.state.padEnd(9)} ${p.lane}${p.rooms_searched ? ` rooms=${p.rooms_searched.join(",")}` : ""}${p.detail ? " " + p.detail : ""}`);
   }
   for (const a of anomalies) warn(a);
-  console.log(summary.ok ? "[azure-canary] OK (jobs green, all indexes fresh, all streams fresh)" : `[azure-canary] ANOMALIES: ${anomalies.join("; ")}`);
-  if (STRICT && !summary.ok) console.error(`::error::[azure-canary] STRICT: paging on the above anomalies (stale index, dead job, or dead telemetry stream); the nightly run goes RED so nothing can sit silent.`);
+  console.log(summary.ok ? "[azure-canary] OK (jobs green, all indexes fresh, all streams fresh, all lane probes OK)" : `[azure-canary] ANOMALIES: ${anomalies.join("; ")}`);
+  if (STRICT && !summary.ok) console.error(`::error::[azure-canary] STRICT: paging on the above anomalies (stale index, dead job, dead telemetry stream, or a broken gateway lane); the nightly run goes RED so nothing can sit silent.`);
   process.exit(pageExitCode(summary.ok, STRICT)); // strict => page on anomaly; default => report-only
 }
 

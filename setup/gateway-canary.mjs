@@ -12,6 +12,10 @@
 //                                health gate. Optional here: if the token isn't available we report
 //                                'skipped', we never fail the run just because that bearer is absent
 //                                (this script runs far more often than deploys, from more places).
+//                                ADMIN_REVOKE_TOKEN has no self-mint path (it is a standalone admin
+//                                kill-switch secret, not an OAuth lane) so this step's graceful skip
+//                                is UNCHANGED and stays a deliberate, non-failing design choice —
+//                                see the strict-mode note on step 3 below for the step that changed.
 //   3. Real tools/call(s) end-to-end via GATEWAY_BEARER — the part deploy.yml's own eval-runner.mjs
 //      comment says needs a GATEWAY_BEARER secret "to activate"; same env var, same auth header
 //      shape (Authorization: Bearer <token>), same POST-to-/mcp JSON-RPC envelope
@@ -26,23 +30,41 @@
 //      second independent tool-family sanity check so one lucky tool passing doesn't mask a
 //      broader contract regression.
 //
-// GATEWAY_BEARER may not be set (same graceful-degrade convention as eval-runner.mjs, which exits 2
-// when it's missing — but THIS script is a report-only sentinel meant to run unattended far more
-// often than a deploy, so a missing bearer must not be fatal here: step 3 is marked 'skipped', not
-// 'fail', and the overall exit code reflects only the steps that actually ran).
+// AUTH FIX (2026-07-21): nightly-fleet-sentinels.yml never set GATEWAY_BEARER, so step 3 — this
+// canary's whole reason for existing, "real tools/call(s) end-to-end" — silently SKIPPED on every
+// single scheduled run since the workflow was created. "gateway-canary" beat green every night while
+// never once actually calling an authenticated tool. Fix: when GATEWAY_BEARER/--bearer is unset, self-
+// mint a cto-lane bearer via the SAME client_credentials flow skills/azure-canary/canary.mjs's own
+// ctoBearer() already uses in this exact job (oauth-lane-cto-id/-secret via the shared kvSecret
+// resolver -> POST /oauth/token) — no new secret required, since nightly-fleet-sentinels.yml already
+// runs azure/login@v2 (OIDC) before this step, the same identity kvSecret()'s az-CLI fallback uses.
+// An explicit --bearer/env GATEWAY_BEARER still wins when supplied. Under --strict, step 3 SKIPping
+// (BEARER still unavailable after the mint attempt — e.g. Key Vault genuinely unreachable) is now a
+// FAILURE, not a silent pass: a sentinel that can silently skip its core check is not a sentinel. This
+// does NOT extend to step 2 (health_deep/ADMIN_REVOKE_TOKEN) — that token has no self-mint path here
+// and its graceful-skip is the pre-existing, deliberate design (see the step-2 comment above and
+// deploy.yml's identical convention for the same token); making it strict-fail too would just turn
+// this sentinel permanently red regardless of real gateway health, the opposite of the goal.
 //
-// Dependency-free (node builtins + fetch only), matching this fleet's established style.
-// Report-only by default; --strict makes ANY real failure (not skip) a non-zero exit for CI/heartbeat wiring.
+// GATEWAY_BEARER may not be mintable in every environment (e.g. a local run with no Azure/KV access —
+// same graceful-degrade convention as eval-runner.mjs, which exits 2 when it's missing). THIS script is
+// a report-only-by-default sentinel meant to run unattended far more often than a deploy, so a missing
+// bearer is a 'skipped' step, not a 'fail', UNLESS --strict is set (see AUTH FIX above).
+//
+// Dependency-free (node builtins + fetch only, plus the shared kvSecret resolver for the self-mint),
+// matching this fleet's established style. Report-only by default; --strict makes ANY real failure
+// (not skip) — and, for step 3 specifically, a SKIP — a non-zero exit for CI/heartbeat wiring.
 //
 // Usage:
 //   node setup/gateway-canary.mjs [--json] [--strict]
 //     [--base-url https://mcp.otchealth.app]   # default: https://mcp.otchealth.app
 //     [--admin-token <token>]                   # else env ADMIN_REVOKE_TOKEN
-//     [--bearer <token>]                        # else env GATEWAY_BEARER
+//     [--bearer <token>]                        # else env GATEWAY_BEARER, else self-minted (cto lane)
 //     [--timeout-ms 8000]
 //
-// Exit codes: 0 = report (default, unless --strict); 3 = one or more real (non-skipped) step FAILED
-// and --strict; 1 = unexpected error in the harness itself.
+// Exit codes: 0 = report (default, unless --strict); 3 = one or more real (non-skipped) step FAILED,
+// OR (under --strict) step 3 could not get a bearer at all; 1 = unexpected error in the harness itself.
+import { kvSecret } from "../skills/kb-memory/azure-secret.mjs";
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
@@ -50,8 +72,29 @@ const opt = (name, def) => { const i = argv.indexOf(name); return i >= 0 && argv
 
 const BASE_URL = (opt("--base-url", process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app")).replace(/\/$/, "");
 const ADMIN_TOKEN = opt("--admin-token", process.env.ADMIN_REVOKE_TOKEN || "");
-const BEARER = opt("--bearer", process.env.GATEWAY_BEARER || "");
+let BEARER = opt("--bearer", process.env.GATEWAY_BEARER || "");
 const TIMEOUT_MS = parseInt(opt("--timeout-ms", "8000"), 10);
+// Steps whose SKIP (missing bearer) becomes a FAILURE under --strict — see the AUTH FIX note above.
+// health_deep is deliberately excluded: ADMIN_REVOKE_TOKEN has no self-mint path here.
+const CORE_AUTH_STEPS = new Set(["tool_catalog_list_tools", "tool_memory_recall"]);
+
+/** Self-mint a cto-lane bearer via the SAME client_credentials flow skills/azure-canary/canary.mjs's
+ *  own ctoBearer() uses (oauth-lane-cto-id/-secret via the shared kvSecret resolver -> GW /oauth/token).
+ *  Never called when --bearer/GATEWAY_BEARER was already supplied — an explicit override always wins.
+ *  Throws with a safe (non-secret) message on failure so the caller can record a clear reason. */
+async function mintCtoBearer() {
+  const cid = await kvSecret("oauth-lane-cto-id");
+  const csec = await kvSecret("oauth-lane-cto-secret");
+  if (!cid || !csec) throw new Error("cto-lane creds unavailable (oauth-lane-cto-id/secret) — Key Vault unreachable or the lane is not provisioned");
+  const r = await fetch(`${BASE_URL}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: cid, client_secret: csec }),
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j?.access_token) throw new Error(`cto-lane token mint failed: HTTP ${r.status}${j?.error ? ` (${j.error})` : ""}`);
+  return j.access_token;
+}
 
 async function getJson(url, headers = {}) {
   const r = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -120,10 +163,21 @@ function record(id, status, detail) { steps.push({ id, status, detail }); }
     }
   }
 
-  // ── Step 3: real end-to-end tool calls via /mcp (needs GATEWAY_BEARER) ─────────────────────
+  // ── Step 3: real end-to-end tool calls via /mcp (needs a bearer) ────────────────────────────
+  // AUTH FIX: --bearer/GATEWAY_BEARER still wins if supplied; otherwise self-mint a cto-lane bearer
+  // (see mintCtoBearer() above) so this step actually RUNS instead of silently skipping every night.
+  let bearerMintError = null;
   if (!BEARER) {
-    record("tool_catalog_list_tools", "skipped", "GATEWAY_BEARER not set — no bearer available in this environment to authenticate tools/call (same env var eval-runner.mjs / deploy.yml's golden-case-eval step needs).");
-    record("tool_memory_recall", "skipped", "GATEWAY_BEARER not set — skipped alongside catalog_list_tools.");
+    try {
+      BEARER = await mintCtoBearer();
+    } catch (e) {
+      bearerMintError = e.message;
+    }
+  }
+  if (!BEARER) {
+    const reason = `GATEWAY_BEARER not set, and self-mint via oauth-lane-cto creds failed (${bearerMintError || "no creds available"}).`;
+    record("tool_catalog_list_tools", "skipped", reason);
+    record("tool_memory_recall", "skipped", `${reason} (skipped alongside catalog_list_tools.)`);
   } else {
     // 3a. catalog_list_tools — read-only, idempotent, no side effects (per its own tool
     // annotations). Verifies the CONTRACT: not just HTTP 200, but that total_tools/services are
@@ -181,21 +235,34 @@ function record(id, status, detail) { steps.push({ id, status, detail }); }
     }
   }
 
+  const strict = flag("--strict");
   const failed = steps.filter((s) => s.status === "fail");
   const skipped = steps.filter((s) => s.status === "skipped");
   const passed = steps.filter((s) => s.status === "pass");
+  // AUTH FIX: under --strict, a SKIP on a CORE auth step (tool_catalog_list_tools / tool_memory_recall
+  // — the "real tools/call(s) end-to-end" this canary exists for) is itself a failure. health_deep is
+  // deliberately NOT in CORE_AUTH_STEPS, so its own graceful skip (no self-mint path for
+  // ADMIN_REVOKE_TOKEN) is unaffected — see the header comment.
+  const strictSkipFailures = strict ? skipped.filter((s) => CORE_AUTH_STEPS.has(s.id)) : [];
+  const hardFailed = [...failed, ...strictSkipFailures];
 
   if (flag("--json")) {
-    console.log(JSON.stringify({ base_url: BASE_URL, steps, summary: { passed: passed.length, failed: failed.length, skipped: skipped.length } }, null, 2));
+    console.log(JSON.stringify({
+      base_url: BASE_URL, steps, strict,
+      summary: { passed: passed.length, failed: failed.length, skipped: skipped.length, strict_skip_failures: strictSkipFailures.map((s) => s.id) },
+    }, null, 2));
   } else {
-    console.log(`# GATEWAY-CANARY — ${BASE_URL} — ${passed.length} pass, ${failed.length} fail, ${skipped.length} skipped`);
+    console.log(`# GATEWAY-CANARY — ${BASE_URL} — ${passed.length} pass, ${failed.length} fail, ${skipped.length} skipped${strictSkipFailures.length ? ` (${strictSkipFailures.length} core-auth skip escalated to FAIL under --strict)` : ""}`);
     for (const s of steps) {
-      const tag = s.status === "pass" ? "LIVE  " : s.status === "fail" ? "DEAD  " : "SKIP  ";
-      console.log(`[${tag}] ${s.id.padEnd(26)} ${s.detail}`);
+      const escalated = strict && s.status === "skipped" && CORE_AUTH_STEPS.has(s.id);
+      const tag = s.status === "pass" ? "LIVE  " : s.status === "fail" || escalated ? "DEAD  " : "SKIP  ";
+      console.log(`[${tag}] ${s.id.padEnd(26)} ${s.detail}${escalated ? " (STRICT: a core auth step cannot silently skip — a sentinel that can silently skip its core check is not a sentinel.)" : ""}`);
     }
     if (failed.length) console.log(`\nFAILED: ${failed.map((s) => s.id).join(", ")} — gateway is up but at least one contract silently broke.`);
-    if (skipped.length) console.log(`SKIPPED (not failures, missing optional creds): ${skipped.map((s) => s.id).join(", ")}`);
+    if (strictSkipFailures.length) console.log(`STRICT FAILURE (core auth step skipped): ${strictSkipFailures.map((s) => s.id).join(", ")}.`);
+    const reportOnlySkips = skipped.filter((s) => !strictSkipFailures.includes(s));
+    if (reportOnlySkips.length) console.log(`SKIPPED (not failures, missing optional creds): ${reportOnlySkips.map((s) => s.id).join(", ")}`);
   }
 
-  process.exit(flag("--strict") && failed.length ? 3 : 0);
+  process.exit(strict && hardFailed.length ? 3 : 0);
 })().catch((e) => { console.error("[gateway-canary] ERROR: " + e.message); process.exit(1); });
