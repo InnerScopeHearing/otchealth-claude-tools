@@ -527,7 +527,26 @@ async function aisExistingIds() {
   return ids;
 }
 async function runPushSearch() {
-  await aisInit(); await aisCreateIndex();
+  await aisInit();
+  // CHUNKED-ROOM GUARD (2026-07-21): after the Phase-3 S1 cutover the doc rooms are CHUNKED
+  // (key=chunk_id, text_vector) and fed by native S1 pull-indexers -- a flat push (key=id,
+  // contentVector) has nothing valid to do there. The 4 librarian jobs sat RED for ~6 days on
+  // exactly this: a pinned pre-cutover image ignored SKIP_PUSH_SEARCH=1, ran push-search anyway,
+  // and the schema-ensure PUT died 400 ("Found 2 key fields") merging the flat schema onto the
+  // chunked one. Detect the live shape and SKIP cleanly instead of failing the whole job.
+  // Freshness for chunked rooms is monitored via the pull-indexer (writer_indexer in
+  // setup/expected-indexes.json), so this skip hides nothing.
+  try {
+    const g = await fetch(`${AIS_EP}/indexes/${IDXNAME}?api-version=${AIS_API}`, { headers: { "api-key": AIS_KEY } });
+    if (g.ok) {
+      const liveKey = ((await g.json()).fields || []).find((f) => f.key)?.name;
+      if (liveKey && liveKey !== "id") {
+        console.error(`[push-search] SKIP: index ${IDXNAME} is CHUNKED (key=${liveKey}; S1 pull-indexer-fed). A flat push does not apply to this room; set SKIP_PUSH_SEARCH=1 on its job to skip earlier.`);
+        return;
+      }
+    }
+  } catch { /* GET failure -> proceed; aisCreateIndex handles first-create + real errors */ }
+  await aisCreateIndex();
   let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
   if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
   const existing = REINDEX ? new Set() : await aisExistingIds(); // --reindex forces a full re-push
