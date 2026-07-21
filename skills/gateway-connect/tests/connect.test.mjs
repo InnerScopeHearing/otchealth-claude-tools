@@ -44,17 +44,19 @@ test('hasLane: true for known lanes, false otherwise (onboarding no-op gate)', (
   // NOTE (2026-07-10): this used to assert hasLane('cto') === false, but the LANES registry in
   // connect.mjs now carries a real 'cto' entry (oauth-lane-cto-id/secret) -- that assumption is
   // stale and was failing this suite (and therefore the repo's required CI check) for every PR,
-  // unrelated to their own content. 'coo' is not in this registry's LANES map at all (the COO/CFO/
-  // CLO/etc. exec lanes outside clo/clo-personal/cfo/cto/developer aren't gateway-connect lanes),
-  // so it is the correct known-laneless case going forward.
-  assert.equal(hasLane('coo'), false);
+  // unrelated to their own content.
+  // NOTE (2026-07-21): coo + cro were onboarded onto the gateway (oauth-lane-coo-*/oauth-lane-cro-*),
+  // so both now resolve to real lanes too. 'nope' is the correct known-laneless placeholder going
+  // forward (it names no real agent, so it can't go stale the way 'coo' did).
+  assert.equal(hasLane('coo'), true);
+  assert.equal(hasLane('cro'), true);
   assert.equal(hasLane('nope'), false);
 });
 
 test('CLI --if-lane on a laneless agent exits 0 and does nothing (no network, no register)', () => {
   const runMjs = join(dirname(fileURLToPath(import.meta.url)), '..', 'connect.mjs');
-  const out = execFileSync('node', [runMjs, 'coo', '--if-lane'], { encoding: 'utf8' }); // exit 0, prints skip
-  assert.match(out, /no gateway lane for "coo"; skipping/);
+  const out = execFileSync('node', [runMjs, 'nope', '--if-lane'], { encoding: 'utf8' }); // exit 0, prints skip
+  assert.match(out, /no gateway lane for "nope"; skipping/);
 });
 
 import { azureEnvPresent, credSource } from '../connect.mjs';

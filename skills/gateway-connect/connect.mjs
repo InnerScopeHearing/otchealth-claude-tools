@@ -32,6 +32,8 @@ export const LANES = {
   cfo: { idSecret: 'oauth-lane-cfo-id', secretSecret: 'oauth-lane-cfo-secret', mcpName: 'otchealth-gateway' },
   cto: { idSecret: 'oauth-lane-cto-id', secretSecret: 'oauth-lane-cto-secret', mcpName: 'otchealth-gateway' },
   developer: { idSecret: 'oauth-lane-developer-id', secretSecret: 'oauth-lane-developer-secret', mcpName: 'otchealth-gateway' },
+  coo: { idSecret: 'oauth-lane-coo-id', secretSecret: 'oauth-lane-coo-secret', mcpName: 'otchealth-gateway' },
+  cro: { idSecret: 'oauth-lane-cro-id', secretSecret: 'oauth-lane-cro-secret', mcpName: 'otchealth-gateway' },
 };
 
 // ---- pure, unit-testable helpers ----
