@@ -84,3 +84,14 @@ jobs:
             nightly-eval.log
           retention-days: 90
           if-no-files-found: warn
+
+      # ITEM 2.3 (Wave 2, AI-OS research-pass 2026-07-21): schedule-liveness heartbeat. This workflow's
+      # own golden-task run above is report-only (continue-on-error) by design, so it can never page on
+      # its own content going stale -- this heartbeat is the ONLY signal that would ever catch this
+      # workflow's cron itself stopping (a 60-day repo-inactivity schedule disable, a deleted/malformed
+      # workflow YAML, a cron typo). Fires unconditionally (if: always()). See
+      # skills/nightly-schedule-canary/SKILL.md for the full design.
+      - name: "Heartbeat: mark this workflow's schedule as alive"
+        if: always()
+        continue-on-error: true
+        run: node setup/heartbeat.mjs beat nightly-eval ok >/dev/null 2>&1 || true

@@ -1,0 +1,120 @@
+# Pager self-test (ITEM 2.2, Wave 2, AI-OS research-pass 2026-07-21).
+#
+# WHY THIS EXISTS. Every --strict nightly monitor (nightly-azure-canary, nightly-continuity-canary,
+# nightly-recall-eval, nightly-fleet-sentinels, ...) ends with the SAME step: `if: failure(): run: node
+# setup/page-on-failure.mjs --workflow "..."`. That wiring has only ever been trusted by READING the
+# code, never by watching it actually fire against the real gateway + real Key Vault creds from inside a
+# real GitHub Actions run. A pager nobody has ever seen page is exactly the same class of unverified trust
+# this whole workstream exists to close (see page-on-failure.mjs's own header for the sibling story about
+# a red canary that pages nobody).
+#
+# WHAT THIS WORKFLOW DOES. Dispatch-only (never scheduled, never runs unattended). It deliberately fails
+# ONE synthetic, isolated step (a plain `exit 1`, nothing real, no other workflow's checks are touched)
+# and then calls the EXACT SAME setup/page-on-failure.mjs script every real nightly monitor calls, with
+# the SAME call path (mint the cto-lane bearer -> graph_send_email, PostHog 'canary_red'-family fallback
+# on failure) -- just with --test, which changes the subject/body/event name to unmistakably say
+# SELF-TEST (see page-on-failure.mjs's own header for exactly what --test changes and why). This proves
+# the pager fires in practice without ever risking a real page being mistaken for this drill, and without
+# making any real nightly workflow's own check fail for real.
+#
+# HOW TO RUN THIS SELF-TEST:
+#   1. Actions tab -> "Pager Self-Test" -> "Run workflow" (workflow_dispatch), on any branch.
+#   2. The run's overall status will show FAILED/red -- THAT IS EXPECTED AND CORRECT. Step 3 below
+#      ("Synthetic failure") deliberately fails on purpose, every single time, so GitHub Actions marks
+#      the whole job red the moment that step runs, before any later step's own outcome is even known.
+#      The run's color is NOT the self-test's verdict.
+#   3. THE ACTUAL VERDICT is the "Verify pager self-test result" step's own output (open its log, or read
+#      the run's Job Summary). It reads the exit status of the page-on-failure.mjs step that ran just
+#      before it and prints one of:
+#        PASS: the pager fired (either the email path or the PostHog fallback got the page out).
+#        FAIL (PAGER DID NOT FIRE): page-on-failure.mjs itself did not run at all -- the synthetic
+#          failure step above did not actually fail, which means THIS WORKFLOW is broken, not the pager.
+#        FAIL (BOTH CHANNELS DOWN): page-on-failure.mjs ran and exited non-zero -- both the email path
+#          and the PostHog fallback failed. Check oauth-lane-cto-id/-secret and posthog-fleet-ingest-key
+#          in Key Vault, and gateway reachability at https://mcp.otchealth.app.
+#   4. Confirm the page actually arrived: check matthew@otchealth.app for a "[SELF-TEST] Pager Self-Test
+#      pager self-test (not a real incident)" email, OR (if the email path itself is what is being tested
+#      as unavailable) query the PostHog Fleet Agents project for a 'pager_selftest' event -- never
+#      'canary_red', which stays reserved for real incidents so a dashboard built on it can never be
+#      polluted by a self-test run.
+#
+# Azure auth = SECRETLESS OIDC, same pattern every other claude-tools monitor uses: azure/login (federated
+# OIDC, repo VARIABLES AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID) lets page-on-failure.mjs's kvSecret()
+# resolve oauth-lane-cto-id/-secret and posthog-fleet-ingest-key from Key Vault via the az-CLI/OIDC path.
+# No secret at rest in this workflow.
+name: Pager Self-Test
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write   # secretless OIDC login to Azure (azure/login); kvSecret reads Key Vault via the az session
+  contents: read
+
+concurrency:
+  group: pager-selftest
+  cancel-in-progress: false
+
+jobs:
+  selftest:
+    name: exercise page-on-failure.mjs end to end from a deliberate synthetic failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Azure login (OIDC, secretless)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # THE deliberate, isolated failure. Nothing real: no canary script, no real check, no other
+      # workflow's job. It exists only to give the step below something genuine to react to via
+      # `if: failure()`, exactly the same trigger condition every real nightly workflow's own paging
+      # step uses. Intentionally NOT continue-on-error: a step that "fails" but is tolerated would never
+      # satisfy `if: failure()` on the next step in the way a real check failure does.
+      - name: "Synthetic failure (intentional -- proves the pager fires on a real job failure)"
+        run: |
+          echo "This step deliberately fails on every run of this workflow. That is the point: it gives"
+          echo "the next step a genuine if: failure() condition to react to, the same condition every"
+          echo "real nightly monitor's own paging step reacts to."
+          exit 1
+
+      # THE self-test page itself. Same script, same call path, same secrets as every real nightly
+      # pager -- only --test differs, which changes the subject/body/PostHog event so this can never be
+      # mistaken for a real incident (see page-on-failure.mjs's header). continue-on-error so the next
+      # step (the verdict) always gets to run and report clearly, instead of the job just stopping here.
+      - name: "Page on failure (SELF-TEST: --test tags subject/body/event so this can never be mistaken for a real incident)"
+        id: page
+        if: failure()
+        continue-on-error: true
+        run: node setup/page-on-failure.mjs --workflow "Pager Self-Test" --test
+
+      # THE actual verdict. Not the run's overall red/green (that is guaranteed red by the synthetic
+      # failure step above and means nothing about the pager). Reads the page-on-failure.mjs step's own
+      # outcome and reports PASS/FAIL in the log and the Job Summary, so a human (or future automation)
+      # can tell at a glance whether the pager actually fired, without having to know that this
+      # workflow's own red/green is a red herring.
+      - name: Verify pager self-test result
+        if: always()
+        run: |
+          outcome="${{ steps.page.outcome }}"
+          echo "page-on-failure.mjs step outcome: $outcome"
+          if [ "$outcome" = "success" ]; then
+            echo "PASS: the pager fired (email or the PostHog fallback got the self-test page out)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif [ "$outcome" = "failure" ]; then
+            echo "::error::FAIL (BOTH CHANNELS DOWN): page-on-failure.mjs ran and reported that BOTH the email page and the PostHog fallback failed. Check oauth-lane-cto-id/-secret and posthog-fleet-ingest-key in Key Vault, and gateway reachability at https://mcp.otchealth.app." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          else
+            echo "::error::FAIL (PAGER DID NOT FIRE): the 'Page on failure' step never ran (outcome: $outcome). The synthetic failure step above did not actually fail as expected -- this self-test WORKFLOW is broken, not necessarily the pager itself. Re-check the 'Synthetic failure' step." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

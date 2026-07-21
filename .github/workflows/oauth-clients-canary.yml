@@ -44,3 +44,17 @@ jobs:
         # No env creds: azure/login authenticated the runner; the canary resolves ARM + Key Vault tokens
         # via `az account get-access-token`. Exit 3 = a canonical lane/connector client is MISSING.
         run: node setup/oauth-clients-canary.mjs check
+
+      # ITEM 2.3 (Wave 2, AI-OS research-pass 2026-07-21): schedule-liveness heartbeat, a DIFFERENT
+      # failure class than the invariant check above. Fires unconditionally (if: always()), regardless
+      # of whether the check step passed or failed, because this beat means "this workflow's own 6-hourly
+      # cron fired", not "the oauth-clients registry was healthy" (that check fails the job on its own
+      # terms; this repo's default GitHub Actions failure notification is the only page today, which is
+      # a separate known gap, not one this heartbeat closes). This heartbeat's OWN registry entry
+      # ("oauth-clients-canary" in setup/heartbeat-registry.json) uses an 8h SLO (not the ~26h used for
+      # the daily nightly workflows) since this one runs every 6h. See
+      # skills/nightly-schedule-canary/SKILL.md for the full design.
+      - name: "Heartbeat: mark this workflow's schedule as alive"
+        if: always()
+        continue-on-error: true
+        run: node setup/heartbeat.mjs beat oauth-clients-canary ok >/dev/null 2>&1 || true

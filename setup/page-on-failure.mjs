@@ -32,8 +32,19 @@
 // notifier's own failure is visible in this step's own log — the job is already red from `if: failure()`
 // regardless of this script's exit code, so a non-zero exit here can never mask the real failure).
 //
+// ITEM 2.2 (Wave 2, AI-OS research-pass 2026-07-21): --test / SELF-TEST MODE. Every nightly workflow's
+// pager wiring (the `if: failure()` step calling this script) had never been PROVEN to actually fire in
+// practice, only trusted by reading the code. .github/workflows/pager-selftest.yml exercises this exact
+// script end to end from a deliberate, isolated synthetic failure (see that workflow's header). --test
+// (or PAGE_TEST_MODE=1) makes that exercise SAFE to run at any time without ever being mistaken for a
+// real incident: it changes the email subject / PostHog event name / body banner to unmistakably say
+// SELF-TEST, so whoever receives it (Matt) can never confuse a self-test page with a real one. The
+// underlying call path (mint the cto-lane bearer, call graph_send_email, fall back to the PostHog
+// 'canary_red'-family capture event on failure) is IDENTICAL in both modes. A self-test that silently
+// used a different, easier code path would prove nothing about whether the real pager works.
+//
 // Usage:
-//   node setup/page-on-failure.mjs --workflow "<Workflow Name>" [--log <path>]... [--tail-lines 40]
+//   node setup/page-on-failure.mjs --workflow "<Workflow Name>" [--log <path>]... [--tail-lines 40] [--test]
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { kvSecret } from "../skills/kb-memory/azure-secret.mjs";
@@ -47,6 +58,7 @@ const RECIPIENT = process.env.PAGE_RECIPIENT || "matthew@otchealth.app";
 const WORKFLOW = opt("--workflow", process.env.GITHUB_WORKFLOW || "unknown workflow");
 const TAIL_LINES = parseInt(opt("--tail-lines", "40"), 10);
 const LOG_PATHS = optAll("--log");
+const TEST_MODE = argv.includes("--test") || process.env.PAGE_TEST_MODE === "1";
 
 /** The GitHub Actions run URL from the runner's own standard env vars (no new inputs needed). Pure
  *  given process.env. */
@@ -71,10 +83,34 @@ export function tailFile(path, n) {
   }
 }
 
-/** Plain-text page body. Pure. No em/en dashes (fleet copy convention). */
-export function buildPageBody(workflow, url, logSections) {
+/** Email subject line. Pure. In self-test mode the subject is unmistakably a test (never "[RED]", never
+ *  "failed") so it can never be confused with a real page in an inbox or a phone notification preview,
+ *  which is often just the subject line. */
+export function pageSubject(workflow, testMode) {
+  return testMode ? `[SELF-TEST] ${workflow} pager self-test (not a real incident)` : `[RED] ${workflow} failed`;
+}
+
+/** Which PostHog event the fallback path emits. Pure. Kept a distinct event name in self-test mode (not
+ *  'canary_red' with a property flag) so a dashboard/alert built on 'canary_red' counts can never be
+ *  polluted by self-test runs, and so a query for 'pager_selftest' cleanly answers "when did we last
+ *  prove the pager works" on its own. */
+export function posthogEventName(testMode) { return testMode ? "pager_selftest" : "canary_red"; }
+
+/** Plain-text page body. Pure. No em/en dashes (fleet copy convention). In self-test mode a loud banner
+ *  is prepended so the body itself (not just the subject) states this is not a real incident, in case a
+ *  mail client shows only a body preview or the subject gets stripped by a forwarding rule. */
+export function buildPageBody(workflow, url, logSections, testMode) {
+  const banner = testMode
+    ? [
+        "THIS IS A PAGER SELF-TEST. No real incident occurred.",
+        "It exists only to prove the paging pipeline (email, then PostHog fallback) actually fires end to end.",
+        "No action is needed.",
+        "",
+      ]
+    : [];
   const lines = [
-    `${workflow} failed on the nightly schedule.`,
+    ...banner,
+    testMode ? `${workflow} pager self-test (deliberate synthetic failure, see .github/workflows/pager-selftest.yml).` : `${workflow} failed on the nightly schedule.`,
     "",
     `Run: ${url}`,
     "",
@@ -122,14 +158,15 @@ async function sendPageEmail(subject, body) {
 }
 
 /** Fallback trace: the SAME secret + capture endpoint canary.mjs's own emitPosthog() already uses,
- *  event 'canary_red' instead of 'azure_canary'. Throws on failure so the caller can report it. */
-async function emitPosthogFallback(props) {
+ *  event 'canary_red' (or 'pager_selftest' in --test mode, see posthogEventName()) instead of
+ *  'azure_canary'. Throws on failure so the caller can report it. */
+async function emitPosthogFallback(props, eventName) {
   const key = await kvSecret("posthog-fleet-ingest-key");
   if (!key) throw new Error("posthog-fleet-ingest-key unavailable");
   const host = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
   const r = await fetch(`${host}/capture/`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: key, event: "canary_red", distinct_id: "fleet-page-on-failure", properties: props }),
+    body: JSON.stringify({ api_key: key, event: eventName, distinct_id: TEST_MODE ? "fleet-pager-selftest" : "fleet-page-on-failure", properties: props }),
   });
   if (!r.ok) throw new Error(`PostHog capture HTTP ${r.status}`);
   return true;
@@ -138,8 +175,9 @@ async function emitPosthogFallback(props) {
 async function main() {
   const url = runUrl();
   const logSections = LOG_PATHS.length ? LOG_PATHS.map((p) => tailFile(p, TAIL_LINES)) : ["(no --log path supplied)"];
-  const subject = `[RED] ${WORKFLOW} failed`;
-  const body = buildPageBody(WORKFLOW, url, logSections);
+  const subject = pageSubject(WORKFLOW, TEST_MODE);
+  const body = buildPageBody(WORKFLOW, url, logSections, TEST_MODE);
+  const eventName = posthogEventName(TEST_MODE);
 
   let emailed = false, emailErr = null, posted = false, postErr = null;
   try {
@@ -150,19 +188,20 @@ async function main() {
   }
   if (!emailed) {
     try {
-      posted = await emitPosthogFallback({ workflow: WORKFLOW, run_url: url, tail: logSections.join("\n---\n").slice(0, 4000) });
+      posted = await emitPosthogFallback({ workflow: WORKFLOW, run_url: url, test: TEST_MODE, tail: logSections.join("\n---\n").slice(0, 4000) }, eventName);
     } catch (e) {
       postErr = e.message;
       console.error(`[page-on-failure] PostHog fallback failed: ${postErr}`);
     }
   }
 
+  const modeTag = TEST_MODE ? " [SELF-TEST]" : "";
   if (emailed) {
-    console.log(`[page-on-failure] paged via graph_send_email to ${RECIPIENT}.`);
+    console.log(`[page-on-failure]${modeTag} paged via graph_send_email to ${RECIPIENT}.`);
   } else if (posted) {
-    console.log(`[page-on-failure] email path unavailable (${emailErr}); paged via PostHog 'canary_red' event fallback instead.`);
+    console.log(`[page-on-failure]${modeTag} email path unavailable (${emailErr}); paged via PostHog '${eventName}' event fallback instead.`);
   } else {
-    console.error(`::error::[page-on-failure] BOTH the email page (${emailErr}) and the PostHog fallback (${postErr}) failed — this red run left NO durable page. Check oauth-lane-cto-*/posthog-fleet-ingest-key in Key Vault and gateway reachability.`);
+    console.error(`::error::[page-on-failure]${modeTag} BOTH the email page (${emailErr}) and the PostHog fallback (${postErr}) failed — this red run left NO durable page. Check oauth-lane-cto-*/posthog-fleet-ingest-key in Key Vault and gateway reachability.`);
     process.exitCode = 1;
   }
 }

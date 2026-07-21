@@ -85,3 +85,13 @@ jobs:
           path: nightly-recall-eval.log
           retention-days: 90
           if-no-files-found: warn
+
+      # ITEM 2.3 (Wave 2, AI-OS research-pass 2026-07-21): schedule-liveness heartbeat, a DIFFERENT
+      # failure class than the --strict verdict above. Fires unconditionally (if: always()), regardless
+      # of whether the recall-eval step passed or failed, because this beat means "this workflow's own
+      # cron fired today", not "recall quality was healthy" (that already pages via the step above). See
+      # skills/nightly-schedule-canary/SKILL.md for the full design.
+      - name: "Heartbeat: mark this workflow's schedule as alive (independent of the recall-eval's own verdict above)"
+        if: always()
+        continue-on-error: true
+        run: node setup/heartbeat.mjs beat nightly-recall-eval ok >/dev/null 2>&1 || true

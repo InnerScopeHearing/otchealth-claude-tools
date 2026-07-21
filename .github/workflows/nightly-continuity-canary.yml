@@ -15,8 +15,13 @@
 # Auth: none of its own beyond git (the freshness check is a local `git log`, no credentials, no
 # network). The optional brain.mjs ledger-drift enrichment reuses whatever creds brain.mjs itself
 # resolves via Key Vault (kvSecret); a missing/broken diff path degrades to "enrichment unavailable"
-# and is never itself an anomaly, so no Azure OIDC login is needed for the freshness check to run. The
-# PostHog emit inside continuity-canary.mjs resolves its own key via kvSecret with no auth step here.
+# and is never itself an anomaly, so no Azure OIDC login was needed for the freshness check itself.
+#
+# ITEM 2.3 (Wave 2, AI-OS research-pass 2026-07-21) ADDED an Azure OIDC login (id-token: write +
+# azure/login below) purely so this workflow's own schedule-liveness heartbeat step (see the end of the
+# job) can resolve its Key Vault creds (azure-commons-storage-account/key) via kvSecret()'s az-CLI/OIDC
+# fallback path, the same way every other nightly monitor already does. The freshness check above still
+# needs none of it.
 name: Nightly Continuity Canary
 
 on:
@@ -25,6 +30,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
+  id-token: write   # secretless OIDC login to Azure (azure/login); kvSecret reads Key Vault via the az session (needed only by the heartbeat beat step below)
   contents: read
 
 concurrency:
@@ -47,6 +53,13 @@ jobs:
         with:
           node-version: 22
 
+      - name: Azure login (OIDC, secretless, needed only by the schedule-heartbeat step at the end of this job)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - name: "Run continuity canary (--strict: RED on a stale/missing/undated continuity doc)"
         working-directory: skills/continuity-canary
         run: |
@@ -65,3 +78,13 @@ jobs:
       - name: Page on failure (email, PostHog fallback)
         if: failure()
         run: node setup/page-on-failure.mjs --workflow "Nightly Continuity Canary" --log "${GITHUB_WORKSPACE}/continuity-canary.log"
+
+      # ITEM 2.3 (Wave 2, AI-OS research-pass 2026-07-21): schedule-liveness heartbeat, a DIFFERENT
+      # failure class than the --strict verdict above. Fires unconditionally (if: always()), regardless
+      # of whether the canary step passed or failed, because this beat means "this workflow's own cron
+      # fired today", not "the canary's content was healthy" (that already pages via the step above). See
+      # skills/nightly-schedule-canary/SKILL.md for the full design.
+      - name: "Heartbeat: mark this workflow's schedule as alive (independent of the canary's own verdict above)"
+        if: always()
+        continue-on-error: true
+        run: node setup/heartbeat.mjs beat nightly-continuity-canary ok >/dev/null 2>&1 || true

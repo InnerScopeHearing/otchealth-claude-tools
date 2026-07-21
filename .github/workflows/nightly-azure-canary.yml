@@ -79,3 +79,17 @@ jobs:
       - name: Page on failure (email, PostHog fallback)
         if: failure()
         run: node setup/page-on-failure.mjs --workflow "Nightly Azure Canary" --log "${GITHUB_WORKSPACE}/azure-canary.log"
+
+      # ITEM 2.3 (Wave 2, AI-OS research-pass 2026-07-21): schedule-liveness heartbeat, a DIFFERENT
+      # failure class than the --strict verdict above. Fires unconditionally (if: always()), regardless
+      # of whether the canary step passed or failed, because this beat means "this workflow's own cron
+      # fired today", not "the canary's content was healthy" (that already pages via the step above). A
+      # cron that stops firing entirely (GitHub disables a schedule after 60 days of repo inactivity, a
+      # deleted/malformed workflow YAML, a cron typo) never reaches this step again, so its last beat
+      # ages past the SLO in setup/heartbeat-registry.json (job "nightly-azure-canary") and
+      # skills/nightly-schedule-canary/schedule-canary.mjs (run from nightly-fleet-sentinels.yml) pages
+      # on that staleness itself. See skills/nightly-schedule-canary/SKILL.md for the full design.
+      - name: "Heartbeat: mark this workflow's schedule as alive (independent of the canary's own verdict above)"
+        if: always()
+        continue-on-error: true
+        run: node setup/heartbeat.mjs beat nightly-azure-canary ok >/dev/null 2>&1 || true
