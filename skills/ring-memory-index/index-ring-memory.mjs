@@ -391,7 +391,19 @@ if (isMain) {
       .catch((e) => { console.error("reconcile-fleet-dupes fatal:", e.message); process.exit(1); });
   } else {
     const arg = cliArgs.find((a) => !a.startsWith("--")) || "all";
-    run(arg).then((res) => { for (const r of res) console.log(r.error ? `RING ${r.label}: ERROR ${r.error}` : `RING ${r.label}: indexed ${r.indexed}/${r.total} -> ${r.index}${r.fleet ? ` (+ ${FLEET_INDEX})` : " (PRIVATE, not in fleet)"}`); })
+    run(arg).then(async (res) => {
+      for (const r of res) console.log(r.error ? `RING ${r.label}: ERROR ${r.error}` : `RING ${r.label}: indexed ${r.indexed}/${r.total} -> ${r.index}${r.fleet ? ` (+ ${FLEET_INDEX})` : " (PRIVATE, not in fleet)"}`);
+      // SELF-HEAL (2026-07-21): after a FULL reindex, purge the pre-fix `fleet__*` duplicates whose
+      // content now has a converged twin, so the scheduled ring-memory-index-daily job clears the ~882
+      // legacy dupes over its next runs with NO manual step. Safe by construction -- planFleetDupeCleanup
+      // only deletes a `fleet__*` doc that has an exact (agent, ts) twin, so a never-shared fact is never
+      // dropped -- and idempotent. Only on a full `run all` (a single-ring run must not reconcile across
+      // the whole fleet index). Non-fatal: a reconcile error never fails the reindex. RING_NO_AUTO_RECONCILE=1 opts out.
+      if (arg === "all" && process.env.RING_NO_AUTO_RECONCILE !== "1") {
+        try { const rc = await reconcileFleetDupes({ apply: true }); console.log(`reconcile-fleet-dupes (post-run-all): DELETED ${rc.toDelete} converged dupe(s), kept ${rc.kept}.`); }
+        catch (e) { console.error("post-run-all reconcile (non-fatal):", e.message); }
+      }
+    })
       .catch((e) => { console.error("ring-memory-index fatal:", e.message); process.exit(1); });
   }
 }
