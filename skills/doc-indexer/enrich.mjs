@@ -127,7 +127,10 @@ function buildSas() {
   return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
 const enc = (n) => n.split("/").map(encodeURIComponent).join("/");
-const htmlEnt = (s) => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'");
+// Single-pass entity decode: each entity is consumed exactly once (a chained .replace() could
+// double-unescape e.g. `&amp;lt;` -> `<`). Best-effort fallback for HTML-entity-encoded blob names only.
+const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'" };
+const htmlEnt = (s) => s.replace(/&(amp|lt|gt|quot|#39|apos);/g, (_, e) => ENT[e]);
 async function getBuf(n) {
   let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`);
   if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(n)) { const d = htmlEnt(n); if (d !== n) r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(d)}?${SAS}`); }
@@ -402,7 +405,7 @@ async function cmdRun() {
     const rows = await loadCatalog();
     let todo = rows.filter((r) => r.path && !r.path.startsWith("_") && r.sidecar && !r.err && (REINDEX || !r.enriched || r.enriched_sha256 !== r.sha256));
     if (LIMIT) todo = todo.slice(0, LIMIT);
-    console.error(`[enrich] domain=${DOMAIN} ${ACCT}/${CONTAINER} | ${rows.length} catalog rows | ${todo.length} to (re)enrich | model=${MODEL} conc=${CONCURRENCY}${MAX_MIN ? ` budget=${MAX_MIN}m` : ""}`);
+    console.error(`[enrich] domain=${DOMAIN} | ${rows.length} catalog rows | ${todo.length} to (re)enrich | model=${MODEL} conc=${CONCURRENCY}${MAX_MIN ? ` budget=${MAX_MIN}m` : ""}`);
     if (!todo.length) { console.log("[enrich] nothing to enrich (all caught up)."); return; }
     let next = 0, since = 0;
     const start = Date.now();
