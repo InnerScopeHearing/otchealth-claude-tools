@@ -17,7 +17,11 @@
 // run picks up the tail. Runs on Azure credits (gpt-4.1 on the Foundry resource). Non-PHI ring;
 // legal `personal` container is privileged (run it with --container personal in its own lane).
 //
-// Usage: GCP_CLAUDE_DRIVER_SA_JSON=... node deep-pass.mjs --profile legal|finance
+// Credentials: Azure Key Vault ONLY (GCP Secret Manager is fully retired). kvSecret() self-resolves
+// via managed identity, then AZURE_SP_CLIENT_ID/SECRET/TENANT_ID, then az-CLI/OIDC -- see
+// skills/kb-memory/azure-secret.mjs. No GCP service account of any kind is used or required.
+//
+// Usage: node deep-pass.mjs --profile legal|finance
 //          [--container company|personal|cfo-source-docs] [--account <acct>] [--key-secret <sm>]
 //          [--limit N] [--reindex] [--concurrency 6] [--max-minutes 110] [--prefix p]
 
@@ -54,15 +58,22 @@ const slug = (s) => String(s || '').replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[^
 const J = (t) => { try { return JSON.parse(t); } catch { try { return JSON.parse(String(t).slice(String(t).indexOf('{'), String(t).lastIndexOf('}') + 1)); } catch { return null; } } };
 const csv = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""').replace(/\r?\n/g, ' ') + '"';
 
-// ---------- GCP Secret Manager via the claude-driver SA ----------
-const SA = (() => { try { return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON || readFileSync(process.env.HOME + '/.gcp_claude_driver_sa.json', 'utf8')); } catch { return null; } })();
-function saJwt(scope) { if(!SA)return null; const n = Math.floor(Date.now() / 1e3), e = (o) => Buffer.from(JSON.stringify(o)).toString('base64url'); const i = `${e({ alg: 'RS256', typ: 'JWT' })}.${e({ iss: SA.client_email, scope, aud: 'https://oauth2.googleapis.com/token', iat: n, exp: n + 3600 })}`; return i + '.' + crypto.createSign('RSA-SHA256').update(i).sign(SA.private_key, 'base64url'); }
-async function gTok(scope) { const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt(scope))}` }); return (await r.json()).access_token; }
-async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const t = await gTok('https://www.googleapis.com/auth/cloud-platform'); if(!t)return null; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/otchealth-shared-prod/secrets/${id}/versions/latest:access`, { headers: { Authorization: 'Bearer ' + t } }); return r.ok ? Buffer.from((await r.json()).payload.data, 'base64').toString('utf8').trim() : null; }
+// ---------- Azure Key Vault (GCP is fully retired -- kvSecret is the only credential path) ----------
+// 2026-07-21 migration: this used to fall back to a GCP service-account JWT -> Secret Manager REST
+// call whenever kvSecret() returned null. That fallback is DELETED, not just unreachable: GCP billing
+// is off and GCP_CLAUDE_DRIVER_SA_JSON is no longer injected into these jobs, so the block was dead
+// weight. kvSecret() already tries managed identity, then AZURE_SP_* client_credentials, then
+// az-CLI/OIDC, in that order, and fails closed (returns null) if none work -- see
+// skills/kb-memory/azure-secret.mjs for the full auth-path documentation.
+async function sm(id) { return kvSecret(id); }
 
 // ---------- Azure Blob (account SAS) ----------
 let AKEY, SAS;
-function buildSas() { const sv = '2021-12-02', sp = 'rwlc', ss = 'b', srt = 'co'; const st = new Date(Date.now() - 3e5).toISOString().slice(0, 19) + 'Z'; const se = new Date(Date.now() + 12 * 36e5).toISOString().slice(0, 19) + 'Z'; const sts = [ACCT, sp, ss, srt, st, se, '', 'https', sv, ''].join('\n') + '\n'; const sig = crypto.createHmac('sha256', Buffer.from(AKEY, 'base64')).update(sts, 'utf8').digest('base64'); return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: 'https', sig }).toString(); }
+// sp includes 'd' (delete): releaseLock() below issues a plain blob DELETE to clear the lock file on a
+// clean exit. Without 'd' that DELETE 403s (silently swallowed by releaseLock's empty catch), so the
+// lock never actually clears early -- it still self-heals via LOCK_TTL, but every run then waits out
+// the full 15 minutes instead of the next run reacquiring immediately. Found + fixed 2026-07-21.
+function buildSas() { const sv = '2021-12-02', sp = 'rwdlc', ss = 'b', srt = 'co'; const st = new Date(Date.now() - 3e5).toISOString().slice(0, 19) + 'Z'; const se = new Date(Date.now() + 12 * 36e5).toISOString().slice(0, 19) + 'Z'; const sts = [ACCT, sp, ss, srt, st, se, '', 'https', sv, ''].join('\n') + '\n'; const sig = crypto.createHmac('sha256', Buffer.from(AKEY, 'base64')).update(sts, 'utf8').digest('base64'); return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: 'https', sig }).toString(); }
 const enc = (n) => n.split('/').map(encodeURIComponent).join('/');
 // The indexer's List-Blobs parser stored XML-escaped names (a blob literally named "(L&C).pdf" was
 // captured as "(L&amp;C).pdf"), so the catalog path 404s against the real blob. Decode on 404 so
