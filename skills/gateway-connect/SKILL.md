@@ -13,7 +13,7 @@ The MCP gateway (`mcp.otchealth.app`) issues **1-hour** access tokens via the `c
 skills/gateway-connect/clo-gateway-connect.sh            # CLO: connect once + verify
 skills/gateway-connect/clo-gateway-connect.sh --watch    # CLO: connect + stay connected (nohup/cron/leave running)
 skills/gateway-connect/cfo-gateway-connect.sh --watch    # CFO variant
-# generic: node skills/gateway-connect/connect.mjs <clo|clo-personal|cfo> [--watch] [--verify-only]
+# generic: node skills/gateway-connect/connect.mjs <clo|clo-personal|cfo|coo|cro> [--watch] [--verify-only]
 ```
 - `--verify-only` mints + calls `tools/list` to PROVE the lane works, WITHOUT touching your MCP config — the safe first check.
 - On success you'll see `agent=<lane>`, the tool count, and the privileged tools present (e.g. `memory_recall, kb_search_privileged, llm_azure, shield_check, groundedness_check`).
