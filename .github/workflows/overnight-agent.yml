@@ -19,8 +19,14 @@ on:
         required: false
         type: boolean
         default: false
-  schedule:
-    - cron: "0 9 * * *"   # 09:00 UTC ~= 02:00 PT. ARMED (CLAUDE_CODE_OAUTH_TOKEN is set 2026-06-22).
+  # schedule DISARMED 2026-07-21. The default "summarize 24h changes" task delivered zero realized
+  # value across ~29 consecutive nights (0 PRs merged/reviewed; the last 7 nights produced only the run
+  # log) while drawing the SHARED Claude Max weekly limit that the CTO + Developer seats also consume,
+  # and the daily change-digest is already covered by the Tier-1 Azure `daily-digest` Container Apps Job
+  # (zero Max draw). Kept fully functional DISPATCH-ONLY for a real on-demand overnight task. To re-arm,
+  # uncomment below AND set a task worth a Max session (the default summarize task is NOT).
+  # schedule:
+  #   - cron: "0 9 * * *"   # 09:00 UTC ~= 02:00 PT
 
 permissions:
   contents: write
@@ -125,14 +131,18 @@ jobs:
 
           if gh pr view "$BRANCH" >/dev/null 2>&1; then
             echo "Draft PR already exists for ${BRANCH}."
-          else
-            gh pr create --draft --base "$DEFAULT_BRANCH" --head "$BRANCH" \
+          elif gh pr create --draft --base "$DEFAULT_BRANCH" --head "$BRANCH" \
               --title "Overnight run ${RUN_ID}: $(printf '%s' "$TASK" | head -c 60)" \
               --body "Automated draft PR capturing the work of overnight run [\`${RUN_ID}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}).
 
           **Task:** ${TASK}
 
-          Unattended subscription-auth run. Review before merge." || echo "PR create skipped (may already exist)."
+          Unattended subscription-auth run. Review before merge."; then
+            echo "Draft PR created for ${BRANCH}."
+          else
+            # Do NOT silently swallow a real failure: the branch is pushed but no PR opened. Surface it
+            # loudly (a swallowed failure here is why ~29 overnight runs never produced a reviewable PR).
+            echo "::warning::[overnight-agent] gh pr create FAILED for ${BRANCH} (branch pushed, PR not opened). Check gh auth / pull-requests:write permission."
           fi
 
       - name: Upload result
