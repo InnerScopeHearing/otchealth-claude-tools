@@ -221,7 +221,16 @@ audiologist licensing; CRO owns the offer, CTO owns the pipeline, CLO gates cont
 aso-growth, content-engine, coo, daily-briefing, designer, devkit, digital-products,
 eval-runner, grant-tracker, growth-pr, ir-support, lifecycle-crm, monetization, paid-ads,
 partnerships, raise-ops, release-conductor, scaffolder, storefront-cro, supply-chain-guard,
-telemetry-wiring, test-author, voice-ops. Plus the fleet utility + ops skills: **pdf**
+telemetry-wiring, test-author, voice-ops.
+**apple-preflight** (the CTO's pre-dispatch Apple App Store Review gate; before dispatching an
+`ios-depot.yml` build headed for submission, or before promoting external testers, run
+`node skills/apple-preflight/apple-preflight.mjs --app <id>` for a guideline-cited checklist
+report mapped to that app's real risk profile: kids/COPPA for FourVault, health+ai for
+MedReview/Companion, subscription for every paywalled app, social for Companion's family feed,
+plus Privacy Manifest + Export Compliance on every app; reads the installed
+capacitor-apple-review-preflight plugin live, falls back to a condensed cited summary if that
+plugin is absent; advisory report only, never an automated blocker, the CTO reads it and
+decides). Plus the fleet utility + ops skills: **pdf**
 (OCR read + create), **legal** (CLO citation verifier + Azure matter/docket store),
 **skills-discovery** (search the 50k-skill claude-plugins.dev registry on demand; the
 fleet meta-skill), amazon-sp-api, quickbooks, xero, cfo-store, cfo-onedrive, m365-mail,
