@@ -69,6 +69,14 @@ jobs:
           node run-evals.mjs --emit --baseline baseline.json --tolerance 0.05 --strict --json \
             2>&1 | tee "${GITHUB_WORKSPACE}/nightly-recall-eval.log"
 
+      # A RED run is not a PAGE on its own: the recall SLO was blind because nobody watches the
+      # Actions tab. Route a hit@5 regression (or a can't-run/dark-sensor) through the real pager
+      # (dual email + PostHog fallback), matching nightly-azure-canary / nightly-fleet-sentinels.
+      # Runs from repo root (setup/page-on-failure.mjs), not the recall-evals working-directory.
+      - name: Page on failure (email, PostHog fallback)
+        if: failure()
+        run: node setup/page-on-failure.mjs --workflow "Nightly Recall-Quality Eval" --log "${GITHUB_WORKSPACE}/nightly-recall-eval.log"
+
       - name: Upload scorecard log
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
