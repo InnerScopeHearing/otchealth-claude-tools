@@ -187,7 +187,6 @@ async function revenuecatOverview(projectId, key) {
 // Confirmed shape: mirrors skills/azure-canary/stream-freshness.mjs's own newestStreamEventTs()
 // query pattern exactly (same auth, same endpoint, same DateTime64-string normalization) — this is
 // a proven-live query path in this repo already, not a new integration guess.
-function hogqlLiteral(s) { return `'${String(s).replace(/'/g, "\\'")}'`; }
 async function posthogFunnel(projectId, key, days) {
   const hql = `SELECT count() AS events, count(DISTINCT person_id) AS actives FROM events WHERE timestamp > now() - INTERVAL ${days} DAY`;
   const r = await postHogQuery(projectId, key, hql);
