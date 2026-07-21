@@ -11,7 +11,11 @@
 //
 // Verbs:
 //   node semantic.mjs reindex                 # (re)build the memory-exec index from the exec feed (resumable: skips already-indexed)
-//   node semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall]
+//   node semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall] [--include-ops]
+//
+// Recall-quality safeguards (gateway parity, 2026-07-21): recall() drops retracted/superseded rows and,
+// by default, operational-exhaust chatter (status/episode/heartbeat/digest); pass --include-ops to see
+// the exhaust types too. See filterHygiene() below.
 import crypto from "node:crypto";
 import { mergeSchemaAdditive } from "../doc-indexer/schema-merge.mjs";
 import { pathToFileURL } from "node:url";
@@ -31,6 +35,7 @@ const QUERY = argv.slice(1).filter((a, i, arr) => !a.startsWith("--") && !(i > 0
 const N = parseInt(takeVal("--n", "12"), 10) || 12;
 const AGENT_FILTER = (takeVal("--agent", "") || "").toLowerCase();
 const TYPE_FILTER = (takeVal("--type", "") || "").toLowerCase();
+const INCLUDE_OPS = argv.includes("--include-ops"); // bypass the exhaust-type room-hygiene filter (see filterHygiene)
 
 function saJwt(scope) {
   const __r=process.env.GCP_CLAUDE_DRIVER_SA_JSON;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;}
@@ -85,6 +90,12 @@ async function ensureIndex() {
       { name: "ts", type: "Edm.String", filterable: true, sortable: true },
       { name: "tags", type: "Edm.String", searchable: true },
       { name: "text", type: "Edm.String", searchable: true },
+      // Retraction/supersession parity with the gateway's brain_search safeguards (defect-2 fix,
+      // 2026-07-21): true when this entry's ledger id is SOME OTHER entry's `supersedes` target anywhere
+      // in the exec feed, i.e. the fleet has since corrected/retracted it (see reindex() below). Additive
+      // field (mergeSchemaAdditive keeps the PUT below non-destructive on the live index); recall()
+      // treats an absent value (pre-fix docs, or an index not yet reindexed) as NOT retracted, fail-open.
+      { name: "retracted", type: "Edm.Boolean", filterable: true },
       { name: "contentVector", type: "Collection(Edm.Single)", searchable: true, retrievable: false, dimensions: EMB_DIMS, vectorSearchProfile: "vp" },
     ],
     vectorSearch: { algorithms: [{ name: "hnsw", kind: "hnsw" }], profiles: [{ name: "vp", algorithm: "hnsw" }] },
@@ -238,6 +249,42 @@ export function rankHitsByTrust(hits, trust, nowMs = Date.now()) {
   }
 }
 
+// Operational-exhaust "room hygiene": types that are ops chatter, not durable knowledge, and crowd out
+// real facts in a top-N recall (a heartbeat/digest/status ping displacing an actual fact). Mirrors the
+// gateway's brain_search room-hygiene filter (otchealth-mcp-server PR #110) so a local Claude Code
+// recall() gives the same quality result the gateway would. Exported so the exact set is test-pinned.
+export const EXHAUST_TYPES = new Set(["status", "episode", "heartbeat", "digest"]);
+
+// Room-hygiene + retraction filter (defect-2 parity fix, 2026-07-21): drop rows the fleet has
+// superseded/retracted (retracted===true, see reindex()) and, unless includeOps or an explicit
+// typeFilter was requested, operational-exhaust chatter (EXHAUST_TYPES) -- the two safeguards the
+// gateway's brain_search already applies that this local recall path lacked. `typeFilter` suppresses the
+// exhaust check on purpose: if the caller explicitly asked for `--type status`, honor it rather than
+// stripping every result back out. Pure, fail-open by construction (any throw returns the input
+// unmodified, mirroring rankHitsByTrust's own fail-open contract above); exported for unit tests.
+export function filterHygiene(hits, { includeOps = false, typeFilter = "" } = {}) {
+  try {
+    return (hits || []).filter((h) => {
+      if (h && h.retracted === true) return false;
+      if (!includeOps && !typeFilter && h && EXHAUST_TYPES.has(String(h.type || "").toLowerCase())) return false;
+      return true;
+    });
+  } catch {
+    return hits || [];
+  }
+}
+
+// Which ledger ids are RETRACTED (superseded by some other entry), over a full entries list. The same
+// supersededIds-Set idiom mem.mjs's `active` filter, dedupe.mjs's `activeRowsOfType`, and
+// contradiction-scan.mjs's `dropSuperseded` already use elsewhere in this toolkit -- extracted here as
+// its own pure, exported, directly-testable function (mirrors assignDocIds/rankHitsByTrust/filterHygiene
+// above: a pure core plus a thin I/O caller) rather than left inline in reindex(), so the PRODUCER side
+// of retraction (which ids get tagged) is pinned by a test independent of the CONSUMER side
+// (filterHygiene, above). Pure, no I/O.
+export function computeRetractedIds(entries) {
+  return new Set((entries || []).filter((e) => e && e.supersedes).map((e) => e.supersedes));
+}
+
 async function reindex() {
   await init(); await ensureIndex();
   const entries = await readExecFeed();
@@ -246,19 +293,39 @@ async function reindex() {
   // as-is in the index, no re-embed), a content-hash-suffixed key ONLY for genuinely colliding entries
   // so no distinct fact is silently dropped (the gs-10 id-collision bug).
   const collidedBaseKeys = assignDocIds(entries);
+  // RETRACTION (defect-2 fix, 2026-07-21): computed ONCE over the full feed -- an entry's id landing in
+  // this set means some OTHER entry `--supersedes`s it, i.e. the fleet has corrected/retracted it. Baked
+  // into every doc as `retracted` (inline below, plus a retroactive refresh pass after the main loop) so
+  // recall() can drop it cheaply -- a stored field, no extra network call.
+  const supersededIds = computeRetractedIds(entries);
   const todo = entries.filter(e => e.id && e._docId && !have.has(e._docId));
-  console.error(`[memory-semantic] ${entries.length} exec entries; ${have.size} already indexed; ${todo.length} to embed; ${collidedBaseKeys.size} colliding base key(s) to de-duplicate`);
+  console.error(`[memory-semantic] ${entries.length} exec entries; ${have.size} already indexed; ${todo.length} to embed; ${collidedBaseKeys.size} colliding base key(s) to de-duplicate; ${supersededIds.size} superseded id(s)`);
   let n = 0, buf = [], bufIds = [];
   const embedded = new Set(); // _docIds confirmed upserted this run (added only after a successful push)
   const flush = async () => { if (!buf.length) return; await aisPush(buf); for (const id of bufIds) embedded.add(id); n += buf.length; buf = []; bufIds = []; };
   for (const e of todo) {
     const text = `[${e.type}] ${e.text || ""} ${(e.tags || []).join(" ")}`.slice(0, 8000);
     let vec; try { vec = (await embed([text]))[0]; } catch (err) { console.error("  embed fail " + e.id + ": " + err.message); continue; }
-    buf.push({ "@search.action": "mergeOrUpload", id: e._docId, agent: e._agent, type: e.type || "", ts: e.ts || "", tags: (e.tags || []).join(", "), text: (e.text || "").slice(0, 16000), contentVector: vec });
+    buf.push({ "@search.action": "mergeOrUpload", id: e._docId, agent: e._agent, type: e.type || "", ts: e.ts || "", tags: (e.tags || []).join(", "), text: (e.text || "").slice(0, 16000), retracted: supersededIds.has(e.id), contentVector: vec });
     bufIds.push(e._docId);
     if (buf.length >= 64) { await flush(); console.error(`  indexed ${n}/${todo.length}`); }
   }
   await flush();
+  // RETROACTIVE RETRACTION (defect-2 fix): an entry that gets superseded by a LATER correction, AFTER it
+  // was already embedded in a prior run, is never revisited by the todo-only loop above (todo = not-yet-
+  // indexed only) -- so its `retracted` flag would otherwise stay false forever and recall() would keep
+  // surfacing a belief the fleet already corrected. No re-embed needed: a partial mergeOrUpload of just
+  // {id, retracted:true} updates ONLY that field (Azure AI Search merges named fields; text/contentVector
+  // already on the doc are untouched). The ledger is append-only and supersession is monotonic (once
+  // retracted, never un-retracted), so it is always correct to write retracted:true here, never false.
+  const validEntries = entries.filter((e) => e.id && e._docId);
+  const toRetract = validEntries.filter((e) => supersededIds.has(e.id));
+  let retractedNow = 0;
+  for (let i = 0; i < toRetract.length; i += 1000) {
+    const batch = toRetract.slice(i, i + 1000).map((e) => ({ "@search.action": "mergeOrUpload", id: e._docId, retracted: true }));
+    try { await aisPush(batch); retractedNow += batch.length; } catch (err) { console.error("  retracted-flag refresh batch failed: " + err.message); }
+  }
+  if (toRetract.length) console.error(`[memory-semantic] marked ${retractedNow}/${toRetract.length} superseded doc(s) retracted:true`);
   // Prune the now-stale bare `agent__id` doc of each collided group: its fact has just been re-indexed
   // under a `__<hash>` key (alongside the sibling the collision previously hid), so the bare key is a
   // duplicate. SAFETY: delete a base key ONLY when EVERY entry of its group is confirmed present under
@@ -275,13 +342,15 @@ async function reindex() {
 }
 
 async function recall() {
-  if (!QUERY) { console.error('need a query: semantic.mjs recall "<query>" [--n 12] [--agent x] [--type pitfall]'); process.exit(2); }
+  if (!QUERY) { console.error('need a query: semantic.mjs recall "<query>" [--n 12] [--agent x] [--type pitfall] [--include-ops]'); process.exit(2); }
   await init();
   const vec = (await embed([QUERY]))[0];
   const filters = [];
   if (AGENT_FILTER) filters.push(`agent eq '${AGENT_FILTER.replace(/'/g, "''")}'`);
   if (TYPE_FILTER) filters.push(`type eq '${TYPE_FILTER.replace(/'/g, "''")}'`);
-  const baseBody = { search: QUERY, top: N, select: "agent,type,ts,text,tags", vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: N }] };
+  const SELECT_FULL = "agent,type,ts,text,tags,retracted";
+  const SELECT_LEGACY = "agent,type,ts,text,tags"; // fallback: index not yet reindexed since `retracted` shipped
+  let baseBody = { search: QUERY, top: N, select: SELECT_FULL, vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: N }] };
   if (filters.length) baseBody.filter = filters.join(" and ");
   // Invoke the Azure AI Search L2 SEMANTIC RERANKER. The memory-exec index provisions a "sem" semantic
   // config (see ensureIndex above) but this recall path never used it -- it returned pure hybrid
@@ -300,8 +369,24 @@ async function recall() {
   // just because the reranker is unavailable -- fall straight back to the plain hybrid query that has
   // always worked.
   if (!r.ok) { console.error(`[recall] semantic ranker unavailable (${r.status}); falling back to plain hybrid`); r = await doSearch(false); }
+  // FAIL-OPEN on the `retracted` field not existing yet (an index that has not been reindexed since this
+  // shipped): Azure 400s a $select naming an unknown field. Drop it and retry the same semantic/non-
+  // semantic dance once more, so recall NEVER breaks on a stale schema; it just runs one cycle without
+  // the extra safeguard field until the next reindex backfills it.
+  if (!r.ok && r.status === 400) {
+    console.error("[recall] 'retracted' field not yet in the live schema (run reindex to backfill); retrying without it");
+    baseBody = { ...baseBody, select: SELECT_LEGACY };
+    r = await doSearch(true);
+    if (!r.ok) r = await doSearch(false);
+  }
   if (!r.ok) { console.error("search " + r.status + " " + (await r.text()).slice(0, 200)); process.exit(1); }
-  const hits = (await r.json()).value || [];
+  let hits = (await r.json()).value || [];
+
+  // Room-hygiene + retraction filter (defect-2 parity fix): see filterHygiene() above. Fail-open by
+  // construction (filterHygiene never throws); `hits` is only ever reassigned to its own filtered output.
+  const hygieneHits = filterHygiene(hits, { includeOps: INCLUDE_OPS, typeFilter: TYPE_FILTER });
+  if (hygieneHits.length !== hits.length) console.error(`[recall] filtered ${hits.length - hygieneHits.length} retracted/exhaust row(s)${INCLUDE_OPS ? "" : " (pass --include-ops to include status/episode/heartbeat/digest chatter)"}`);
+  hits = hygieneHits;
 
   // semantic-trust wiring (ADVISORY, FAIL-OPEN): the shared exec feed is CROSS-AGENT, so the same
   // real-world claim is often asserted independently by several agents in their own words. semantic-trust
@@ -328,7 +413,7 @@ if (isMain) {
     try {
       if (cmd === "reindex") await reindex();
       else if (cmd === "recall") await recall();
-      else { console.error('usage: semantic.mjs reindex | recall "<query>" [--n 12] [--agent x] [--type pitfall]'); process.exit(2); }
+      else { console.error('usage: semantic.mjs reindex | recall "<query>" [--n 12] [--agent x] [--type pitfall] [--include-ops]'); process.exit(2); }
     } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
   })();
 }
