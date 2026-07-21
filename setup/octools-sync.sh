@@ -73,4 +73,12 @@ fi
 
 # --- Fleet bulletin: surface what changed + why (any session; cheap local read). ---
 node "$TOOLS_DIR/setup/bulletin.mjs" since 2>/dev/null || true
+
+# --- Governed-skills audit: catch a shadow skill created MID-SESSION, not just at next session start. ---
+# session-start.sh already runs the full --report once per session; this is the same cheap two-directory
+# diff (microseconds, no network) re-run on every prompt via --if-changed, which stays SILENT unless the
+# orphan set actually changed since the last check (mirrors the bulletin.mjs "since" idea above). Catches
+# an agent authoring a doctrine-y "helpful" skill straight into ~/.claude/skills outside git review,
+# without waiting for the next session to notice. Report-only (never prunes); fail-open.
+[ -f "$TOOLS_DIR/setup/governed-skills-audit.mjs" ] && node "$TOOLS_DIR/setup/governed-skills-audit.mjs" --report --if-changed 2>/dev/null || true
 exit 0
