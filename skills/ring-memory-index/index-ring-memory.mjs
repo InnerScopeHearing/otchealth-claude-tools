@@ -19,12 +19,30 @@
 // still gets its own commons-<agent>-memory index). Content is never printed. Creds self-resolve per row
 // from Secret Manager via the claude-driver SA. Idempotent (mergeOrUpload by stable id) and fail-safe PER
 // ROW — one row's failure never blocks the others. Safe to run on a schedule.
+//
+// DUAL-WRITER CONVERGENCE (defect-1 fix, 2026-07-21): `memory-exec` (FLEET_INDEX below) has a SECOND
+// writer -- kb-memory/semantic.mjs's reindex(), which indexes the curated shared exec feed
+// (_MEMORY/_exec/<agent>.jsonl) under id `docId(agent,id) = "<agent>__<id>"` with the entry's raw `.text`.
+// Before this fix, indexRing()'s fleet push used a DIFFERENT id scheme (`fleet__<label>__<localDocId>`)
+// and a type-prefixed text, so any entry that was ALSO `--share`d (and is therefore in BOTH
+// `_MEMORY/<agent>.jsonl` here AND `_MEMORY/_exec/<agent>.jsonl`, under the SAME source `id` -- mem.mjs's
+// append() builds ONE entry object and writes it to both places) landed in `memory-exec` as TWO rows,
+// measured at ~882/6176 (~14%) of the index, diluting recall (a verified case knocked a golden
+// Mercury-cash-runway answer out of the top-5). FIX: the fleet push now uses `sharedDocId(ring.label,
+// eR.id)` -- semantic.mjs's OWN docId() -- and the same raw-text convention semantic.mjs stores, so a
+// shared entry converges onto the IDENTICAL key + content from EITHER writer (mergeOrUpload collapses
+// re-runs to one row, order-independent). Entries that were NEVER shared (present only in the private
+// ledger read here) still get a unique key under the converged scheme, so this ring's UNIQUE
+// fleet-learning coverage (semantic.mjs only ever sees the curated _exec feed, never the full private
+// ledger) is preserved -- no fact coverage is lost, only the duplicate rows are. See
+// `planFleetDupeCleanup` / `reconcileFleetDupes` below for cleaning the pre-fix `fleet__*` leftovers.
 import crypto from "node:crypto";
 import { mergeSchemaAdditive } from "../doc-indexer/schema-merge.mjs";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { docId as sharedDocId } from "../kb-memory/semantic.mjs";
 
 const SM = "otchealth-shared-prod";
 const API = "2023-11-01";
@@ -218,6 +236,20 @@ function entryText(eR) {
   return `[${eR.type || "entry"}] ${eR.text || eR.evalue || eR.value || ""} ${tags}`.trim().slice(0, 8000);
 }
 
+// The fallback id used when a row has no real ledger `.id` (defensive: real rows written by mem.mjs's
+// append() always have one). Pure, exported so fleetKeyFor()'s test can reproduce it exactly.
+export const fallbackRowId = (ring, eR, k) => eR.id || `${ring.idPrefix}-${k}-${(eR.ts || "").slice(0, 19)}`;
+
+// THE CONVERGED fleet-index key (defect-1 fix, 2026-07-21) for one ring ledger row: the SAME formula
+// (semantic.mjs's own docId(), imported not reimplemented) semantic.mjs's reindex() uses for this exact
+// source entry (agent=ring.label, id=eR.id) when/if it is also `--share`d to the exec feed -- so the two
+// writers land on ONE row instead of two, from either writer, in either order. A named, exported function
+// (not inlined in indexRing() below) so the convergence property is unit-testable against the REAL
+// production code path rather than a test-side reimplementation that could silently drift from it.
+export function fleetKeyFor(ring, eR, k) {
+  return sharedDocId(ring.label, fallbackRowId(ring, eR, k));
+}
+
 /** Index one ring's ledger into its index. Returns {label, indexed, total} or {label, error}. Fail-safe. */
 export async function indexRing(ring, azure, tok) {
   try {
@@ -229,10 +261,15 @@ export async function indexRing(ring, azure, tok) {
     const rows = (await rr.text()).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     await ensureIndex(azure.AIS, azure.AK, ring.index);
     const prep = rows.map((eR, k) => ({
-      id: docId(eR.id || `${ring.idPrefix}-${k}-${(eR.ts || "").slice(0, 19)}`),
+      id: docId(fallbackRowId(ring, eR, k)),
+      fleetId: fleetKeyFor(ring, eR, k),
       type: eR.type || "", ts: eR.ts || "",
       tags: Array.isArray(eR.tags) ? eR.tags.join(", ") : eR.tags || "",
       text: entryText(eR),
+      // Raw (non type-prefixed) text, matching semantic.mjs's stored `text` field convention exactly —
+      // "ONE text format for a given source entry" so a converged doc's content does not ping-pong
+      // between formats depending on which writer touched it last.
+      rawText: (eR.text || eR.evalue || eR.value || "").slice(0, 16000),
     })).filter((d) => d.text);
     // Non-privileged rings ALSO feed the shared fleet-learning index (agent-faceted). Privileged rings
     // (private:true) never do — their content stays walled to their own index.
@@ -245,7 +282,7 @@ export async function indexRing(ring, azure, tok) {
       try { vecs = await embed(azure.AOAI, azure.AOK, azure.DEP, chunk.map((c) => c.text)); } catch { continue; }
       chunk.forEach((c, j) => {
         buf.push({ "@search.action": "mergeOrUpload", id: c.id, type: c.type, ts: c.ts, tags: c.tags, text: c.text.slice(0, 16000), contentVector: vecs[j] });
-        if (toFleet) fleetBuf.push({ "@search.action": "mergeOrUpload", id: `fleet__${ring.label}__${c.id}`, agent: ring.label, type: c.type, ts: c.ts, tags: c.tags, text: c.text.slice(0, 16000), contentVector: vecs[j] });
+        if (toFleet) fleetBuf.push({ "@search.action": "mergeOrUpload", id: c.fleetId, agent: ring.label, type: c.type, ts: c.ts, tags: c.tags, text: c.rawText, contentVector: vecs[j] });
       });
       if (buf.length >= PUSH_BATCH) { await push(ring.index, buf); indexed += buf.length; buf = []; if (toFleet) { await push(FLEET_INDEX, fleetBuf); fleetBuf = []; } }
     }
@@ -274,11 +311,89 @@ export async function run(filterLabel) {
   return out;
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
-  const arg = process.argv.slice(2).find((a) => !a.startsWith("--")) || "all";
-  run(arg).then((res) => { for (const r of res) console.log(r.error ? `RING ${r.label}: ERROR ${r.error}` : `RING ${r.label}: indexed ${r.indexed}/${r.total} -> ${r.index}${r.fleet ? ` (+ ${FLEET_INDEX})` : " (PRIVATE, not in fleet)"}`); })
-    .catch((e) => { console.error("ring-memory-index fatal:", e.message); process.exit(1); });
+// ============================ FLEET-DUPE RECONCILE (defect-1 cleanup) ============================
+// One-shot cleanup for the ~882 pre-fix `fleet__*` duplicate rows already sitting in `memory-exec` (the
+// old id scheme this file used before the convergence fix above). Dry-run by default; NEVER deletes
+// unless called with { apply: true } / `--apply` on the CLI. The CTO runs this, not the builder.
+
+// Pure: given the full memory-exec doc set ({id, agent, ts}), decide which `fleet__`-prefixed ids are
+// SAFE to delete (a converged, non-`fleet__` doc holding the SAME fact already exists) vs which must be
+// KEPT (no twin yet -- deleting would silently drop the only copy of a fact that was never `--share`d,
+// so semantic.mjs never indexed it, and this ring has not been re-indexed under the converged scheme
+// since the fix shipped). (agent,ts) is an exact, collision-safe join key: mem.mjs's append() stamps
+// `ts` ONCE via `new Date().toISOString()` on the entry object and copies that SAME value into every
+// place the entry is written (the private ledger row AND, if shared, the exec-feed copy), and a fresh
+// converged fleet push carries the identical `ts` too (see indexRing() above) -- so two docs sharing
+// (agent,ts) are always the same source entry, never a coincidence (millisecond-precision timestamps on
+// CLI-driven writes that take >>1ms each). Pure, no I/O; exported for unit tests.
+export function planFleetDupeCleanup(docs) {
+  const isFleet = (id) => typeof id === "string" && id.startsWith("fleet__");
+  const key = (d) => `${d.agent || ""} ${d.ts || ""}`;
+  const otherKeys = new Set();
+  for (const d of docs || []) { if (d && !isFleet(d.id) && d.ts) otherKeys.add(key(d)); }
+  const toDelete = [], kept = [];
+  for (const d of docs || []) {
+    if (!d || !isFleet(d.id)) continue;
+    if (d.ts && otherKeys.has(key(d))) toDelete.push(d.id);
+    else kept.push(d.id);
+  }
+  return { toDelete, kept };
 }
 
-export default { RINGS, FLEET_INDEX, indexRing, run };
+// Paginated listing of every doc's {id, agent, ts} in FLEET_INDEX. Mirrors semantic.mjs's existingIds()
+// pagination pattern (1000/page via $skip, same 100000 bound -- already proven sufficient for this
+// index's live size).
+async function listMemoryExecDocs(AIS, AK) {
+  const out = [];
+  for (let skip = 0; skip < 100000; skip += 1000) {
+    const r = await fetch(`${AIS}/indexes/${FLEET_INDEX}/docs?api-version=${API}&$select=id,agent,ts&$top=1000&$skip=${skip}`, { headers: { "api-key": AK } });
+    if (!r.ok) break;
+    const v = (await r.json()).value || [];
+    out.push(...v);
+    if (v.length < 1000) break;
+  }
+  return out;
+}
+
+/**
+ * List (and, only with apply:true, DELETE) the pre-fix `fleet__*` duplicate rows in memory-exec.
+ * Dry-run (apply:false, the default) does a read-only scan and returns the plan without deleting
+ * anything. Safe to run at any time, including before a fresh `run all` -- planFleetDupeCleanup only
+ * ever proposes deleting a `fleet__*` doc that ALREADY has a converged twin, so it can never orphan a
+ * fact regardless of ordering (see that function's doc comment).
+ */
+export async function reconcileFleetDupes({ apply = false } = {}) {
+  const tok = await gtoken();
+  const [ep, AK] = await Promise.all([sm("azure-search-endpoint", tok), sm("azure-search-admin-key", tok)]);
+  const AIS = (ep || "").replace(/\/$/, "");
+  if (!AIS || !AK) throw new Error("missing azure-search-endpoint/admin-key");
+  const docs = await listMemoryExecDocs(AIS, AK);
+  const { toDelete, kept } = planFleetDupeCleanup(docs);
+  if (apply && toDelete.length) {
+    for (let i = 0; i < toDelete.length; i += 1000) {
+      const batch = toDelete.slice(i, i + 1000).map((id) => ({ "@search.action": "delete", id }));
+      const r = await fetch(`${AIS}/indexes/${FLEET_INDEX}/docs/index?api-version=${API}`, { method: "POST", headers: { "api-key": AK, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
+      if (!r.ok) throw new Error("delete " + r.status + " " + (await r.text()).slice(0, 200));
+    }
+  }
+  return { total: docs.length, toDelete: toDelete.length, kept: kept.length, apply: !!apply };
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  const cliArgs = process.argv.slice(2);
+  if (cliArgs.includes("reconcile-fleet-dupes")) {
+    const apply = cliArgs.includes("--apply");
+    reconcileFleetDupes({ apply })
+      .then((r) => {
+        console.log(`reconcile-fleet-dupes: scanned ${r.total} memory-exec doc(s); ${r.toDelete} fleet__* duplicate(s) ${apply ? "DELETED" : "would delete (dry-run, pass --apply to actually delete)"}; ${r.kept} fleet__* doc(s) kept (no converged twin yet -- run 'node index-ring-memory.mjs run all' first to backfill, then re-run this).`);
+      })
+      .catch((e) => { console.error("reconcile-fleet-dupes fatal:", e.message); process.exit(1); });
+  } else {
+    const arg = cliArgs.find((a) => !a.startsWith("--")) || "all";
+    run(arg).then((res) => { for (const r of res) console.log(r.error ? `RING ${r.label}: ERROR ${r.error}` : `RING ${r.label}: indexed ${r.indexed}/${r.total} -> ${r.index}${r.fleet ? ` (+ ${FLEET_INDEX})` : " (PRIVATE, not in fleet)"}`); })
+      .catch((e) => { console.error("ring-memory-index fatal:", e.message); process.exit(1); });
+  }
+}
+
+export default { RINGS, FLEET_INDEX, indexRing, run, fallbackRowId, fleetKeyFor, planFleetDupeCleanup, reconcileFleetDupes };
