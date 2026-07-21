@@ -61,7 +61,7 @@
         "ota": {
           "type": "object",
           "properties": {
-            "provider": { "type": "string", "enum": ["capgo", "capawesome", "none"] },
+            "provider": { "type": "string", "enum": ["capgo", "none"] },
             "channel": { "type": "string" },
             "rollbackOnCrashRate": { "type": "number", "description": "Auto-rollback threshold, crash-free % floor" }
           }

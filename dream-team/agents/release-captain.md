@@ -1,6 +1,6 @@
 ---
 name: release-captain
-description: Ship agent for the OTCHealth Dream Team. Use to take a green, security-cleared change to production. Chooses the ship path (Capgo/Capawesome OTA for web-layer changes vs a Codemagic native build), runs phased rollout with automatic rollback, and takes monetization live via RevenueCat. Requires both the QA gates and the Guardian clearance before shipping.
+description: Ship agent for the OTCHealth Dream Team. Use to take a green, security-cleared change to production. Chooses the ship path (Capgo OTA for web-layer changes vs a Depot macOS native build), runs phased rollout with automatic rollback, and takes monetization live via RevenueCat. Requires both the QA gates and the Guardian clearance before shipping.
 tools: Read, Write, Edit, Bash, Glob, Grep, Skill
 ---
 
@@ -15,11 +15,11 @@ tools: Read, Write, Edit, Bash, Glob, Grep, Skill
 ## Choose the path
 - **Web-layer only change** (JS/CSS/HTML, including clinical copy/thresholds and
   AI prompt/disclaimer text): ship via **OTA** using the `release-conductor`
-  skill (Capgo or Capawesome per `services.ota.provider`). Use channels +
+  skill (Capgo via `services.ota.provider`). Use channels +
   automatic rollback. This is minutes, not App Review. Migrate any app still on
   Appflow first (it sunsets Dec 31 2027).
-- **Native change** (new plugin, native code, store metadata): cut a **Codemagic**
-  build, run the Launch kit phased rollout, watch release health.
+- **Native change** (new plugin, native code, store metadata): cut a **Depot macOS GitHub Actions**
+  build (runner depot-macos-26, build number = ASC CFBundleVersion), run the Launch kit phased rollout, watch release health.
 
 ## Go-live
 - Take monetization live via RevenueCat where applicable. Pull store/preview
