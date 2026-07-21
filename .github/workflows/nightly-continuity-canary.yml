@@ -1,0 +1,67 @@
+# Nightly Continuity-Doc Freshness CANARY (Wave 1.3, AI-OS research-pass 2026-07-21).
+#
+# skills/continuity-canary/continuity-canary.mjs watches the fleet's load-bearing hand-authored
+# continuity docs (the CTO's CLAUDE.md, CTO-KICKOFF-PROMPT.md, the claude-tools CLAUDE.md, ...; see
+# skills/continuity-canary/expected-docs.json) the same way nightly-azure-canary.yml watches search
+# indexes and scheduled jobs: AGE, not a floor. A doc nobody has touched in weeks is silent drift --
+# every session that reads it inherits a stale picture with no warning, the same failure class that
+# let otchealth-brain sit frozen for ~12 days before anything caught it.
+#
+# Behaviour mirrors nightly-azure-canary.yml exactly: report-only locally (safe to run by hand), but
+# this scheduled run passes --strict so any anomaly (a STALE doc, a required doc with NO_DATA, or a
+# missing REQUIRED doc) makes the run RED and PAGES. It also goes RED if the canary cannot run at all
+# (a dark sensor), which is itself an anomaly worth paging on.
+#
+# Auth: none of its own beyond git (the freshness check is a local `git log`, no credentials, no
+# network). The optional brain.mjs ledger-drift enrichment reuses whatever creds brain.mjs itself
+# resolves via Key Vault (kvSecret); a missing/broken diff path degrades to "enrichment unavailable"
+# and is never itself an anomaly, so no Azure OIDC login is needed for the freshness check to run. The
+# PostHog emit inside continuity-canary.mjs resolves its own key via kvSecret with no auth step here.
+name: Nightly Continuity Canary
+
+on:
+  schedule:
+    - cron: '35 8 * * *'   # daily 08:35 UTC (after nightly-azure-canary at 08:20, same paging convention)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-continuity-canary
+  cancel-in-progress: false
+
+jobs:
+  continuity-canary:
+    name: continuity-doc freshness canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history — freshness is measured via git log, needs real commit dates)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: "Run continuity canary (--strict: RED on a stale/missing/undated continuity doc)"
+        working-directory: skills/continuity-canary
+        run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
+          node continuity-canary.mjs --json --strict 2>&1 | tee "${GITHUB_WORKSPACE}/continuity-canary.log"
+
+      - name: Upload canary log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: continuity-canary-log
+          path: continuity-canary.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Page on failure (email, PostHog fallback)
+        if: failure()
+        run: node setup/page-on-failure.mjs --workflow "Nightly Continuity Canary" --log "${GITHUB_WORKSPACE}/continuity-canary.log"
