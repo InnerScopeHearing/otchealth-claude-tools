@@ -83,9 +83,9 @@ test("pageExitCode: non-strict never pages, even with anomalies (report-only def
   assert.equal(pageExitCode(0, false), 0);
 });
 
-test("the live registry: all 7 nightly-workflow entries are present and each carries a positive interval_min", () => {
+test("the live registry: all 8 nightly-workflow entries are present and each carries a positive interval_min", () => {
   // Guards against a silent typo/removal in setup/heartbeat-registry.json itself dropping one of the
-  // 7 tracked entries or leaving its interval_min unset (which would make heartbeat.mjs's own status
+  // 8 tracked entries or leaving its interval_min unset (which would make heartbeat.mjs's own status
   // math treat it as NO-DATA instead of a real staleness check).
   const registry = JSON.parse(readFileSync(new URL("../setup/heartbeat-registry.json", import.meta.url), "utf8"));
   const expected = [
@@ -96,6 +96,7 @@ test("the live registry: all 7 nightly-workflow entries are present and each car
     "nightly-fleet-sentinels",
     "nightly-recall-eval",
     "oauth-clients-canary",
+    "nightly-s3-dr-mirror",
   ].sort();
   assert.deepEqual(trackedJobNames(registry), expected);
   for (const job of expected) {
