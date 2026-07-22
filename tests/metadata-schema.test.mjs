@@ -14,12 +14,23 @@ test("UNIVERSAL_FIELDS has exactly the 22 fields the design + enrich.mjs both as
 });
 
 test("fieldsForDomain falls back to universal-core ONLY for a domain with no DOMAIN_PACKS entry", () => {
-  // finance/legal/commons are explicitly-commented-out TODOs in DOMAIN_PACKS today -- this is the
-  // exact behavior that makes rolling ENRICH=1 out to them safe before their packs are built.
-  for (const domain of ["finance", "legal", "commons", "some-domain-that-will-never-exist"]) {
+  // commons is still an explicitly-commented-out TODO in DOMAIN_PACKS today -- this is the exact
+  // behavior that makes rolling ENRICH=1 out to it safe before its pack is built. finance/legal now
+  // carry the field/passage-level confidentiality-classification pack (Wave 7 item 7.4), see the
+  // dedicated test below; their FULL domain packs (materiality/counterparty/etc) remain a separate
+  // future TODO.
+  for (const domain of ["commons", "some-domain-that-will-never-exist"]) {
     const fields = MS.fieldsForDomain(domain);
     assert.equal(fields.length, MS.UNIVERSAL_FIELDS.length, `fieldsForDomain(${domain}) must be universal-core only`);
     assert.deepEqual(fields.map((f) => f.name), MS.UNIVERSAL_FIELDS.map((f) => f.name));
+  }
+});
+
+test("fieldsForDomain adds the field/passage-level confidentiality pack ON TOP of universal-core for finance/legal (Wave 7 item 7.4)", () => {
+  for (const domain of ["finance", "legal"]) {
+    const fields = MS.fieldsForDomain(domain);
+    assert.equal(fields.length, MS.UNIVERSAL_FIELDS.length + MS.SEGMENT_CONFIDENTIALITY_FIELDS.length, `fieldsForDomain(${domain}) must be universal-core plus the segment-confidentiality pack`);
+    for (const f of MS.SEGMENT_CONFIDENTIALITY_FIELDS) assert.ok(fields.some((x) => x.name === f.name), `missing segment-confidentiality field ${f.name} for domain ${domain}`);
   }
 });
 
