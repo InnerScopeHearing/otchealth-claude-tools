@@ -1,7 +1,8 @@
 #!/bin/sh
 # Nightly fleet learning loop (Container Apps Job, cron 59 23 * * *): generate the day's company
-# digest, stage it to the journal commons, and index it so it is cloud-searchable. The company
-# journals itself every night and the knowledge base compounds. Secrets resolve from Azure Key Vault
+# digest, stage it to the journal commons, index it so it is cloud-searchable, and (opt-in, see the
+# ENRICH gate below) run the S1 metadata-enrichment pass over the commons-company-journal room. The
+# company journals itself every night and the knowledge base compounds. Secrets resolve from Azure Key Vault
 # via the job's managed identity (UAMI id-otc-jobs-kv): the GitHub App key, all Azure keys, the
 # commons storage key. GCP Secret Manager is RETIRED; the optional B64 SA line below is a no-op unless
 # GCP_CLAUDE_DRIVER_SA_JSON_B64 is explicitly set (kept only as a break-glass fallback).
@@ -31,6 +32,22 @@ if [ "$SKIP_PUSH_SEARCH" = "1" ]; then
   echo "[nightly] SKIP_PUSH_SEARCH=1 -> skipping commons push-search (S1 pull-indexer-fed)"
 else
   node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --azure
+fi
+# METADATA ENRICHMENT (opt-in, default OFF; commerce is the 2026-07-21 proving ground -- see
+# skills/doc-indexer/enrich.mjs + skills/doc-indexer/metadata-schema.mjs). Universal-core metadata
+# layered on top of CU `understand` output, written as blob metadata on the _TEXT sidecar and
+# projected onto every chunk via the S1 blob indexer's fieldMappings + the skillset's index
+# projections. Incremental (skips docs already enriched at the same sha256) and gpt-4.1-mini only.
+# This is the SAME opt-in gate already wired into job/librarian.sh for finance/commerce/legal-company/
+# legal-personal (that script takes a --profile argument; this job's profile is always commons, so the
+# gate is hardcoded here rather than parameterized). Roll out via ENRICH=1 on this job's env AFTER a
+# parity check against the live commons-company-journal index -- do not flip it fleet-wide blind.
+if [ "$ENRICH" = "1" ]; then
+  echo "[nightly] ENRICH=1 -> ensuring the metadata schema + enriching commons"
+  node "$ROOT/skills/doc-indexer/enrich.mjs" ensure-schema --profile commons --azure
+  node "$ROOT/skills/doc-indexer/enrich.mjs" run --profile commons --azure
+else
+  echo "[nightly] ENRICH not set -> skipping the metadata-enrichment pass for commons (opt-in; see skills/doc-indexer/enrich.mjs)"
 fi
 echo "[nightly] refreshing the company-brain memory index (memory-exec)"
 # Keep the Billion Dollar Brain's agent-memory index fresh: embed any new shared exec-feed
