@@ -407,6 +407,53 @@ test("DEFAULT_CONFLICT_SUBJECT_THRESHOLD sits between a templated-overlap pair (
   assert.ok(DEFAULT_CONFLICT_SUBJECT_THRESHOLD > 0.385 && DEFAULT_CONFLICT_SUBJECT_THRESHOLD <= 0.4545);
 });
 
+// ---------------------------- LIVE-DRY-RUN-DERIVED REGRESSION (item 6.5 re-verification) ----------------------------
+// The two cases below were probed against a real 14-day contradiction-scan dry run on the live ledger
+// (Wave 6 item 6.5 re-verification). Neither is a bug fix, both are hermetic fixtures pinning behavior
+// that was directly observed to already be correct in production, so a future change cannot silently
+// regress it. See also the "long multi-number document" false-positive category from the original
+// dry-run report: privileged (clo/clo-personal) multi-number documents never reach the value-conflict
+// gate at all, because normalizeAssertionRows/findContestedGroups drop them via ringSafeCross before
+// partitioning (see the RING/PRIVILEGE WALL tests above), so this section covers the ORDINARY
+// (non-privileged) multi-number-document shape instead.
+
+test("LIVE-VERIFIED: two near-identical multi-number facts differing only in an incidental run/build id merge as the SAME claim (corroboration), never reach the contradiction split", () => {
+  // Realistic "long multi-number document" shape: several shared numbers (replica count, port,
+  // latency) plus one incidental identifier (a CI run id) that legitimately differs between two
+  // reports of the same stable state. High textual overlap means groupAssertions merges these into
+  // ONE claim cluster before hasGenuineValueConflict is ever consulted, so this is not a templated-
+  // identifier case (which DOES partition as two claims, see the ROTATE-BEFORE-LAUNCH tests above);
+  // it is a stronger, whole-different-shape guarantee that the two-tier threshold design already
+  // provides. Probed directly against findContestedGroups (not just the isolated gate function) so
+  // the assertion reflects the full pipeline's real behavior, not one function's opinion in isolation.
+  const execRows = [{ id: "e1", _agent: "cto", type: "fact", text: "the gateway container app scaled to 4 replicas serving port 8080 with a p95 latency of 340ms during the load test on run 29621797013", ts: iso(20) }];
+  const cosmosRows = [{ id: "c1", agent: "developer", kind: "fact", text: "the gateway container app scaled to 4 replicas serving port 8080 with a p95 latency of 340ms during the load test on run 29624174874", ts: iso(10) }];
+  const rows = normalizeAssertionRows(execRows, cosmosRows);
+  assert.equal(findContestedGroups(rows, { nowMs: NOW }).length, 0, "near-duplicate multi-number reports differing only in an incidental id must not become a contradiction proposal");
+});
+
+test("LIVE-VERIFIED: sequential un-superseded build-progression facts about the SAME evolving field DO surface as contested (intentional; this is stale-ledger hygiene, not noise)", () => {
+  // Directly reproduces the shape of 5 real contested groups a live 14-day dry run against the actual
+  // ledger surfaced this session (synthetic text below; no real ledger content is quoted). Each pair is
+  // two "next build number" status facts from the SAME agent that were never linked via --supersedes as
+  // the build number moved on, so both are still "active" claims about the current build state and
+  // genuinely disagree. This is NOT the false-positive class the value-conflict gate exists to suppress
+  // (that class is same-shape-different-IDENTIFIER with no numeric claim at all, e.g. ROTATE-BEFORE-
+  // LAUNCH); it is a real, if mundane, catch of two coexisting beliefs about one field that a human
+  // should reconcile with a proper --supersedes link, exactly what the module header describes as the
+  // "CORRECTION-plague" this whole scan exists to surface (never auto-resolve). Pinned here so a future
+  // precision tweak cannot accidentally suppress this legitimate signal while chasing the unrelated
+  // templated-identifier false-positive class.
+  const execRows = [{ id: "e1", _agent: "developer", type: "fact", text: "widget app build 7 shipped green on depot, next build is 8", ts: iso(40) }];
+  const cosmosRows = [{ id: "c1", agent: "developer", kind: "fact", text: "widget app build 9 is now valid on testflight, next build is 10", ts: iso(10) }];
+  const rows = normalizeAssertionRows(execRows, cosmosRows);
+  const groups = findContestedGroups(rows, { nowMs: NOW });
+  assert.equal(groups.length, 1, "an un-superseded stale build-status fact must still surface for human reconciliation");
+  const proposals = proposalsFor(groups, { owner: "developer" });
+  assert.equal(proposals.length, 1);
+  assert.match(proposals[0].text, /never auto-resolves/, "the proposal must stay advisory-only, exactly like every other contested group");
+});
+
 // ---------------------------- NEVER-MUTATE static regression (future-proofing) ----------------------------
 
 test("contradiction-scan.mjs source contains no memory-mutation tokens (mem.mjs / correct / --supersedes)", () => {
