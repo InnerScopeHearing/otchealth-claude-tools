@@ -212,3 +212,13 @@ above. Both are dry-run by default (pass `--commit` to actually write) and alway
   Job entrypoints: `job/nightly-reflection.sh`, `job/contradiction-scan.sh` (mirror
   `skills/ledger-compaction/job/compaction.sh`'s shape). Not yet scheduled as Container Apps Jobs --
   that is a CTO deploy step, pending review of the ring/privilege wall above.
+- **RE-VERIFIED (item 6.5, Wave 6):** the false-positive fix (`hasGenuineValueConflict`, PR #358) and
+  the ring/privilege wall above were re-run against the LIVE ledger in dry-run mode (`--days 14` /
+  `--hours 24`, no `--commit`). Result: 853 raw candidate rows, 195 correctly excluded pre-partition by
+  `ringSafeCross()` (11 genuine clo-personal-authored rows plus 184 additional MNPI/PHI-content-flagged
+  rows from otherwise-shareable agents), 5 contested groups surfaced, all legitimate un-superseded
+  build-status hygiene items (a stale "next build is N" fact never linked via `--supersedes` as later
+  builds shipped), zero recurrence of the previously-fixed templated-identifier false-positive class,
+  and zero privileged/MNPI content in any surfaced proposal. Both scripts remain dry-run by default and
+  neither is scheduled as a Container Apps Job; the arm decision (schedule + `--commit` + review) stays
+  a deliberate later step, not part of this re-verification.
