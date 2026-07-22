@@ -21,24 +21,62 @@
  *   node restore-drill.mjs --privileged            # drill every blob mirrored to the privileged bucket
  *   node restore-drill.mjs --privileged <blobKey>  # drill just one blob, privileged bucket
  *
+ * SCHEDULED INVOCATION (added 2026-07-22): .github/workflows/nightly-s3-dr-mirror.yml runs this,
+ * non-privileged lane, right after s3-mirror.mjs run in the same job, so every scheduled run proves the
+ * mirror is actually RESTORABLE, not just that a write succeeded. Manual invocation (drilling one
+ * specific blob, or the privileged lane once it is ever armed) is still the commands above, run ad hoc
+ * from a session with the same env this file already documents.
+ *
  * INERT-SAFE: exits 0 with a clear message if the relevant aws-dr-* (or aws-dr-privileged-*) secrets
- * are not yet in Key Vault — the same Matt gate as s3-mirror.mjs. If creds ARE present but no manifest
- * can be found/read in Azure, or the manifest has nothing recorded for the requested bucket, that IS a
- * real problem (nothing to verify a restore against) and this exits non-zero.
+ * are not yet in Key Vault. As of 2026-07-22 the base (non-privileged) aws-dr-* secrets are confirmed
+ * live in Key Vault (see s3-mirror.mjs's header for the verification details), so this guard is now a
+ * permanent fail-open safety net for that lane, not the reason it had never run; the privileged lane's
+ * own secrets remain unconfirmed and this guard is still the expected, live gate for it. If creds ARE
+ * present but no manifest can be found/read in Azure, or the manifest has nothing recorded for the
+ * requested bucket, that IS a real problem (nothing to verify a restore against) and this exits non-zero.
  */
 
+import { fileURLToPath } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { listBlobs, getBlob, containerExists } from "./azure-blob-client.mjs";
 import { s3Get, sha256Hex } from "./s3-client.mjs";
 
+// Pure (no network/credential dependency): given a list of blob names already listed from the source
+// container, pick the most recent s3-mirror-manifest-<date>.json, or null if none exist. Extracted from
+// loadLatestManifest() below so the date-picking rule (lexicographic sort equals chronological order
+// for a zero-padded YYYY-MM-DD filename suffix) is unit-tested directly, see
+// tests/restore-drill-select.test.mjs.
+export function latestManifestName(blobNames) {
+  const manifests = blobNames
+    .filter((n) => /^s3-mirror-manifest-\d{4}-\d{2}-\d{2}\.json$/.test(n))
+    .sort((a, b) => (a < b ? 1 : -1)); // lexicographic == chronological for YYYY-MM-DD names
+  return manifests[0] || null;
+}
+
 async function loadLatestManifest(account, container) {
   const blobs = await listBlobs(account, container);
-  const manifests = blobs
-    .filter((b) => /^s3-mirror-manifest-\d{4}-\d{2}-\d{2}\.json$/.test(b.name))
-    .sort((a, b) => (a.name < b.name ? 1 : -1)); // lexicographic == chronological for YYYY-MM-DD names
-  if (!manifests.length) return null;
-  const buf = await getBlob(account, container, manifests[0].name);
-  return { name: manifests[0].name, data: JSON.parse(buf.toString("utf8")) };
+  const name = latestManifestName(blobs.map((b) => b.name));
+  if (!name) return null;
+  const buf = await getBlob(account, container, name);
+  return { name, data: JSON.parse(buf.toString("utf8")) };
+}
+
+// Pure (no network/credential dependency): given an already-loaded manifest's `data` object, the
+// resolved destination bucket, and an optional single blobKey filter, compute which blobs this drill
+// run should verify. Extracted from run() below (same rationale as latestManifestName above) so the
+// candidate-pool rule is unit-tested directly. The pool is the union of blobs freshly uploaded THIS run
+// (`mirrored`, excluding dry-run entries) and blobs confirmed already-correct via an S3 HEAD THIS run
+// (`skippedUnchanged`) -- see the comment on this exact union at its original call site in run(), below.
+// `reason` is null on success, else one of:
+//   "BLOB_NOT_IN_MANIFEST"       a specific blobKey was requested but is not recorded for this bucket
+//   "NO_CANDIDATES_FOR_BUCKET"   no requested blobKey, but this bucket has nothing recorded at all
+export function selectDrillTargets(manifestData, bucket, blobKey) {
+  const pool = [...(manifestData.mirrored || []).filter((m) => !m.dryRun), ...(manifestData.skippedUnchanged || [])];
+  const candidates = pool.filter((m) => m.bucket === bucket && m.sha256);
+  const targets = blobKey ? candidates.filter((m) => m.blob === blobKey) : candidates;
+  if (blobKey && !targets.length) return { targets: [], reason: "BLOB_NOT_IN_MANIFEST" };
+  if (!targets.length) return { targets: [], reason: "NO_CANDIDATES_FOR_BUCKET" };
+  return { targets, reason: null };
 }
 
 async function resolveCreds(privileged) {
@@ -94,15 +132,12 @@ async function run({ blobKey, privileged }) {
   // in S3 as of the manifest's run", just via different code paths. On any run after the first,
   // `mirrored` alone would be near-empty (idempotent re-runs skip almost everything), so using only
   // `mirrored` would make the drill nearly toothless after day one.
-  const pool = [...(manifest.data.mirrored || []).filter((m) => !m.dryRun), ...(manifest.data.skippedUnchanged || [])];
-  const candidates = pool.filter((m) => m.bucket === creds.bucket && m.sha256);
-
-  const targets = blobKey ? candidates.filter((m) => m.blob === blobKey) : candidates;
-  if (blobKey && !targets.length) {
+  const { targets, reason } = selectDrillTargets(manifest.data, creds.bucket, blobKey);
+  if (reason === "BLOB_NOT_IN_MANIFEST") {
     console.error(`[FATAL] "${blobKey}" is not recorded as mirrored to bucket ${creds.bucket} in manifest ${manifest.name}.`);
     process.exit(1);
   }
-  if (!targets.length) {
+  if (reason === "NO_CANDIDATES_FOR_BUCKET") {
     console.error(`[FATAL] manifest ${manifest.name} has no mirrored blob(s) recorded for bucket ${creds.bucket} (${privileged ? "privileged" : "non-privileged"} lane). Nothing to drill.`);
     process.exit(1);
   }
@@ -137,10 +172,15 @@ async function run({ blobKey, privileged }) {
   console.log("[restore-drill] ALL PASS -- the S3 mirror is verified restorable.");
 }
 
-const argv = process.argv.slice(2);
-const privileged = argv.includes("--privileged");
-const blobKey = argv.find((a) => !a.startsWith("--"));
-run({ blobKey, privileged }).catch((e) => {
-  console.error("ERR", e.message);
-  process.exit(1);
-});
+// Only run as a script (not when imported by a test) -- matches the fleet's established convention
+// (see skills/azure-canary/canary.mjs, skills/continuity-canary/continuity-canary.mjs, and the same
+// guard added to skills/fleet-backup/s3-mirror.mjs in this same change).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const argv = process.argv.slice(2);
+  const privileged = argv.includes("--privileged");
+  const blobKey = argv.find((a) => !a.startsWith("--"));
+  run({ blobKey, privileged }).catch((e) => {
+    console.error("ERR", e.message);
+    process.exit(1);
+  });
+}
