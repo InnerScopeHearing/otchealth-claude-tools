@@ -1,0 +1,50 @@
+[
+  {
+    "id": "hn-001",
+    "query": "Was iHEARtest Build 47 ever finalized and shipped?",
+    "expect_new": [
+      "NEVER actually shipped",
+      "qa/RELEASE-LEDGER.md"
+    ],
+    "expect_old": [
+      "FULLY BUILT + verified",
+      "boots clean on preview"
+    ],
+    "new_id": "20260704-012-998a",
+    "old_id": "20260627-001",
+    "agent": "cto",
+    "note": "mined+validated hard-negative: 20260627-001 (superseded) -> 20260704-012-998a (current). same-topic correction (jaccard 0.123)"
+  },
+  {
+    "id": "hn-002",
+    "query": "Does the fleet backup now include live indexes?",
+    "expect_new": [
+      "backs up the LIVE rooms",
+      "fleet brain HAS a real DR copy"
+    ],
+    "expect_old": [
+      "fleet-backup dumps EXACTLY ONE index",
+      "the DEAD, WRITER-LESS, ad-hoc snapshot"
+    ],
+    "new_id": "20260714-001",
+    "old_id": "20260713-040",
+    "agent": "cto",
+    "note": "mined+validated hard-negative: 20260713-040 (superseded) -> 20260714-001 (current). same-topic correction (jaccard 0.140)"
+  },
+  {
+    "id": "hn-003",
+    "query": "What is the current status of the iheartest release and its next update?",
+    "expect_new": [
+      "LIVE on TestFlight",
+      "heritage/de-name copy fix"
+    ],
+    "expect_old": [
+      "LIVE/shipped to users",
+      "Build 47 is the next version"
+    ],
+    "new_id": "20260627-010",
+    "old_id": "20260627-009",
+    "agent": "developer",
+    "note": "mined+validated hard-negative: 20260627-009 (superseded) -> 20260627-010 (current). same-topic correction (jaccard 0.263)"
+  }
+]

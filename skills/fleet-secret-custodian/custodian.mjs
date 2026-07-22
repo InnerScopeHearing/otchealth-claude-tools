@@ -58,6 +58,7 @@
  */
 
 import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 const VAULT = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
 const KV_API = "7.4";
@@ -197,7 +198,10 @@ async function kvSetValue(name, value, { expUnix } = {}) {
   } catch { return null; }
 }
 
-/** Enable/disable a SPECIFIC version (grace-window rollback control). versionId is the full KV id. */
+/** Enable/disable a SPECIFIC version (grace-window rollback control). versionId is the full KV id.
+ *  Returns false (never throws) on a missing token (every Key Vault auth path unavailable) or any
+ *  API/network failure -- callers MUST check this return value. A rollback caller that ignores it
+ *  would report "rolled back" while the bad version could still be the live, readable one. */
 async function kvSetVersionEnabled(versionId, enabled) {
   const tok = await vaultToken();
   if (!tok) return false;
@@ -210,6 +214,31 @@ async function kvSetVersionEnabled(versionId, enabled) {
     });
     return r.ok;
   } catch { return false; }
+}
+
+/**
+ * Fail-safe wrapper around the rollback half of `kvSetVersionEnabled(id, false)`. This exists because
+ * a rollback (disabling a bad/unaccounted new secret version) is itself an action that can fail for the
+ * SAME reason the surrounding rotation is being rolled back in the first place -- e.g. every Key Vault
+ * auth path (managed identity + SP client_credentials) is unavailable. Silently awaiting the disable call
+ * and moving on would let the caller log "ROLLED_BACK" or otherwise imply safety was restored when the bad
+ * version may STILL be enabled (an unversioned GET against a secret returns its newest-updated enabled
+ * version). This wrapper makes that failure impossible to miss: it never returns a "looks fine" result
+ * when the disable did not actually happen.
+ * Returns { disabled: boolean, reason: string|null }.
+ */
+async function safeguardDisable(versionId, label) {
+  if (!versionId) return { disabled: false, reason: "no version id to disable" };
+  const disabled = await kvSetVersionEnabled(versionId, false);
+  if (!disabled) {
+    console.error(
+      `[CRITICAL] could not disable ${label} (version ${versionId}) -- it may STILL be the enabled, ` +
+      `readable Key Vault version. This happens when every Key Vault auth path (managed identity + SP ` +
+      `client_credentials) is unavailable, or the API call itself failed. MANUAL ACTION REQUIRED: disable ` +
+      `this version directly in Key Vault (or re-run once an auth path is restored).`,
+    );
+  }
+  return { disabled, reason: disabled ? null : "kvSetVersionEnabled returned false (auth failure or API error); see the CRITICAL log line above" };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -573,8 +602,17 @@ async function rotate(name, { force, dryRun }) {
   const verified = readback != null && readback === regen.newVal;
   if (!verified) {
     console.error(`[FAILED] new KV version for '${name}' did not verify on readback. Disabling the new version and keeping the prior version active (fail-closed rollback).`);
-    if (newVer.id) await kvSetVersionEnabled(newVer.id, false);
-    await auditAppend({ action: "rotate", result: "ROLLED_BACK", secret: name, reason: "readback verify failed", priorVersionId, newVersionId: newVer.id, trigger });
+    // Never assume the rollback itself succeeded: safeguardDisable() only reports "disabled" when the
+    // Key Vault PATCH is actually confirmed ok -- if EVERY auth path failed (or the API call errored),
+    // the audit record says so explicitly (ROLLBACK_FAILED) instead of the misleading ROLLED_BACK.
+    const sg = await safeguardDisable(newVer.id, `the unverified new version of '${name}'`);
+    await auditAppend({
+      action: "rotate",
+      result: sg.disabled ? "ROLLED_BACK" : "ROLLBACK_FAILED",
+      secret: name,
+      reason: sg.disabled ? "readback verify failed" : `readback verify failed AND rollback disable also failed (${sg.reason})`,
+      priorVersionId, newVersionId: newVer.id, trigger,
+    });
     process.exit(1);
   }
 
@@ -587,7 +625,13 @@ async function rotate(name, { force, dryRun }) {
   if (!logged.ok) {
     // accountability is mandatory for a mutation: if we cannot record it, treat as failed and roll back.
     console.error(`[FAILED] rotation succeeded but the tamper-evident audit append FAILED (${logged.reason}). Rolling back to the prior version to preserve the never-unaccounted-mutation invariant.`);
-    if (newVer.id) await kvSetVersionEnabled(newVer.id, false);
+    // Same rule as the readback-failure branch above: do not assume the disable worked. If it also
+    // failed, this is now the worst case (an unaccounted-for, un-rolled-back new version) -- say so
+    // loudly rather than exiting 1 with no signal of which failure mode actually occurred.
+    const sg = await safeguardDisable(newVer.id, `the unaccounted new version of '${name}' (audit append also failed)`);
+    if (!sg.disabled) {
+      console.error(`[CRITICAL] rollback ALSO failed for '${name}': the new version may remain enabled with NO audit record of the rotation. Highest-priority manual follow-up.`);
+    }
     process.exit(1);
   }
   await ledgerMirror({ action: "rotate", title: `secret rotated: ${name}`, body: `fleet-secret-custodian rotated ${name} (${cls.arm}); prior version retires ${retireAt}; auditHash ${logged.recordHash}` });
@@ -622,20 +666,29 @@ async function selftest() {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-const cmd = process.argv[2] || "audit";
-const flags = new Set(process.argv.slice(3).filter((a) => a.startsWith("--")));
-const positional = process.argv.slice(3).filter((a) => !a.startsWith("--"));
-const opts = { json: flags.has("--json"), force: flags.has("--force"), dryRun: flags.has("--dry-run") };
+// exported for tests: the pure/near-pure pieces (auth-fallback resolvers + the classifier + the
+// fail-safe rollback wrapper) so a test can exercise "every auth path failed" without needing real
+// network or credentials, and without executing the CLI dispatch below (guarded by isMain, same
+// pattern as skills/fleet-medic/medic.mjs and skills/github-app/gh-app.mjs).
+export { identityToken, spToken, tokenFor, kvSetVersionEnabled, safeguardDisable, classify, ROTATABLE_BY_CUSTODIAN };
 
-(async () => {
-  if (cmd === "audit") return audit(opts);
-  if (cmd === "report") return report(opts);
-  if (cmd === "selftest") return selftest();
-  if (cmd === "rotate") {
-    if (!positional[0]) { console.error("usage: node custodian.mjs rotate <secret-name> [--force]"); process.exit(2); }
-    return rotate(positional[0], opts);
-  }
-  if (cmd === "rotate-due") return rotateDue(opts);
-  console.error(`unknown command '${cmd}'. usage: node custodian.mjs <audit|report|rotate <name>|rotate-due|selftest> [--json] [--force] [--dry-run]`);
-  process.exit(2);
-})().catch((e) => { console.error("ERR", e.message); process.exit(1); });
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  const cmd = process.argv[2] || "audit";
+  const flags = new Set(process.argv.slice(3).filter((a) => a.startsWith("--")));
+  const positional = process.argv.slice(3).filter((a) => !a.startsWith("--"));
+  const opts = { json: flags.has("--json"), force: flags.has("--force"), dryRun: flags.has("--dry-run") };
+
+  (async () => {
+    if (cmd === "audit") return audit(opts);
+    if (cmd === "report") return report(opts);
+    if (cmd === "selftest") return selftest();
+    if (cmd === "rotate") {
+      if (!positional[0]) { console.error("usage: node custodian.mjs rotate <secret-name> [--force]"); process.exit(2); }
+      return rotate(positional[0], opts);
+    }
+    if (cmd === "rotate-due") return rotateDue(opts);
+    console.error(`unknown command '${cmd}'. usage: node custodian.mjs <audit|report|rotate <name>|rotate-due|selftest> [--json] [--force] [--dry-run]`);
+    process.exit(2);
+  })().catch((e) => { console.error("ERR", e.message); process.exit(1); });
+}

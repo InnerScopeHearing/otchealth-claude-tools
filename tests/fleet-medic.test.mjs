@@ -6,7 +6,47 @@
 // spams healthy agents.
 import { test } from "node:test";
 import assert from "node:assert";
-import { classify, remediationFor } from "../skills/fleet-medic/medic.mjs";
+import { classify, remediationFor, sm } from "../skills/fleet-medic/medic.mjs";
+
+// ---------------------------------------------------------------------------------------------------
+// sm() auth-fallback hardening (Wave 3, 3.6): the CTO auto-remediation review of fleet-medic + the
+// fleet-secret-custodian skill found no auto-merge mechanism in fleet-medic at all (it only ever writes
+// a self-heal directive blob + a PostHog event; see SKILL.md / medic.mjs comments). It DID find that
+// sm()'s legacy GCP Secret Manager fallback built a token-mint request from saJwt() without ever
+// checking whether saJwt() actually returned a JWT -- when no GCP service-account credential was
+// available, the pre-fix code called encodeURIComponent(null), sending a request body containing the
+// literal string "assertion=null" and relying on Google's OAuth endpoint to reject it correctly. That
+// happened to fail safe in practice (a 401 upstream -> sm() still returned null), but it was an
+// accidental safety net, not an explicit fail-closed check in our own code -- exactly the "all auth
+// paths failed" class this hardening pass closes. These tests pin the NOW-explicit behavior: every
+// auth path exhausted (Key Vault unreachable/stubbed to fail, AND no usable GCP SA) resolves to a
+// clean `null`, and sm() never again constructs a request around a missing credential.
+async function withStubbedFetch(stub, run) {
+  const original = globalThis.fetch;
+  globalThis.fetch = stub;
+  try { return await run(); } finally { globalThis.fetch = original; }
+}
+
+test("sm(): every auth path failing (Key Vault stubbed to deny, no GCP SA in this environment) resolves to null, never throws", async () => {
+  const result = await withStubbedFetch(
+    async () => ({ ok: false, status: 401, json: async () => ({}), text: async () => "" }),
+    () => sm("fleet-medic-selftest-guaranteed-missing-secret-xyz"),
+  );
+  assert.strictEqual(result, null);
+});
+
+test("sm(): regression pin -- never sends a token-mint request built from a null/missing JWT assertion (the pre-fix bug: encodeURIComponent(null) => 'assertion=null')", async () => {
+  const seenBodies = [];
+  const result = await withStubbedFetch(
+    async (url, init) => {
+      if (init && typeof init.body === "string") seenBodies.push(init.body);
+      return { ok: false, status: 401, json: async () => ({}), text: async () => "" };
+    },
+    () => sm("fleet-medic-selftest-guaranteed-missing-secret-xyz"),
+  );
+  assert.strictEqual(result, null);
+  assert.ok(!seenBodies.some((b) => b.includes("assertion=null")), "must never build a token request from a null JWT assertion");
+});
 
 const NOW = Date.parse("2026-06-25T12:00:00Z");
 const OPTS = { beaconFreshMin: 120, staleWatchMin: 10080, cooldownMin: 360, escalateAfter: 3, roster: [] };

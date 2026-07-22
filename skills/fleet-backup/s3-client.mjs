@@ -34,7 +34,9 @@ function hmac(key, data) {
 // AWS's canonical URI-encoding rule: percent-encode every byte except unreserved (A-Z a-z 0-9 - . _ ~),
 // uppercase hex, operating on the RAW UTF-8 bytes so multi-byte characters encode correctly one byte
 // at a time (this is the #1 source of SigV4 "SignatureDoesNotMatch" bugs when done wrong).
-function awsEncode(str) {
+// Exported (not just used internally by sigv4() below) so this exact encoding rule is unit-tested
+// directly (tests/s3-client-sigv4.test.mjs) without needing live AWS credentials or network access.
+export function awsEncode(str) {
   const bytes = Buffer.from(str, "utf8");
   let out = "";
   for (const byte of bytes) {
@@ -45,7 +47,7 @@ function awsEncode(str) {
   return out;
 }
 // Canonical URI path: encode each segment, keep '/' separators literal (S3 keys may contain '/').
-function canonicalPath(key) {
+export function canonicalPath(key) {
   return "/" + key.split("/").map(awsEncode).join("/");
 }
 
