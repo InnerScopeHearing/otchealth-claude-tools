@@ -1,6 +1,6 @@
 ---
 name: recall-evals
-description: Recall-quality eval harness for kb-memory AND the fleet's recall-quality SLO pager. Runs a golden set of known durable, non-PHI facts through the existing recall path (semantic.mjs vector recall), scores precision@k, hit-rate, and MRR, records latency, and prints a scorecard. Measurement-only by default (never writes to any ledger or memory); with --strict / --enforce / RECALL_EVAL_STRICT=1 a hit@K drop past the recorded baseline SLO EXITS NON-ZERO so a real recall-quality regression PAGES instead of sitting in a dashboard nobody watches (same --strict convention as skills/azure-canary). Use to measure and tune memory/recall changes with data instead of vibes, and as the nightly regression pager. Non-PHI ring; PHI-excluded by a hard guard (refuses to run if the golden set or a target agent lane looks PHI-adjacent).
+description: Recall-quality eval harness for kb-memory AND the fleet's recall-quality SLO pager. Runs a golden set of known durable, non-PHI facts through the existing recall path (semantic.mjs vector recall), scores precision@k, hit-rate, and MRR, records latency, and prints a scorecard. Measurement-only by default (never writes to any ledger or memory); with --strict / --enforce / RECALL_EVAL_STRICT=1 a hit@K drop past the recorded baseline SLO EXITS NON-ZERO so a real recall-quality regression PAGES instead of sitting in a dashboard nobody watches (same --strict convention as skills/azure-canary). Also includes a DEEP-MODE eval (run-deep-evals.mjs, exercises the gateway's brain_search mode:'deep' agentic path specifically) and a HARD-NEGATIVE / contrastive eval (mine-hard-negatives.mjs + run-hard-negative-evals.mjs, mines real supersedes pairs from the ledger and asserts a retracted/superseded belief does not leak back into results). Use to measure and tune memory/recall changes with data instead of vibes, and as the nightly regression pager. Non-PHI ring; PHI-excluded by a hard guard (refuses to run if the golden set or a target agent lane looks PHI-adjacent); the hard-negative miner is additionally MNPI-excluded (agent allowlist + keyword deny).
 ---
 
 # recall-evals -- measure recall quality, and PAGE when it regresses
@@ -149,10 +149,116 @@ Nightly 06:45 UTC, secretless OIDC (same pattern as nightly-eval.yml / nightly-a
 real regression (or a dark-sensor fatal) now makes the job RED, so the PostHog trend + the `::warning::`
 + the CI failure ARE the alert -- not a dashboard nobody watches.
 
+## ITEM 5.3 (Wave 5, AI-OS recall-quality pass, 2026-07-21/22): TWO NEW, INDEPENDENT eval dimensions
+The suite above (the golden set + `run-evals.mjs`) tests exactly ONE thing: the local, non-deep
+`semantic.mjs recall` path's hit@5. Two real blind spots existed alongside it, closed by this item.
+
+### (a) DEEP-MODE eval -- `run-deep-evals.mjs` + `gateway-deep-client.mjs` + `baseline-deep.json`
+The gateway's `brain_search` tool also supports `mode:'deep'`: an LLM-planned, multi-round agentic
+retrieval (plan sub-queries -> search -> one bounded refine round if thin -> synthesize a cited
+answer; see `otchealth-mcp-server` `src/memory/deep-retrieval.ts`). The existing suite NEVER calls the
+gateway and NEVER passes `mode:'deep'`, so a regression specific to that pipeline (a broken plan-JSON
+parse, a refine round that never fires, a synthesis prompt that stops citing, or -- as measured below
+-- the planner narrowing to the WRONG room) would be entirely invisible to it.
+- `gateway-deep-client.mjs` -- `callDeepBrainSearch(token, query, opts)` calls the LIVE gateway
+  (`mcp.otchealth.app`) via the SAME lane-token mint every other gateway-calling skill in this repo
+  uses (`skills/gateway-connect/connect.mjs`'s `mintToken(lane)`, default lane `cto`). Its pure half,
+  `parseDeepToolResponse()`, guards a real, ledger-documented pitfall: a gateway MCP tool's actual
+  structured result lives at `result.structuredContent.result`, NOT `result.content[0].text` (that
+  text field is `JSON.stringify(data) + "\n\n" + a human summary sentence` -- NOT valid JSON on its
+  own). Fixture-tested in `tests/recall-evals-deep-client.test.mjs` against the real observed shape.
+- `run-deep-evals.mjs` -- runs a deterministic, evenly-spaced SUBSET of the same golden-set queries
+  (`--limit 15` default; `sampleEvenly()` is pure + unit-tested) through `mode:'deep'`, scores
+  hit@K/precision@K/MRR on the returned `matches` (reusing `scoring.mjs`'s pure functions unchanged
+  against `matches[].text`), PLUS one deep-mode-only signal: **answer-grounded rate** -- does the
+  LLM-SYNTHESIZED `answer` text itself contain the grounded fact (`hard-negative-scoring.mjs`'s
+  `answerMatches()`), not just retrieve it. Same `--baseline`/`--strict`/`--tolerance`/`--emit`/`--json`
+  flags and the exact same `pageExitCode()` exit policy as `run-evals.mjs` (imported, not
+  reimplemented). Cost-bounded by `--limit` + `--concurrency` (default 3) because EVERY query spends
+  one or more Foundry calls + a live gateway round trip (~5-11s/query observed).
+- **A GENUINE FINDING from the first live measurement (baseline-deep.json, 2026-07-22, n=15,
+  lane=cto):** hit@5 = **26.7%**, precision@5 = 14.7%, MRR = 0.200, answer-grounded rate = 13.3% --
+  dramatically lower than the fast-path baseline's ~97.7%. Root-caused live (not guessed): on the MISS
+  for `gs-03` ("contradiction staleness signal radar detector"), deep mode's PLANNER narrowed
+  `rooms_searched` down to `['commons-company-journal']` ONLY, silently dropping `memory-exec` (where
+  the actual golden fact lives) even though the cto lane is permitted to search it. This is NOT a bug
+  in this eval; it is deep mode's planner room-narrowing feature (`deep-retrieval.ts`'s `planQuery()`)
+  confidently excluding the room that had the ground truth -- a real, reportable characteristic of the
+  current implementation, not something this eval quietly patched over. `baseline-deep.json` was
+  seeded from this real, live-measured run (not invented), so it becomes the honest starting SLO: a
+  FUTURE drop below it now has real room to page, and a future fix to the planner's room-selection
+  heuristic should show up here as a genuine improvement.
+- Wired into `.github/workflows/nightly-recall-eval-deep.yml` (its own schedule, `05 07 * * *` UTC,
+  right after the fast/hard-negative job) rather than folded into `nightly-recall-eval.yml`, because
+  its LLM-cost/latency profile does not belong sharing that job's tight timeout with two cheap,
+  local-only checks. Same `--strict` pager convention, `page-on-failure.mjs`, PostHog `recall_eval_deep`
+  emit, and schedule-liveness heartbeat (`nightly-recall-eval-deep` in `setup/heartbeat-registry.json`).
+
+### (b) HARD-NEGATIVE (contrastive) eval -- `mine-hard-negatives.mjs` + `hard-negative-scoring.mjs` + `hard-negative-set.json` + `run-hard-negative-evals.mjs` + `baseline-hardneg.json`
+The golden set only ever asks "did a relevant memory show up." It never asks the mirror-image
+question: "did a SUPERSEDED, semantically-similar-but-now-WRONG memory on the exact same topic stay
+correctly SUPPRESSED." `semantic.mjs`'s retraction filter (`computeRetractedIds`/`filterHygiene`; the
+gateway's `filterRetracted()`) is what is supposed to guarantee that -- but a future reindex bug or a
+dropped `filterRetracted()` call would leave the golden set looking perfectly healthy (the current
+fact is usually still findable on its own merits) while a retracted, wrong belief silently leaks back
+into results. That is exactly the failure mode this eval pages on.
+- **Mining methodology (real pairs, never hand-invented):** `mine-hard-negatives.mjs` reads the WHOLE
+  shared exec feed (`otchealthcommons/company-journal/_MEMORY/_exec/*.jsonl` -- the EXACT corpus
+  `semantic.mjs` indexes into `memory-exec`), pure-resolves every row whose `supersedes` points at
+  another row in that same corpus (`resolveSupersedePairs()`), then applies a chain of pure safety +
+  quality filters (`isEligiblePair()`): an AGENT ALLOWLIST (never mines from `cfo`/`clo`/
+  `clo-personal`/`exec`/`capital`/`commerce`/`cro`/`compliance`/`rainmaker` -- this file is committed
+  to the repo, so finance/legal/MNPI-adjacent content is excluded by construction, not just by
+  keyword), an `MNPI_DENY` keyword deny (defense in depth on top of the allowlist) plus the existing
+  `PHI_DENY` vocabulary, an exhaust-type check (the NEW fact must not be a `status`/`episode`/
+  `heartbeat`/`digest` row recall already excludes by default), and a jaccard-similarity BAND
+  (`dedupe.mjs`'s existing `tokenize`/`jaccard`, reused not reimplemented) that rejects both
+  near-duplicate maintenance-log chatter (a real corpus pattern found: "Batch tagging progress: N of
+  853 memories tagged..." scored jaccard 0.83 between consecutive entries) and likely-unrelated
+  cross-topic id collisions (one found at jaccard 0.000). Each eligible pair is then sent to Azure
+  OpenAI (the fleet's `TIERS.standard` model-routing tier, see `setup/model-routing.mjs`) for a
+  paraphrased query + verbatim `expect_new`/`expect_old` substrings, and VALIDATED against the LIVE
+  `semantic.mjs recall` path before being kept -- exactly `mine-cases.mjs`'s "every committed case is
+  answerable-by-current-recall" discipline, extended with the negative half a hard-negative case needs
+  (the old/retracted substrings must NOT appear).
+- **Why only `supersedes` pairs, not the `correction`-type `was` field:** a `correct --was "<wrong>"`
+  entry stores the wrong belief as an inline STRING on ONE row; `semantic.mjs`'s `reindex()` only
+  embeds/selects each row's `text` field, never `was` -- so a `was` string can never itself leak back
+  as a competing retrieved document. Only a resolvable `supersedes` link creates TWO independently
+  retrievable documents, which is what a genuine "old vs new, which one surfaces" test needs.
+- **Real yield (2026-07-22 mining run, `hard-negative-set.json`):** of 39 resolvable `supersedes`
+  pairs in the live corpus, 4 passed every safety + quality filter, and 3 validated end-to-end
+  (`hn-001` iHEARtest Build 47 shipped-vs-not-shipped; `hn-002`/`hn-003` a 3-generation fleet-backup
+  correction chain and the iHEARtest release-state staleness case). The 4th eligible pair was tried and
+  REJECTED (the LLM's chosen `expect_new` substring did not hit live recall) -- proof the
+  validate-before-keep step is a real filter, not a rubber stamp. Re-runnable
+  (`node mine-hard-negatives.mjs --target N --out hard-negative-set.json`) to grow the set as the
+  ledger accumulates more corrections; it merges with (never drops) the existing file.
+- `run-hard-negative-evals.mjs` runs entirely against the LOCAL `semantic.mjs recall` path (no LLM
+  calls at eval time -- that cost was already spent once, at mining time), scoring three numbers per
+  run (`hard-negative-scoring.mjs`, pure, mirrors `scoring.mjs`'s style): **correct-rate** (the current
+  fact found), **leak-rate** (the retracted fact reappeared -- want this near 0), and **PASS-rate**
+  (found AND leak-free -- the SLO this harness pages on). `baseline-hardneg.json` was seeded from a
+  real live run (n=3, 100% correct-rate / 0% leak-rate / 100% PASS-rate -- expected, since every kept
+  case was already proven to pass at mining time; the value is as a FUTURE regression tripwire, not as
+  evidence about today).
+- Cheap (no LLM calls at eval time), so it runs as an EXTRA STEP inside the existing
+  `nightly-recall-eval.yml` job/schedule (same `--strict` pager convention, same `page-on-failure.mjs`
+  call now attaching both logs, PostHog `recall_eval_hardneg` emit) rather than a separate workflow.
+
 ## Guardrails
-- **No ledger writes, ever.** Only mutates its own `baseline.json`, and only with `--update-baseline`.
+- **No ledger writes, ever.** Only mutates its own `baseline*.json` files, and only with
+  `--update-baseline`. `mine-hard-negatives.mjs` reads the shared exec feed with a **READ-ONLY** SAS
+  (`sp=rl`) -- it can never write to the ledger it mines from.
 - **Report-only by default; a pager with `--strict`.** Pair with `agent-evals` (the task-quality judge
   harness) for a broader quality signal; this harness is specifically about RETRIEVAL, not answer quality.
-- **PHI-excluded.** Hard guard refuses to run against a PHI-adjacent golden item or agent lane.
-- **No new infra.** Reuses the existing `semantic.mjs recall` transport and the kb-memory SA-injection
-  wrapper; this skill adds no new store, index, or credential path.
+- **PHI-excluded** (all four eval scripts + both miners). The hard-negative mining path is ALSO
+  MNPI-excluded (agent allowlist + `MNPI_DENY` keyword deny), because it reads a broader,
+  cross-agent corpus than `mine-cases.mjs`'s single-named-agent tail and that corpus includes
+  finance/legal/securities-adjacent lanes this file must never touch.
+- **No new infra for the golden-set/hard-negative paths.** They reuse the existing `semantic.mjs
+  recall` transport and the kb-memory SA-injection wrapper. The deep-mode path is the one deliberate
+  exception: it calls the LIVE gateway over its existing OAuth `client_credentials` lane-token flow
+  (`gateway-connect/connect.mjs`, already used elsewhere in this repo) -- no new credential path, but a
+  new network dependency (the gateway itself), which is why it is gated behind its own `--limit` /
+  separate workflow rather than folded into the always-cheap local checks.

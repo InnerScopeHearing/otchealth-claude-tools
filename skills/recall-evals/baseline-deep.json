@@ -1,0 +1,14 @@
+{
+  "engine": "gateway-deep",
+  "lane": "cto",
+  "k": 5,
+  "top": 8,
+  "n": 15,
+  "hitRate": 0.26666666666666666,
+  "mrr": 0.2,
+  "meanPrecisionAtK": 0.14666666666666667,
+  "answerGroundedRate": 0.13333333333333333,
+  "latencyMeanMs": 7519,
+  "runErrors": 0,
+  "recordedAt": "2026-07-22T00:59:13.233Z"
+}

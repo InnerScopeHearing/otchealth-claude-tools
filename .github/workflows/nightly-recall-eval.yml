@@ -24,6 +24,21 @@
 # the AI Search + Azure OpenAI + PostHog secrets from Key Vault via kvSecret(); claude-tools CI logs in
 # with azure/login federated OIDC (repo VARIABLES AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID + id-token:
 # write). No AZURE_SP_* secret at rest. Regression-ledger tag: monitor-azure-auth-oidc.
+#
+# ITEM 5.3 (Wave 5, AI-OS recall-quality pass): added a SECOND, INDEPENDENT dimension to this job --
+# the HARD-NEGATIVE (contrastive) eval (run-hard-negative-evals.mjs against hard-negative-set.json).
+# The step above only ever asks "did a relevant memory show up"; it has never asked "did a SUPERSEDED,
+# semantically-similar-but-now-WRONG memory on the same topic stay correctly suppressed" -- a
+# retraction-filter regression (a reindex bug, a dropped filterRetracted() call) could leave hit@5
+# looking perfectly healthy while a retracted belief silently leaks back into results. The hard-negative
+# cases are REAL, mined + validated `supersedes` pairs from the shared exec feed (see
+# skills/recall-evals/mine-hard-negatives.mjs), never hand-invented. It is CHEAP (local semantic.mjs
+# recall only, no LLM calls at eval time -- the LLM cost was already spent once at mining time), so it
+# runs as an extra step in this SAME job/schedule rather than a separate workflow. The DEEP-MODE eval
+# (gateway brain_search mode:'deep', LLM-cost-heavy) is the OTHER new dimension from this item; it runs
+# on its own schedule in the sibling nightly-recall-eval-deep.yml, not here, because its cost/latency
+# profile (multiple Foundry calls + a live gateway round trip per query) does not belong sharing this
+# job's tight timeout with two other cheap checks.
 name: Nightly Recall-Quality Eval
 
 on:
@@ -69,20 +84,36 @@ jobs:
           node run-evals.mjs --emit --baseline baseline.json --tolerance 0.05 --strict --json \
             2>&1 | tee "${GITHUB_WORKSPACE}/nightly-recall-eval.log"
 
+      # ITEM 5.3: the HARD-NEGATIVE (contrastive) dimension -- see the file-header comment above for
+      # why this is a genuinely different question from the hit@5 check above. Cheap (local
+      # semantic.mjs recall only, no LLM calls), so it rides in the SAME job/schedule. NO
+      # continue-on-error, same reasoning as the step above: a real PASS-rate regression or a dark
+      # sensor must fail this step so the job goes RED and the page-on-failure step below fires.
+      - name: "Run hard-negative eval (--strict: RED on a PASS-rate drop past the baseline SLO, or a dark sensor)"
+        working-directory: skills/recall-evals
+        run: |
+          set -o pipefail
+          node run-hard-negative-evals.mjs --emit --baseline baseline-hardneg.json --tolerance 0.05 --strict --json \
+            2>&1 | tee "${GITHUB_WORKSPACE}/nightly-recall-eval-hardneg.log"
+
       # A RED run is not a PAGE on its own: the recall SLO was blind because nobody watches the
-      # Actions tab. Route a hit@5 regression (or a can't-run/dark-sensor) through the real pager
-      # (dual email + PostHog fallback), matching nightly-azure-canary / nightly-fleet-sentinels.
-      # Runs from repo root (setup/page-on-failure.mjs), not the recall-evals working-directory.
+      # Actions tab. Route a hit@5 regression, a hard-negative PASS-rate regression, or a can't-run/
+      # dark-sensor through the real pager (dual email + PostHog fallback), matching
+      # nightly-azure-canary / nightly-fleet-sentinels. Runs from repo root (setup/page-on-failure.mjs),
+      # not the recall-evals working-directory. Both logs are attached so the page body shows whichever
+      # check(s) actually failed.
       - name: Page on failure (email, PostHog fallback)
         if: failure()
-        run: node setup/page-on-failure.mjs --workflow "Nightly Recall-Quality Eval" --log "${GITHUB_WORKSPACE}/nightly-recall-eval.log"
+        run: node setup/page-on-failure.mjs --workflow "Nightly Recall-Quality Eval" --log "${GITHUB_WORKSPACE}/nightly-recall-eval.log" --log "${GITHUB_WORKSPACE}/nightly-recall-eval-hardneg.log"
 
-      - name: Upload scorecard log
+      - name: Upload scorecard logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nightly-recall-eval-log
-          path: nightly-recall-eval.log
+          path: |
+            nightly-recall-eval.log
+            nightly-recall-eval-hardneg.log
           retention-days: 90
           if-no-files-found: warn
 

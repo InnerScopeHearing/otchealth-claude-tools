@@ -1,0 +1,97 @@
+# Nightly Deep-Mode Recall Eval -- scheduled hit@5 regression PAGER for the gateway's brain_search
+# mode:'deep' agentic retrieval path (ITEM 5.3, Wave 5 AI-OS recall-quality pass).
+#
+# WHY THIS IS A SEPARATE WORKFLOW FROM nightly-recall-eval.yml: that workflow's checks (the golden-set
+# hit@5 pager + the new hard-negative contrastive pager) both run entirely against the LOCAL
+# semantic.mjs recall path -- cheap, no LLM calls, sub-second per query. This workflow instead calls
+# the LIVE otchealth-mcp-server gateway (mcp.otchealth.app) with mode:'deep' -- an LLM-planned,
+# multi-round agentic retrieval (plan -> search -> optional refine -> synthesize a cited answer; see
+# otchealth-mcp-server src/memory/deep-retrieval.ts) that spends one or more Foundry calls AND a live
+# gateway round trip PER QUERY (observed ~5-11s/query during development). Folding this into the same
+# job as the two cheap checks would blow past a shared tight timeout and needlessly couple an
+# LLM-cost-heavy external dependency to two checks that have neither. See run-deep-evals.mjs's header
+# for the full rationale on why a deep-mode-SPECIFIC eval is a genuinely different question from the
+# existing (fast-path-only) golden-set suite: a regression in the planner/refine/synthesize pipeline
+# would be entirely invisible to a harness that never calls the gateway with mode:'deep'.
+#
+# COST CONTROL: run-deep-evals.mjs defaults to --limit 15 (an evenly-sampled, deterministic subset of
+# the 44-item golden set, not the whole thing) to bound nightly Foundry spend + latency. --concurrency
+# 3 (the script's default) keeps the gateway round trips from serializing into a multi-minute queue.
+#
+# Azure auth = SECRETLESS OIDC (same pattern as nightly-recall-eval.yml / nightly-eval.yml):
+# run-deep-evals.mjs resolves the PostHog ingest key from Key Vault via kvSecret(); the gateway lane
+# token itself is minted via skills/gateway-connect/connect.mjs's client_credentials flow (its own
+# Key Vault-resolved oauth-lane-cto-id/secret, the SAME lane-token mint every other gateway-calling
+# skill in this repo uses -- no new credential path). claude-tools CI logs in with azure/login
+# federated OIDC (repo VARIABLES AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID + id-token: write). No
+# AZURE_SP_* secret at rest. Regression-ledger tag: monitor-azure-auth-oidc.
+name: Nightly Deep-Mode Recall Eval
+
+on:
+  schedule:
+    - cron: '5 7 * * *'    # daily 07:05 UTC (after the 06:45 fast/hard-negative recall-eval, before the 08:00 medic)
+  workflow_dispatch: {}     # manual trigger for testing
+
+permissions:
+  id-token: write   # secretless OIDC login to Azure (azure/login); no AZURE_SP_* secret at rest
+  contents: read
+
+concurrency:
+  group: nightly-recall-eval-deep
+  cancel-in-progress: false
+
+jobs:
+  recall-eval-deep:
+    name: deep-mode recall hit@5 SLO pager
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Azure login (OIDC, secretless, the claude-tools Azure auth pattern)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "Run deep-mode recall-eval (--strict: RED on a hit@5 drop past the baseline SLO, or a dark sensor)"
+        # NO continue-on-error: a real regression (--strict) or a can't-run fatal (mint failure,
+        # unreachable gateway) now fails this step, so the job goes RED and pages instead of writing
+        # to a dashboard nobody watches -- same convention as nightly-recall-eval.yml.
+        working-directory: skills/recall-evals
+        run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
+          node run-deep-evals.mjs --emit --baseline baseline-deep.json --tolerance 0.05 --strict --json \
+            2>&1 | tee "${GITHUB_WORKSPACE}/nightly-recall-eval-deep.log"
+
+      # A RED run is not a PAGE on its own: route a hit@5 regression (or a can't-run/dark-sensor)
+      # through the real pager (dual email + PostHog fallback), matching nightly-recall-eval.yml /
+      # nightly-azure-canary / nightly-fleet-sentinels. Runs from repo root (setup/page-on-failure.mjs),
+      # not the recall-evals working-directory.
+      - name: Page on failure (email, PostHog fallback)
+        if: failure()
+        run: node setup/page-on-failure.mjs --workflow "Nightly Deep-Mode Recall Eval" --log "${GITHUB_WORKSPACE}/nightly-recall-eval-deep.log"
+
+      - name: Upload scorecard log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nightly-recall-eval-deep-log
+          path: nightly-recall-eval-deep.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      # Schedule-liveness heartbeat, the SAME "did this workflow's cron fire at all" signal every other
+      # nightly-*.yml workflow in this repo self-beats (see skills/nightly-schedule-canary/SKILL.md).
+      # Fires unconditionally (if: always()), independent of the --strict verdict above.
+      - name: "Heartbeat: mark this workflow's schedule as alive (independent of the recall-eval's own verdict above)"
+        if: always()
+        continue-on-error: true
+        run: node setup/heartbeat.mjs beat nightly-recall-eval-deep ok >/dev/null 2>&1 || true

@@ -1,0 +1,11 @@
+{
+  "engine": "hard-negative",
+  "k": 5,
+  "n": 3,
+  "correctRate": 1,
+  "leakRate": 0,
+  "passRate": 1,
+  "latencyMeanMs": 2130,
+  "runErrors": 0,
+  "recordedAt": "2026-07-22T01:00:57.952Z"
+}
