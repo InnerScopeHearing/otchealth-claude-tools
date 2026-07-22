@@ -1,20 +1,29 @@
 #!/usr/bin/env node
-// set-secret.mjs — write a single secret to GCP Secret Manager (create-then-addVersion).
-// The write-side companion to get-secret.mjs. Uses the same claude-driver SA, which has
-// secretmanager.secrets.create + addVersion + access on otchealth-shared-prod.
+// set-secret.mjs, write a single secret to Azure Key Vault via kvSecretSet.
+// GCP Secret Manager is fully retired fleet-wide (billing intentionally disabled, 2026-07). This is
+// the write-side companion to get-secret.mjs, which was already rewritten onto Key Vault. It reuses
+// kvSecretSet() from skills/kb-memory/azure-secret.mjs (the same managed-identity -> SP client
+// credentials -> az-CLI/OIDC 3-path auth resolver every other fleet writer already relies on)
+// instead of reimplementing the Key Vault PUT /secrets/{name} call from scratch.
 //
-// Creates the secret container if it does not exist (automatic replication), then adds a
-// new version with the given value. Safe to re-run (a 409 on create is treated as "exists").
-//
-// Usage:
+// Key Vault secret NAMES are a 1:1 mirror of the old GCP Secret Manager ids, so every existing call
+// site keeps its exact CLI shape unchanged:
 //   node setup/set-secret.mjs <secret-id> <value>          # value as an arg
 //   node setup/set-secret.mjs <secret-id> -                # value from stdin (PEM / multiline / binary)
 //   VALUE=... node setup/set-secret.mjs <secret-id> --env  # value from $VALUE (keeps it out of argv)
 //
-// Auth: ~/.gcp_claude_driver_sa.json (or GOOGLE_APPLICATION_CREDENTIALS).
+// Auth (same 3-path resolver as get-secret.mjs's sibling primitives, via kvSecretSet):
+//   1. managed identity (IDENTITY_ENDPOINT / IDENTITY_HEADER, Container Apps sidecar)
+//   2. AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID (client_credentials)
+//   3. az-CLI / OIDC (az account get-access-token, for federated GitHub Actions logins)
+// AZURE_KEYVAULT_NAME overrides the target vault (default kv-otc-55c84f6bef).
+//
+// Unlike Secret Manager, Key Vault has no separate create-container step: a PUT on a secret name
+// creates it if new, or adds a new version if it already exists, so this script is a single call
+// (no create-then-addVersion two-step, and no 409-means-exists special case).
 
 import { readFileSync } from 'node:fs';
-import crypto from 'node:crypto';
+import { kvSecretSet } from '../skills/kb-memory/azure-secret.mjs';
 
 const id = process.argv[2];
 const src = process.argv[3];
@@ -24,35 +33,11 @@ let value;
 if (src === '-') value = readFileSync(0); // stdin (Buffer)
 else if (src === '--env') { value = process.env.VALUE; if (value === undefined) { console.error('set-secret: --env given but $VALUE is unset'); process.exit(1); } }
 else value = src;
-const data = Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf8');
+const str = Buffer.isBuffer(value) ? value.toString('utf8') : String(value);
 
-const SA_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS || `${process.env.HOME}/.gcp_claude_driver_sa.json`;
-const PROJECT = process.env.GOOGLE_CLOUD_PROJECT || 'otchealth-shared-prod';
-const sa = JSON.parse(readFileSync(SA_PATH, 'utf8'));
-
-async function token() {
-  const h = { alg: 'RS256', typ: 'JWT' }, n = Math.floor(Date.now() / 1000);
-  const c = { iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: 'https://oauth2.googleapis.com/token', iat: n, exp: n + 3600 };
-  const e = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-  const i = `${e(h)}.${e(c)}`;
-  const s = crypto.createSign('RSA-SHA256').update(i).sign(sa.private_key, 'base64url');
-  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(`${i}.${s}`)}` });
-  return (await r.json()).access_token;
+const ok = await kvSecretSet(id, str);
+if (!ok) {
+  console.error(`[set-secret] FAILED to write "${id}" to Key Vault (see the [kv-secret] log lines above for which auth path(s) failed)`);
+  process.exit(1);
 }
-
-const t = await token();
-const auth = { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' };
-
-// 1. create the container (idempotent; 409 == already exists)
-const create = await fetch(`https://secretmanager.googleapis.com/v1/projects/${PROJECT}/secrets?secretId=${id}`, {
-  method: 'POST', headers: auth, body: JSON.stringify({ replication: { automatic: {} } }),
-});
-if (!create.ok && create.status !== 409) { console.error(`create ${id} ${create.status}: ${(await create.text()).slice(0, 200)}`); process.exit(1); }
-
-// 2. add a version with the value
-const add = await fetch(`https://secretmanager.googleapis.com/v1/projects/${PROJECT}/secrets/${id}:addVersion`, {
-  method: 'POST', headers: auth, body: JSON.stringify({ payload: { data: data.toString('base64') } }),
-});
-if (!add.ok) { console.error(`addVersion ${id} ${add.status}: ${(await add.text()).slice(0, 200)}`); process.exit(1); }
-const ver = (await add.json()).name;
-console.error(`[set-secret] ${create.status === 409 ? 'updated' : 'created'} ${id} (${data.length} bytes) -> ${ver}`);
+console.error(`[set-secret] wrote ${str.length} chars -> Key Vault secret "${id}"`);
