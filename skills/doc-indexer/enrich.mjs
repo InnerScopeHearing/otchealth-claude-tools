@@ -57,6 +57,20 @@
 // enriched (so it is not silently retried every run at the same cost) AND flagged into the review queue
 // instead of being trusted blind.
 //
+// FIELD/PASSAGE-LEVEL CONFIDENTIALITY CLASSIFICATION (Wave 7 item 7.4, 2026-07-22, foundation only):
+// for the executive-ring domains (finance, legal -- covers legal-company AND legal-personal, they
+// share the "legal" doc-indexer domain, see MS.SEGMENT_CONFIDENTIALITY_DOMAINS), the SAME LLM call
+// above is asked to name up to 6 passages inside the document whose sensitivity DIFFERS from the rest
+// of it (an unreleased financial figure inside an otherwise routine memo, an attorney-work-product
+// paragraph inside an otherwise shareable letter), each with a controlled-vocabulary label + a short
+// verbatim locator. Stored as `sensitive_segments` / `sensitive_labels` / `mixed_confidentiality`
+// (metadata-schema.mjs's SEGMENT_CONFIDENTIALITY_FIELDS). This is groundwork ONLY: nothing downstream
+// reads these fields yet -- no retrieval/synthesis path redacts a flagged passage or treats a doc
+// differently. A future consumer would map `locator_excerpt` onto the CHUNK row(s) it falls in (e.g. a
+// substring/fuzzy match against each chunk's `chunk` text) and teach the gateway to drop/mask that
+// chunk even when the room is otherwise readable. See metadata-schema.mjs for the full design note and
+// the pure, unit-tested merge logic (sanitizeSegments/encodeSegments/buildSegmentFields).
+//
 // Credentials: Azure Key Vault only (managed identity -> AZURE_SP_* -> az-CLI/OIDC via kvSecret()).
 // Non-PHI ring; INND content is MNPI (confidentiality/mnpi_flag exist precisely so a room that carries
 // MNPI can be gated on it); the legal `personal` container is privileged/confidential.
@@ -216,6 +230,16 @@ function enrichSystemPrompt(domain, needSummary) {
  "medical_claims_present": true or false (true if the text makes or discusses a medical/hearing-aid/FDA claim -- TReO is a PSAP, NOT a hearing aid, so hearing-aid language anywhere is a compliance risk to flag)
 }`);
   }
+  // Field/passage-level confidentiality classification (Wave 7 item 7.4, 2026-07-22): only asked of
+  // the executive-ring domains (finance, legal -- covers both legal-company and legal-personal, they
+  // share the "legal" domain, see MS.SEGMENT_CONFIDENTIALITY_DOMAINS). Splices one more field into the
+  // SAME call, zero extra LLM calls. See metadata-schema.mjs's SEGMENT_CONFIDENTIALITY_* section for
+  // the full design note (what this is, what it is explicitly NOT: no enforcement/consumption here).
+  if (MS.SEGMENT_CONFIDENTIALITY_DOMAINS.has(domain)) {
+    schema = schema.replace(/\}$/, `,
+ ${MS.segmentClassificationPromptBlock()}
+}`);
+  }
   return `You are a meticulous document cataloguing analyst for OTCHealth Inc./InnerScope. Output ONLY a JSON object, no prose, matching exactly this schema (use "" or [] for anything not present or not applicable; NEVER invent a fact not supported by the text; if genuinely unsure, say so via a lower "confidence" rather than guessing):
 ${schema}`;
 }
@@ -367,6 +391,13 @@ async function enrichOne(r) {
       signed_off_by: MS.capStr(signed_off_by, 80),
       notion_source_page_id: MS.capStr(notion_source_page_id, 40),
     });
+  }
+  // Field/passage-level confidentiality classification (Wave 7 item 7.4): only computed for the
+  // executive-ring domains. buildSegmentFields is the whole merge (validate the LLM's raw
+  // sensitive_segments -> the three field values below); see metadata-schema.mjs for the pure,
+  // unit-tested logic. Groundwork only -- nothing downstream consumes these fields yet.
+  if (MS.SEGMENT_CONFIDENTIALITY_DOMAINS.has(DOMAIN)) {
+    Object.assign(fields, MS.buildSegmentFields(llm.sensitive_segments));
   }
 
   const lowConf = extraction_confidence === "low" || !!llm._parseFailed;
