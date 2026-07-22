@@ -205,7 +205,14 @@ an `AZURE_SP_*` client_credentials path) on a `BACKUP_STORAGE_ACCOUNT` repo vari
 the documented example account name if unset.
 
 A future alternative not built here: moving this to a Container Apps Job with the identical env block
-`backup.mjs` runs under (Bicep or ARM job spec, granting its managed identity `Storage Blob Data Reader`
-on `ledger-backup`), which would drop the `AZURE_SP_*` secret entirely in favor of the same managed
-identity `backup.mjs` already uses. The GitHub Actions schedule above is the live path today; that move
-is optional future work, not a gap in the current schedule.
+`backup.mjs` runs under (Bicep or ARM job spec), which would drop the `AZURE_SP_*` secret entirely in
+favor of the same managed identity `backup.mjs` already uses. **Correction (2026-07-21, live proving
+run):** the required grant is NOT `Storage Blob Data Reader`. `backup.mjs` WRITES the backup and its
+manifest, so it needs `Storage Blob Data Contributor` (see the comment in `backup.mjs`); `s3-mirror.mjs`
+also needs Contributor on the SOURCE container, since it writes its own run manifest back into the
+container it mirrors -- a live proving run confirmed Reader-only access lets the mirror step succeed
+but fails writing that manifest. `restore-drill.mjs` is the one script here that genuinely only needs
+Reader (it reads the manifest from Azure Blob and pulls the compare blob from S3, writing nothing back
+to Azure). Grant each identity what its own script needs; do not copy one script's grant onto another.
+The GitHub Actions schedule above is the live path today; that Container-Apps-Job move is optional
+future work, not a gap in the current schedule.
