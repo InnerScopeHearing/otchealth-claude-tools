@@ -35,21 +35,34 @@
  *   `S3_DR_INCLUDE_PRIVILEGED=1` (this env var) are set, and even then go to a SEPARATE bucket/credential
  *   (aws-dr-privileged-*), never co-mingled with the non-privileged bucket.
  *
- * INERT-SAFE (Matt gate): if any of the four base aws-dr-* secrets is missing from Key Vault, this
- * prints a clear message and exits 0. No error, no partial state, safe to wire into a cron/Container
- * Apps Job today and it will simply no-op until the AWS credential is provisioned.
+ * INERT-SAFE (permanent defense-in-depth, NOT the current reason this has never run): if any of the
+ * four base aws-dr-* secrets is missing from Key Vault, this prints a clear message and exits 0. No
+ * error, no partial state, safe to wire into a cron/Container Apps Job today. This guard stays in the
+ * code forever as a fail-open safety net (a deleted/rotated secret, a Key Vault outage, or a future
+ * credential swap should degrade to a clean no-op, never a crash) -- but it is NOT what has kept this
+ * script from running in production. CORRECTED 2026-07-22: the base (non-privileged) aws-dr-* credential
+ * set is LIVE in kv-otc-55c84f6bef, independently confirmed with a real STS GetCallerIdentity call (IAM
+ * user cto-hyperagent, AWS account 900915535335) and a real S3 ListObjectsV2 call against the
+ * destination bucket (HTTP 200, bucket exists, 0 objects so far, because nothing has ever invoked this
+ * script -- no Container Apps Job and no GitHub Actions workflow scheduled it; see
+ * .github/workflows/nightly-s3-dr-mirror.yml, added in this same change, which closes that gap). This
+ * item was a schedule gap, not a credential gap.
  *
  * REQUIRED SECRETS (Key Vault, kv-otc-55c84f6bef by default):
  *   aws-dr-access-key-id / aws-dr-secret-access-key / aws-dr-s3-bucket / aws-dr-region
  *     -> the non-privileged DR mirror. ALL FOUR required or the run is a no-op (see INERT-SAFE above).
+ *     CONFIRMED LIVE 2026-07-22 (see above) -- this lane is fully self-serve, no further provisioning
+ *     needed; the INERT-SAFE gate above will not trip for it under normal operation.
  *   aws-dr-privileged-access-key-id / aws-dr-privileged-secret-access-key / aws-dr-privileged-s3-bucket
  *     -> the privileged DR mirror, a DISTINCT credential + bucket (not just a different prefix) so a
  *        leaked/over-scoped non-privileged key structurally cannot reach the privileged bucket.
  *        aws-dr-privileged-region is optional and falls back to aws-dr-region (region is not sensitive).
  *     -> only read/required when BOTH --include-privileged and S3_DR_INCLUDE_PRIVILEGED=1 are set.
- *   None of these secrets exist yet as of this writing — that is expected; this script merges safely
- *   and stays inert until Matt provisions them (see README.md for the exact `az keyvault secret set`
- *   commands and the recommended least-privilege IAM policy).
+ *   The privileged lane's own secrets were NOT part of the 2026-07-22 confirmation above -- only the
+ *   base four were verified live. Run `node s3-mirror.mjs selftest` to check current state; the
+ *   privileged lane stays inert-safe (by design, double opt-in) until those are separately confirmed.
+ *   See README.md for the exact `az keyvault secret set` commands and the recommended least-privilege
+ *   IAM policy.
  *
  * REQUIRED ENV (non-secret, same names backup.mjs already uses — deploy this as a sibling job with
  * the identical env block):
@@ -65,6 +78,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { listBlobs, getBlob, putBlockBlob, containerExists, blobToken, blobAuthMode } from "./azure-blob-client.mjs";
 import { s3Put, s3Head, sha256Hex } from "./s3-client.mjs";
@@ -72,8 +86,12 @@ import { s3Put, s3Head, sha256Hex } from "./s3-client.mjs";
 const MAX_MIRROR_BYTES = Number(process.env.S3_DR_MAX_MB || 500) * 1024 * 1024;
 
 // ---------- ring segregation ----------
-const PRIVILEGED_SUBSTRINGS = ["legal-personal", "legal-company", "cfo", "finance-", "-personal", "medreview", "phi"];
-function isPrivilegedByName(blobName) {
+// Exported (isPrivilegedByName / isPrivileged / indexNameFromBlob / ringGatedIndexNames): this is the
+// hard compliance boundary of the whole mirror (README.md "ring segregation, hard compliance
+// requirement") and pure/deterministic, so it is unit-tested directly (tests/s3-mirror-privileged.test.mjs)
+// rather than only exercised indirectly through a full `run()` with live Azure/AWS credentials.
+export const PRIVILEGED_SUBSTRINGS = ["legal-personal", "legal-company", "cfo", "finance-", "-personal", "medreview", "phi"];
+export function isPrivilegedByName(blobName) {
   const lower = blobName.toLowerCase();
   return PRIVILEGED_SUBSTRINGS.some((s) => lower.includes(s));
 }
@@ -87,7 +105,7 @@ function loadExpectedIndexRegistry() {
     return [];
   }
 }
-function ringGatedIndexNames(registry) {
+export function ringGatedIndexNames(registry) {
   const names = new Set();
   for (const ix of registry) {
     const queriedBy = (ix.queried_by || []).join(" ");
@@ -95,12 +113,12 @@ function ringGatedIndexNames(registry) {
   }
   return names;
 }
-function isPrivileged(blobName, ringGatedNames) {
+export function isPrivileged(blobName, ringGatedNames) {
   if (isPrivilegedByName(blobName)) return true;
   for (const n of ringGatedNames) if (blobName.includes(n)) return true;
   return false;
 }
-function indexNameFromBlob(blobName) {
+export function indexNameFromBlob(blobName) {
   const m = blobName.match(/^index-(.+)-\d{4}-\d{2}-\d{2}\.jsonl$/);
   return m ? m[1] : null;
 }
@@ -340,19 +358,25 @@ async function selftest() {
   console.log(JSON.stringify(report, null, 2));
 }
 
-const cmd = process.argv[2] || "run";
-const flags = new Set(process.argv.slice(3));
-if (cmd === "selftest") {
-  selftest().catch((e) => {
-    console.error("ERR", e.message);
-    process.exit(1);
-  });
-} else if (cmd === "run") {
-  run({ includePrivileged: flags.has("--include-privileged"), dryRun: flags.has("--dry-run") }).catch((e) => {
-    console.error("ERR", e.message);
-    process.exit(1);
-  });
-} else {
-  console.error("usage: node s3-mirror.mjs run [--include-privileged] [--dry-run] | selftest");
-  process.exit(2);
+// Only run as a script (not when imported by a test) -- matches the fleet's established convention
+// (see skills/azure-canary/canary.mjs, skills/continuity-canary/continuity-canary.mjs). Without this
+// guard, importing the pure classification helpers above for unit tests would also execute this
+// argv-driven dispatch (and process.exit) as a side effect of the import itself.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const cmd = process.argv[2] || "run";
+  const flags = new Set(process.argv.slice(3));
+  if (cmd === "selftest") {
+    selftest().catch((e) => {
+      console.error("ERR", e.message);
+      process.exit(1);
+    });
+  } else if (cmd === "run") {
+    run({ includePrivileged: flags.has("--include-privileged"), dryRun: flags.has("--dry-run") }).catch((e) => {
+      console.error("ERR", e.message);
+      process.exit(1);
+    });
+  } else {
+    console.error("usage: node s3-mirror.mjs run [--include-privileged] [--dry-run] | selftest");
+    process.exit(2);
+  }
 }

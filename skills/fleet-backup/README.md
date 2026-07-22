@@ -67,12 +67,19 @@ When both are set, privileged blobs go to a SEPARATE bucket and a SEPARATE AWS c
 run the privileged lane at all if `aws-dr-privileged-s3-bucket` resolves to the same bucket as
 `aws-dr-s3-bucket`.
 
-### The Matt gate: secrets to provision
+### Secrets to provision
 
-None of the secrets below exist yet as of this writing. Both scripts are inert safe: with the base
-four secrets absent, `s3-mirror.mjs run` prints a clear message and exits 0, no error, no partial
-state, safe to wire into a cron or Container Apps Job today. It will simply no-op until the credential
-lands.
+UPDATE 2026-07-22: the base (non-privileged) four secrets below are now CONFIRMED LIVE in Key Vault,
+independently verified with a real STS GetCallerIdentity call (IAM user cto-hyperagent, AWS account
+900915535335) and a real S3 ListObjectsV2 call against the destination bucket (HTTP 200, bucket exists).
+This lane is fully self-serve; nobody needs to provision anything further for it. The scheduled
+`.github/workflows/nightly-s3-dr-mirror.yml` runs it nightly. Only the privileged lane's secrets remain
+unconfirmed (see "Including privileged rooms" above); that lane is a deliberate, manual, double opt-in
+action and stays inert until someone provisions and arms it on purpose.
+
+Both scripts stay inert safe regardless: with any of the base four secrets absent, `s3-mirror.mjs run`
+prints a clear message and exits 0, no error, no partial state. That is now a permanent fail-open guard
+(a deleted/rotated secret, a Key Vault outage), not the day-to-day expected state.
 
 Store these in Azure Key Vault (`kv-otc-55c84f6bef` by default, override with `AZURE_KEYVAULT_NAME`).
 Prefer `--file` over `--value` so the secret never lands in shell history; write to a temp file, set
@@ -188,12 +195,17 @@ non-zero.
 
 ### Deployment note
 
-This is designed to run exactly like `backup.mjs`: as a Container Apps Job with the identical env
-block, on the same schedule cadence or a slower one. Deploying it as a scheduled job (Bicep or ARM
-job spec, granting its managed identity `Storage Blob Data Reader` on `ledger-backup`, mirroring
-`backup.mjs`'s own required grant) is a follow-up step, not built as part of this change. Until then,
-run it ad hoc from a session with `AZURE_SP_*` env set (the same fallback path
-`skills/kb-memory/azure-secret.mjs` uses), noting that an ad-hoc session identity may not itself hold
-the `Storage Blob Data Reader` role on `ledger-backup` even if it holds broad ARM-level access.
-Storage data-plane RBAC is a separate grant from ARM management-plane access in Azure, and the fastest
-path to a truly live test end to end is the same managed identity `backup.mjs` already runs under.
+SCHEDULED as of 2026-07-22 via `.github/workflows/nightly-s3-dr-mirror.yml` (daily, 06:50 UTC): runs
+`s3-mirror.mjs run` then `restore-drill.mjs` in the same job, non-privileged lane only, and pages on
+failure the same way every other nightly workflow in this repo does. It authenticates with `azure/login`
+OIDC (for `kvSecret`'s az-CLI fallback, resolving the `aws-dr-*` Key Vault secrets) plus
+`AZURE_SP_CLIENT_ID`/`AZURE_SP_CLIENT_SECRET`/`AZURE_SP_TENANT_ID` GitHub Actions secrets (needed because
+`azure-blob-client.mjs`, unlike `kvSecret`, has no az-CLI fallback of its own, only managed identity or
+an `AZURE_SP_*` client_credentials path) on a `BACKUP_STORAGE_ACCOUNT` repo variable that falls back to
+the documented example account name if unset.
+
+A future alternative not built here: moving this to a Container Apps Job with the identical env block
+`backup.mjs` runs under (Bicep or ARM job spec, granting its managed identity `Storage Blob Data Reader`
+on `ledger-backup`), which would drop the `AZURE_SP_*` secret entirely in favor of the same managed
+identity `backup.mjs` already uses. The GitHub Actions schedule above is the live path today; that move
+is optional future work, not a gap in the current schedule.
