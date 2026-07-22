@@ -38,6 +38,15 @@ export const ENUMS = {
   BRAND: ["treo", "ihear_matrix", "n_a", "unknown"],
   CURRENCY: ["USD", "EUR", "GBP", "CAD", "OTHER"],
   SOURCE_TYPE: ["primary_source", "ai_memo", "machine_generated"],
+  // Passage/segment-level confidentiality label (Wave 7 item 7.4, 2026-07-22): WHAT a specific
+  // passage inside a document contains, distinct from CONFIDENTIALITY above (the whole-document
+  // access-control level). A document's overall confidentiality might be "internal" while one
+  // paragraph inside it still deserves one of these finer-grained labels -- see the
+  // SEGMENT_CONFIDENTIALITY_* section below for the full design note.
+  SEGMENT_LABEL: [
+    "unreleased_financials", "attorney_work_product", "attorney_client_privileged",
+    "personal_pii", "strategic_plan", "regulatory_sensitive", "routine_operational", "other_sensitive",
+  ],
 };
 
 /** Resolve the doc_type enum for a domain (falls back to the commerce list, which is the only fully
@@ -99,10 +108,60 @@ export const COMMERCE_FIELDS = [
   { name: "notion_source_page_id", type: "Edm.String", kind: "scalar", source: "code", filterable: true, facetable: false, maxLen: 40 },
 ];
 
+// ============================ field/passage-level confidentiality classification (Wave 7 item 7.4) ============================
+// FOUNDATION ONLY, not enforcement (2026-07-22). Today, confidentiality/privilege is enforced at the
+// ROOM level: an entire index (finance-cfo-source-docs, legal-company, legal-personal, ...) is gated
+// wholesale to the executive ring (see otchealth-mcp-server src/tools/kb/search-privileged.ts,
+// INDEX_LANES / EXEC_RING / PERSONAL_LEGAL_RING). That is coarse: within ONE document that is
+// otherwise fine to share inside the room, a specific paragraph can carry materially more sensitive
+// content (an unreleased earnings figure buried in an otherwise routine board-minutes document), and
+// room-level gating has no way to express "withhold just this passage."
+//
+// This pack adds a THIRD classification layer, alongside the whole-document `confidentiality` field
+// above and CU/deep-pass's per-document fields: it asks the SAME enrichment LLM call (no new call, no
+// new cost line -- see COST CONTROLS in enrich.mjs) to name up to 6 passages whose sensitivity DIFFERS
+// from the rest of the document, tag each with a controlled-vocabulary SEGMENT_LABEL, and quote a
+// short verbatim locator so a later pass can find the passage again. It is scoped to the
+// executive-ring rooms named in the task that motivated it: finance and legal (both the `company` and
+// `personal` legal containers -- they share the `legal` doc-indexer profile/domain, differentiated
+// only by --container, so this pack applies to both automatically). Commerce/commons documents are
+// not privileged-ring content, so they never carry this pack (see DOMAIN_PACKS below).
+//
+// EXPLICITLY NOT BUILT HERE: nothing downstream reads these fields yet. No retrieval/synthesis path in
+// the gateway redacts a flagged passage, withholds it from a response, or treats a doc differently
+// because `mixed_confidentiality` is true -- that consumption is a separate, larger, future change (it
+// would need to map `locator_excerpt` back onto the CHUNK row(s) it falls in, e.g. a substring/fuzzy
+// match against each chunk's `chunk` text, and then teach the gateway's retrieval or synthesis path to
+// drop or mask that specific chunk even when the caller is otherwise allowed to read the room). This
+// pack only computes and stores the metadata so that future pass has something to consume.
+export const SEGMENT_CONFIDENTIALITY_DOMAINS = new Set(["finance", "legal"]);
+
+export const SEGMENT_CONFIDENTIALITY_FIELDS = [
+  // The audit trail: one JSON-encoded {label, locator_excerpt, rationale} object per flagged passage,
+  // as a Collection(Edm.String) (mirrors how every other list field in this schema is metadata-encoded
+  // -- see indexerFieldMapping's jsonArrayToStringCollection). Not searchable/filterable itself (the
+  // payload is structured JSON, not prose or a controlled vocabulary); sensitive_labels below is the
+  // filterable/facetable surface a future consumer or a human query would actually use.
+  { name: "sensitive_segments", type: "Collection(Edm.String)", kind: "list", source: "llm", searchable: false, filterable: false, facetable: false, maxItems: 6, maxItemLen: 500 },
+  // Deduped SEGMENT_LABEL values found anywhere in sensitive_segments, so "find every finance doc with
+  // an unreleased_financials passage" is a plain facet/filter, no JSON parsing required.
+  { name: "sensitive_labels", type: "Collection(Edm.String)", kind: "list", source: "llm", searchable: true, filterable: true, facetable: true, maxItems: 8, maxItemLen: 40, enumKey: "SEGMENT_LABEL" },
+  // Cheap, well-defined signal: does this document need passage-level attention at all, or is its
+  // whole-document confidentiality classification already the whole story. Deliberately NOT a
+  // "highest sensitivity" ranking across labels -- ranking severity across (say) attorney-privilege vs
+  // MNPI vs PII is a legal judgment call this pipeline should not fabricate.
+  { name: "mixed_confidentiality", type: "Edm.Boolean", kind: "bool", source: "llm", filterable: true, facetable: true },
+];
+
 export const DOMAIN_PACKS = {
   commerce: COMMERCE_FIELDS,
-  // finance: FINANCE_FIELDS,   // TODO (wide rollout): design doc Section 4A, ~18 fields
-  // legal:   LEGAL_FIELDS,     // TODO (wide rollout): design doc Section 4B, ~20 fields
+  // finance/legal: ONLY the field/passage-level confidentiality-classification pack above is wired so
+  // far (Wave 7 item 7.4). The FULL finance/legal domain packs (materiality/counterparty/entities/etc,
+  // ~18-20 fields each, design doc Sections 4A/4B) remain the CTO's separate gated wide rollout; when
+  // that lands, change these two lines to `[...FINANCE_FIELDS, ...SEGMENT_CONFIDENTIALITY_FIELDS]` and
+  // `[...LEGAL_FIELDS, ...SEGMENT_CONFIDENTIALITY_FIELDS]`.
+  finance: SEGMENT_CONFIDENTIALITY_FIELDS,
+  legal: SEGMENT_CONFIDENTIALITY_FIELDS,
   // commons: COMMONS_FIELDS,   // TODO (wide rollout): design doc Section 4D, ~15 fields
 };
 
@@ -235,6 +294,63 @@ export function coerceEnum(v, allowed, fallback = "") {
   return hit || fallback;
 }
 
+// ============================ field/passage-level confidentiality classification: pure logic ============================
+// sanitizeSegments / encodeSegments / buildSegmentFields together are the "how the new classification
+// merges into existing enrichment output" layer: given the raw sensitive_segments the LLM returned
+// (untrusted -- may be missing, malformed, or off-vocabulary), produce the exact three field values
+// enrich.mjs writes as blob metadata. Pure (no I/O, no network), so this is fully unit-testable without
+// a live LLM call -- see enrichOne() in enrich.mjs for where buildSegmentFields is actually invoked.
+
+/** Validate + coerce the LLM's raw sensitive_segments array into a bounded list of clean
+ *  {label, locator_excerpt, rationale} records. An item with no recognizable SEGMENT_LABEL, or no
+ *  locatable text, is DROPPED rather than guessed at (same "never invent, flag or drop" discipline as
+ *  coerceEnum/validDateOrEmpty above). */
+export function sanitizeSegments(raw, maxItems = 6) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const label = coerceEnum(item.label, ENUMS.SEGMENT_LABEL, "");
+    if (!label) continue; // unrecognized/missing label: not usable by a future consumer, drop rather than guess
+    const locator_excerpt = capStr(item.locator_excerpt ?? item.locator ?? "", 220);
+    if (!locator_excerpt) continue; // a label with nothing to locate is not actionable, drop
+    const rationale = capStr(item.rationale ?? "", 140);
+    out.push({ label, locator_excerpt, rationale });
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+/** Each validated segment becomes its own compact JSON string (one Collection(Edm.String) element),
+ *  mirroring how every other list field in this schema becomes a JSON-array-of-strings blob-metadata
+ *  value (see indexerFieldMapping's jsonArrayToStringCollection). */
+export function encodeSegments(segments) {
+  return (Array.isArray(segments) ? segments : []).map((s) => JSON.stringify(s));
+}
+
+/** The full merge: raw LLM output -> the three field values enrich.mjs assigns onto its `fields`
+ *  object for a finance/legal doc. mixed_confidentiality is true exactly when at least one segment
+ *  survived sanitation, i.e. this document has passage-level content that diverges from its
+ *  whole-document confidentiality classification and deserves a closer look before a future
+ *  enforcement pass trusts the room-level gate alone. */
+export function buildSegmentFields(rawSegments, maxItems = 6) {
+  const segments = sanitizeSegments(rawSegments, maxItems);
+  return {
+    sensitive_segments: encodeSegments(segments),
+    sensitive_labels: capList(Array.from(new Set(segments.map((s) => s.label))), 8, 40),
+    mixed_confidentiality: segments.length > 0,
+  };
+}
+
+/** The JSON-schema-shaped prompt snippet enrich.mjs splices into enrichSystemPrompt() for
+ *  SEGMENT_CONFIDENTIALITY_DOMAINS only (mirrors how the commerce-only fields are spliced in there).
+ *  Kept here, not in enrich.mjs, so the exact prompt text is unit-testable without importing enrich.mjs
+ *  (a CLI script, not a module). Returns text with no trailing comma, meant to be spliced in as the
+ *  last schema field (see enrich.mjs's `schema.replace(/\}$/, ...)` pattern). */
+export function segmentClassificationPromptBlock() {
+  return `"sensitive_segments": [{"label": "one of: ${ENUMS.SEGMENT_LABEL.join("|")}", "locator_excerpt": "8 to 20 words copied VERBATIM from the document text so this exact passage can be found again later, never paraphrase", "rationale": "one short clause: why this specific passage carries that label"}] (0 to 6 items, most sensitive first; ONLY passages whose sensitivity genuinely DIFFERS from the rest of this document, e.g. one paragraph with a specific unreleased number inside an otherwise routine memo, or one attorney-work-product paragraph inside an otherwise shareable letter; if the WHOLE document reads as uniformly one sensitivity level, return an empty array, the whole-document confidentiality field above already covers that case)`;
+}
+
 /** A date is NEVER trusted from raw LLM output (design principle #3: "the one failure a CLO/CFO cannot
  *  absorb"). This only accepts a string that already looks like YYYY-MM-DD (from deterministic
  *  extraction: a path-embedded date, a CU/deep-pass field that itself came from regex/calendar logic,
@@ -273,6 +389,10 @@ export function parseAmount(s) {
 // before enums/dates/ids) rather than erroring or silently letting Azure reject the write.
 const METADATA_BYTE_BUDGET = 7200;
 const SHRINK_PRIORITY = [
+  // sensitive_segments first: it is retrievable-only (searchable/filterable/facetable all false, see
+  // SEGMENT_CONFIDENTIALITY_FIELDS), so it is the least valuable field to keep at full size under
+  // budget pressure -- shrink it before touching anything that actually drives search quality.
+  "sensitive_segments",
   "contextual_prefix", "summary", "hypothetical_questions", "keywords",
   "entities", "named_entities_orgs", "named_entities_people",
   "related_systems", "product_names", "compliance_flags",
