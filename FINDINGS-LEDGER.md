@@ -24,3 +24,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** refreshed otchealth-cto/CLAUDE.md with a dated entry documenting Waves 0-1; commit c2f2e2d merged to main
 - **Opened:** 2026-07-21T23:04:34.960Z
 - **Closed:** 2026-07-21T23:07:44.935Z
+
+### finding:FND-20260723-8456 severity:medium status:fixed | gateway_call_full.py JIT-offload pagination loop checked nonexistent done/is_last fields, never terminated, hung on any real multi-page result (found by CFO agent, fixed same day)
+
+- **Source audit doc:** kb-memory:cto__20260723-044-75bd
+- **Fix commit:** (none yet)
+- **Verified by:** Live call against xero_report(innd,TrialBalance), 8-page/223568-byte JIT-offloaded result: 6s round trip, byte-exact reassembly, internally consistent trial balance (debits=credits=885089.82). Real schema is {page,pages,chunk,found,total_bytes,created}; fix compares page>=pages-1.
+- **Opened:** 2026-07-23T21:54:30.148Z
+- **Closed:** 2026-07-23T21:54:30.148Z
