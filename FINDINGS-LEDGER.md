@@ -56,3 +56,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Hyperagent CFO seat 2026-07-23 - durable Hyperagent memory (importance 5) created explicitly distinguishing the closed personal CA FTB matter from the still-open corporate 3(a)(10) payroll under-accrual, to prevent a third recurrence
 - **Opened:** 2026-07-24T02:26:10.085Z
 - **Closed:** 2026-07-24T02:26:10.085Z
+
+### finding:FND-20260724-764f severity:medium status:open | XERO_CLEANUP_TASKLIST.md self-declares 'read before any Xero posting' but is stale since 2026-06-20/21, still tracks the Phase 0-9 plan superseded by the 2026-06-29 Option-B directive - risks misdirecting a future session's next-step choice into the wrong workstream
+
+- **Source audit doc:** OneDrive CFO Incoming/XERO_CLEANUP_TASKLIST.md
+- **Fix commit:** (none yet)
+- **Verified by:** Hyperagent CFO seat 2026-07-23 - flagged in Master Living Document section 17, document itself not yet retired/corrected
+- **Opened:** 2026-07-24T02:26:12.309Z
+- **Closed:** (open)
