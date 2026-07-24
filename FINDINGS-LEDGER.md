@@ -40,3 +40,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Hyperagent CFO seat 2026-07-23 - confirmed via the company's own filed stock-issuance disclosure table + VStock Event Schedule + live Xero query; see Master Living Document (cmre7bc9m008207ad6114341s) section 18
 - **Opened:** 2026-07-24T02:26:04.911Z
 - **Closed:** 2026-07-24T02:26:04.911Z
+
+### finding:FND-20260724-556a severity:high status:fixed | FY2021 GS Capital derivative methodology churned across 3 different totals ($9,378,556 as-filed, $1,828,800 interim 7/10-7/12 pass, $1,559,432 DSV2 final) with no documented final determination, causing repeated re-litigation across agent sessions - Matt's explicit stated frustration
+
+- **Source audit doc:** Derivative Day-One Bifurcation doc (cmrfr5idd08a608ad8gj3u0pr) + S2_NINE_NOTE_BIFURCATION_2026-07-17.md
+- **Fix commit:** (none yet)
+- **Verified by:** Hyperagent CFO seat 2026-07-23 - independently re-ran mc_engine.py against DSV2 staged inputs, reproduced $1,559,432 to within -0.04%; full reasoning in Master Living Document section 18; durable Hyperagent memory MEMORYCONFIG_T2pWFGJO created so this is not re-derived again
+- **Opened:** 2026-07-24T02:26:07.544Z
+- **Closed:** 2026-07-24T02:26:07.544Z
