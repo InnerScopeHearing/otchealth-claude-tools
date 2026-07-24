@@ -48,3 +48,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Hyperagent CFO seat 2026-07-23 - independently re-ran mc_engine.py against DSV2 staged inputs, reproduced $1,559,432 to within -0.04%; full reasoning in Master Living Document section 18; durable Hyperagent memory MEMORYCONFIG_T2pWFGJO created so this is not re-derived again
 - **Opened:** 2026-07-24T02:26:07.544Z
 - **Closed:** 2026-07-24T02:26:07.544Z
+
+### finding:FND-20260724-cab8 severity:medium status:fixed | IRC 6672/Trust Fund Recovery Penalty personal-vs-corporate conflation recurred in 2 separate documents after being resolved once on 2026-06-24
+
+- **Source audit doc:** CFO_PROJECT_MEMORY.md section 5b + PCAOB_AUDITOR_VIEW_2026-06-24.md item 9
+- **Fix commit:** (none yet)
+- **Verified by:** Hyperagent CFO seat 2026-07-23 - durable Hyperagent memory (importance 5) created explicitly distinguishing the closed personal CA FTB matter from the still-open corporate 3(a)(10) payroll under-accrual, to prevent a third recurrence
+- **Opened:** 2026-07-24T02:26:10.085Z
+- **Closed:** 2026-07-24T02:26:10.085Z
