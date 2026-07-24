@@ -41,13 +41,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-07-24T02:26:04.911Z
 - **Closed:** 2026-07-24T02:26:04.911Z
 
-### finding:FND-20260724-556a severity:high status:fixed | FY2021 GS Capital derivative methodology churned across 3 different totals ($9,378,556 as-filed, $1,828,800 interim 7/10-7/12 pass, $1,559,432 DSV2 final) with no documented final determination, causing repeated re-litigation across agent sessions - Matt's explicit stated frustration
+### finding:FND-20260724-556a severity:high status:wontfix | FY2021 GS Capital derivative methodology churned across 3 different totals ($9,378,556 as-filed, $1,828,800 interim 7/10-7/12 pass, $1,559,432 DSV2 final) with no documented final determination, causing repeated re-litigation across agent sessions - Matt's explicit stated frustration
 
 - **Source audit doc:** Derivative Day-One Bifurcation doc (cmrfr5idd08a608ad8gj3u0pr) + S2_NINE_NOTE_BIFURCATION_2026-07-17.md
 - **Fix commit:** (none yet)
-- **Verified by:** Hyperagent CFO seat 2026-07-23 - independently re-ran mc_engine.py against DSV2 staged inputs, reproduced $1,559,432 to within -0.04%; full reasoning in Master Living Document section 18; durable Hyperagent memory MEMORYCONFIG_T2pWFGJO created so this is not re-derived again
+- **Verified by:** Duplicate entry created by a retry loop during the 2026-07-23 checkpoint (each retry actually succeeded silently; canonical entry is FND-20260724-a03e, independently verified via github__get_commit). Closing as wontfix to avoid ledger clutter, not because the underlying finding is invalid.
 - **Opened:** 2026-07-24T02:26:07.544Z
-- **Closed:** 2026-07-24T02:26:07.544Z
+- **Closed:** 2026-07-24T02:28:30.002Z
 
 ### finding:FND-20260724-cab8 severity:medium status:fixed | IRC 6672/Trust Fund Recovery Penalty personal-vs-corporate conflation recurred in 2 separate documents after being resolved once on 2026-06-24
 
