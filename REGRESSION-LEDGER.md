@@ -153,3 +153,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** N/A@N/A — Live Shopify Admin API pageUpdate across 49 pages: parsed each page's BreadcrumbList JSON-LD, corrected the last itemListElement's item field to https://otchealthmart.com/pages/{realHandle}, re-serialized, pushed. Handles both compact and pretty-printed JSON-LD formats found across different pages.
 - **Verified:** Independent full re-scan via a fresh detection script (not reusing the fix script) confirmed 0 of 67 pages have the wrong-self-URL pattern afterward, down from 49
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-26T21:13Z] tag:safety-classifier-substring-match — safety_gate.py keyword backstop used bare substring matching for symptom/legal stems, causing real false positives on live customer traffic: 'sting' matched inside 'testing' (caught on own verification email); manual audit found more -- 'sue' in issue/pursue, 'itch' in switch, 'cure' in secure, 'pus' in campus, and most dangerously 'numb' in 'order NUMBer', one of the most common customer-service phrases
+
+- **Root cause:** Bare Python substring checks have no concept of word boundaries; any stem that is also a substring of a common word/phrase false-positives at scale even though small unit tests miss it. Second occurrence of this exact bug class in this file -- an earlier session's narrower ad-hoc WORD_ONLY split for er/ent did not generalize to all stems
+- **Fix:** hyperagent-skill:Intercom-CRM-v2.1@N-A-hyperagent-skill-config-not-git-tracked — Rewrote to word-boundary-bounded compiled regex for every stem (\b...\b), replacing the old ad-hoc WORD_ONLY split entirely
+- **Verified:** Re-ran full validation suite: 30/30 recall, 12/12 specificity, plus 8 targeted re-tests of the exact false-positive phrases found, all passing
+**First recorded occurrence of this root-cause tag.**
