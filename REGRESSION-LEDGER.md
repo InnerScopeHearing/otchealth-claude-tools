@@ -188,3 +188,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** hyperagent-skill:Intercom-CRM-v2.1@N-A-hyperagent-skill-config-not-git-tracked — Added OTCHEALTH_AGENT_IDS default-deny allow-list; sync() now skips (and logs, does not silently drop) any call whose agent_id is not one of OTCHealth's 4 known agents, so InnerScope or any future/unknown agent can never be mirrored into this workspace
 - **Verified:** Re-ran voice sync after the fix (0 new calls, no regression). Cleaned up the 4 already-mirrored InnerScope conversations: tagged misrouted-not-otchealth, noted with root cause, and closed via the Intercom API. Intercom's public API has no conversation-delete endpoint, so full removal was not possible from this runtime -- flagged to Matt in case formal deletion/erasure is wanted
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-26T21:31Z] tag:intercom-close-missing-admin-id — intercom.py's cmd_close sent {message_type:close, type:admin} with no admin_id, returning 400 parameter_invalid 'ID is required' on every close attempt -- discovered while closing the misrouted InnerScope conversations
+
+- **Root cause:** Same undocumented-required-field pattern already found and fixed for tag-attach this session: Intercom requires admin_id on admin-authored conversation replies (reply/note/assign already included it via _get_admin_id()) but cmd_close was written without it and the error message never names the missing field
+- **Fix:** hyperagent-skill:Intercom-CRM-v2.1@N-A-hyperagent-skill-config-not-git-tracked — cmd_close now calls the existing _get_admin_id() helper and includes admin_id in the close body, matching the pattern already used by cmd_reply/cmd_note/cmd_assign
+- **Verified:** Successfully closed all 4 misrouted conversations plus 4 Intercom demo conversations after the fix, confirmed via each response's waiting_since:null (closed state)
+**First recorded occurrence of this root-cause tag.**
