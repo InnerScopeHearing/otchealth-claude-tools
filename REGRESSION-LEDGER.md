@@ -167,3 +167,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** hyperagent-skill:Intercom-CRM-v2.1@N-A-hyperagent-skill-config-not-git-tracked — Switched to POST /conversations/{id}/tags with body {id: tag_id, admin_id: <admin>} -- admin_id is a required parameter Intercom does not document until you omit it (400 parameter_not_found)
 - **Verified:** Created a real conversation, tagged it via the new endpoint, re-fetched via GET /conversations/{id} and confirmed the tag now appears in the tags array
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-26T21:14Z] tag:intercom-phone-search-equals-broken — POST /contacts/search with {field:phone, operator:=} silently returns total_count 0 even for an exact, verified-stored phone match -- caught live in production when two ElevenLabs calls from the identical number +18483264009, seconds apart, created two separate Intercom contacts during the voice-sync's first live run
+
+- **Root cause:** Intercom's exact-match (=) operator does not reliably match E.164 phone strings even when GET /contacts/{id} confirms the value is stored identically; root mechanism unconfirmed (possibly a normalization/indexing quirk specific to the phone field), but empirically the = operator cannot be trusted for phone identity lookups on this API
+- **Fix:** hyperagent-skill:Intercom-CRM-v2.1@N-A-hyperagent-skill-config-not-git-tracked — find_or_create_contact_by_phone() now searches with operator ~ (contains) then applies a mandatory exact-match post-filter (candidate.phone == query) before trusting a hit, rejecting over-broad partial matches while working around the broken = operator
+- **Verified:** Re-ran the voice sync against the same duplicate-number scenario after the fix; second call now correctly resolved to the existing contact instead of creating a new one; also manually cleaned up the pre-fix duplicate contact
+**First recorded occurrence of this root-cause tag.**
