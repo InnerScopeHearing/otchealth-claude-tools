@@ -160,3 +160,10 @@ repeat bulletin.mjs's mistake of silently editing a local file only.
 - **Fix:** hyperagent-skill:Intercom-CRM-v2.1@N-A-hyperagent-skill-config-not-git-tracked — Rewrote to word-boundary-bounded compiled regex for every stem (\b...\b), replacing the old ad-hoc WORD_ONLY split entirely
 - **Verified:** Re-ran full validation suite: 30/30 recall, 12/12 specificity, plus 8 targeted re-tests of the exact false-positive phrases found, all passing
 **First recorded occurrence of this root-cause tag.**
+
+### [2026-07-26T21:14Z] tag:intercom-tag-silent-noop — POST /tags with {id, conversations:[...]} returns HTTP 200 but silently does NOT attach the tag to the conversation -- verified live by creating a conversation, tagging it via this pattern, then reading the conversation back and finding tags: []
+
+- **Root cause:** That endpoint's real behavior is find-or-create-a-tag-object, not attach-tag-to-resource; Intercom returns 200 success for the find/create half of the operation without it meaning the attach half happened, and there is no error surfaced to indicate the attach never occurred
+- **Fix:** hyperagent-skill:Intercom-CRM-v2.1@N-A-hyperagent-skill-config-not-git-tracked — Switched to POST /conversations/{id}/tags with body {id: tag_id, admin_id: <admin>} -- admin_id is a required parameter Intercom does not document until you omit it (400 parameter_not_found)
+- **Verified:** Created a real conversation, tagged it via the new endpoint, re-fetched via GET /conversations/{id} and confirmed the tag now appears in the tags array
+**First recorded occurrence of this root-cause tag.**
