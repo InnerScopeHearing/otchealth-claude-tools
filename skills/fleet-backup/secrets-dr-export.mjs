@@ -89,13 +89,13 @@
  */
 
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { vaultToken, kvSecret, kvSecretSet } from "../kb-memory/azure-secret.mjs";
-import { s3Put, s3Get, sha256Hex } from "./s3-client.mjs";
+import { s3Put, s3Head, sha256Hex } from "./s3-client.mjs";
 import { encrypt, envelopeSize } from "./crypto-envelope.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -255,16 +255,27 @@ async function realSelftest() {
   report.awsDrCredsProvisioned = Boolean(akid && asecret && bucket && region);
   if (report.awsDrCredsProvisioned) {
     try {
-      // GET (not HEAD) a definitely-nonexistent key. GET responses carry a body, so a real S3 error
-      // (bad credentials, wrong signature, an actual deny) is DISTINGUISHABLE from a clean missing-
-      // object 404 — empirically verified against this exact bucket: a valid-credential GET on a
-      // missing key returns a clean null, while a broken credential throws with a parseable
-      // <Code>SignatureDoesNotMatch</Code>-style body. So here, ANY throw means genuinely unreachable
-      // — there is no masked-404-looks-like-403 case to special-case for THIS bucket's observed
-      // behavior (an earlier version of this check treated any 403 as "reachable," which would have
-      // hidden a real broken-credential failure behind a false-positive pass).
-      await s3Get({ accessKeyId: akid, secretAccessKey: asecret, bucket, region }, `secrets-dr/.selftest-probe-${Date.now()}`);
-      report.s3Reachable = true;
+      // Round-trip a real, fixed marker object instead of GET'ing a definitely-nonexistent key
+      // (2026-07-28 review, Copilot finding: this is the SAME bug class already fixed in
+      // azure-watchdog.mjs's selftest, present here as a separate, un-caught instance). The comment
+      // this replaced claimed a GET on a missing key reliably distinguishes bad credentials from a
+      // clean 404 "for this exact bucket's observed behavior" -- but that is not a property of THIS
+      // bucket, it is standard AWS S3 IAM semantics: the recommended least-privilege policy for these
+      // credentials (README.md's "Recommended IAM policy") is deliberately s3:PutObject + s3:GetObject
+      // ONLY, with no s3:ListBucket -- and AWS returns 403 Forbidden (not 404) for a GET/HEAD on a
+      // missing key whenever the caller lacks s3:ListBucket, specifically to avoid leaking whether the
+      // key exists. So a perfectly valid, correctly-scoped credential probing a guaranteed-missing key
+      // throws here exactly like a broken one would, and this selftest reports a healthy, supported
+      // setup as unreachable. PUT-then-HEAD a fixed (not timestamped) marker key instead: a genuine 200
+      // on the read-back proves real reachability with the actual granted permissions, with no
+      // dependence on 403-vs-404 semantics, and reusing one fixed key (overwritten each run) avoids
+      // accumulating objects this credential has no DeleteObject permission to clean up.
+      const creds = { accessKeyId: akid, secretAccessKey: asecret, bucket, region };
+      const marker = "secrets-dr/.selftest-probe-marker";
+      const markerBuf = Buffer.from(`selftest ${new Date().toISOString()}`, "utf8");
+      await s3Put(creds, marker, markerBuf, sha256Hex(markerBuf), {});
+      const head = await s3Head(creds, marker);
+      report.s3Reachable = head !== null;
     } catch (e) {
       report.s3Reachable = false;
       report.s3Error = String(e && e.message || e).slice(0, 300);
@@ -295,23 +306,34 @@ function deliverToOneDrive(buf, label) {
     // guard and failure pager ever ran. 90s is generous for a token refresh plus an upload of a file
     // this size (an encrypted JSON export of ~300 secrets, not a large media file).
     //
-    // Captured (not inherited) stdout/stderr (2026-07-28 review finding, second pass): the underlying
-    // engine (skills/cfo-onedrive/onedrive.mjs) rotates the OneDrive OAuth refresh token on every
-    // invocation and tries to persist the new one via its own smWrite() -- but if that persist call
-    // throws, onedrive.mjs CATCHES it, logs "ROTATE PERSIST FAILED: <reason>" to stderr, and keeps
-    // going (exits 0 regardless). That makes this delivery step look like a clean success even when
-    // Key Vault now holds the OLD refresh token while Microsoft has already invalidated it (OAuth
-    // refresh tokens are typically single-use/rotate-on-use) -- the run's own freshness check further
-    // down this file re-reads that same Key Vault secret and, seeing no change, concludes "no rotation
-    // happened," when what actually happened is "rotation happened and failed to persist." Piping the
-    // child's output lets this script scan for that exact failure string and fail loud instead of
-    // silently trusting a false "no change" reading.
-    const result = execFileSync("node", [
+    // Captured (not inherited) stdout AND stderr SEPARATELY (2026-07-28 review, second pass -- the
+    // first fix here was itself buggy, caught by review): the underlying engine
+    // (skills/cfo-onedrive/onedrive.mjs) rotates the OneDrive OAuth refresh token on every invocation
+    // and tries to persist the new one via its own smWrite() -- but if that persist call throws,
+    // onedrive.mjs CATCHES it and logs "ROTATE PERSIST FAILED: <reason>" via console.error, i.e. to
+    // STDERR, and keeps going (exits 0 regardless). The first version of this fix used
+    // execFileSync(..., {encoding:"utf8"}) and scanned its RETURN VALUE for that marker -- but
+    // execFileSync's return value is stdout ONLY; stderr is captured internally but is never included
+    // in the return on a successful (zero) exit, only attached to the thrown error's `.stderr` on
+    // failure. Since onedrive.mjs's failure path is caught internally and it still exits 0, the marker
+    // would land on stderr while the regex was scanning stdout -- the check could never fire. Fixed by
+    // switching to spawnSync, which returns `.stdout` and `.stderr` as separate captured buffers
+    // regardless of exit code, and scanning BOTH. This is exactly the gap the freshness check further
+    // down this file cannot cover on its own: a failed persist looks identical to "no rotation
+    // happened" there, so this is the only place that can catch it.
+    const spawned = spawnSync("node", [
       join(REPO_ROOT, "skills", "cto-onedrive", "cto-onedrive.mjs"),
       "deliver", localFile, `secrets-dr-${today()}.json.enc`,
     ], { encoding: "utf8", timeout: 90000 });
-    process.stdout.write(result);
-    if (/ROTATE PERSIST FAILED/.test(result)) {
+    const stdout = spawned.stdout || "";
+    const stderr = spawned.stderr || "";
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+    if (spawned.error) throw spawned.error; // spawn itself failed (e.g. ENOENT, or the timeout fired)
+    if (spawned.status !== 0) {
+      throw new Error(`OneDrive delivery (cto-onedrive.mjs deliver) exited ${spawned.status}`);
+    }
+    if (/ROTATE PERSIST FAILED/.test(stdout) || /ROTATE PERSIST FAILED/.test(stderr)) {
       throw new Error(
         "OneDrive delivery succeeded but the underlying engine reported \"ROTATE PERSIST FAILED\" while " +
         "rotating graph-onedrive-refresh-token -- Key Vault likely now holds a stale, already-consumed " +
@@ -321,17 +343,12 @@ function deliverToOneDrive(buf, label) {
       );
     }
     console.log(`[secrets-dr-export] ${label} delivered to Matt's OneDrive (CTO Incoming) — his OneDrive desktop client mirrors this to his local hard disk automatically.`);
-  } catch (e) {
-    // execFileSync with encoding:"utf8" attaches captured stdout/stderr to the thrown error on a
-    // non-zero exit -- surface it (stdio:"inherit" used to do this for free) before re-throwing.
-    if (e && e.stdout) process.stdout.write(e.stdout);
-    if (e && e.stderr) process.stderr.write(e.stderr);
-    throw e;
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
-  // Deliberately NOT caught above (beyond the stdout/stderr passthrough): OneDrive is a REQUIRED
-  // second off-Azure copy (see header), so a delivery failure must propagate and fail this run.
+  // Deliberately no catch above (only the temp-dir cleanup in `finally`): OneDrive is a REQUIRED
+  // second off-Azure copy (see header), so any delivery failure -- spawn error, non-zero exit, or the
+  // rotate-persist-failed marker -- must propagate and fail this run.
 }
 
 async function main() {

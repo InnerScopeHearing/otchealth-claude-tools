@@ -343,5 +343,17 @@ async function main() {
 // tests/azure-watchdog-state.test.mjs importing decideNextStep) — importing this file must never have
 // the side effect of kicking off a real check/status/selftest run.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => { console.error(`[azure-watchdog] FATAL: ${String(e && e.message || e)}`); process.exit(1); });
+  // Explicit process.exit() after main() settles (2026-07-28 review finding, same pattern already
+  // applied in page-on-failure.mjs): checkKeyVault() is raced against a local timeout so a hang
+  // resolves to `false` promptly (see that race's own comment above), but racing does NOT cancel the
+  // loser -- the underlying vaultToken()/kvSecret() fetch keeps running in the background with an open
+  // socket that can keep Node's event loop alive even after main() has already saved state and this
+  // function would otherwise be done. Without a forced exit, that exact outage case (Key Vault hanging,
+  // not just erroring) leaves the CLI process alive until the workflow's OS-level `timeout 420` kills
+  // it -- turning a check this script actually completed successfully into a SIGKILLed run, which the
+  // workflow's `if: failure()` step then reports as the watchdog's OWN failure and pages Matt for a
+  // false alarm, on top of (or instead of) whatever real Key Vault outage it may have also detected.
+  main()
+    .then(() => process.exit(0))
+    .catch((e) => { console.error(`[azure-watchdog] FATAL: ${String(e && e.message || e)}`); process.exit(1); });
 }
