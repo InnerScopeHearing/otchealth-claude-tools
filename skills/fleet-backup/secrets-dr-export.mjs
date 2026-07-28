@@ -42,7 +42,9 @@
  * archive silently replacing last night's complete one is worse than no archive), or if the OneDrive
  * delivery leg fails (it is a REQUIRED second off-Azure copy, not a best-effort extra — a swallowed
  * failure there would leave only the S3 leg populated while the job still reports green). `selftest`
- * remains diagnostic-only (never exits non-zero) — it is a human/operator reachability check.
+ * remains diagnostic-only IN THE SENSE THAT IT NEVER EXITS NON-ZERO — it is a human/operator
+ * reachability check, not a validation gate. It is NOT a no-write guarantee: see ONEDRIVE TOKEN
+ * FRESHNESS below, which also applies to selftest's OneDrive probe, not only the real `run` delivery.
  *
  * DRY-RUN NEVER TOUCHES THE PASSPHRASE (2026-07-28 review finding): the earlier version called the
  * real passphrase resolver even under `--dry-run`, which could mint AND CACHE a brand-new production
@@ -60,11 +62,22 @@
  * second time to "fix" that copy too — a second delivery call rotates the token AGAIN, which never
  * converges. The OneDrive copy may therefore lag by one rotation on this single field; see the
  * in-code comment at the fix site for why that is an accepted, narrow, low-severity limitation.
+ * THIS ALSO APPLIES TO `selftest`'s OneDrive probe (a later review finding, same day): `stat` needs a
+ * live access token exactly like `deliver` does, calling the same `accessToken()` that rotates and
+ * persists the refresh token — so running `selftest` mutates Key Vault too, despite the file's usage
+ * comment previously implying it does not. Not fixed by adding a no-persist mode to the shared
+ * cfo-onedrive engine (that engine has other callers; changing its rotation behavior is a broader,
+ * separate change) — fixed here by correcting the claim instead. Accepted: an OAuth refresh-token
+ * rotation on a diagnostic reachability check is a normal, expected side effect of using the token,
+ * not a leak or a meaningful risk, and matches the same accepted-limitation posture already used above
+ * for the real delivery path.
  *
  * OUTPUT: one file per run, `secrets-dr-<date>.json.enc`. Decrypt with secrets-dr-restore.mjs.
  *
  * USAGE:
- *   node secrets-dr-export.mjs selftest         # no writes: exercises Key Vault + S3 + OneDrive reachability for real
+ *   node secrets-dr-export.mjs selftest         # exercises Key Vault + S3 + OneDrive reachability for real (NOTE: the
+ *                                                # OneDrive probe rotates graph-onedrive-refresh-token as a side effect,
+ *                                                # see ONEDRIVE TOKEN FRESHNESS above -- not fully no-write)
  *   node secrets-dr-export.mjs run              # real export: encrypt + upload to S3 + OneDrive
  *   node secrets-dr-export.mjs run --dry-run    # report sizes only; never touches the passphrase or uploads anything
  *
@@ -93,12 +106,32 @@ const today = () => new Date().toISOString().slice(0, 10);
 // cron/systemd/other non-GitHub-Actions non-interactive runners the env-var check alone would miss).
 const isNonInteractive = Boolean(process.env.CI || process.env.GITHUB_ACTIONS) || !process.stdout.isTTY;
 
+// Bounded Key Vault REST calls (2026-07-28 review finding): none of this file's own fetch() calls to
+// the Key Vault REST API had a timeout, so a single stalled request -- during the LIST, any one of the
+// 300+ sequential per-secret reads, or the final passphrase read -- could consume the whole 15-minute
+// workflow budget before the fail-loud aggregation below or the failure pager ever run. 20s is generous
+// for a healthy Key Vault (real calls are typically well under 1s) and still leaves ample budget for
+// hundreds of sequential reads plus the encrypt/upload/deliver steps afterward.
+const KV_FETCH_TIMEOUT_MS = 20000;
+async function timedFetch(url, init) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), KV_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e) {
+    if (e?.name === "AbortError") throw new Error(`Key Vault request timed out after ${KV_FETCH_TIMEOUT_MS}ms: ${url}`);
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ---------- list + fetch every enabled secret ----------
 async function listSecretNames(token) {
   const names = [];
   let url = `https://${VAULT}.vault.azure.net/secrets?api-version=7.4&maxresults=25`;
   while (url) {
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const r = await timedFetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!r.ok) throw new Error(`list secrets failed: HTTP ${r.status} ${(await r.text()).slice(0, 300)}`);
     const body = await r.json();
     for (const item of body.value || []) {
@@ -112,7 +145,7 @@ async function listSecretNames(token) {
 }
 
 async function fetchOneSecret(token, name) {
-  const r = await fetch(`https://${VAULT}.vault.azure.net/secrets/${name}?api-version=7.4`, {
+  const r = await timedFetch(`https://${VAULT}.vault.azure.net/secrets/${name}?api-version=7.4`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!r.ok) throw new Error(`http-${r.status}`);
@@ -154,7 +187,7 @@ async function fetchAllSecrets() {
 async function passphraseExists() {
   const token = await vaultToken();
   if (!token) throw new Error("could not mint a Key Vault token to check for an existing DR passphrase");
-  const r = await fetch(`https://${VAULT}.vault.azure.net/secrets/secrets-dr-passphrase?api-version=7.4`, {
+  const r = await timedFetch(`https://${VAULT}.vault.azure.net/secrets/secrets-dr-passphrase?api-version=7.4`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (r.status === 404) return { exists: false };
@@ -232,10 +265,15 @@ function deliverToOneDrive(buf, label) {
   const localFile = join(tmp, `secrets-dr-${today()}.json.enc`);
   writeFileSync(localFile, buf);
   try {
+    // timeout (2026-07-28 review finding): this REQUIRED delivery leg had no bound while the OneDrive
+    // engine underneath makes several of its own unbounded network calls (token refresh + Graph
+    // upload). An unbounded hang here could burn the whole 15-minute job budget before the fail-loud
+    // guard and failure pager ever ran. 90s is generous for a token refresh plus an upload of a file
+    // this size (an encrypted JSON export of ~300 secrets, not a large media file).
     execFileSync("node", [
       join(REPO_ROOT, "skills", "cto-onedrive", "cto-onedrive.mjs"),
       "deliver", localFile, `secrets-dr-${today()}.json.enc`,
-    ], { stdio: "inherit" });
+    ], { stdio: "inherit", timeout: 90000 });
     console.log(`[secrets-dr-export] ${label} delivered to Matt's OneDrive (CTO Incoming) — his OneDrive desktop client mirrors this to his local hard disk automatically.`);
   } finally {
     rmSync(tmp, { recursive: true, force: true });

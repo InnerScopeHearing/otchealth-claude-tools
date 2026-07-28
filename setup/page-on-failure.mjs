@@ -66,13 +66,6 @@ const GW = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
 // budget and get the runner killed BEFORE the independent PostHog fallback below ever runs, and before
 // the caller gets to save episode state. 8s per call is generous for a healthy gateway and still leaves
 // ample time in a 10-minute job for the PostHog fallback + episode-state save afterward.
-// SCOPE NOTE: this bounds this file's OWN fetch() calls only. kvSecret() (from
-// skills/kb-memory/azure-secret.mjs, used by ctoBearer() and the PostHog fallback's credential
-// resolution) is a shared module used by many callers across the fleet; adding a timeout inside it is a
-// separate, broader change out of scope here. In practice kvSecret() already has its own internal
-// three-path fallback (managed identity -> SP client_credentials -> az-CLI/OIDC) that fails reasonably
-// fast on a genuine outage; this fix targets the specific unbounded-hang risk this review flagged
-// (the outbound HTTP calls this script makes directly).
 const FETCH_TIMEOUT_MS = 8000;
 async function timedFetch(url, init) {
   const ctrl = new AbortController();
@@ -84,6 +77,30 @@ async function timedFetch(url, init) {
     throw e;
   } finally {
     clearTimeout(t);
+  }
+}
+
+// WHOLE-ATTEMPT timeout (2026-07-28 review finding, corrected same day): timedFetch above only bounds
+// this file's OWN fetch() calls. ctoBearer() also calls kvSecret() (skills/kb-memory/azure-secret.mjs)
+// TWICE before it ever reaches a fetch() this file controls, and kvSecret() makes its own unbounded
+// network calls internally. A first attempt at fixing this only bounded the local fetch() calls and
+// left that gap open — an earlier review round correctly called that out as still real. Rather than add
+// a timeout inside the shared kvSecret() module (used by many other callers fleet-wide; changing its
+// behavior is a separate, broader change), this wraps the ENTIRE email-page attempt — ctoBearer's two
+// kvSecret() calls plus its token-mint fetch plus sendPageEmail's /mcp fetch — in one outer race against
+// a wall-clock timeout. Whatever is slow inside, the whole attempt gives up by MAIL_ATTEMPT_TIMEOUT_MS
+// and falls through to the independent PostHog path, with time left in the watchdog's 10-minute budget
+// to still save episode state afterward.
+const MAIL_ATTEMPT_TIMEOUT_MS = 20000;
+async function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 const RECIPIENT = process.env.PAGE_RECIPIENT || "matthew@otchealth.app";
@@ -239,7 +256,13 @@ async function main() {
 
   let emailed = false, emailErr = null, posted = false, postErr = null;
   try {
-    emailed = await sendPageEmail(subject, body);
+    // withTimeout() races, it does not cancel -- if sendPageEmail() is still hung when the race times
+    // out, a permanent no-op .catch() on the SAME promise reference (attaching a second consumer does
+    // not affect the race) keeps Node from ever surfacing it as an unhandled rejection once it finally
+    // settles in the background, after main() has already moved on to the PostHog fallback.
+    const emailPromise = sendPageEmail(subject, body);
+    emailPromise.catch(() => {});
+    emailed = await withTimeout(emailPromise, MAIL_ATTEMPT_TIMEOUT_MS, "email page attempt");
   } catch (e) {
     emailErr = e.message;
     console.error(`[page-on-failure] email page failed: ${emailErr}`);
