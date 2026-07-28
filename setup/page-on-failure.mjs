@@ -80,17 +80,21 @@ async function timedFetch(url, init) {
   }
 }
 
-// WHOLE-ATTEMPT timeout (2026-07-28 review finding, corrected same day): timedFetch above only bounds
-// this file's OWN fetch() calls. ctoBearer() also calls kvSecret() (skills/kb-memory/azure-secret.mjs)
-// TWICE before it ever reaches a fetch() this file controls, and kvSecret() makes its own unbounded
-// network calls internally. A first attempt at fixing this only bounded the local fetch() calls and
-// left that gap open — an earlier review round correctly called that out as still real. Rather than add
-// a timeout inside the shared kvSecret() module (used by many other callers fleet-wide; changing its
-// behavior is a separate, broader change), this wraps the ENTIRE email-page attempt — ctoBearer's two
-// kvSecret() calls plus its token-mint fetch plus sendPageEmail's /mcp fetch — in one outer race against
-// a wall-clock timeout. Whatever is slow inside, the whole attempt gives up by MAIL_ATTEMPT_TIMEOUT_MS
-// and falls through to the independent PostHog path, with time left in the watchdog's 10-minute budget
-// to still save episode state afterward.
+// WHOLE-ATTEMPT timeout (2026-07-28 review finding, corrected same day, then corrected again): timedFetch
+// above only bounds this file's OWN fetch() calls. ctoBearer() also calls kvSecret()
+// (skills/kb-memory/azure-secret.mjs) TWICE before it ever reaches a fetch() this file controls, and
+// kvSecret() makes its own unbounded network calls internally. This wraps the ENTIRE email-page attempt
+// in an outer Promise.race against MAIL_ATTEMPT_TIMEOUT_MS so main() stops WAITING on it and falls
+// through to the independent PostHog path promptly in the common case. IMPORTANT LIMITATION (a further
+// review round correctly caught this): Promise.race does not CANCEL the losing promise -- JS has no true
+// cancellation without an AbortSignal threaded through every dependency, which kvSecret() does not
+// support. If sendPageEmail() is genuinely hung (not just slow), its open network handle keeps running in
+// the background after main() moves on, and can keep THIS PROCESS's event loop alive past
+// MAIL_ATTEMPT_TIMEOUT_MS. The actual worst-case guarantee against that is external to this file: the
+// `timeout 60`/`timeout 45` OS-level wrapper around every `node setup/page-on-failure.mjs` invocation in
+// the calling workflows, which SIGKILLs the whole process tree unconditionally. Treat this in-process
+// race as a fast/common-path optimization (falls through to PostHog quickly when the hang is short), not
+// the correctness backstop -- the workflow-level `timeout` is that backstop.
 const MAIL_ATTEMPT_TIMEOUT_MS = 20000;
 async function withTimeout(promise, ms, label) {
   let timer;

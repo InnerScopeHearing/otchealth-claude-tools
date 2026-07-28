@@ -125,7 +125,13 @@ jobs:
               exit 1
             fi
           fi
-          node azure-watchdog.mjs "$CMD" 2>&1 | tee "${GITHUB_WORKSPACE}/azure-watchdog.log"
+          # OS-level backstop (2026-07-28 review, final round): checkKeyVault()'s vaultToken()/kvSecret()
+          # calls have their own unbounded fetches that no JS-level timeout inside azure-watchdog.mjs
+          # itself can fully close (review kept finding fresh call sites). `timeout` SIGKILLs the whole
+          # process tree unconditionally after 420s (7min) regardless of what's stuck inside any
+          # dependency -- this, not any JS-level race, is what actually guarantees state gets saved and
+          # the "Page on the watchdog's OWN failure" step below gets to run within the 10-minute job cap.
+          timeout 420 node azure-watchdog.mjs "$CMD" 2>&1 | tee "${GITHUB_WORKSPACE}/azure-watchdog.log"
 
       - name: Upload log
         if: always()
@@ -143,9 +149,11 @@ jobs:
           # without re-declaring this here, this specific pager call loses its off-Azure fallback
           # exactly when a real Key Vault outage is also why the watchdog step above failed.
           POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
-        run: node setup/page-on-failure.mjs --workflow "Azure Watchdog (self-failure, not necessarily an Azure outage)" --log "${GITHUB_WORKSPACE}/azure-watchdog.log"
+        # timeout (2026-07-28 review, final round): see the OS-level backstop comment on the "Run
+        # azure-watchdog" step above -- same reasoning applies to this pager call.
+        run: timeout 60 node setup/page-on-failure.mjs --workflow "Azure Watchdog (self-failure, not necessarily an Azure outage)" --log "${GITHUB_WORKSPACE}/azure-watchdog.log"
 
       - name: "Heartbeat: mark this workflow's schedule as alive"
         if: always()
         continue-on-error: true
-        run: node setup/heartbeat.mjs beat azure-watchdog ok >/dev/null 2>&1 || true
+        run: timeout 20 node setup/heartbeat.mjs beat azure-watchdog ok >/dev/null 2>&1 || true

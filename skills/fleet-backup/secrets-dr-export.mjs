@@ -108,10 +108,17 @@ const isNonInteractive = Boolean(process.env.CI || process.env.GITHUB_ACTIONS) |
 
 // Bounded Key Vault REST calls (2026-07-28 review finding): none of this file's own fetch() calls to
 // the Key Vault REST API had a timeout, so a single stalled request -- during the LIST, any one of the
-// 300+ sequential per-secret reads, or the final passphrase read -- could consume the whole 15-minute
-// workflow budget before the fail-loud aggregation below or the failure pager ever run. 20s is generous
-// for a healthy Key Vault (real calls are typically well under 1s) and still leaves ample budget for
-// hundreds of sequential reads plus the encrypt/upload/deliver steps afterward.
+// 300+ sequential per-secret reads, or the final passphrase read -- could hang. 20s is generous for a
+// healthy Key Vault (real calls are typically well under 1s) and keeps the NORMAL-case run fast and
+// responsive. NOTE (correctness, not just speed -- a later review round correctly kept finding gaps
+// here): this bound covers only fetch() calls THIS FILE makes directly. It does NOT cover the bootstrap
+// kvSecret() calls in main() (aws-dr-* lookups) or vaultToken()'s own internal fetch, both in the shared
+// skills/kb-memory/azure-secret.mjs, which have no timeout of their own -- and even fully bounding every
+// individual read here does not bound the CUMULATIVE time across 300+ sequential reads if Key Vault
+// degrades mid-run rather than hanging on one call. The actual worst-case guarantee is the `timeout 540`
+// OS-level wrapper around this whole script's invocation in nightly-secrets-dr-export.yml, which SIGKILLs
+// the entire process tree regardless of what's stuck inside any dependency. Treat this in-process timeout
+// as a responsiveness optimization, not the correctness backstop.
 const KV_FETCH_TIMEOUT_MS = 20000;
 async function timedFetch(url, init) {
   const ctrl = new AbortController();
