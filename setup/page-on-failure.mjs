@@ -45,6 +45,10 @@
 //
 // Usage:
 //   node setup/page-on-failure.mjs --workflow "<Workflow Name>" [--log <path>]... [--tail-lines 40] [--test]
+//   node setup/page-on-failure.mjs --workflow "<name>" --severity info --message "<notable, not an alarm>"
+//     (--severity info: never "[RED]"/"failed"/canary_red — for a notable-but-not-an-alarm notice, e.g.
+//     azure-watchdog.mjs's "reachability RESTORED" recovery message. Default severity is "red", the
+//     original behavior, unchanged for every caller that does not pass --severity.)
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { kvSecret } from "../skills/kb-memory/azure-secret.mjs";
@@ -59,6 +63,13 @@ const WORKFLOW = opt("--workflow", process.env.GITHUB_WORKFLOW || "unknown workf
 const TAIL_LINES = parseInt(opt("--tail-lines", "40"), 10);
 const LOG_PATHS = optAll("--log");
 const TEST_MODE = argv.includes("--test") || process.env.PAGE_TEST_MODE === "1";
+// SEVERITY (2026-07-28, added for azure-watchdog.mjs's recovery notice): default "red" is BYTE-FOR-BYTE
+// the original behavior for every existing caller (every nightly-*.yml workflow) -- none of them pass
+// --severity, so pageSubject/posthogEventName/buildPageBody's severity branch is never taken for them.
+// "info" exists for a message that is notable but NOT an alarm (e.g. "reachability restored"), so it
+// does not get delivered/indexed with red-alert semantics ([RED] subject, "failed" body, canary_red event).
+const SEVERITY = opt("--severity", "red");
+const MESSAGE = opt("--message", null);
 
 /** The GitHub Actions run URL from the runner's own standard env vars (no new inputs needed). Pure
  *  given process.env. */
@@ -85,21 +96,29 @@ export function tailFile(path, n) {
 
 /** Email subject line. Pure. In self-test mode the subject is unmistakably a test (never "[RED]", never
  *  "failed") so it can never be confused with a real page in an inbox or a phone notification preview,
- *  which is often just the subject line. */
-export function pageSubject(workflow, testMode) {
-  return testMode ? `[SELF-TEST] ${workflow} pager self-test (not a real incident)` : `[RED] ${workflow} failed`;
+ *  which is often just the subject line. severity="info" (default "red", unchanged for every existing
+ *  caller) is the same idea applied to a notable-but-not-an-alarm message: never "[RED]", never "failed". */
+export function pageSubject(workflow, testMode, severity = "red") {
+  if (testMode) return `[SELF-TEST] ${workflow} pager self-test (not a real incident)`;
+  return severity === "info" ? `[INFO] ${workflow}` : `[RED] ${workflow} failed`;
 }
 
 /** Which PostHog event the fallback path emits. Pure. Kept a distinct event name in self-test mode (not
  *  'canary_red' with a property flag) so a dashboard/alert built on 'canary_red' counts can never be
  *  polluted by self-test runs, and so a query for 'pager_selftest' cleanly answers "when did we last
- *  prove the pager works" on its own. */
-export function posthogEventName(testMode) { return testMode ? "pager_selftest" : "canary_red"; }
+ *  prove the pager works" on its own. Same reasoning for severity="info" -> 'canary_info': a dashboard
+ *  built on 'canary_red' counts must not be polluted by informational (e.g. recovery) notices either. */
+export function posthogEventName(testMode, severity = "red") {
+  if (testMode) return "pager_selftest";
+  return severity === "info" ? "canary_info" : "canary_red";
+}
 
 /** Plain-text page body. Pure. No em/en dashes (fleet copy convention). In self-test mode a loud banner
  *  is prepended so the body itself (not just the subject) states this is not a real incident, in case a
- *  mail client shows only a body preview or the subject gets stripped by a forwarding rule. */
-export function buildPageBody(workflow, url, logSections, testMode) {
+ *  mail client shows only a body preview or the subject gets stripped by a forwarding rule. severity="info"
+ *  uses the caller-supplied `message` verbatim instead of the hardcoded "X failed on the nightly
+ *  schedule" line, so a recovery/informational notice reads as what it actually is, not as a fresh alarm. */
+export function buildPageBody(workflow, url, logSections, testMode, severity = "red", message = null) {
   const banner = testMode
     ? [
         "THIS IS A PAGER SELF-TEST. No real incident occurred.",
@@ -108,9 +127,13 @@ export function buildPageBody(workflow, url, logSections, testMode) {
         "",
       ]
     : [];
+  let headline;
+  if (testMode) headline = `${workflow} pager self-test (deliberate synthetic failure, see .github/workflows/pager-selftest.yml).`;
+  else if (severity === "info") headline = message || `${workflow}: informational notice (no message supplied).`;
+  else headline = `${workflow} failed on the nightly schedule.`;
   const lines = [
     ...banner,
-    testMode ? `${workflow} pager self-test (deliberate synthetic failure, see .github/workflows/pager-selftest.yml).` : `${workflow} failed on the nightly schedule.`,
+    headline,
     "",
     `Run: ${url}`,
     "",
@@ -182,9 +205,9 @@ async function emitPosthogFallback(props, eventName) {
 async function main() {
   const url = runUrl();
   const logSections = LOG_PATHS.length ? LOG_PATHS.map((p) => tailFile(p, TAIL_LINES)) : ["(no --log path supplied)"];
-  const subject = pageSubject(WORKFLOW, TEST_MODE);
-  const body = buildPageBody(WORKFLOW, url, logSections, TEST_MODE);
-  const eventName = posthogEventName(TEST_MODE);
+  const subject = pageSubject(WORKFLOW, TEST_MODE, SEVERITY);
+  const body = buildPageBody(WORKFLOW, url, logSections, TEST_MODE, SEVERITY, MESSAGE);
+  const eventName = posthogEventName(TEST_MODE, SEVERITY);
 
   let emailed = false, emailErr = null, posted = false, postErr = null;
   try {

@@ -25,6 +25,32 @@ test("posthogEventName: real mode emits canary_red, self-test mode emits a disti
   assert.notEqual(posthogEventName(true), posthogEventName(false));
 });
 
+// 2026-07-28: severity="info" exists so a notable-but-not-an-alarm notice (e.g. azure-watchdog.mjs's
+// "reachability RESTORED") is never delivered/indexed with red-alert semantics. Default severity
+// ("red", i.e. omitted) must stay byte-for-byte the original behavior for every existing caller.
+test("severity=info: subject/event never say RED/failed/canary_red, and default (omitted) severity is unchanged", () => {
+  assert.equal(pageSubject("Azure Watchdog", false, "info"), "[INFO] Azure Watchdog");
+  assert.doesNotMatch(pageSubject("Azure Watchdog", false, "info"), /\[RED\]/);
+  assert.doesNotMatch(pageSubject("Azure Watchdog", false, "info"), /\bfailed\b/);
+  assert.equal(posthogEventName(false, "info"), "canary_info");
+  assert.notEqual(posthogEventName(false, "info"), "canary_red");
+  // omitted severity (no third arg) must match explicit "red" exactly -- this is the backward-
+  // compatibility guarantee every other nightly-*.yml caller relies on.
+  assert.equal(pageSubject("X", false), pageSubject("X", false, "red"));
+  assert.equal(posthogEventName(false), posthogEventName(false, "red"));
+});
+
+test("severity=info: buildPageBody uses the supplied message verbatim, not the hardcoded 'failed' line", () => {
+  const body = buildPageBody("Azure Watchdog", "https://example/run/1", ["(no --log path supplied)"], false, "info", "reachability RESTORED at T");
+  assert.match(body, /reachability RESTORED at T/);
+  assert.doesNotMatch(body, /failed on the nightly schedule/);
+});
+
+test("severity=info with no message supplied falls back to a clear placeholder, never throws", () => {
+  const body = buildPageBody("Azure Watchdog", "https://example/run/1", ["(no --log path supplied)"], false, "info", null);
+  assert.match(body, /informational notice/);
+});
+
 test("buildPageBody: real mode has no self-test banner", () => {
   const body = buildPageBody("Nightly Azure Canary", "https://example/run/1", ["(no --log path supplied)"], false);
   assert.doesNotMatch(body, /SELF-TEST/);

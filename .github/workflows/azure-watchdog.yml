@@ -90,8 +90,14 @@ jobs:
           [ -z "${WATCHDOG_AWS_SECRET_ACCESS_KEY:-}" ] && MISSING="${MISSING} WATCHDOG_AWS_SECRET_ACCESS_KEY"
           [ -z "${WATCHDOG_AWS_S3_BUCKET:-}" ] && MISSING="${MISSING} WATCHDOG_AWS_S3_BUCKET"
           [ -z "${WATCHDOG_AWS_REGION:-}" ] && MISSING="${MISSING} WATCHDOG_AWS_REGION"
+          # POSTHOG_FLEET_INGEST_KEY is validated here too (2026-07-28 review finding): without it, a
+          # healthy check goes green just fine, but the workflow is NOT actually armed -- during a real
+          # Key Vault outage its paging fallback would ALSO depend on Key Vault (see setup/page-on-failure.mjs),
+          # so both channels would fail together and no page would ever be recorded. A workflow that
+          # "looks armed" but silently isn't is worse than one that visibly refuses to run.
+          [ -z "${POSTHOG_FLEET_INGEST_KEY:-}" ] && MISSING="${MISSING} POSTHOG_FLEET_INGEST_KEY"
           if [ -n "$MISSING" ]; then
-            echo "::error::Missing repo secret(s):${MISSING} -- refusing to run the scheduled watchdog against the Key Vault fallback (that would defeat the whole off-Azure design silently). Provision these (same values as aws-dr-* in Key Vault) to arm the watchdog. This will repeat every 15 minutes and page until provisioned -- that is intentional, not a bug."
+            echo "::error::Missing repo secret(s):${MISSING} -- refusing to run the scheduled watchdog against the Key Vault fallback (that would defeat the whole off-Azure design silently, including the paging channel). Provision these (WATCHDOG_AWS_* mirror aws-dr-*, POSTHOG_FLEET_INGEST_KEY mirrors posthog-fleet-ingest-key, both in Key Vault) to arm the watchdog. This will repeat every 15 minutes and page until provisioned -- that is intentional, not a bug."
             exit 1
           fi
           node azure-watchdog.mjs "$CMD" 2>&1 | tee "${GITHUB_WORKSPACE}/azure-watchdog.log"

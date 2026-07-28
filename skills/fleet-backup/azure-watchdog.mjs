@@ -94,13 +94,23 @@ async function checkKeyVault() {
   } catch { return false; }
 }
 
+// Validates the SAME documented /health contract setup/gateway-canary.mjs already checks (2026-07-28
+// review finding): body.status === "ok" AND body.tool_count is a number >= 800 (deploy.yml's own
+// MIN_TOOLS floor), not just "the HTTP status was 2xx." A bare r.ok check would count a maintenance
+// page, a misconfigured reverse proxy, or a degraded-but-200-responding gateway as fully healthy,
+// which could reset the consecutive-failure counter and suppress a real declaration.
 async function checkGateway() {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 8000);
     const r = await fetch(`${GATEWAY_BASE_URL}/health`, { signal: ctrl.signal });
     clearTimeout(t);
-    return r.ok;
+    if (!r.ok) return false;
+    const body = await r.json().catch(() => null);
+    if (!body) return false;
+    if (body.status !== "ok") return false;
+    if (typeof body.tool_count !== "number" || body.tool_count < 800) return false;
+    return true;
   } catch { return false; }
 }
 
@@ -166,8 +176,14 @@ export function decideNextStep(state, healthy, now, threshold) {
 // S3 even though Matt was never actually notified — the NEXT run would then see an already-open (or
 // already-closed) episode and never retry the page, permanently suppressing the one notification the
 // whole system exists to deliver. Callers must NOT persist state past a failed page() call.
-function page(workflowLabel) {
-  execFileSync("node", [join(REPO_ROOT, "setup", "page-on-failure.mjs"), "--workflow", workflowLabel], {
+// severity="info" (2026-07-28 review finding): page-on-failure.mjs hardcodes "[RED] ... failed" /
+// canary_red for its default severity, which made the "reachability RESTORED" recovery notice get
+// delivered and indexed as a fresh red alarm — exactly backwards for good news. The declare (real
+// outage) call keeps the default "red" severity; only the recover call passes "info".
+function page(workflowLabel, severity = "red") {
+  const args = [join(REPO_ROOT, "setup", "page-on-failure.mjs"), "--workflow", workflowLabel];
+  if (severity === "info") args.push("--severity", "info", "--message", workflowLabel);
+  execFileSync("node", args, {
     stdio: "inherit",
     env: process.env,
   });
@@ -249,7 +265,7 @@ async function main() {
     // function throws too, main()'s top-level catch aborts BEFORE saveState() runs, and the episode
     // stays open in the last-saved state — so the NEXT run still sees it open and retries the
     // recovery notice, instead of silently marking it recovered with nobody ever told.
-    page(`AZURE WATCHDOG: reachability RESTORED (was declared down at ${decision.episode.declaredAt})`);
+    page(`AZURE WATCHDOG: reachability RESTORED (was declared down at ${decision.episode.declaredAt})`, "info");
     decision.episode.recoveredAt = now;
     console.log(`[azure-watchdog] RECOVERED: Azure reachability restored (episode declared ${decision.episode.declaredAt}).`);
   } else if (decision.action === "increment") {

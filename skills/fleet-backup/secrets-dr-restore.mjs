@@ -65,18 +65,19 @@ function writeOwnerOnly(outPath, contents) {
   }
 }
 
-// Dotenv-safe quoting: wrap in double quotes, escape backslashes/double-quotes, and escape real
-// newlines as \n — lossless for multi-line values like PEM keys under standard dotenv-style parsers
-// that support double-quoted values with backslash-escape expansion (dotenv, python-dotenv). The
-// earlier unquoted version broke on any value containing `#` (parsed as a comment) or a literal
-// newline (many loaders do not expand a bare `\n` outside quotes).
+// base64, not backslash-escaping (2026-07-28 review finding, corrected same day): the earlier
+// quote-and-escape approach is NOT actually round-trip-safe for every value this export can contain.
+// A value that already holds a literal two-character `\n` sequence (common inside a JSON-formatted
+// credential, e.g. a service-account key where a multi-line field is JSON-escaped) gets re-escaped to
+// `\\n` by this function — but whether a downstream dotenv-style parser resolves that back to a
+// literal backslash+n or corrupts it into a real newline (breaking the JSON) depends on that parser's
+// exact escape-resolution ORDER, which varies across implementations and is not something this script
+// controls or can verify for every consumer. base64 has no special characters at all (no quoting, no
+// escaping, no parser-order ambiguity) and is trivially, unambiguously reversible — `base64 -d`, or any
+// language's base64 decoder. The cost is one manual decode step per value instead of a directly
+// readable file; correctness for JSON/PEM/binary-ish credentials is worth that.
 function toEnvLine(envName, value) {
-  const escaped = String(value)
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r");
-  return `${envName}="${escaped}"`;
+  return `${envName}=${Buffer.from(String(value), "utf8").toString("base64")}`;
 }
 
 async function resolvePassphrase(rest) {
@@ -118,7 +119,7 @@ async function main() {
     if (!outPath) { console.error("--to-env-file needs a path"); process.exit(2); }
     const lines = names.map((n) => toEnvLine(n.toUpperCase().replace(/-/g, "_"), data.secrets[n]));
     writeOwnerOnly(outPath, lines.join("\n") + "\n");
-    console.error(`wrote ${names.length} KEY="value" lines to ${outPath} (mode 600). Delete this file once no longer needed.`);
+    console.error(`wrote ${names.length} KEY=<base64> lines to ${outPath} (mode 600). Values are base64-encoded for a guaranteed round-trip (JSON/PEM-safe) -- decode with e.g. echo "$VALUE" | base64 -d, or your language's base64 decoder. Delete this file once no longer needed.`);
     return;
   }
 
