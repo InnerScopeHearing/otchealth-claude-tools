@@ -45,8 +45,6 @@
 import { execFileSync } from "node:child_process";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { vaultToken, kvSecret } from "../kb-memory/azure-secret.mjs";
 import { s3Put, s3Get, s3Head, sha256Hex } from "./s3-client.mjs";
 
