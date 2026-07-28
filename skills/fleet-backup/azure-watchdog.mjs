@@ -100,11 +100,15 @@ async function checkKeyVault() {
 // page, a misconfigured reverse proxy, or a degraded-but-200-responding gateway as fully healthy,
 // which could reset the consecutive-failure counter and suppress a real declaration.
 async function checkGateway() {
+  // 2026-07-28 review finding: the abort timer was cleared as soon as fetch() returned (headers
+  // received), BEFORE r.json() was awaited -- so a response that sent headers promptly but then
+  // stalled mid-body left the json() read completely unprotected, able to hang indefinitely. Keep the
+  // timer alive through the whole fetch+parse and only clear it in `finally`, so the same 8s bound
+  // covers both.
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 8000);
     const r = await fetch(`${GATEWAY_BASE_URL}/health`, { signal: ctrl.signal });
-    clearTimeout(t);
     if (!r.ok) return false;
     const body = await r.json().catch(() => null);
     if (!body) return false;
@@ -112,6 +116,7 @@ async function checkGateway() {
     if (typeof body.tool_count !== "number" || body.tool_count < 800) return false;
     return true;
   } catch { return false; }
+  finally { clearTimeout(t); }
 }
 
 // 2026-07-28 review finding: a real S3 read error (network blip, transient auth failure, a corrupt
@@ -183,9 +188,18 @@ export function decideNextStep(state, healthy, now, threshold) {
 function page(workflowLabel, severity = "red") {
   const args = [join(REPO_ROOT, "setup", "page-on-failure.mjs"), "--workflow", workflowLabel];
   if (severity === "info") args.push("--severity", "info", "--message", workflowLabel);
+  // timeout (2026-07-28 review finding): this synchronous child-process call had no bound, so a hung
+  // socket inside page-on-failure.mjs (which itself relies on an EXTERNAL OS timeout, not true
+  // in-process cancellation -- see that file's own header) could block THIS process's event loop until
+  // the outer workflow-level `timeout 420` on the whole azure-watchdog.mjs invocation kills everything,
+  // including saveState() below, which never gets to run -- the exact "page succeeded but state was
+  // never saved, so the next run re-declares and re-pages" bug the surrounding comments already guard
+  // against for a THROWING page(), just via a different route (a hang instead of a rejection). 60s
+  // matches the same bound used for the standalone "Page on the watchdog's OWN failure" workflow step.
   execFileSync("node", args, {
     stdio: "inherit",
     env: process.env,
+    timeout: 60000,
   });
 }
 

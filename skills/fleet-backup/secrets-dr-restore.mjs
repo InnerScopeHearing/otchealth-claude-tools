@@ -105,7 +105,12 @@ async function main() {
   try {
     plaintext = decrypt(buf, passphrase);
   } catch (e) {
-    console.error("decrypt failed — wrong passphrase, or the file is corrupt/truncated.");
+    // Include e.message, not a generic string (2026-07-28 review finding): crypto-envelope.mjs's
+    // decrypt() deliberately throws DISTINCT errors for bad magic bytes, an unsupported/future version,
+    // and wrong-passphrase/corruption (see its own header) -- collapsing all three to one generic
+    // message defeats that design. In particular, an OLDER restore tool opening a FUTURE-version
+    // archive needs to be told to update its decoder, not misled into thinking the passphrase is wrong.
+    console.error(`decrypt failed: ${e && e.message ? e.message : e}`);
     process.exit(1);
   }
   const data = JSON.parse(plaintext.toString("utf8"));
@@ -124,6 +129,15 @@ async function main() {
   }
 
   if (rest.includes("--print-values")) {
+    // TTY guard (2026-07-28 review finding): --print-values is documented as interactive-only ("only
+    // ever run that locally/interactively" -- see this file's header), but nothing enforced that. Piped
+    // or redirected stdout (a CI log, `> out.txt`, `| less`) would silently write the ENTIRE decrypted
+    // credential inventory somewhere durable/broadly-readable. Refuse outside a real interactive
+    // terminal and point at the owner-only --to-env-file path instead.
+    if (!process.stdout.isTTY) {
+      console.error("--print-values refuses to run with stdout redirected or piped (not a TTY) -- this would write every decrypted secret value somewhere durable/broadly-readable instead of just your terminal. Use --to-env-file <path> instead (writes owner-only, mode 600, base64-encoded).");
+      process.exit(1);
+    }
     for (const n of names) console.log(`${n} = ${data.secrets[n]}`);
   } else {
     console.log(names.join("\n"));
