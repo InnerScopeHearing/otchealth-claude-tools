@@ -3,33 +3,96 @@
  * secrets-dr-restore.mjs — decrypt a secrets-dr-export.mjs archive. This is the "morning Azure is
  * dead" tool: pull the .enc file from S3 (or from Matt's OneDrive/local disk copy) and this script
  * turns it back into usable credentials, either as a printed report (names + which ones exist) or,
- * with --print-values, the actual values (only ever run that locally/interactively, never in CI logs).
+ * with --print-values, the actual values (only ever run that locally/interactively).
+ *
+ * PASSPHRASE INPUT (fixed 2026-07-28 review finding): this decrypts the entire company credential
+ * inventory, so the passphrase is NEVER accepted as a positional CLI argument — that would land it in
+ * shell history and in `ps`/process-list output for any other user on the box. Provide it one of three
+ * ways, checked in this order:
+ *   1. --passphrase-file <path>   read the passphrase from a file (e.g. one you just pasted it into)
+ *   2. SECRETS_DR_PASSPHRASE env var
+ *   3. an interactive, non-echoing terminal prompt (if none of the above is set and stdin is a TTY)
  *
  * USAGE:
- *   node secrets-dr-restore.mjs <file.enc> <passphrase>                 # names + counts only (safe to log)
- *   node secrets-dr-restore.mjs <file.enc> <passphrase> --print-values  # full plaintext (careful)
- *   node secrets-dr-restore.mjs <file.enc> <passphrase> --to-env-file out.env  # writes KEY=value lines
+ *   node secrets-dr-restore.mjs <file.enc>                                   # prompts for passphrase
+ *   node secrets-dr-restore.mjs <file.enc> --passphrase-file pass.txt
+ *   SECRETS_DR_PASSPHRASE=... node secrets-dr-restore.mjs <file.enc> --print-values
+ *   node secrets-dr-restore.mjs <file.enc> --passphrase-file pass.txt --to-env-file out.env
  */
-import crypto from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, chmodSync, openSync, closeSync, constants as fsConstants } from "node:fs";
+import { createInterface } from "node:readline";
+import { decrypt } from "./crypto-envelope.mjs";
 
-function decrypt(buf, passphrase) {
-  const salt = buf.subarray(0, 16);
-  const iv = buf.subarray(16, 28);
-  const authTag = buf.subarray(28, 44);
-  const ciphertext = buf.subarray(44);
-  const key = crypto.scryptSync(passphrase, salt, 32);
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(authTag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+function readPassphraseFromFile(path) {
+  return readFileSync(path, "utf8").trim();
 }
 
-function main() {
-  const [file, passphrase, ...rest] = process.argv.slice(2);
-  if (!file || !passphrase) {
-    console.error("usage: secrets-dr-restore.mjs <file.enc> <passphrase> [--print-values | --to-env-file out.env]");
+function promptPassphrase() {
+  return new Promise((resolvePromise, rejectPromise) => {
+    if (!process.stdin.isTTY) {
+      rejectPromise(new Error("no passphrase source given (--passphrase-file or SECRETS_DR_PASSPHRASE) and stdin is not a TTY to prompt on"));
+      return;
+    }
+    process.stdout.write("DR passphrase (input hidden): ");
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    // Hide echoed input by intercepting the output write — readline has no built-in "silent" mode.
+    const originalWrite = rl._writeToOutput ? rl._writeToOutput.bind(rl) : null;
+    if (originalWrite) rl._writeToOutput = () => {};
+    rl.question("", (answer) => {
+      rl.close();
+      process.stdout.write("\n");
+      resolvePromise(answer.trim());
+    });
+  });
+}
+
+// Guarantees the final file mode is 0600 REGARDLESS of whether outPath already existed — writeFileSync's
+// `mode` option only applies when Node itself creates the file, so overwriting a pre-existing file with
+// looser permissions would silently leave those permissions in place (the exact bug flagged in review).
+function writeOwnerOnly(outPath, contents) {
+  const fd = openSync(outPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC, 0o600);
+  try {
+    writeFileSync(fd, contents);
+  } finally {
+    closeSync(fd);
+  }
+  chmodSync(outPath, 0o600); // belt-and-suspenders: also fix it explicitly in case of an umask surprise
+}
+
+// Dotenv-safe quoting: wrap in double quotes, escape backslashes/double-quotes, and escape real
+// newlines as \n — lossless for multi-line values like PEM keys under standard dotenv-style parsers
+// that support double-quoted values with backslash-escape expansion (dotenv, python-dotenv). The
+// earlier unquoted version broke on any value containing `#` (parsed as a comment) or a literal
+// newline (many loaders do not expand a bare `\n` outside quotes).
+function toEnvLine(envName, value) {
+  const escaped = String(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r");
+  return `${envName}="${escaped}"`;
+}
+
+async function resolvePassphrase(rest) {
+  const fileIdx = rest.indexOf("--passphrase-file");
+  if (fileIdx !== -1) {
+    const p = rest[fileIdx + 1];
+    if (!p) throw new Error("--passphrase-file needs a path");
+    return readPassphraseFromFile(p);
+  }
+  if (process.env.SECRETS_DR_PASSPHRASE) return process.env.SECRETS_DR_PASSPHRASE.trim();
+  return promptPassphrase();
+}
+
+async function main() {
+  const [file, ...rest] = process.argv.slice(2);
+  if (!file) {
+    console.error("usage: secrets-dr-restore.mjs <file.enc> [--passphrase-file <path>] [--print-values | --to-env-file out.env]");
+    console.error("       (or set SECRETS_DR_PASSPHRASE in the environment)");
     process.exit(2);
   }
+
+  const passphrase = await resolvePassphrase(rest);
   const buf = readFileSync(file);
   let plaintext;
   try {
@@ -47,13 +110,9 @@ function main() {
   if (envFileIdx !== -1) {
     const outPath = rest[envFileIdx + 1];
     if (!outPath) { console.error("--to-env-file needs a path"); process.exit(2); }
-    const lines = names.map((n) => {
-      const envName = n.toUpperCase().replace(/-/g, "_");
-      const v = String(data.secrets[n]).replace(/\n/g, "\\n");
-      return `${envName}=${v}`;
-    });
-    writeFileSync(outPath, lines.join("\n") + "\n", { mode: 0o600 });
-    console.error(`wrote ${names.length} KEY=value lines to ${outPath} (mode 600). Delete this file once no longer needed.`);
+    const lines = names.map((n) => toEnvLine(n.toUpperCase().replace(/-/g, "_"), data.secrets[n]));
+    writeOwnerOnly(outPath, lines.join("\n") + "\n");
+    console.error(`wrote ${names.length} KEY="value" lines to ${outPath} (mode 600). Delete this file once no longer needed.`);
     return;
   }
 
