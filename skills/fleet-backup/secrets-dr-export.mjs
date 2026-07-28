@@ -270,6 +270,14 @@ async function main() {
   const { secrets, failed, totalListed } = await fetchAllSecrets();
   const count = Object.keys(secrets).length;
   console.log(`[secrets-dr-export] fetched ${count}/${totalListed} secrets (${failed.length} failed reads).`);
+  if (totalListed === 0) {
+    // FAIL LOUD (2026-07-28 review finding): a successful-but-empty Key Vault LIST (e.g. a transient
+    // API response, an auth/scope regression that quietly returns zero enabled secrets instead of
+    // erroring) leaves `failed` empty too, so the `failed.length` guard below does not catch it —
+    // this would otherwise silently encrypt and upload a zero-secret archive OVER last night's real
+    // recovery point. Consistent with backup.mjs's own zero-row guard for the same failure class.
+    throw new Error("Key Vault listed 0 enabled secrets — refusing to upload an empty archive over the current recovery point. This is almost certainly a listing/auth bug, not an actual empty vault; investigate before retrying.");
+  }
   if (failed.length) {
     // FAIL LOUD: a partial archive silently replacing last night's complete one is worse than no
     // archive at all — it looks like a successful backup while actually degrading the recovery point.

@@ -58,6 +58,34 @@ const opt = (name, def) => { const i = argv.indexOf(name); return i >= 0 && argv
 const optAll = (name) => argv.reduce((acc, a, i) => (a === name && argv[i + 1] !== undefined ? [...acc, argv[i + 1]] : acc), []);
 
 const GW = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
+
+// Bounded network calls (2026-07-28 review finding): none of this file's fetch() calls had a timeout,
+// so during a real Azure/gateway outage the email path (ctoBearer's token mint + sendPageEmail's /mcp
+// call) could hang for however long the runtime's default socket timeout is — long enough, stacked with
+// azure-watchdog.mjs's own emergency-backup attempt beforehand, to eat the watchdog job's 10-minute
+// budget and get the runner killed BEFORE the independent PostHog fallback below ever runs, and before
+// the caller gets to save episode state. 8s per call is generous for a healthy gateway and still leaves
+// ample time in a 10-minute job for the PostHog fallback + episode-state save afterward.
+// SCOPE NOTE: this bounds this file's OWN fetch() calls only. kvSecret() (from
+// skills/kb-memory/azure-secret.mjs, used by ctoBearer() and the PostHog fallback's credential
+// resolution) is a shared module used by many callers across the fleet; adding a timeout inside it is a
+// separate, broader change out of scope here. In practice kvSecret() already has its own internal
+// three-path fallback (managed identity -> SP client_credentials -> az-CLI/OIDC) that fails reasonably
+// fast on a genuine outage; this fix targets the specific unbounded-hang risk this review flagged
+// (the outbound HTTP calls this script makes directly).
+const FETCH_TIMEOUT_MS = 8000;
+async function timedFetch(url, init) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e) {
+    if (e?.name === "AbortError") throw new Error(`timed out after ${FETCH_TIMEOUT_MS}ms: ${url}`);
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
 const RECIPIENT = process.env.PAGE_RECIPIENT || "matthew@otchealth.app";
 const WORKFLOW = opt("--workflow", process.env.GITHUB_WORKFLOW || "unknown workflow");
 const TAIL_LINES = parseInt(opt("--tail-lines", "40"), 10);
@@ -149,7 +177,7 @@ async function ctoBearer() {
   const cid = await kvSecret("oauth-lane-cto-id");
   const csec = await kvSecret("oauth-lane-cto-secret");
   if (!cid || !csec) throw new Error("cto-lane creds unavailable (oauth-lane-cto-id/secret)");
-  const r = await fetch(`${GW}/oauth/token`, {
+  const r = await timedFetch(`${GW}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "client_credentials", client_id: cid, client_secret: csec }),
@@ -164,7 +192,7 @@ async function ctoBearer() {
  *  any failure so the caller can fall back; never logs a secret. */
 async function sendPageEmail(subject, body) {
   const bearer = await ctoBearer();
-  const r = await fetch(`${GW}/mcp`, {
+  const r = await timedFetch(`${GW}/mcp`, {
     method: "POST",
     headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "graph_send_email", arguments: { to: RECIPIENT, subject, body, body_type: "Text" } } }),
@@ -194,7 +222,7 @@ async function emitPosthogFallback(props, eventName) {
   const key = process.env.POSTHOG_FLEET_INGEST_KEY || await kvSecret("posthog-fleet-ingest-key");
   if (!key) throw new Error("posthog-fleet-ingest-key unavailable (checked POSTHOG_FLEET_INGEST_KEY env and Key Vault)");
   const host = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
-  const r = await fetch(`${host}/capture/`, {
+  const r = await timedFetch(`${host}/capture/`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_key: key, event: eventName, distinct_id: TEST_MODE ? "fleet-pager-selftest" : "fleet-page-on-failure", properties: props }),
   });
