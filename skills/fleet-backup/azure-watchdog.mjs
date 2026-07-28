@@ -132,6 +132,35 @@ async function saveState(creds, state) {
   await s3Put(creds, STATE_KEY, buf, sha256Hex(buf), {});
 }
 
+// ---------- the actual state machine, pure and exported so it is unit-testable without mocking S3,
+// exec, or the network (2026-07-28 review finding: none of threshold-crossing, recovery, or the
+// no-open-episode-guard had a deterministic test). Given (state, healthy, now, threshold), decides
+// what main() should DO next without performing any I/O itself — main() executes the side effects
+// (paging, emergency backup, marker write) and only commits `next` via saveState() once those side
+// effects it depends on have succeeded, per the page-before-mutate ordering documented at each call
+// site in main(). This function's OWN contract: never mutates its `state` argument (returns a fresh
+// `next` object), so a caller can freely inspect `state` after calling this without surprises.
+export function decideNextStep(state, healthy, now, threshold) {
+  const openEpisode = state.episodes.find((e) => !e.recoveredAt) || null;
+  const next = { ...state, lastCheckAt: now, episodes: state.episodes.map((e) => ({ ...e })) };
+
+  if (healthy) {
+    next.consecutiveFailures = 0;
+    next.lastSuccessAt = now;
+    if (openEpisode) {
+      const nextOpenEpisode = next.episodes.find((e) => !e.recoveredAt);
+      return { next, action: "recover", episode: nextOpenEpisode };
+    }
+    return { next, action: "noop" };
+  }
+
+  next.consecutiveFailures = state.consecutiveFailures + 1;
+  if (next.consecutiveFailures >= threshold && !openEpisode) {
+    return { next, action: "declare", episode: { declaredAt: now, recoveredAt: null } };
+  }
+  return { next, action: "increment" };
+}
+
 // Throws on failure (2026-07-28 review finding) rather than swallowing it. The earlier version logged
 // and continued, which let the caller commit an "episode declared" (or "episode recovered") state to
 // S3 even though Matt was never actually notified — the NEXT run would then see an already-open (or
@@ -211,40 +240,37 @@ async function main() {
   const now = new Date().toISOString();
 
   const state = await loadState(creds);
-  state.lastCheckAt = now;
-  const openEpisode = state.episodes.find((e) => !e.recoveredAt);
+  const decision = decideNextStep(state, healthy, now, THRESHOLD);
 
-  if (healthy) {
-    state.consecutiveFailures = 0;
-    state.lastSuccessAt = now;
-    if (openEpisode) {
-      // page() BEFORE mutating the episode (2026-07-28 review finding): if the page throws, this
-      // whole function throws too, main()'s top-level catch aborts BEFORE saveState() runs, and the
-      // episode stays open in the last-saved state — so the NEXT run still sees it open and retries
-      // the recovery notice, instead of silently marking it recovered with nobody ever told.
-      page(`AZURE WATCHDOG: reachability RESTORED (was declared down at ${openEpisode.declaredAt})`);
-      openEpisode.recoveredAt = now;
-      console.log(`[azure-watchdog] RECOVERED: Azure reachability restored (episode declared ${openEpisode.declaredAt}).`);
-    } else {
-      console.log("[azure-watchdog] healthy.");
-    }
-  } else {
-    state.consecutiveFailures += 1;
-    console.log(`[azure-watchdog] unhealthy check ${state.consecutiveFailures}/${THRESHOLD} (kvOk=${kvOk} gwOk=${gwOk}).`);
-    if (state.consecutiveFailures >= THRESHOLD && !openEpisode) {
-      const episode = { declaredAt: now, recoveredAt: null };
-      console.error(`[azure-watchdog] DECLARING FAILOVER: ${THRESHOLD} consecutive unhealthy checks. Running emergency backup...`);
-      const backupResults = await emergencyBackup();
-      const markerKey = await writeMarker(creds, episode, backupResults);
-      console.error(`[azure-watchdog] marker written: s3://${creds.bucket}/${markerKey}`);
-      // page() BEFORE pushing the episode into state, same reasoning as the recovery branch above: a
-      // failed page must not be recorded as "declared" (that would permanently suppress retry).
-      page(`AZURE WATCHDOG: sustained outage DECLARED at ${now} (${THRESHOLD} consecutive checks). Emergency backup: ${JSON.stringify(backupResults)}`);
-      state.episodes.push(episode);
-    }
+  if (decision.action === "noop") {
+    console.log("[azure-watchdog] healthy.");
+  } else if (decision.action === "recover") {
+    // page() BEFORE mutating the episode (2026-07-28 review finding): if the page throws, this whole
+    // function throws too, main()'s top-level catch aborts BEFORE saveState() runs, and the episode
+    // stays open in the last-saved state — so the NEXT run still sees it open and retries the
+    // recovery notice, instead of silently marking it recovered with nobody ever told.
+    page(`AZURE WATCHDOG: reachability RESTORED (was declared down at ${decision.episode.declaredAt})`);
+    decision.episode.recoveredAt = now;
+    console.log(`[azure-watchdog] RECOVERED: Azure reachability restored (episode declared ${decision.episode.declaredAt}).`);
+  } else if (decision.action === "increment") {
+    console.log(`[azure-watchdog] unhealthy check ${decision.next.consecutiveFailures}/${THRESHOLD} (kvOk=${kvOk} gwOk=${gwOk}).`);
+  } else if (decision.action === "declare") {
+    console.error(`[azure-watchdog] DECLARING FAILOVER: ${THRESHOLD} consecutive unhealthy checks. Running emergency backup...`);
+    const backupResults = await emergencyBackup();
+    const markerKey = await writeMarker(creds, decision.episode, backupResults);
+    console.error(`[azure-watchdog] marker written: s3://${creds.bucket}/${markerKey}`);
+    // page() BEFORE pushing the episode into state, same reasoning as the recovery branch above: a
+    // failed page must not be recorded as "declared" (that would permanently suppress retry).
+    page(`AZURE WATCHDOG: sustained outage DECLARED at ${now} (${THRESHOLD} consecutive checks). Emergency backup: ${JSON.stringify(backupResults)}`);
+    decision.next.episodes.push(decision.episode);
   }
 
-  await saveState(creds, state);
+  await saveState(creds, decision.next);
 }
 
-main().catch((e) => { console.error(`[azure-watchdog] FATAL: ${String(e && e.message || e)}`); process.exit(1); });
+// Only auto-run when executed directly (CLI), not when imported as a module (e.g. by
+// tests/azure-watchdog-state.test.mjs importing decideNextStep) — importing this file must never have
+// the side effect of kicking off a real check/status/selftest run.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { console.error(`[azure-watchdog] FATAL: ${String(e && e.message || e)}`); process.exit(1); });
+}

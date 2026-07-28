@@ -79,8 +79,20 @@ jobs:
         run: |
           set -o pipefail
           CMD="${WATCHDOG_CMD:-check}"
-          if [ -z "${WATCHDOG_AWS_ACCESS_KEY_ID:-}" ]; then
-            echo "::warning::WATCHDOG_AWS_* repo secrets are not provisioned yet -- the watchdog cannot read/write its off-Azure state without them and will exit non-zero by design (it refuses to run stateless). Provision WATCHDOG_AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY/S3_BUCKET/REGION (the same values as aws-dr-* in Key Vault) as repo secrets to arm this."
+          # Validate ALL FOUR WATCHDOG_AWS_* vars, and actually STOP here (not just warn) if any are
+          # missing -- 2026-07-28 review finding: a warn-only check on only one of the four still let
+          # the script fall through to its Key Vault fallback, so the SCHEDULED run could report
+          # "healthy" while its state path silently shared fate with Azure the whole time. The Key
+          # Vault fallback in the script exists for local/manual runs ONLY; the scheduled workflow
+          # must never reach it silently.
+          MISSING=""
+          [ -z "${WATCHDOG_AWS_ACCESS_KEY_ID:-}" ] && MISSING="${MISSING} WATCHDOG_AWS_ACCESS_KEY_ID"
+          [ -z "${WATCHDOG_AWS_SECRET_ACCESS_KEY:-}" ] && MISSING="${MISSING} WATCHDOG_AWS_SECRET_ACCESS_KEY"
+          [ -z "${WATCHDOG_AWS_S3_BUCKET:-}" ] && MISSING="${MISSING} WATCHDOG_AWS_S3_BUCKET"
+          [ -z "${WATCHDOG_AWS_REGION:-}" ] && MISSING="${MISSING} WATCHDOG_AWS_REGION"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing repo secret(s):${MISSING} -- refusing to run the scheduled watchdog against the Key Vault fallback (that would defeat the whole off-Azure design silently). Provision these (same values as aws-dr-* in Key Vault) to arm the watchdog. This will repeat every 15 minutes and page until provisioned -- that is intentional, not a bug."
+            exit 1
           fi
           node azure-watchdog.mjs "$CMD" 2>&1 | tee "${GITHUB_WORKSPACE}/azure-watchdog.log"
 
@@ -95,6 +107,11 @@ jobs:
 
       - name: "Page on the watchdog's OWN failure (not the Azure outage it might be reporting -- that pages via its own logic)"
         if: failure()
+        env:
+          # Step-level env does NOT carry over from the earlier step (2026-07-28 review finding) --
+          # without re-declaring this here, this specific pager call loses its off-Azure fallback
+          # exactly when a real Key Vault outage is also why the watchdog step above failed.
+          POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
         run: node setup/page-on-failure.mjs --workflow "Azure Watchdog (self-failure, not necessarily an Azure outage)" --log "${GITHUB_WORKSPACE}/azure-watchdog.log"
 
       - name: "Heartbeat: mark this workflow's schedule as alive"

@@ -324,8 +324,22 @@ async function main() {
     // lag by one rotation if it rotates mid-run. That credential's only use is operating this same
     // OneDrive delivery pipeline — if it is ever actually stale/invalid, OneDrive re-authentication
     // (a fresh OAuth consent) recovers it; it is not load-bearing for recovering anything else.
-    const rotatedToken = await kvSecret("graph-onedrive-refresh-token");
-    if (rotatedToken && secrets["graph-onedrive-refresh-token"] && rotatedToken !== secrets["graph-onedrive-refresh-token"]) {
+    // Deliberately NOT using kvSecret() here (2026-07-28 review finding): it returns null on 404 AND
+    // on 5xx/exhausted-auth-paths alike, which would make this freshness check silently no-op on a
+    // real read failure and report the run successful anyway. We already read this exact secret once
+    // successfully a few seconds ago (it's in `secrets`), so a failure re-reading it now is a REAL
+    // problem, not "it doesn't exist" — fail loud, matching this file's convention everywhere else.
+    let rotatedToken = null;
+    if (secrets["graph-onedrive-refresh-token"]) {
+      const freshToken = await vaultToken();
+      if (!freshToken) throw new Error("could not mint a Key Vault token to check graph-onedrive-refresh-token freshness after OneDrive delivery");
+      try {
+        rotatedToken = await fetchOneSecret(freshToken, "graph-onedrive-refresh-token");
+      } catch (e) {
+        throw new Error(`could not re-read graph-onedrive-refresh-token after OneDrive delivery (it WAS present in the original snapshot, so this is a real failure, not "secret doesn't exist"): ${String(e && e.message || e)}`);
+      }
+    }
+    if (rotatedToken && rotatedToken !== secrets["graph-onedrive-refresh-token"]) {
       console.log("[secrets-dr-export] graph-onedrive-refresh-token rotated during delivery — patching the S3 archive with the current value (the OneDrive copy may lag by one rotation on this one field; see header).");
       secrets["graph-onedrive-refresh-token"] = rotatedToken;
       const patchedPayload = JSON.stringify({ exportedAt: new Date().toISOString(), vault: VAULT, count, secrets });
