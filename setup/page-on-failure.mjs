@@ -301,5 +301,18 @@ async function main() {
 // artifact, self-evidently not a real incident — but it is exactly the accident this guard exists to
 // prevent, so it is not a hypothetical.)
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  main().catch((e) => { console.error(`::error::[page-on-failure] FATAL: ${e.message}`); process.exit(1); });
+  main()
+    // Explicit process.exit() (2026-07-28 review, final round): main() only ever SET
+    // process.exitCode, never called process.exit(). Node only exits naturally once the event loop is
+    // empty -- if the LOSING side of the internal email-vs-timeout race (see WHOLE-ATTEMPT timeout
+    // comment above) still has an orphaned open socket, the process would sit alive past a SUCCESSFUL
+    // delivery on the other channel, waiting on something nobody cares about anymore. A caller like
+    // azure-watchdog.mjs's page() (execFileSync with `timeout: 60000`) would then see this process get
+    // killed on the OS timeout even though the page it asked for actually succeeded, throw, and the
+    // caller's fail-loud "must NOT persist state past a failed page() call" contract would wrongly treat
+    // a SUCCESSFUL page as a failed one -- state never saved, next run re-declares and re-pages the same
+    // outage. Once main() has decided the outcome, exit immediately and deliberately abandon any
+    // still-pending background operation; we already have what we came for.
+    .then(() => process.exit(process.exitCode || 0))
+    .catch((e) => { console.error(`::error::[page-on-failure] FATAL: ${e.message}`); process.exit(1); });
 }

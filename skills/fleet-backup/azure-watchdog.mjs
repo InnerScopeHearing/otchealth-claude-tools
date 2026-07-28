@@ -85,13 +85,32 @@ async function drCreds() {
   return { accessKeyId: akid, secretAccessKey: asecret, bucket, region };
 }
 
+// Bounded (2026-07-28 review, final round): vaultToken()/kvSecret() (shared skills/kb-memory/
+// azure-secret.mjs) make their own unbounded internal fetches. Left unguarded here, main()'s
+// `Promise.all([checkKeyVault(), checkGateway()])` waits for BOTH to settle before EVER reaching
+// loadState/decideNextStep/saveState/page -- so during the exact Key Vault outage this watchdog exists
+// to detect, a hung checkKeyVault() could consume the entire outer `timeout 420` budget and get the
+// whole process SIGKILLed before the state machine runs even once. Every invocation would then look
+// like a watchdog self-failure instead of a detected outage: the consecutive-failure counter never
+// increments, the episode never gets declared, the page never fires -- the opposite of this script's
+// purpose. Race the check against a local timeout so a hang resolves to `false` (correctly reported as
+// "Key Vault unreachable," which is the right answer anyway) and main() proceeds promptly; a no-op
+// .catch() on the original promise prevents it surfacing as an unhandled rejection if it settles later
+// in the background after main() has already moved on (same pattern as page-on-failure.mjs).
 async function checkKeyVault() {
-  try {
+  const check = (async () => {
     const token = await vaultToken();
     if (!token) return false;
     const v = await kvSecret("aws-dr-region"); // cheap, already-required read
     return Boolean(v);
+  })();
+  check.catch(() => {});
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(false), 8000); });
+  try {
+    return await Promise.race([check, timeout]);
   } catch { return false; }
+  finally { clearTimeout(timer); }
 }
 
 // Validates the SAME documented /health contract setup/gateway-canary.mjs already checks (2026-07-28
