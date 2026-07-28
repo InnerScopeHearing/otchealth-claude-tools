@@ -295,6 +295,18 @@ async function realSelftest() {
   return report;
 }
 
+// Pulled out as a small, pure, exported function (2026-07-28 review, round 3: "add tests for these
+// branches" -- this is the one piece of deliverToOneDrive()'s logic that is genuinely pure (no network,
+// no filesystem) and therefore cheaply unit-testable on its own, without needing to mock Key Vault/S3/
+// OneDrive network boundaries for the rest of this file's orchestration -- see
+// tests/secrets-dr-export-detection.test.mjs, which pins this exact regex against both a stdout- and a
+// stderr-only occurrence of the marker, directly regression-testing the bug this file already hit once
+// this session (execFileSync's stdout-only return value silently defeating an earlier version of this
+// check).
+export function hasRotatePersistFailure(stdout, stderr) {
+  return /ROTATE PERSIST FAILED/.test(stdout || "") || /ROTATE PERSIST FAILED/.test(stderr || "");
+}
+
 function deliverToOneDrive(buf, label) {
   const tmp = mkdtempSync(join(tmpdir(), "secrets-dr-"));
   const localFile = join(tmp, `secrets-dr-${today()}.json.enc`);
@@ -333,7 +345,7 @@ function deliverToOneDrive(buf, label) {
     if (spawned.status !== 0) {
       throw new Error(`OneDrive delivery (cto-onedrive.mjs deliver) exited ${spawned.status}`);
     }
-    if (/ROTATE PERSIST FAILED/.test(stdout) || /ROTATE PERSIST FAILED/.test(stderr)) {
+    if (hasRotatePersistFailure(stdout, stderr)) {
       throw new Error(
         "OneDrive delivery succeeded but the underlying engine reported \"ROTATE PERSIST FAILED\" while " +
         "rotating graph-onedrive-refresh-token -- Key Vault likely now holds a stale, already-consumed " +
@@ -472,4 +484,13 @@ async function main() {
   console.log("[secrets-dr-export] done.");
 }
 
-main().catch((e) => { console.error(`[secrets-dr-export] FATAL: ${String(e && e.message || e)}`); process.exit(1); });
+// Only auto-run when executed directly (CLI), not when imported as a module (2026-07-28 review, round
+// 3: adding a unit test for hasRotatePersistFailure() above required importing this file, and
+// main().catch(...) previously ran UNCONDITIONALLY at module load with no import.meta.url guard --
+// unlike azure-watchdog.mjs, which already has this guard for exactly this reason. Without it, simply
+// importing this file for its exports would attempt real Key Vault/S3/OneDrive network calls, print to
+// the console, and potentially call process.exit(1) on failure, aborting whatever imported it (a test
+// runner, in this case). Matches azure-watchdog.mjs's existing pattern.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { console.error(`[secrets-dr-export] FATAL: ${String(e && e.message || e)}`); process.exit(1); });
+}

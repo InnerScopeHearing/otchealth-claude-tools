@@ -13,10 +13,20 @@
  *   2. SECRETS_DR_PASSPHRASE env var
  *   3. an interactive, non-echoing terminal prompt (if none of the above is set and stdin is a TTY)
  *
+ * A NOTE ON METHOD 2 AT AN INTERACTIVE SHELL (2026-07-28 review, round 2): `VAR=value command` prefix
+ * syntax avoids `ps`/process-list exposure (env vars are not listed there the way argv is), but if you
+ * TYPE the real passphrase directly into an interactive terminal this way, the whole line -- including
+ * the real value -- still lands in your shell history exactly like a positional argument would; the env
+ * var form is not automatically history-safe. Method 2 is intended for NON-interactive contexts where
+ * the value is injected programmatically and never typed (CI/CD secrets, a sourced env file, a secret
+ * manager's `export`-and-run wrapper) -- if you are a human at a live terminal, prefer method 1
+ * (--passphrase-file, itself reachable without typing the value by piping it in) or method 3 (the
+ * hidden-input interactive prompt) instead.
+ *
  * USAGE:
- *   node secrets-dr-restore.mjs <file.enc>                                   # prompts for passphrase
+ *   node secrets-dr-restore.mjs <file.enc>                                   # prompts for passphrase (safest for a human at a terminal)
  *   node secrets-dr-restore.mjs <file.enc> --passphrase-file pass.txt
- *   SECRETS_DR_PASSPHRASE=... node secrets-dr-restore.mjs <file.enc> --print-values
+ *   SECRETS_DR_PASSPHRASE=... node secrets-dr-restore.mjs <file.enc> --print-values  # non-interactive/CI use only -- see the note above; do not type the real value here at a live terminal
  *   node secrets-dr-restore.mjs <file.enc> --passphrase-file pass.txt --to-env-file out.env
  */
 import { readFileSync, writeFileSync, fchmodSync, openSync, closeSync, constants as fsConstants } from "node:fs";
