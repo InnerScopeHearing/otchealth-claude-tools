@@ -137,7 +137,12 @@ async function fetchAllSecrets() {
       failed.push(`${name}:${String(e && e.message || e)}`);
     }
   }
-  return { secrets: out, failed, totalListed: names.length };
+  // totalListed excludes secrets-dr-passphrase (2026-07-28 review finding): the passphrase is skipped
+  // from `out` above but WAS still counted in names.length, so every fully-successful run reported a
+  // permanently confusing "N/(N+1) fetched, 0 failed" instead of "N/N" -- internally inconsistent
+  // completeness telemetry that looked like an off-by-one bug on every single green run.
+  const totalListed = names.filter((n) => n !== "secrets-dr-passphrase").length;
+  return { secrets: out, failed, totalListed };
 }
 
 // ---------- does secrets-dr-passphrase genuinely not exist, or did the read just fail? ----------

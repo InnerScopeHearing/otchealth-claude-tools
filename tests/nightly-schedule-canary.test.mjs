@@ -83,14 +83,16 @@ test("pageExitCode: non-strict never pages, even with anomalies (report-only def
   assert.equal(pageExitCode(0, false), 0);
 });
 
-test("the live registry: all 9 nightly-workflow entries are present and each carries a positive interval_min", () => {
+test("the live registry: all 11 nightly-workflow entries are present and each carries a positive interval_min", () => {
   // Guards against a silent typo/removal in setup/heartbeat-registry.json itself dropping one of the
-  // 9 tracked entries or leaving its interval_min unset (which would make heartbeat.mjs's own status
+  // tracked entries or leaving its interval_min unset (which would make heartbeat.mjs's own status
   // math treat it as NO-DATA instead of a real staleness check). ITEM 5.3 (Wave 5, AI-OS
   // recall-quality pass) added "nightly-recall-eval-deep" (the new deep-mode eval's own sibling
   // workflow/schedule) -- see that entry's own note in the registry for why it is a separate workflow
   // from "nightly-recall-eval" rather than folded into it. "nightly-s3-dr-mirror" (Wave 4 item 4.4)
-  // landed on main independently in the same window; both are tracked here.
+  // landed on main independently in the same window; both are tracked here. 2026-07-28 review finding
+  // added "nightly-secrets-dr-export" and "azure-watchdog" (their own workflows had a heartbeat.mjs
+  // beat step with nothing in this registry to check it against -- see those two entries' own notes).
   const registry = JSON.parse(readFileSync(new URL("../setup/heartbeat-registry.json", import.meta.url), "utf8"));
   const expected = [
     "nightly-azure-canary",
@@ -102,6 +104,8 @@ test("the live registry: all 9 nightly-workflow entries are present and each car
     "nightly-recall-eval-deep",
     "oauth-clients-canary",
     "nightly-s3-dr-mirror",
+    "nightly-secrets-dr-export",
+    "azure-watchdog",
   ].sort();
   assert.deepEqual(trackedJobNames(registry), expected);
   for (const job of expected) {
