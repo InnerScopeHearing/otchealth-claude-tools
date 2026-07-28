@@ -120,11 +120,28 @@ const isNonInteractive = Boolean(process.env.CI || process.env.GITHUB_ACTIONS) |
 // the entire process tree regardless of what's stuck inside any dependency. Treat this in-process timeout
 // as a responsiveness optimization, not the correctness backstop.
 const KV_FETCH_TIMEOUT_MS = 20000;
+// Reads the FULL response body here, under the abort signal, before returning (2026-07-28 review
+// finding, same bug class already fixed in azure-watchdog.mjs's checkGateway()): fetch() resolving
+// (response headers received) is not the same as the response BODY finishing. The earlier version of
+// this function cleared the abort timer in a `finally` immediately after `fetch()` returned, then let
+// every caller do its own `.json()`/`.text()` afterward, completely unprotected by any timeout -- a
+// slow/stalled body stream on a degraded Key Vault could hang indefinitely with no OS-level backstop
+// until the whole-script `timeout 540` wrapper (see the comment above this constant) eventually kills
+// the process. Buffering the text here and handing back a Response-shaped object (ok/status/json/text)
+// keeps every existing call site (r.ok, r.status, r.json(), r.text()) working unchanged while ensuring
+// the abort controller stays armed for the entire request, not just the headers.
 async function timedFetch(url, init) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), KV_FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
+    const r = await fetch(url, { ...init, signal: ctrl.signal });
+    const bodyText = await r.text();
+    return {
+      ok: r.ok,
+      status: r.status,
+      json: async () => JSON.parse(bodyText),
+      text: async () => bodyText,
+    };
   } catch (e) {
     if (e?.name === "AbortError") throw new Error(`Key Vault request timed out after ${KV_FETCH_TIMEOUT_MS}ms: ${url}`);
     throw e;
@@ -277,16 +294,44 @@ function deliverToOneDrive(buf, label) {
     // upload). An unbounded hang here could burn the whole 15-minute job budget before the fail-loud
     // guard and failure pager ever ran. 90s is generous for a token refresh plus an upload of a file
     // this size (an encrypted JSON export of ~300 secrets, not a large media file).
-    execFileSync("node", [
+    //
+    // Captured (not inherited) stdout/stderr (2026-07-28 review finding, second pass): the underlying
+    // engine (skills/cfo-onedrive/onedrive.mjs) rotates the OneDrive OAuth refresh token on every
+    // invocation and tries to persist the new one via its own smWrite() -- but if that persist call
+    // throws, onedrive.mjs CATCHES it, logs "ROTATE PERSIST FAILED: <reason>" to stderr, and keeps
+    // going (exits 0 regardless). That makes this delivery step look like a clean success even when
+    // Key Vault now holds the OLD refresh token while Microsoft has already invalidated it (OAuth
+    // refresh tokens are typically single-use/rotate-on-use) -- the run's own freshness check further
+    // down this file re-reads that same Key Vault secret and, seeing no change, concludes "no rotation
+    // happened," when what actually happened is "rotation happened and failed to persist." Piping the
+    // child's output lets this script scan for that exact failure string and fail loud instead of
+    // silently trusting a false "no change" reading.
+    const result = execFileSync("node", [
       join(REPO_ROOT, "skills", "cto-onedrive", "cto-onedrive.mjs"),
       "deliver", localFile, `secrets-dr-${today()}.json.enc`,
-    ], { stdio: "inherit", timeout: 90000 });
+    ], { encoding: "utf8", timeout: 90000 });
+    process.stdout.write(result);
+    if (/ROTATE PERSIST FAILED/.test(result)) {
+      throw new Error(
+        "OneDrive delivery succeeded but the underlying engine reported \"ROTATE PERSIST FAILED\" while " +
+        "rotating graph-onedrive-refresh-token -- Key Vault likely now holds a stale, already-consumed " +
+        "refresh token. Do not trust this run's freshness check to catch this (a failed persist looks " +
+        "identical to \"no rotation happened\" there). Investigate the Key Vault write path and " +
+        "re-authenticate OneDrive if the stored token has gone invalid."
+      );
+    }
     console.log(`[secrets-dr-export] ${label} delivered to Matt's OneDrive (CTO Incoming) — his OneDrive desktop client mirrors this to his local hard disk automatically.`);
+  } catch (e) {
+    // execFileSync with encoding:"utf8" attaches captured stdout/stderr to the thrown error on a
+    // non-zero exit -- surface it (stdio:"inherit" used to do this for free) before re-throwing.
+    if (e && e.stdout) process.stdout.write(e.stdout);
+    if (e && e.stderr) process.stderr.write(e.stderr);
+    throw e;
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
-  // Deliberately NOT caught above: OneDrive is a REQUIRED second off-Azure copy (see header), so a
-  // delivery failure must propagate and fail this run.
+  // Deliberately NOT caught above (beyond the stdout/stderr passthrough): OneDrive is a REQUIRED
+  // second off-Azure copy (see header), so a delivery failure must propagate and fail this run.
 }
 
 async function main() {

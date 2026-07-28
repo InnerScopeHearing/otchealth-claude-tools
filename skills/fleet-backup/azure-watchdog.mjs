@@ -266,7 +266,29 @@ async function main() {
     const gw = await checkGateway();
     const creds = await drCreds();
     let s3Ok = false;
-    if (creds) { try { await s3Head(creds, `secrets-dr/.watchdog-selftest-${Date.now()}`); s3Ok = true; } catch { s3Ok = false; } }
+    if (creds) {
+      // Round-trip a real object rather than HEAD a synthetic never-existing key (2026-07-28 review
+      // finding): the recommended least-privilege IAM policy for these creds (README.md's "Recommended
+      // IAM policy") is deliberately s3:PutObject + s3:GetObject ONLY, with no s3:ListBucket. AWS's
+      // actual behavior on a HEAD/GET for a missing key depends on that grant -- WITH ListBucket a
+      // missing key 404s (s3Head returns null, no throw, s3Ok stays true); WITHOUT it the identical
+      // request 403s instead (s3Head throws, the catch below sets s3Ok=false). So probing a guaranteed-
+      // missing key made this selftest report "S3 unreachable" for perfectly valid, correctly-scoped
+      // credentials that simply lack a permission they were never supposed to have. PUT-then-HEAD a
+      // fixed (not timestamped) marker key instead: a genuine 200 on the read-back proves real
+      // reachability with the actual granted permissions, with no dependence on 403-vs-404 semantics,
+      // and reusing one fixed key (overwritten each run) avoids accumulating throwaway objects this
+      // credential has no DeleteObject permission to clean up.
+      try {
+        const marker = "secrets-dr/.watchdog-selftest-marker";
+        const buf = Buffer.from(`selftest ${new Date().toISOString()}`, "utf8");
+        await s3Put(creds, marker, buf, sha256Hex(buf), {});
+        const head = await s3Head(creds, marker);
+        s3Ok = head !== null;
+      } catch {
+        s3Ok = false;
+      }
+    }
     console.log(JSON.stringify({ keyVaultReachable: kv, gatewayReachable: gw, s3StateStoreReachable: s3Ok }, null, 2));
     return;
   }
