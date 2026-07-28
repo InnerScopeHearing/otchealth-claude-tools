@@ -50,13 +50,16 @@
  * would-be encrypted size analytically (crypto-envelope.mjs's envelopeSize()) without ever calling
  * encrypt() or touching Key Vault's passphrase entry at all.
  *
- * ONEDRIVE TOKEN FRESHNESS (2026-07-28 review finding): the OneDrive delivery engine
- * (skills/cfo-onedrive/onedrive.mjs) rotates and persists `graph-onedrive-refresh-token` as a side
- * effect of use. If that rotation happens DURING this run's OneDrive delivery step, the archive this
- * run already encrypted (built from the secrets snapshot taken BEFORE delivery) would silently ship a
- * stale copy of that one credential. After delivery, this script re-reads that one secret; if it
- * changed, it patches the in-memory snapshot, re-encrypts, and re-uploads/re-delivers so both copies
- * end up reflecting the truly-final value, not the pre-rotation one.
+ * ONEDRIVE TOKEN FRESHNESS (2026-07-28 review finding, corrected same day): the OneDrive delivery
+ * engine (skills/cfo-onedrive/onedrive.mjs) rotates and persists `graph-onedrive-refresh-token` as a
+ * side effect of EVERY invocation (observed live: every run this session logged "rotated OneDrive
+ * refresh token -> persisted"). If that rotation happens during this run's OneDrive delivery step, the
+ * archive already encrypted (built from the secrets snapshot taken BEFORE delivery) would silently
+ * ship a stale copy of that one credential. After delivery, this script re-reads that one secret and,
+ * if it changed, patches the S3 copy and re-uploads. It deliberately does NOT re-deliver to OneDrive a
+ * second time to "fix" that copy too — a second delivery call rotates the token AGAIN, which never
+ * converges. The OneDrive copy may therefore lag by one rotation on this single field; see the
+ * in-code comment at the fix site for why that is an accepted, narrow, low-severity limitation.
  *
  * OUTPUT: one file per run, `secrets-dr-<date>.json.enc`. Decrypt with secrets-dr-restore.mjs.
  *
@@ -79,7 +82,7 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { vaultToken, kvSecret, kvSecretSet } from "../kb-memory/azure-secret.mjs";
-import { s3Put, s3Head, sha256Hex } from "./s3-client.mjs";
+import { s3Put, s3Get, sha256Hex } from "./s3-client.mjs";
 import { encrypt, envelopeSize } from "./crypto-envelope.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -137,13 +140,30 @@ async function fetchAllSecrets() {
   return { secrets: out, failed, totalListed: names.length };
 }
 
+// ---------- does secrets-dr-passphrase genuinely not exist, or did the read just fail? ----------
+// kvSecret() collapses "404, genuinely missing" and "5xx/network transient failure" to the SAME null
+// return (see azure-secret.mjs's own comment: "404/5xx: don't retry via the other path"). Minting a
+// BRAND NEW passphrase on a transient blip would silently produce an archive incompatible with every
+// previous night's — a real, reviewed finding. So this call site does its own narrow HTTP check
+// instead of trusting kvSecret()'s collapsed null.
+async function passphraseExists() {
+  const token = await vaultToken();
+  if (!token) throw new Error("could not mint a Key Vault token to check for an existing DR passphrase");
+  const r = await fetch(`https://${VAULT}.vault.azure.net/secrets/secrets-dr-passphrase?api-version=7.4`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (r.status === 404) return { exists: false };
+  if (r.ok) return { exists: true, value: (await r.json()).value };
+  throw new Error(`unexpected HTTP ${r.status} checking for an existing DR passphrase — aborting rather than risk minting a new, incompatible one over what may just be a transient Key Vault failure`);
+}
+
 // ---------- passphrase: reuse the KV convenience cache; NEVER auto-mint when non-interactive ----------
 // Returns { pass, isNew }. Deliberately does NOT cache a newly minted passphrase itself — the caller
 // must print it to the human FIRST, then cache it, so a crash between mint and display can never
 // leave a passphrase committed to Key Vault that no human ever actually saw (see header).
 async function resolvePassphrase() {
-  const pass = await kvSecret("secrets-dr-passphrase");
-  if (pass) return { pass, isNew: false };
+  const check = await passphraseExists();
+  if (check.exists) return { pass: check.value, isNew: false };
 
   if (isNonInteractive) {
     throw new Error(
@@ -173,22 +193,19 @@ async function realSelftest() {
   report.awsDrCredsProvisioned = Boolean(akid && asecret && bucket && region);
   if (report.awsDrCredsProvisioned) {
     try {
-      // HEAD a definitely-nonexistent key. Under the documented least-privilege policy (no
-      // s3:ListBucket), S3 can legitimately answer a HEAD-on-missing-object with 403 instead of 404
-      // (masking object existence) even with fully valid credentials — so a bare 403 here means
-      // "reachable, just can't confirm this exact object's absence," NOT "unreachable." Only treat a
-      // genuine auth/network failure (401, or the fetch itself throwing) as unreachable.
-      await s3Head({ accessKeyId: akid, secretAccessKey: asecret, bucket, region }, `secrets-dr/.selftest-probe-${Date.now()}`);
+      // GET (not HEAD) a definitely-nonexistent key. GET responses carry a body, so a real S3 error
+      // (bad credentials, wrong signature, an actual deny) is DISTINGUISHABLE from a clean missing-
+      // object 404 — empirically verified against this exact bucket: a valid-credential GET on a
+      // missing key returns a clean null, while a broken credential throws with a parseable
+      // <Code>SignatureDoesNotMatch</Code>-style body. So here, ANY throw means genuinely unreachable
+      // — there is no masked-404-looks-like-403 case to special-case for THIS bucket's observed
+      // behavior (an earlier version of this check treated any 403 as "reachable," which would have
+      // hidden a real broken-credential failure behind a false-positive pass).
+      await s3Get({ accessKeyId: akid, secretAccessKey: asecret, bucket, region }, `secrets-dr/.selftest-probe-${Date.now()}`);
       report.s3Reachable = true;
     } catch (e) {
-      const msg = String(e && e.message || e);
-      if (/\b403\b/.test(msg)) {
-        report.s3Reachable = true;
-        report.s3Note = "HEAD returned 403 on a nonexistent key (expected under the no-ListBucket least-privilege policy) — credentials + bucket are reachable, this is not a failure.";
-      } else {
-        report.s3Reachable = false;
-        report.s3Error = msg.slice(0, 200);
-      }
+      report.s3Reachable = false;
+      report.s3Error = String(e && e.message || e).slice(0, 300);
     }
   }
 
@@ -296,16 +313,25 @@ async function main() {
 
     // Freshness check: did OneDrive's own token rotation (a side effect of the delivery call above)
     // change the one credential this run's snapshot captured BEFORE that rotation happened? If so,
-    // patch, re-encrypt, and re-ship both copies so neither ends up stale.
+    // patch and re-upload the S3 copy (S3 has no rotation side effect, so this converges cleanly).
+    //
+    // Deliberately NOT re-delivering to OneDrive a second time here (an earlier version of this fix
+    // did, and it was wrong): the OneDrive engine rotates the refresh token on EVERY invocation
+    // (observed live, every run this session logged "rotated OneDrive refresh token -> persisted"),
+    // so a second `deliver` call would just rotate AGAIN, leaving the re-delivered file exactly as
+    // stale as the first — an infinite regress that never converges, not a fix. Accepted, narrow,
+    // low-severity limitation instead: the OneDrive copy's `graph-onedrive-refresh-token` field may
+    // lag by one rotation if it rotates mid-run. That credential's only use is operating this same
+    // OneDrive delivery pipeline — if it is ever actually stale/invalid, OneDrive re-authentication
+    // (a fresh OAuth consent) recovers it; it is not load-bearing for recovering anything else.
     const rotatedToken = await kvSecret("graph-onedrive-refresh-token");
     if (rotatedToken && secrets["graph-onedrive-refresh-token"] && rotatedToken !== secrets["graph-onedrive-refresh-token"]) {
-      console.log("[secrets-dr-export] graph-onedrive-refresh-token rotated during delivery — patching the archive with the current value and re-uploading so the recovery point isn't stale.");
+      console.log("[secrets-dr-export] graph-onedrive-refresh-token rotated during delivery — patching the S3 archive with the current value (the OneDrive copy may lag by one rotation on this one field; see header).");
       secrets["graph-onedrive-refresh-token"] = rotatedToken;
       const patchedPayload = JSON.stringify({ exportedAt: new Date().toISOString(), vault: VAULT, count, secrets });
       const patchedBuf = encrypt(Buffer.from(patchedPayload, "utf8"), pass);
       await s3Put(creds, key, patchedBuf, sha256Hex(patchedBuf), { secretCount: String(count), vault: VAULT });
       console.log(`[secrets-dr-export] re-uploaded patched archive to s3://${bucket}/${key}`);
-      deliverToOneDrive(patchedBuf, "patched archive");
     }
   }
 

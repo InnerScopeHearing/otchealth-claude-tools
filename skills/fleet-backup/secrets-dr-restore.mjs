@@ -19,7 +19,7 @@
  *   SECRETS_DR_PASSPHRASE=... node secrets-dr-restore.mjs <file.enc> --print-values
  *   node secrets-dr-restore.mjs <file.enc> --passphrase-file pass.txt --to-env-file out.env
  */
-import { readFileSync, writeFileSync, chmodSync, openSync, closeSync, constants as fsConstants } from "node:fs";
+import { readFileSync, writeFileSync, fchmodSync, openSync, closeSync, constants as fsConstants } from "node:fs";
 import { createInterface } from "node:readline";
 import { decrypt } from "./crypto-envelope.mjs";
 
@@ -46,17 +46,23 @@ function promptPassphrase() {
   });
 }
 
-// Guarantees the final file mode is 0600 REGARDLESS of whether outPath already existed — writeFileSync's
-// `mode` option only applies when Node itself creates the file, so overwriting a pre-existing file with
-// looser permissions would silently leave those permissions in place (the exact bug flagged in review).
+// Guarantees the final file mode is 0600 REGARDLESS of whether outPath already existed, AND that it is
+// 0600 for the ENTIRE duration of the write, not just after. Two review findings, same root cause:
+// (1) the `mode` argument to open()/openSync() is a POSIX no-op for a file that already exists — only
+// file CREATION honors it — so overwriting a pre-existing, looser-permissioned file would silently
+// leave those old permissions in place unless fixed some other way; (2) the earlier fix called
+// chmodSync() AFTER writeFileSync() completed, which closed gap (1) but left a race window during the
+// write itself — a pre-existing group/world-readable file would briefly hold the new secret contents
+// under the OLD, looser mode. Fixed by chmod'ing the OPEN FILE DESCRIPTOR (fchmodSync) immediately
+// after opening, before any content is written — correct for both a brand-new file and an overwrite.
 function writeOwnerOnly(outPath, contents) {
   const fd = openSync(outPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC, 0o600);
   try {
+    fchmodSync(fd, 0o600); // fixes an existing file's mode BEFORE any write touches it
     writeFileSync(fd, contents);
   } finally {
     closeSync(fd);
   }
-  chmodSync(outPath, 0o600); // belt-and-suspenders: also fix it explicitly in case of an umask surprise
 }
 
 // Dotenv-safe quoting: wrap in double quotes, escape backslashes/double-quotes, and escape real

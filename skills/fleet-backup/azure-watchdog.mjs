@@ -20,9 +20,16 @@
  *      fail if Azure really is down — that is expected and logged, not a bug; it exists to catch the
  *      cases where Azure is *degraded* rather than *fully* gone, e.g. a billing-lapse grace window
  *      where compute still runs briefly), writes an unmissable marker object to S3, and pages Matt via
- *      setup/page-on-failure.mjs (which already tries an Azure-hosted email path AND falls back to a
- *      PostHog capture event that does NOT depend on Azure — so the page itself does not share fate
- *      with the outage it is reporting).
+ *      setup/page-on-failure.mjs, which tries an Azure-hosted email path AND falls back to a PostHog
+ *      capture event — but that PostHog fallback is ONLY genuinely independent of Azure when
+ *      POSTHOG_FLEET_INGEST_KEY is supplied as a GitHub Actions secret (2026-07-28 review finding:
+ *      page-on-failure.mjs's PostHog path originally resolved its key via Key Vault too, so a real
+ *      Key Vault outage would have made BOTH paging channels fail simultaneously, defeating the
+ *      "the page does not share fate with the outage" claim — fixed by adding an env-var override
+ *      that only this workflow's scheduled run actually sets; every other caller of page-on-failure.mjs
+ *      is unaffected). If page() itself throws (both channels failed), this script does NOT record the
+ *      episode as declared/recovered — see the "page() BEFORE mutating state" comments at each call
+ *      site — so the next scheduled run retries the notification instead of silently giving up on it.
  *   4. On recovery (a healthy run with a currently-open episode): closes the episode and sends a
  *      matching "Azure reachability restored" notice, so Matt hears both ends, not just the alarm.
  *
@@ -55,7 +62,21 @@ const MARKER_KEY_PREFIX = "secrets-dr/FAILOVER-DECLARED";
 const THRESHOLD = Number(process.env.WATCHDOG_THRESHOLD || 3);
 const GATEWAY_BASE_URL = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
 
+// OFF-AZURE FIRST (2026-07-28 review finding — this was the load-bearing bug): the watchdog's own
+// credentials for reading/writing its S3 state must NOT depend on Key Vault, or the watchdog cannot
+// function during the exact scenario it exists to detect (Key Vault AND the gateway both down) — it
+// would return null here, exit before recording anything, declaring an episode, or paging, and the
+// whole "self-trigger" premise silently does nothing. GitHub Actions secrets (WATCHDOG_AWS_*) are
+// checked FIRST; Key Vault (kvSecret) is a fallback used only for local/manual runs where Azure is
+// known to be healthy — never the path the scheduled outage-detection run actually relies on.
 async function drCreds() {
+  const envAkid = process.env.WATCHDOG_AWS_ACCESS_KEY_ID;
+  const envAsecret = process.env.WATCHDOG_AWS_SECRET_ACCESS_KEY;
+  const envBucket = process.env.WATCHDOG_AWS_S3_BUCKET;
+  const envRegion = process.env.WATCHDOG_AWS_REGION;
+  if (envAkid && envAsecret && envBucket && envRegion) {
+    return { accessKeyId: envAkid, secretAccessKey: envAsecret, bucket: envBucket, region: envRegion };
+  }
   const akid = await kvSecret("aws-dr-access-key-id");
   const asecret = await kvSecret("aws-dr-secret-access-key");
   const bucket = await kvSecret("aws-dr-s3-bucket");
@@ -83,14 +104,26 @@ async function checkGateway() {
   } catch { return false; }
 }
 
+// 2026-07-28 review finding: a real S3 read error (network blip, transient auth failure, a corrupt
+// object) is NOT the same as "no prior state." The earlier version collapsed both to an empty state,
+// which during an actual outage could silently ERASE an already-accumulated consecutive-failure count
+// on a transient hiccup — delaying or preventing the very failover declaration this script exists to
+// make. Only a clean 404 (s3Get returns null: genuinely never run before) initializes empty state;
+// any other failure throws and the caller aborts this cycle WITHOUT calling saveState(), so whatever
+// real state already exists in S3 is left untouched for the next run to read correctly.
 async function loadState(creds) {
   const empty = { consecutiveFailures: 0, lastCheckAt: null, lastSuccessAt: null, episodes: [] };
-  if (!creds) return empty;
+  let buf;
   try {
-    const buf = await s3Get(creds, STATE_KEY);
+    buf = await s3Get(creds, STATE_KEY);
+  } catch (e) {
+    throw new Error(`could not read watchdog state from S3 (not a clean 404 — a real error, aborting rather than risk erasing accumulated failure evidence): ${String(e && e.message || e)}`);
+  }
+  if (buf == null) return empty; // clean 404: genuinely first run
+  try {
     return { ...empty, ...JSON.parse(buf.toString("utf8")) };
-  } catch {
-    return empty; // no prior state (first run) or a transient read miss — start clean, never crash on this
+  } catch (e) {
+    throw new Error(`watchdog state object is present but not valid JSON — refusing to treat corrupt state as empty: ${String(e && e.message || e)}`);
   }
 }
 
@@ -99,15 +132,16 @@ async function saveState(creds, state) {
   await s3Put(creds, STATE_KEY, buf, sha256Hex(buf), {});
 }
 
+// Throws on failure (2026-07-28 review finding) rather than swallowing it. The earlier version logged
+// and continued, which let the caller commit an "episode declared" (or "episode recovered") state to
+// S3 even though Matt was never actually notified — the NEXT run would then see an already-open (or
+// already-closed) episode and never retry the page, permanently suppressing the one notification the
+// whole system exists to deliver. Callers must NOT persist state past a failed page() call.
 function page(workflowLabel) {
-  try {
-    execFileSync("node", [join(REPO_ROOT, "setup", "page-on-failure.mjs"), "--workflow", workflowLabel], {
-      stdio: "inherit",
-      env: process.env,
-    });
-  } catch (e) {
-    console.error(`[azure-watchdog] page-on-failure itself failed: ${String(e && e.message || e)} — this is the worst case (the page about the outage could not be sent). Check oauth-lane-cto-* and posthog-fleet-ingest-key.`);
-  }
+  execFileSync("node", [join(REPO_ROOT, "setup", "page-on-failure.mjs"), "--workflow", workflowLabel], {
+    stdio: "inherit",
+    env: process.env,
+  });
 }
 
 async function emergencyBackup() {
@@ -184,9 +218,13 @@ async function main() {
     state.consecutiveFailures = 0;
     state.lastSuccessAt = now;
     if (openEpisode) {
+      // page() BEFORE mutating the episode (2026-07-28 review finding): if the page throws, this
+      // whole function throws too, main()'s top-level catch aborts BEFORE saveState() runs, and the
+      // episode stays open in the last-saved state — so the NEXT run still sees it open and retries
+      // the recovery notice, instead of silently marking it recovered with nobody ever told.
+      page(`AZURE WATCHDOG: reachability RESTORED (was declared down at ${openEpisode.declaredAt})`);
       openEpisode.recoveredAt = now;
       console.log(`[azure-watchdog] RECOVERED: Azure reachability restored (episode declared ${openEpisode.declaredAt}).`);
-      page(`AZURE WATCHDOG: reachability RESTORED (was declared down at ${openEpisode.declaredAt})`);
     } else {
       console.log("[azure-watchdog] healthy.");
     }
@@ -197,10 +235,12 @@ async function main() {
       const episode = { declaredAt: now, recoveredAt: null };
       console.error(`[azure-watchdog] DECLARING FAILOVER: ${THRESHOLD} consecutive unhealthy checks. Running emergency backup...`);
       const backupResults = await emergencyBackup();
-      state.episodes.push(episode);
       const markerKey = await writeMarker(creds, episode, backupResults);
       console.error(`[azure-watchdog] marker written: s3://${creds.bucket}/${markerKey}`);
+      // page() BEFORE pushing the episode into state, same reasoning as the recovery branch above: a
+      // failed page must not be recorded as "declared" (that would permanently suppress retry).
       page(`AZURE WATCHDOG: sustained outage DECLARED at ${now} (${THRESHOLD} consecutive checks). Emergency backup: ${JSON.stringify(backupResults)}`);
+      state.episodes.push(episode);
     }
   }
 

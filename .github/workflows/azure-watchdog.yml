@@ -1,0 +1,103 @@
+# The outside-Azure self-trigger: detects sustained Azure/gateway unreachability and reacts.
+#
+# skills/fleet-backup/azure-watchdog.mjs is the logic; this workflow is what actually FIRES it on a
+# schedule (2026-07-28 review finding: the script existed but nothing invoked it — the whole
+# self-trigger premise did nothing until this file existed).
+#
+# CREDENTIAL SOURCING IS THE LOAD-BEARING DESIGN POINT (see the script's own header for the full
+# rationale): WATCHDOG_AWS_* are passed here as literal GitHub Actions secrets, NOT resolved from Key
+# Vault, so the watchdog's own ability to read/write its S3 state and to declare/page on an outage does
+# NOT depend on Key Vault being reachable — the exact thing it may be detecting the loss of. azure/login
+# below is ONLY for the script's secondary Key Vault-reachability PROBE (one of its two health signals);
+# if that OIDC login itself fails, checkKeyVault() correctly reports false and the run proceeds on the
+# gateway-health signal alone — it never blocks the state read/write path.
+#
+# Runs every 15 minutes. With THRESHOLD=3 (the script's default), that is ~30-45 minutes of sustained
+# failure before a failover is declared — deliberately conservative against a single transient blip.
+
+name: Azure Watchdog
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'azure-watchdog.mjs command to run'
+        required: false
+        default: 'check'
+        type: choice
+        options: [check, status, selftest]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: azure-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    name: check Azure/gateway reachability, react on sustained failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: "Azure login (OIDC, secondary signal only -- NOT the state read/write path, see header)"
+        continue-on-error: true
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run azure-watchdog
+        working-directory: skills/fleet-backup
+        env:
+          # Off-Azure credentials for the watchdog's OWN S3 state (the load-bearing path -- see header).
+          WATCHDOG_AWS_ACCESS_KEY_ID: ${{ secrets.WATCHDOG_AWS_ACCESS_KEY_ID }}
+          WATCHDOG_AWS_SECRET_ACCESS_KEY: ${{ secrets.WATCHDOG_AWS_SECRET_ACCESS_KEY }}
+          WATCHDOG_AWS_S3_BUCKET: ${{ secrets.WATCHDOG_AWS_S3_BUCKET }}
+          WATCHDOG_AWS_REGION: ${{ secrets.WATCHDOG_AWS_REGION }}
+          # Azure SP fallback, used only by the secondary Key Vault-reachability probe and by the
+          # emergency-backup path (secrets-dr-export.mjs / s3-mirror.mjs) when it actually runs.
+          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
+          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
+          # Off-Azure PostHog paging credential (setup/page-on-failure.mjs checks this env var BEFORE
+          # Key Vault) -- without it, paging silently depends on Key Vault too, defeating the point.
+          POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
+          WATCHDOG_CMD: ${{ inputs.command }}
+        run: |
+          set -o pipefail
+          CMD="${WATCHDOG_CMD:-check}"
+          if [ -z "${WATCHDOG_AWS_ACCESS_KEY_ID:-}" ]; then
+            echo "::warning::WATCHDOG_AWS_* repo secrets are not provisioned yet -- the watchdog cannot read/write its off-Azure state without them and will exit non-zero by design (it refuses to run stateless). Provision WATCHDOG_AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY/S3_BUCKET/REGION (the same values as aws-dr-* in Key Vault) as repo secrets to arm this."
+          fi
+          node azure-watchdog.mjs "$CMD" 2>&1 | tee "${GITHUB_WORKSPACE}/azure-watchdog.log"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: azure-watchdog-log
+          path: azure-watchdog.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: "Page on the watchdog's OWN failure (not the Azure outage it might be reporting -- that pages via its own logic)"
+        if: failure()
+        run: node setup/page-on-failure.mjs --workflow "Azure Watchdog (self-failure, not necessarily an Azure outage)" --log "${GITHUB_WORKSPACE}/azure-watchdog.log"
+
+      - name: "Heartbeat: mark this workflow's schedule as alive"
+        if: always()
+        continue-on-error: true
+        run: node setup/heartbeat.mjs beat azure-watchdog ok >/dev/null 2>&1 || true

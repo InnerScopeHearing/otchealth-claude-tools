@@ -159,10 +159,17 @@ async function sendPageEmail(subject, body) {
 
 /** Fallback trace: the SAME secret + capture endpoint canary.mjs's own emitPosthog() already uses,
  *  event 'canary_red' (or 'pager_selftest' in --test mode, see posthogEventName()) instead of
- *  'azure_canary'. Throws on failure so the caller can report it. */
+ *  'azure_canary'. Throws on failure so the caller can report it.
+ *
+ *  Credential resolution checks POSTHOG_FLEET_INGEST_KEY in the environment FIRST, kvSecret() second
+ *  (2026-07-28, added for azure-watchdog.mjs). Every OTHER caller of this script (the nightly canary/
+ *  sentinel workflows) never sets that env var, so their behavior is byte-for-byte unchanged — kvSecret
+ *  still resolves it exactly as before. The one caller that DOES need this — the outage watchdog — is
+ *  reporting on a scenario where Key Vault itself may be down, so its "independent PostHog fallback"
+ *  claim was not actually independent until this credential could come from somewhere off-Azure too. */
 async function emitPosthogFallback(props, eventName) {
-  const key = await kvSecret("posthog-fleet-ingest-key");
-  if (!key) throw new Error("posthog-fleet-ingest-key unavailable");
+  const key = process.env.POSTHOG_FLEET_INGEST_KEY || await kvSecret("posthog-fleet-ingest-key");
+  if (!key) throw new Error("posthog-fleet-ingest-key unavailable (checked POSTHOG_FLEET_INGEST_KEY env and Key Vault)");
   const host = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
   const r = await fetch(`${host}/capture/`, {
     method: "POST", headers: { "Content-Type": "application/json" },
