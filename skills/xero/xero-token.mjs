@@ -24,9 +24,22 @@
  * Library:  import { getAccessContext } from "./xero-token.mjs"  ->  { access_token, tenantId, source }
  * CLI:      node xero-token.mjs check <org>        # one org, prints health, exit!=0 if unhealthy
  *           node xero-token.mjs monitor [orgs...]  # all (or listed) orgs; writes Azure Blob health snapshot + alerts
+ *
+ * HEALTH CHECK ARCHITECTURE (2026-08-01, post GATEWAY SOLE-CONSUMER GUARD below): `check`/`monitor`
+ * no longer read or refresh org tokens directly (that IS the fork-the-chain failure this guard
+ * exists to prevent — doing so 100% failed every hourly run of the `xero-health` Container Apps Job
+ * for 16+ days, since the guard was added 2026-07-16, and left the Datadog monitor "Xero org
+ * connection DOWN" stuck alerting on stale/no data instead of real state). They now go through the
+ * gateway's own read-only `xero_orgs` tool (probe:true) on a `cfo`-lane client_credentials bearer
+ * (gateway-connect.mjs — same pattern as skills/cfo-reconstruction/xero-readonly.mjs), and emit the
+ * SAME `otc.fleet.xero_connection_ok{org:<org>}` Datadog metric based on the gateway's answer.
+ * XERO_ALLOW_DIRECT=1 switches back to the pre-hardening direct-refresh check (the same escape hatch
+ * documented on guardGatewayOwnedOrg below): a genuinely gateway-independent org, or an operator
+ * emergency re-seed check.
  */
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
 import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
+import { mintToken as mintGatewayToken, GATEWAY_MCP } from "../gateway-connect/connect.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
 const BUCKET = "otchealth-cfo-source-docs"; // legacy GCS name, kept as the object-path namespace
@@ -212,6 +225,11 @@ async function ddEmit(metric, value, tags) {
 // Definitive, low-churn liveness check: obtain a token via the broker (cache when warm; only refreshes
 // when the access token is actually stale), then make a real /connections call. An empty list = the org
 // was DISCONNECTED even if a cached token is still technically valid — which a pure cache read would miss.
+//
+// DIRECT-PATH ONLY: this reads/refreshes the org's token directly, which guardGatewayOwnedOrg() refuses
+// for otchealth/innd/hearingassist/personal unless XERO_ALLOW_DIRECT=1 (the documented escape hatch —
+// a genuinely gateway-independent org, or an operator emergency re-seed). NOT used by the default health
+// check below; see cliCheckViaGateway().
 async function liveCheck(org) {
   const c = await getAccessContext(org);
   const r = await fetch(CONN_URL, { headers: { Authorization: `Bearer ${c.access_token}`, Accept: "application/json" } });
@@ -219,13 +237,116 @@ async function liveCheck(org) {
   if (!Array.isArray(conns) || conns.length === 0) throw new Error(`XERO_DISCONNECTED:${org} (re-consent required)`);
   return conns[0].tenantId;
 }
-async function cliCheck(orgs) {
+
+// ---- Gateway-backed health check (2026-08-01) ----
+// Since 2026-07-16 the gateway is the SOLE consumer of the live rotate-on-use Xero chain for all 4
+// orgs (guardGatewayOwnedOrg above), so this skill can no longer read/refresh org tokens directly to
+// check health — that IS the fork-the-chain failure mode the guard exists to prevent. Post-hardening,
+// health must be read the same way any other read-only consumer reads Xero: through the gateway's own
+// read-only `xero_orgs` tool (probe:true live-checks every configured org in ONE call), authenticated
+// as a lane the gateway allows to reach Xero. Mirrors skills/cfo-reconstruction/xero-readonly.mjs
+// (same gateway-connect.mjs mintToken() client_credentials pattern, same GATEWAY_MCP endpoint).
+//
+// LANE NOTE (load-bearing): xero_orgs is gated by isXeroAllowed() in the gateway
+// (otchealth-mcp-server/src/tools/xero/client.ts), which only accepts EXEC_RING lanes
+// ('cfo','clo','clo-personal','cpo','cco','exec') — 'cto' and 'developer' are NOT on that list and
+// get a ring refusal. This health check MUST mint a 'cfo' lane bearer, not 'cto'.
+function extractLeadingJson(text) {
+  const s = String(text || "");
+  const start = s.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = start; i < s.length; i++) {
+    if (s[i] === "{") depth++;
+    else if (s[i] === "}") { depth--; if (depth === 0) return s.slice(start, i + 1); }
+  }
+  return null; // unbalanced — truncated response
+}
+async function gatewayXeroOrgs() {
+  const { token } = await mintGatewayToken("cfo");
+  const r = await fetch(GATEWAY_MCP, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "xero_orgs", arguments: { probe: true, acknowledge_warning: true } } }),
+  });
+  const txt = await r.text();
+  let j;
+  try { j = JSON.parse(txt); } catch { const m = txt.match(/data: (\{[\s\S]*\})/); j = m ? JSON.parse(m[1]) : null; }
+  if (!j) throw new Error(`gateway xero_orgs: unparseable response (HTTP ${r.status}): ${txt.slice(0, 200)}`);
+  if (j.error) throw new Error(`gateway xero_orgs JSON-RPC error: ${JSON.stringify(j.error).slice(0, 200)}`);
+  const res = j.result;
+  if (!res) throw new Error(`gateway xero_orgs: no result (HTTP ${r.status}): ${txt.slice(0, 200)}`);
+  if (res.isError) {
+    const errText = (res.content && res.content[0] && res.content[0].text) || JSON.stringify(res);
+    throw new Error(`gateway xero_orgs tool error: ${String(errText).slice(0, 300)}`);
+  }
+  // Prefer structuredContent.result (clean JSON). content[0].text carries the SAME JSON followed by a
+  // prose summary line, so the whole string is NOT valid JSON — a documented fleet pitfall (gateway
+  // MCP tools put structured fields in structuredContent.result, not content[0].text; verify response
+  // SHAPE before diagnosing a "broken" deploy).
+  const structOrgs = res.structuredContent && res.structuredContent.result && res.structuredContent.result.orgs;
+  if (Array.isArray(structOrgs)) return structOrgs;
+  const text = (res.content && res.content[0] && res.content[0].text) || "";
+  const leading = extractLeadingJson(text);
+  if (leading) { try { const parsed = JSON.parse(leading); if (Array.isArray(parsed.orgs)) return parsed.orgs; } catch {} }
+  throw new Error(`gateway xero_orgs: could not locate orgs[] in response: ${text.slice(0, 300)}`);
+}
+/** Real-down (dead/unbootstrapped) vs a healthy 'live' org, per the gateway's own probe. */
+function isOrgHealthy(status) { return status === "live"; }
+
+async function cliCheckViaGateway(orgs) {
+  const results = [];
+  let probed;
+  try {
+    probed = await gatewayXeroOrgs();
+  } catch (e) {
+    // The gateway itself is unreachable, or lane auth failed — that is ALSO a real health signal (we
+    // cannot verify anything), not a pass. Report every requested org as unhealthy rather than
+    // silently exiting 0, and emit 0 so the Datadog monitor still sees a fresh (if bad) value.
+    for (const org of orgs) {
+      results.push({ org, ok: false, error: `gateway check failed: ${e.message}` });
+      console.log(`ERROR      ${org.padEnd(13)} gateway check failed: ${e.message}`);
+      await ddEmit("otc.fleet.xero_connection_ok", 0, [`org:${org}`, "state:gateway-error"]);
+    }
+    return results;
+  }
+  const byOrg = new Map(probed.map((o) => [o.org, o]));
+  for (const org of orgs) {
+    const o = byOrg.get(org);
+    if (!o) {
+      results.push({ org, ok: false, error: `org '${org}' missing from gateway xero_orgs response` });
+      console.log(`ERROR      ${org.padEnd(13)} missing from gateway xero_orgs response`);
+      await ddEmit("otc.fleet.xero_connection_ok", 0, [`org:${org}`, "state:missing"]);
+      continue;
+    }
+    if (isOrgHealthy(o.status)) {
+      results.push({ org, ok: true, tenantName: o.tenantName });
+      console.log(`OK         ${org.padEnd(13)} tenant ${o.tenantName || "?"} (via gateway)`);
+      await ddEmit("otc.fleet.xero_connection_ok", 1, [`org:${org}`]);
+    } else {
+      const disconnected = o.status === "unbootstrapped" || o.status === "dead";
+      results.push({ org, ok: false, disconnected, status: o.status, error: o.detail || o.status });
+      console.log(`${o.status === "unbootstrapped" ? "DISCONNECTED" : "ERROR      "} ${org.padEnd(13)} status=${o.status}${o.detail ? " " + o.detail : ""}`);
+      await ddEmit("otc.fleet.xero_connection_ok", 0, [`org:${org}`, `state:${o.status}`]);
+    }
+  }
+  return results;
+}
+async function cliCheckDirect(orgs) {
+  // The ORIGINAL direct-refresh liveness check, preserved for the documented escape hatch
+  // (XERO_ALLOW_DIRECT=1): a genuinely gateway-independent org, or an operator emergency re-seed.
   const results = [];
   for (const org of orgs) {
-    try { const tid = await liveCheck(org); results.push({ org, ok: true, tenantId: tid }); console.log(`OK         ${org.padEnd(13)} tenant ${tid}`); await ddEmit("otc.fleet.xero_connection_ok", 1, [`org:${org}`]); }
+    try { const tid = await liveCheck(org); results.push({ org, ok: true, tenantId: tid }); console.log(`OK         ${org.padEnd(13)} tenant ${tid} (direct)`); await ddEmit("otc.fleet.xero_connection_ok", 1, [`org:${org}`]); }
     catch (e) { const disc = String(e.message || "").startsWith("XERO_DISCONNECTED"); results.push({ org, ok: false, disconnected: disc, error: e.message }); console.log(`${disc ? "DISCONNECTED" : "ERROR      "} ${org.padEnd(13)} ${e.message}`); await ddEmit("otc.fleet.xero_connection_ok", 0, [`org:${org}`, disc ? "state:disconnected" : "state:error"]); }
   }
   return results;
+}
+// Default entry point: gateway-backed (post-2026-07-16 architecture). XERO_ALLOW_DIRECT=1 switches to
+// the pre-hardening direct path (same escape hatch guardGatewayOwnedOrg documents everywhere else in
+// this file) — kept for a genuinely gateway-independent org or an operator emergency re-seed check.
+async function cliCheck(orgs) {
+  return process.env.XERO_ALLOW_DIRECT === "1" ? cliCheckDirect(orgs) : cliCheckViaGateway(orgs);
 }
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
