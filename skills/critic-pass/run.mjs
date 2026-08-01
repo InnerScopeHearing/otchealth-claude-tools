@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { buildCriticPrompt, parseCriticVerdict, shouldRevise } from "./critic.mjs";
-import { chatBody, resolveTier } from "../../setup/model-routing.mjs";
+import { chatBody, resolveTier, LEGACY_STANDARD } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const SM = "otchealth-shared-prod";
@@ -57,21 +57,33 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
 
-// The default (real) model call: primary azure-openai (gpt-4o standard), foundry fallback on throttle.
+// The default (real) model call: primary Foundry (gpt-4.1 standard, 2,000K TPM GlobalStandard),
+// Foundry-quality (gpt-5.1) as a secondary fallback on throttle, and the LEGACY azure-openai resource
+// (gpt-4o, 50K TPM, already 100% subscribed) as the last-resort fallback only. The legacy resource used
+// to be primary here; that pairing broke once TIERS.standard.deployment moved to 'gpt-4.1' (a deployment
+// that does not exist on the legacy resource) and it was also the direct cause of the fleet-wide Datadog
+// "Azure OpenAI throttled (blocked_calls)" flap (see model-routing.mjs LEGACY_STANDARD comment).
 // Mirrors agent-evals/run-evals.mjs's chat() so the whole fleet agrees on endpoints + throttle handling.
 async function defaultAzureChat({ system, user, tier, maxTokens = 700 }) {
   const saRaw = resolveSa(); // may be null post-GCP-exit; sm() then resolves via Key Vault (OIDC on CI)
   const dep = resolveTier(process.env.CRITIC_MODEL || tier || "standard").deployment;
-  const [ep, key] = await Promise.all([sm("azure-openai-endpoint", saRaw), sm("azure-openai-key", saRaw)]);
-  if (!ep || !key) throw new Error("missing azure-openai endpoint/key");
+  const [ep, key] = await Promise.all([sm("azure-foundry-openai-endpoint", saRaw), sm("azure-foundry-key", saRaw)]);
+  if (!ep || !key) throw new Error("missing azure-foundry endpoint/key");
   const endpoint = ep.replace(/\/$/, "");
   try {
     return await callChat(endpoint, key, dep, system, user, maxTokens, 4);
   } catch (e) {
     if (e.throttled) {
-      const [fbEp, fbKey] = await Promise.all([sm("azure-foundry-openai-endpoint", saRaw), sm("azure-foundry-key", saRaw)]);
-      const fbDep = resolveTier(process.env.CRITIC_FALLBACK_MODEL || "quality").deployment;
-      if (fbEp && fbKey) return await callChat(fbEp.replace(/\/$/, ""), fbKey, fbDep, system, user, maxTokens, 5);
+      try {
+        const fbDep = resolveTier(process.env.CRITIC_FALLBACK_MODEL || "quality").deployment;
+        return await callChat(endpoint, key, fbDep, system, user, maxTokens, 2);
+      } catch (e2) {
+        // last resort only: the legacy resource has zero headroom (50K/50K TPM), so it is a final
+        // safety net once Foundry itself is throttled/unavailable, never the primary path.
+        const [legEp, legKey] = await Promise.all([sm("azure-openai-endpoint", saRaw), sm("azure-openai-key", saRaw)]);
+        if (legEp && legKey) return await callChat(legEp.replace(/\/$/, ""), legKey, LEGACY_STANDARD.deployment, system, user, maxTokens, 3);
+        throw e2;
+      }
     }
     throw e;
   }

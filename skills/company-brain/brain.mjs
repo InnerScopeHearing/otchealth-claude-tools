@@ -20,7 +20,7 @@
 //   node brain.mjs rooms                      # list the indexes it can search
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { TIERS, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { RING_DENY } from "../kb-memory/dedupe.mjs";
 const SM = "otchealth-shared-prod";
@@ -66,15 +66,20 @@ let AIS_EP, AIS_KEY, AOAI_EP, AOAI_KEY, AOAI_DEP, CHAT_PROVIDERS = [];
 async function init() {
   AIS_EP = (await sm("azure-search-endpoint") || "").replace(/\/$/, ""); AIS_KEY = await sm("azure-search-admin-key");
   AOAI_EP = ((await sm("azure-foundry-openai-endpoint")) || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, ""); AOAI_KEY = (await sm("azure-foundry-key")) || (await sm("azure-openai-key")); AOAI_DEP = (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
-  // Chat synthesis routes through a PRIMARY then a FALLBACK deployment so a transient throttle on
-  // one Azure OpenAI deployment never silences the brain (down-payment on model-routing, initiative #5).
-  // FALLBACK: gpt-4.1-mini is BANNED for quality/summarization work (see setup/model-routing.mjs). The
-  // brain's whole job IS quality synthesis, so the fallback defaults to the shared 'quality' tier
-  // (gpt-5.1, reasoning-family) via model-routing.mjs, the single source of truth for tier + body shape.
-  const primEp = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); const primKey = await sm("azure-openai-key");
-  const fbEp = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); const fbKey = await sm("azure-foundry-key");
-  if (primEp && primKey) { const dep = process.env.BRAIN_MODEL || TIERS.standard.deployment; CHAT_PROVIDERS.push({ ep: primEp, key: primKey, dep, label: dep, modelFamily: modelFamilyOf(dep) }); }
-  if (fbEp && fbKey) { const fbDep = process.env.BRAIN_FALLBACK_MODEL || TIERS.quality.deployment; CHAT_PROVIDERS.push({ ep: fbEp, key: fbKey, dep: fbDep, label: `foundry/${fbDep}`, modelFamily: modelFamilyOf(fbDep) }); }
+  // Chat synthesis routes through PRIMARY -> SECONDARY -> TERTIARY providers so a transient throttle
+  // on any one deployment never silences the brain (down-payment on model-routing, initiative #5).
+  // PRIMARY + SECONDARY both live on the Foundry resource (2,000K TPM GlobalStandard, ample headroom).
+  // The LEGACY Azure OpenAI resource (its gpt-4o deployment is capped at 50K TPM on the regional
+  // "Standard" SKU, already 100% subscribed with zero headroom) is demoted to a last-resort TERTIARY
+  // fallback only, never primary -- primarying on it was the root cause of the recurring "Azure OpenAI
+  // throttled (blocked_calls)" Datadog page (2026-08-01). SECONDARY: gpt-4.1-mini is BANNED for
+  // quality/summarization work (see setup/model-routing.mjs); the brain's whole job IS quality
+  // synthesis, so the secondary defaults to the shared 'quality' tier (gpt-5.1, reasoning-family).
+  const fEp = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); const fKey = await sm("azure-foundry-key");
+  const lEp = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); const lKey = await sm("azure-openai-key");
+  if (fEp && fKey) { const dep = process.env.BRAIN_MODEL || TIERS.standard.deployment; CHAT_PROVIDERS.push({ ep: fEp, key: fKey, dep, label: `foundry/${dep}`, modelFamily: modelFamilyOf(dep) }); }
+  if (fEp && fKey) { const fbDep = process.env.BRAIN_FALLBACK_MODEL || TIERS.quality.deployment; CHAT_PROVIDERS.push({ ep: fEp, key: fKey, dep: fbDep, label: `foundry/${fbDep}`, modelFamily: modelFamilyOf(fbDep) }); }
+  if (lEp && lKey) { const legDep = process.env.BRAIN_LEGACY_MODEL || LEGACY_STANDARD.deployment; CHAT_PROVIDERS.push({ ep: lEp, key: lKey, dep: legDep, label: `legacy/${legDep}`, modelFamily: modelFamilyOf(legDep) }); }
   if (!AIS_EP || !AIS_KEY) throw new Error("missing azure-search creds");
   if (!CHAT_PROVIDERS.length) throw new Error("no chat provider creds");
 }
@@ -131,9 +136,9 @@ async function callChat(p, system, user, tries) {
   throw Object.assign(new Error("429"), { throttled: true });
 }
 async function chat(system, user) {
-  // Try each provider in order (primary gpt-4o, then foundry fallback). A throttle on one falls
-  // through to the next instead of failing the query. Fewer retries on the primary so we reach the
-  // fallback faster when it is sustained-busy.
+  // Try each provider in order (foundry standard -> foundry quality -> legacy last-resort). A throttle
+  // on one falls through to the next instead of failing the query. Fewer retries on the primary so we
+  // reach the fallback faster when it is sustained-busy.
   let lastErr;
   for (let i = 0; i < CHAT_PROVIDERS.length; i++) {
     const p = CHAT_PROVIDERS[i];

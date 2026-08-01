@@ -42,7 +42,7 @@ import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { makeSignal, isMnpiSubject, isPhiExcluded } from "../schema.mjs";
-import { TIERS, chatBody } from "../../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, chatBody } from "../../../setup/model-routing.mjs";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 export const NAME = "groundedness";
@@ -247,18 +247,21 @@ async function readSharedFeed() {
 
 // Azure OpenAI faithfulness call - BOUNDED gpt tier (cheap/classification tier, not the quality/
 // reasoning tier #6 uses for entailment judgment) since this is a binary supported/unsupported/
-// contradicted classification against a fixed excerpt, not open-ended synthesis. Primary then
-// foundry-fallback, mirroring the fleet's existing routing so a transient throttle on one deployment
-// does not silence the detector.
+// contradicted classification against a fixed excerpt, not open-ended synthesis. Primary on Foundry
+// (2026-08-01: the legacy resource's gpt-4o deployment is 50K TPM regional-Standard, already 100%
+// subscribed, and has never had a gpt-4.1-mini deployment anyway - that combination was a pre-existing
+// bug, not a genuinely working fallback), with the legacy resource kept as a true last-resort fallback
+// using its ONLY real deployment (gpt-4o via LEGACY_STANDARD), mirroring the fleet's existing routing so
+// a transient throttle on Foundry does not silence the detector.
 async function makeChecker() {
-  const primEp = (await smGet("azure-openai-endpoint") || "").replace(/\/$/, "");
-  const primKey = await smGet("azure-openai-key");
-  const fbEp = (await smGet("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
-  const fbKey = await smGet("azure-foundry-key");
+  const primEp = (await smGet("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
+  const primKey = await smGet("azure-foundry-key");
+  const fbEp = (await smGet("azure-openai-endpoint") || "").replace(/\/$/, "");
+  const fbKey = await smGet("azure-openai-key");
   const providers = [];
   const primDep = process.env.GROUNDEDNESS_MODEL || TIERS.cheap.deployment;
   if (primEp && primKey) providers.push({ ep: primEp, key: primKey, dep: primDep });
-  if (fbEp && fbKey) providers.push({ ep: fbEp, key: fbKey, dep: process.env.GROUNDEDNESS_FALLBACK_MODEL || TIERS.cheap.deployment });
+  if (fbEp && fbKey) providers.push({ ep: fbEp, key: fbKey, dep: process.env.GROUNDEDNESS_FALLBACK_MODEL || LEGACY_STANDARD.deployment });
   if (!providers.length) return null;
 
   const callOne = async (p, system, user, tries) => {
@@ -309,7 +312,7 @@ export async function run() {
     if (note) notes.push(note);
     if (!rows.length) return { signals: [], notes };
     const check = await makeChecker();
-    if (!check) { notes.push("Azure OpenAI creds unavailable (azure-openai-endpoint/key) - faithfulness check skipped, detector idle."); return { signals: [], notes }; }
+    if (!check) { notes.push("Azure OpenAI creds unavailable (azure-foundry-openai-endpoint/key or azure-openai-endpoint/key) - faithfulness check skipped, detector idle."); return { signals: [], notes }; }
     const res = await scanRows(rows, check, { nowMs: Date.now() });
     return { signals: res.signals, notes: notes.concat(res.notes) };
   } catch (e) {

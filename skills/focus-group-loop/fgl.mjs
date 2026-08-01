@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
-import { TIERS, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, chatBody } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -38,12 +38,17 @@ async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return 
 
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
-  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.FGL_MODEL || TIERS.standard.deployment;
-  // FALLBACK: gpt-4.1-mini is BANNED for quality work (persona review IS the quality signal that
-  // feeds the 90% gate). Defaults to the shared 'quality' tier (gpt-5.1, reasoning-family) via
-  // setup/model-routing.mjs, the single source of truth for tier + body shape fleet-wide.
-  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.FGL_FALLBACK_MODEL || TIERS.quality.deployment;
-  if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key");
+  // PRIMARY (2026-08-01): the Foundry resource (gpt-4.1, 2,000K TPM GlobalStandard, vision-capable)
+  // via the shared 'standard' tier in setup/model-routing.mjs, the single source of truth for tier +
+  // body shape fleet-wide. gpt-4.1-mini is BANNED for quality work (persona review IS the quality
+  // signal that feeds the 90% gate), which is why 'standard' (not 'cheap') is the default here.
+  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.FGL_MODEL || TIERS.standard.deployment;
+  // FALLBACK: the legacy Azure OpenAI resource (octhealth-aoai-4701, gpt-4o, also vision-capable) as
+  // the last-resort safety net on sustained Foundry throttle. LEGACY_STANDARD is that resource's real
+  // deployment name; it is capacity-capped (50K TPM, 100% subscribed, zero headroom) so it stays a
+  // fallback only, never primary (see setup/model-routing.mjs).
+  FB_EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-openai-key"); FB_DEP = process.env.FGL_FALLBACK_MODEL || LEGACY_STANDARD.deployment;
+  if (!EP || !KEY) throw new Error("missing azure-foundry endpoint/key");
 }
 async function callChat(ep, key, dep, system, content, maxTokens, tries) {
   const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content }], maxTokens, temperature: 0.5 });
@@ -56,8 +61,9 @@ async function callChat(ep, key, dep, system, content, maxTokens, tries) {
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
 async function ask(system, content, maxTokens = 1600) {
-  // primary gpt-4o (vision); fall back to the foundry gpt-5.1 deployment (separate quota, also
-  // vision-capable) on sustained throttle so the autonomous QA loop never stalls (Fleet Intel #5).
+  // primary Foundry gpt-4.1 (vision); fall back to the legacy gpt-4o deployment (separate, capacity-
+  // capped quota, also vision-capable) on sustained throttle so the autonomous QA loop never stalls
+  // (Fleet Intel #5).
   try { return await callChat(EP, KEY, DEP, system, content, maxTokens, 5); }
   catch (e) { if (e.throttled && FB_EP && FB_KEY) return await callChat(FB_EP, FB_KEY, FB_DEP, system, content, maxTokens, 5); throw e; }
 }
@@ -152,7 +158,7 @@ async function runRound() {
   const nFail = parseFails(results.customers) + parseFails(results.professionals) + parseFails(results.investors);
   console.log(`\n================ FOCUS GROUP LOOP — ${APP} ROUND ${ROUND} ================`);
   console.log(summary);
-  if (nFail) console.log(`(note: ${nFail} persona response(s) could not be scored - unparseable output or an Azure OpenAI throttle that survived retry + fallback - and were EXCLUDED from the averages, NOT scored 0. Raise the gpt-4o TPM quota or re-run to score them.)`);
+  if (nFail) console.log(`(note: ${nFail} persona response(s) could not be scored - unparseable output or an Azure OpenAI throttle that survived retry + fallback - and were EXCLUDED from the averages, NOT scored 0. Re-run to score them.)`);
   console.log(`GATE (>=90% all groups): ${pass ? "PASSED -> ship-ready per the panel" : "NOT YET -> execute the change list and re-run"}`);
   console.log(`\nPER-PERSON:`);
   for (const g of ["customers", "professionals", "investors"]) for (const r of results[g]) console.log(`  [${g}] ${r.name}: ${r.rating == null ? "n/a (excluded)" : `${r.rating}/10`}  ${r.rating == null ? "" : g === "customers" ? (r.would_pay ? "would pay" : "would NOT pay") : g === "professionals" ? (r.would_associate ? "would put name on it" : "would NOT associate") : (r.would_invest ? `INVEST $${r.amount_usd} / ${r.equity_pct}% (val $${r.valuation_usd})` : "pass")}`);

@@ -384,9 +384,12 @@ function loadTaskRubric(agent, taskId) {
 // async resolver used to build that closure.
 async function defaultRewriteLLM(promptText) {
   const dep = process.env.SELFREPAIR_REWRITE_MODEL || TIERS.quality.deployment;
-  const ep = (await smGet("azure-openai-endpoint") || "").replace(/\/$/, "");
-  const key = await smGet("azure-openai-key");
-  if (!ep || !key) throw new Error("missing azure-openai endpoint/key (Secret Manager)");
+  // TIERS.quality.deployment (gpt-5.1, reasoning-family) only exists on the Foundry resource -- the
+  // legacy azure-openai resource has no gpt-5.1 deployment at all, so pairing it with the legacy
+  // endpoint/key (as this used to) always 404'd. Fixed here to resolve azure-foundry-* instead.
+  const ep = (await smGet("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
+  const key = await smGet("azure-foundry-key");
+  if (!ep || !key) throw new Error("missing azure-foundry endpoint/key (Secret Manager)");
   const sys = "You rewrite a prompt hunk to recover failed rubric criteria while keeping the PR's intended change. Output ONLY the replacement hunk text, no commentary, no code fences.";
   const body = chatBody(dep, { messages: [{ role: "system", content: sys }, { role: "user", content: promptText }], maxTokens: 1200 });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });

@@ -17,6 +17,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { TIERS } from "../../setup/model-routing.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const argv = process.argv.slice(2);
@@ -30,7 +31,11 @@ async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return 
   if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null; // no GCP SA post-exit -> Key Vault only (via kvSecret above); skip the retired SM fallback
   const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 let EP, KEY, DEP;
-async function initModel() { EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.SHARK_MODEL || "gpt-4o"; if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key"); }
+// Primary on Foundry (2026-08-01: the legacy azure-openai resource's gpt-4o deployment is 50K TPM
+// regional-Standard, already 100% subscribed, zero headroom - a hard capacity ceiling that kept
+// tripping the fleet-wide Datadog "Azure OpenAI throttled (blocked_calls)" monitor). No fallback chain
+// here (lower-frequency caller than the signal-radar detectors); a simple repoint is sufficient.
+async function initModel() { EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.SHARK_MODEL || TIERS.standard.deployment; if (!EP || !KEY) throw new Error("missing azure-foundry-openai endpoint/key"); }
 async function ask(system, user, maxTokens = 700) {
   for (let a = 0; a < 5; a++) {
     const r = await fetch(`${EP}/openai/deployments/${DEP}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": KEY, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.7 }) });
