@@ -17,8 +17,9 @@
 // ONLY, optionally, to rewrite a candidate's surrounding-text context into a short human label
 // (--label-llm); it NEVER invents or adjusts the date itself, and it fails open (leaves the
 // deterministic context untouched) on any error or missing credentials. Per the fleet's
-// model-routing ban (setup/model-routing.mjs), the label call ALWAYS uses gpt-4o (TIERS.standard)
-// and NEVER gpt-4.1-mini (TIERS.cheap is banned for quality/summarization work).
+// model-routing ban (setup/model-routing.mjs), the label call ALWAYS uses TIERS.standard (gpt-4.1
+// on the Foundry resource, primary as of 2026-08-01) and NEVER gpt-4.1-mini (TIERS.cheap is banned
+// for quality/summarization work).
 //
 // Usage:
 //   node deadline-extract.mjs extract --file <sidecar.txt> [--matter <id>] [--personal] [--json] [--label-llm]
@@ -130,10 +131,17 @@ export function extractCandidates(text, { contextChars = 100, source = "extracte
 
 // ---- optional LLM context labeling (never touches the date; fails open) ----
 async function defaultChat(system, user) {
-  const ep = ((await kvSecret("azure-openai-endpoint")) || (await kvSecret("azure-foundry-openai-endpoint")) || "").replace(/\/$/, "");
-  const key = (await kvSecret("azure-openai-key")) || (await kvSecret("azure-foundry-key"));
+  // Foundry FIRST (TIERS.standard.deployment = gpt-4.1 lives there, 2,000K TPM); the legacy resource
+  // is checked only as a fallback if the Foundry secrets are somehow unavailable. Note: if that
+  // fallback DOES resolve, TIERS.standard.deployment ('gpt-4.1') does not exist on the legacy resource
+  // and the call below would 404 - but `!r.ok` already fails open into `return null` (no label, the
+  // deterministic `what` stands), so that edge case is harmless here, unlike the multi-provider
+  // detectors (contradiction-staleness.mjs/groundedness.mjs) which retry against the fallback's real
+  // model name instead of just giving up.
+  const ep = ((await kvSecret("azure-foundry-openai-endpoint")) || (await kvSecret("azure-openai-endpoint")) || "").replace(/\/$/, "");
+  const key = (await kvSecret("azure-foundry-key")) || (await kvSecret("azure-openai-key"));
   if (!ep || !key) return null; // no creds -> fail open, deterministic context stands
-  const dep = TIERS.standard.deployment; // gpt-4o. NEVER TIERS.cheap (gpt-4.1-mini banned for quality work).
+  const dep = TIERS.standard.deployment; // gpt-4.1 on Foundry. NEVER TIERS.cheap (gpt-4.1-mini banned for quality work).
   const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 60, temperature: 0.1 });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) return null;
@@ -142,7 +150,7 @@ async function defaultChat(system, user) {
 }
 const LABEL_SYSTEM = "You are a legal-docket assistant. Given the raw surrounding text of a date found in a legal document, write ONE short label (8 words or fewer) describing what the deadline IS (for example: 'Response to motion due', 'Case management conference', 'Discovery cutoff'). Output ONLY the label: no punctuation at the end, no quotes, no preamble. If the text does not actually describe a deadline or dated event, output exactly: UNCLEAR. Never invent a date or fact that is not present in the given text.";
 // `chatFn` is injectable for tests (never hits the network in a test); production defaults to
-// ONE best-effort gpt-4o call per candidate, bounded to `limit` candidates (remaining candidates
+// ONE best-effort TIERS.standard (gpt-4.1) call per candidate, bounded to `limit` candidates (remaining candidates
 // beyond the bound keep their deterministic `what` untouched, to cap cost/latency on a big
 // document). Per-candidate errors are caught so one bad call never drops the rest of the batch;
 // the deterministic `what` is always preserved as `context` when a label replaces it.

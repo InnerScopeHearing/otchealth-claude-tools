@@ -13,9 +13,12 @@
 //
 // Model choice (deliberate, do NOT default to gpt-4.1-mini here): this is QUALITY SYNTHESIS across a
 // day of cross-session signal, not reflect.mjs's cheap bounded per-session capture, so it follows
-// company-brain's CHAT_PROVIDERS order -- gpt-4o PRIMARY, then the Foundry "quality" tier (gpt-5.1,
-// reasoning-family) as fallback. gpt-4.1-mini is BANNED for this class of work (see
-// setup/model-routing.mjs and otchealth-cto/CLAUDE.md) and is never used, including as a fallback.
+// company-brain's CHAT_PROVIDERS order -- Foundry "standard" (gpt-4.1) PRIMARY, then the Foundry
+// "quality" tier (gpt-5.1, reasoning-family) as secondary, then the LEGACY azure-openai resource
+// (gpt-4o) as a last-resort tertiary fallback only (its 50K TPM deployment is fully subscribed with
+// zero headroom, the root cause of the recurring "Azure OpenAI throttled (blocked_calls)" Datadog
+// page -- see setup/model-routing.mjs LEGACY_STANDARD). gpt-4.1-mini is BANNED for this class of work
+// (see setup/model-routing.mjs and otchealth-cto/CLAUDE.md) and is never used, including as a fallback.
 //
 // Ring/safety notes:
 //   - CORRECTED (was stale): this file used to claim "the Cosmos `memory` container already rejects
@@ -59,7 +62,7 @@ import { dirname, join } from "node:path";
 import { tokenize, jaccard, ringSafeCross, PRIVILEGED_AGENTS } from "./dedupe.mjs";
 import { kvSecret } from "./azure-secret.mjs";
 import * as cosmosMemory from "./cosmos-memory-read.mjs";
-import { TIERS, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -240,21 +243,28 @@ async function sm(id) {
 let CHAT_PROVIDERS = [];
 async function initModel() {
   CHAT_PROVIDERS = [];
-  const primEp = (await sm("azure-openai-endpoint") || "").replace(/\/$/, "");
-  const primKey = await sm("azure-openai-key");
-  const fbEp = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
-  const fbKey = await sm("azure-foundry-key");
-  // Primary: gpt-4o (TIERS.standard). Fallback: TIERS.quality (gpt-5.1, reasoning-family), the SAME
-  // ban-compliant fallback company-brain uses -- never gpt-4.1-mini for this class of synthesis work.
-  // The env overrides are ban-guarded (resolveModelOverride) so an operator cannot point the distiller
-  // at gpt-4.1-mini via NIGHTLY_REFLECTION_MODEL / NIGHTLY_REFLECTION_FALLBACK_MODEL.
-  if (primEp && primKey) {
+  const fEp = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
+  const fKey = await sm("azure-foundry-key");
+  const lEp = (await sm("azure-openai-endpoint") || "").replace(/\/$/, "");
+  const lKey = await sm("azure-openai-key");
+  // Primary + secondary: both Foundry (TIERS.standard = gpt-4.1, then TIERS.quality = gpt-5.1,
+  // reasoning-family), the SAME ban-compliant chain company-brain uses -- never gpt-4.1-mini for this
+  // class of synthesis work. Tertiary: the LEGACY azure-openai resource (LEGACY_STANDARD = gpt-4o) as
+  // a last-resort fallback only -- its deployment is capped at 50K TPM with zero headroom, so it must
+  // never be primary (see setup/model-routing.mjs LEGACY_STANDARD). The env overrides are ban-guarded
+  // (resolveModelOverride) so an operator cannot point the distiller at gpt-4.1-mini via
+  // NIGHTLY_REFLECTION_MODEL / NIGHTLY_REFLECTION_FALLBACK_MODEL.
+  if (fEp && fKey) {
     const dep = resolveModelOverride(process.env.NIGHTLY_REFLECTION_MODEL, TIERS.standard.deployment, "NIGHTLY_REFLECTION_MODEL");
-    CHAT_PROVIDERS.push({ ep: primEp, key: primKey, dep, label: dep, modelFamily: modelFamilyOf(dep) });
+    CHAT_PROVIDERS.push({ ep: fEp, key: fKey, dep, label: `foundry/${dep}`, modelFamily: modelFamilyOf(dep) });
   }
-  if (fbEp && fbKey) {
+  if (fEp && fKey) {
     const fbDep = resolveModelOverride(process.env.NIGHTLY_REFLECTION_FALLBACK_MODEL, TIERS.quality.deployment, "NIGHTLY_REFLECTION_FALLBACK_MODEL");
-    CHAT_PROVIDERS.push({ ep: fbEp, key: fbKey, dep: fbDep, label: `foundry/${fbDep}`, modelFamily: modelFamilyOf(fbDep) });
+    CHAT_PROVIDERS.push({ ep: fEp, key: fKey, dep: fbDep, label: `foundry/${fbDep}`, modelFamily: modelFamilyOf(fbDep) });
+  }
+  if (lEp && lKey) {
+    const legDep = resolveModelOverride(process.env.NIGHTLY_REFLECTION_LEGACY_MODEL, LEGACY_STANDARD.deployment, "NIGHTLY_REFLECTION_LEGACY_MODEL");
+    CHAT_PROVIDERS.push({ ep: lEp, key: lKey, dep: legDep, label: `legacy/${legDep}`, modelFamily: modelFamilyOf(legDep) });
   }
 }
 async function callChat(p, system, user, tries) {
