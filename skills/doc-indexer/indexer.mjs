@@ -74,7 +74,16 @@ const TEXT_PREFIX = "_TEXT/";
 // document text anyway. Catalog them but skip extraction. Override with MAX_INDEX_MB.
 const MAX_INDEX_MB = parseInt(process.env.MAX_INDEX_MB || "200", 10);
 const MAX_INDEX_BYTES = MAX_INDEX_MB * 1024 * 1024;
-const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_NON-ACCOUNTING/", "_DUPLICATES/", "_ARCHIVE/", "_MEMORY/", "_HANDOFF/", "_DISPATCH/"]; // our own artifacts, PLUS (2026-07-12, ring-safety fix) the kb-memory/sunset-protocol ledger prefixes in the commons container -- _MEMORY/ holds the CFO/CLO exec-feed ledgers (MNPI/privileged), already indexed ring-aware into memory-exec by semantic.mjs. If a commons index/push-search run ever crawled the WHOLE container instead of a --prefix-scoped slice, these prefixes would otherwise get their raw ledger text embedded into the UNRESTRICTED commons-company-journal index (the "journal" room every agent can query, no ring wall) -- a real MNPI/privileged leak. Never remove this without adding an equivalent ring wall to the commons profile itself.
+const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_SUMMARY/", "_TRASH/", "_NON-ACCOUNTING/", "_DUPLICATES/", "_ARCHIVE/", "_MEMORY/", "_HANDOFF/", "_DISPATCH/"]; // our own artifacts, PLUS (2026-07-12, ring-safety fix) the kb-memory/sunset-protocol ledger prefixes in the commons container -- _MEMORY/ holds the CFO/CLO exec-feed ledgers (MNPI/privileged), already indexed ring-aware into memory-exec by semantic.mjs. If a commons index/push-search run ever crawled the WHOLE container instead of a --prefix-scoped slice, these prefixes would otherwise get their raw ledger text embedded into the UNRESTRICTED commons-company-journal index (the "journal" room every agent can query, no ring wall) -- a real MNPI/privileged leak. Never remove this without adding an equivalent ring wall to the commons profile itself.
+// 2026-08-04 (CLO brief §2): the reported "indexer indexes its own output" artifacts
+// (_TEXT/_TEXT/...txt.txt, _TEXT/_SUMMARY/.../_TEXT/...txt.md.txt) all live UNDER _TEXT/, which was
+// already excluded -- this codebase never had, and still does not have, any code path that writes or
+// reads a "_SUMMARY/" concept (grep confirms zero references outside this comment), so those
+// artifacts are legacy debris from something other than this pipeline, not a live bug in it. Added
+// "_SUMMARY/" and "_TRASH/" (the new legal_blob_delete soft-delete destination, otchealth-mcp-server
+// PR #190) here anyway, defensively, as top-level entries: belt-and-suspenders in case either ever
+// exists OUTSIDE a _TEXT/ nesting in some other profile/container, and to guarantee a document a
+// caller just soft-deleted never gets re-indexed as if it were still live content.
 const MAXTEXT = 400000; // chars persisted per doc
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmp = (ext) => join(tmpdir(), `idx_${Date.now()}_${Math.random().toString(36).slice(2)}${ext || ""}`);
