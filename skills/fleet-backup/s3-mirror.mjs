@@ -136,6 +136,14 @@ async function loadManifestShaMap(account, container, blobs) {
       const buf = await getBlob(account, container, mb.name);
       const manifest = JSON.parse(buf.toString("utf8"));
       if (manifest.ledger && manifest.ledger.blob && manifest.ledger.sha256) shaMap.set(manifest.ledger.blob, manifest.ledger.sha256);
+      // GAP-8 (2026-08): backup.mjs also records manifest.memory / manifest.events /
+      // manifest.decisions_pending in the same {blob, sha256} shape as manifest.ledger -- pick those
+      // up too so the idempotent-skip check below works for the three new Cosmos-container blobs, not
+      // just the pre-existing tasks-<date>.jsonl.
+      for (const key of ["memory", "events", "decisions_pending"]) {
+        const entry = manifest[key];
+        if (entry && entry.blob && entry.sha256) shaMap.set(entry.blob, entry.sha256);
+      }
       for (const ix of manifest.indexes || []) {
         if (ix.blob && ix.sha256) shaMap.set(ix.blob, ix.sha256);
       }
