@@ -18,7 +18,7 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { TIERS, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, chatBody, LEGACY_STANDARD } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -46,13 +46,16 @@ async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return 
 
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
-  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.AGENT_MODEL || TIERS.standard.deployment;
-  // FALLBACK: gpt-4.1-mini is BANNED for quality work. Both callsites here (running the agent persona
-  // AND the LLM-judge scoring against the rubric) are quality synthesis/evaluation, exactly the kind
-  // of work the ban targets, so the fallback defaults to the shared 'quality' tier (gpt-5.1,
-  // reasoning-family) via setup/model-routing.mjs, the single source of truth for tier + body shape.
-  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.AGENT_FALLBACK_MODEL || TIERS.quality.deployment;
-  if (!EP || !KEY) throw new Error("missing azure-openai endpoint/key");
+  // PRIMARY is now Foundry (2,000K TPM GlobalStandard), not the legacy azure-openai resource (50K TPM,
+  // already 100% subscribed, zero headroom -- the direct cause of the fleet-wide Datadog "Azure OpenAI
+  // throttled (blocked_calls)" flap). DEP still resolves via TIERS.standard.deployment ('gpt-4.1'), which
+  // only exists on Foundry, so EP/KEY must resolve there too (see model-routing.mjs LEGACY_STANDARD).
+  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.AGENT_MODEL || TIERS.standard.deployment;
+  // FALLBACK: the legacy resource, demoted to last-resort only. Its gpt-4o deployment is the ONLY chat
+  // deployment that exists there, so the fallback must use LEGACY_STANDARD.deployment ('gpt-4o'), never
+  // TIERS.standard.deployment ('gpt-4.1', which 404s on the legacy resource).
+  FB_EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-openai-key"); FB_DEP = process.env.AGENT_FALLBACK_MODEL || LEGACY_STANDARD.deployment;
+  if (!EP || !KEY) throw new Error("missing azure-foundry endpoint/key");
 }
 async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens });
@@ -65,7 +68,8 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
 async function chat(system, user, maxTokens = 1200) {
-  // primary gpt-4o; fall back to the foundry deployment (separate quota) on sustained throttle (Fleet Intel #5)
+  // primary Foundry gpt-4.1; fall back to the legacy gpt-4o deployment (separate, capacity-capped
+  // resource) only on sustained throttle (Fleet Intel #5)
   try { return await callChat(EP, KEY, DEP, system, user, maxTokens, 4); }
   catch (e) { if (e.throttled && FB_EP && FB_KEY) return await callChat(FB_EP, FB_KEY, FB_DEP, system, user, maxTokens, 5); throw e; }
 }

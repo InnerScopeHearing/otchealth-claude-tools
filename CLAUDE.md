@@ -239,3 +239,62 @@ assume unless the user says otherwise.
 - Both .p8 are backend-only (never in an IPA or a repo); fetch via
   `node setup/get-secret.mjs <id> <outfile>`. Backup copies + metadata also in the Notion
   "API Tokens & Credentials" vault; both flagged for rotation.
+
+### Fleet health audit + throttle fix + two silent job failures closed (2026-08-01)
+Matt: "go through all our setups and autonomous agents and jobs... make sure everything that
+makes our AI OS special is turned on and working properly." Findings + fixes, all merged to main:
+- **Datadog throttle alert root-caused and fixed (2 PRs).** The fleet-wide "Azure OpenAI
+  throttled (blocked_calls)" monitor had been flapping alert-to-recovery every 1-2h around the
+  clock for days. Two independent causes, both fixed: (1) `skills/ocr-sweep/sweep.mjs`
+  (`docintel-ocr-sweep` job, every 2h) had zero retry/backoff on Document Intelligence 429s and
+  burst all CONC workers' first submit in the same instant -- added stagger + retry-with-backoff
+  (merged). (2) `setup/model-routing.mjs`'s `TIERS.standard.deployment` pointed 13 shared LLM
+  callers (company-brain, kb-memory reflection, critic-pass, agent-evals, recall-evals,
+  focus-group-loop, legal/deadline-extract, shark-tank, signal-radar detectors) at the LEGACY
+  Azure OpenAI resource (`octhealth-aoai-4701`, gpt-4o capped at 50K TPM regional-Standard,
+  100% subscribed, zero headroom) as PRIMARY -- repointed to `otchealth-foundry` (gpt-4.1,
+  2,000K TPM) as primary, legacy demoted to a real last-resort fallback (kept, not removed).
+  Added `LEGACY_STANDARD` export to `model-routing.mjs` for that fallback deployment name.
+  Bonus: fixed two pre-existing bugs found in the same sweep (`agent-evals/selfrepair.mjs` and
+  both `signal-radar` detectors were pairing a Foundry-only model name with the legacy endpoint,
+  which never had those deployments -- silently 404ing). designer/scripts/_lib.mjs (image/video
+  gen) and pdf.mjs (direct OpenAI) deliberately untouched.
+- **`xero-health` job had failed every hourly run for 16+ days**, since the 2026-07-16
+  gateway-sole-consumer hardening (`guardGatewayOwnedOrg`) made its direct-token health check
+  self-refuse for every org. Also the likely cause of the Datadog "Xero org connection DOWN"
+  monitor being stuck in Alert since exactly 2026-07-16T21:05:59. Fixed: `check`/`monitor` now
+  default to a gateway-backed check (mint a `cfo`-lane bearer via gateway-connect.mjs, call the
+  gateway's read-only `xero_orgs` tool) instead of touching tokens directly; emits the same
+  `otc.fleet.xero_connection_ok` metric. `XERO_ALLOW_DIRECT=1` keeps the original path for a
+  genuinely gateway-independent org or an emergency re-seed. LANE NOTE: must be `cfo`, not `cto`
+  -- `isXeroAllowed()` in the gateway only accepts EXEC_RING lanes. Live-verified: all 4 orgs OK,
+  fresh `value:1` Datadog metric points pushed for all 4. FLAGGED, not fixed (separate scope):
+  `xero.mjs`/`xero-bulk.mjs` and the `xero-run` job still call the direct path and would hit the
+  same guard; `xero-run`'s schedule trigger also looks empty/disabled.
+- **`fleet-medic` job "Succeeded" on every 30-min run for 11+ days while its `medic_dispatch`
+  PostHog stream sat stale the whole time** -- a job succeeding while producing zero visible
+  effect. Root cause: `emitDispatch()` wrapped its PostHog capture POST in `try/catch{}` with no
+  `r.ok` check, and the caller printed "DISPATCHED" unconditionally regardless of whether the
+  capture actually succeeded. Fixed: retries + `r.ok` check + returns real success/failure; caller
+  now prints "DISPATCH FAILED (capture)" on a real failure instead of a false "DISPATCHED"; a
+  summary line (`N dispatched, M capture failures`) makes partial failure visible in plain
+  container logs. Ruled out: Key Vault secret-value divergence across auth paths (none possible,
+  confirmed by reading `kvSecret()`), and the dangling missing `sab64` GCP secretRef (dead/
+  vestigial, `kvSecret()`'s managed-identity path never needs it). Whether the silent-swallow was
+  THE root cause of this specific 11-day incident, vs. just A bug it also had, could not be
+  proven without container-level network diagnostics -- but any recurrence is now loud instead
+  of invisible.
+- **Two Datadog monitors are watching metrics that have NEVER been emitted anywhere in the
+  codebase** (confirmed via repo-wide grep, zero hits): `otc.fleet.agent_error` (monitor
+  `22893313`, No Data since creation 2026-06-27) and `otc.fleet.token_age_hours` (monitor
+  `22896070`, No Data since creation 2026-07-08). Not a regression -- genuinely never built.
+  Backlog item, not fixed this session; needs a decision on which job should emit these (or
+  whether to retire the monitors) before building blind.
+- Both `otchealth-cto/CLAUDE.md` and `otchealth-cto/CTO-KICKOFF-PROMPT.md` were flagged STALE by
+  `continuity-canary` during this same audit; refreshed alongside this entry.
+- Method note: 4 of these fixes (both Foundry-repoint batches, fleet-medic, xero-health) were
+  built by parallel Sonnet-5 subagents per Matt's explicit "make sure to use the subagents"
+  directive, each given precise root-cause evidence and file/line targets gathered firsthand
+  first, then every diff reviewed line-by-line and independently tested before merge -- caught
+  zero errors across all batches, but the review step is not optional even when a subagent's own
+  report looks clean.

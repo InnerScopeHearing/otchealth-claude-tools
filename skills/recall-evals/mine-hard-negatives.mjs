@@ -227,10 +227,13 @@ async function fetchAllSharedRows() {
 // ---- IO: Azure OpenAI chat (mirrors mine-cases.mjs's callChat exactly) -----------------------------
 
 async function callChat(system, user) {
-  const ep = (await kvSecret("azure-openai-endpoint") || "").replace(/\/$/, "");
-  const key = await kvSecret("azure-openai-key");
+  // Foundry, not the legacy azure-openai resource: TIERS.standard.deployment ('gpt-4.1') only exists on
+  // Foundry (2,000K TPM GlobalStandard); the legacy resource's gpt-4o deployment is capped at 50K TPM
+  // with zero headroom (see setup/model-routing.mjs LEGACY_STANDARD).
+  const ep = (await kvSecret("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
+  const key = await kvSecret("azure-foundry-key");
   const dep = process.env.MINE_MODEL || TIERS.standard.deployment;
-  if (!ep || !key) throw new Error("missing azure-openai endpoint/key");
+  if (!ep || !key) throw new Error("missing azure-foundry endpoint/key");
   const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 500, jsonMode: true });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-08-01-preview`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);

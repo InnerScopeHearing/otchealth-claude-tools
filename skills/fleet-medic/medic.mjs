@@ -165,9 +165,32 @@ async function readBeacons() {
     return out;
   } catch { return {}; }
 }
+// Returns true iff the PostHog capture genuinely succeeded (HTTP ok). Never throws (fail-open for the
+// CALLER's control flow), but unlike the pre-fix version it never SILENTLY swallows a failure either:
+// every non-ok response or thrown error is retried a couple of times, then logged LOUD to stderr so a
+// failure is visible in plain container logs even with no Log Analytics sink wired (see canary/medic
+// history — this is the exact "Succeeded status, zero visible effect" class of bug). Missing ingestKey
+// (the secret itself failed to resolve) is also now a loud, distinct failure instead of a quiet return.
 async function emitDispatch(ingestKey, agent, item) {
-  if (!ingestKey) return;
-  try { await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: ingestKey, event: "medic_dispatch", distinct_id: agent, timestamp: new Date().toISOString(), properties: { agent, condition: item.condition, severity: item.severity, escalate: item.escalate, reason: item.reason, $lib: "fleet-medic" } }) }); } catch {}
+  if (!ingestKey) {
+    console.error(`  [fleet-medic] POSTHOG CAPTURE SKIPPED for ${agent}: posthog-fleet-ingest-key did not resolve from Key Vault`);
+    return false;
+  }
+  const body = JSON.stringify({ api_key: ingestKey, event: "medic_dispatch", distinct_id: agent, timestamp: new Date().toISOString(), properties: { agent, condition: item.condition, severity: item.severity, escalate: item.escalate, reason: item.reason, $lib: "fleet-medic" } });
+  const ATTEMPTS = 3;
+  let lastErr = "unknown";
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    try {
+      const r = await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+      if (r.ok) return true;
+      lastErr = `HTTP ${r.status} ${(await r.text().catch(() => "")).slice(0, 200)}`.trim();
+    } catch (e) {
+      lastErr = e && e.message || String(e);
+    }
+    if (attempt < ATTEMPTS) await new Promise((res) => setTimeout(res, 400 * attempt)); // short backoff, not a full withRetry
+  }
+  console.error(`  [fleet-medic] POSTHOG CAPTURE FAILED for ${agent} after ${ATTEMPTS} attempts: ${lastErr}`);
+  return false;
 }
 
 // Azure commons blob (account SAS) for the _MEDIC directives + medic state.
@@ -210,12 +233,18 @@ async function scan() {
   const nowIso = new Date(now).toISOString();
   const escalations = [];
   const newState = { ...state };
+  let captureOk = 0, captureFail = 0;
   for (const r of results) {
     if (r.dispatch) {
       try { await cPut(`${MEDIC_PREFIX}${r.agent}.md`, remediationFor(r.agent, r, nowIso), "text/markdown; charset=utf-8"); } catch (e) { console.error(`  dispatch ${r.agent}: directive write failed (${e.message})`); }
-      await emitDispatch(ingestKey, r.agent, r);
+      // The self-heal directive above is the actual fix and is written regardless; `captured` reflects
+      // ONLY whether the PostHog telemetry event (the thing that makes this dispatch visible off-box)
+      // made it. Do NOT claim "DISPATCHED" when that capture failed — say so plainly instead, so a run
+      // that "Succeeded" but produced zero visible telemetry is never indistinguishable from a real one.
+      const captured = await emitDispatch(ingestKey, r.agent, r);
+      if (captured) captureOk++; else captureFail++;
       newState[r.agent] = { last_dispatch_ts: nowIso, consecutive_dark: r.consecutive_dark };
-      console.error(`  DISPATCHED medic -> ${r.agent}: ${r.reason}${r.escalate ? "  [ESCALATE]" : ""}`);
+      console.error(`  ${captured ? "DISPATCHED" : "DISPATCH FAILED (capture)"} medic -> ${r.agent}: ${r.reason}${r.escalate ? "  [ESCALATE]" : ""}`);
       if (r.escalate) escalations.push(r);
     } else if (r.condition === "HEALTHY" && newState[r.agent]) {
       newState[r.agent] = { last_dispatch_ts: newState[r.agent].last_dispatch_ts, consecutive_dark: 0 }; // recovered -> reset the streak
@@ -226,9 +255,12 @@ async function scan() {
     // persistent failures the self-heal directive did not resolve -> a single operator-facing alert.
     const line = `MEDIC ESCALATION ${nowIso}: ${escalations.map((e) => `${e.agent} (${e.consecutive_dark}x DARK: ${e.reason})`).join("; ")}. Self-heal directive left; needs a human/medic-session look.`;
     try { await cPut(`${MEDIC_PREFIX}_ESCALATIONS.md`, line + "\n", "text/markdown; charset=utf-8"); } catch {}
-    await emitDispatch(ingestKey, "fleet", { condition: "ESCALATION", severity: "high", escalate: true, reason: line });
+    if (await emitDispatch(ingestKey, "fleet", { condition: "ESCALATION", severity: "high", escalate: true, reason: line })) captureOk++; else captureFail++;
     console.log("\n" + line);
   }
+  // Visible-at-a-glance summary so a partial failure (job "Succeeded", some/all telemetry silently
+  // lost) shows up in plain container logs without needing a Log Analytics query.
+  console.log(`[fleet-medic] run complete: ${captureOk} dispatched successfully, ${captureFail} capture failures`);
 }
 
 async function check() {

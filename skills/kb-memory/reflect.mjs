@@ -20,12 +20,18 @@ const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] 
 const COMMIT = argv.includes("--commit");
 const MIN_TOOLS = parseInt(val("--min-tools", "12"), 10) || 12;
 const AGENT = (process.env.KB_AGENT || val("--agent", "") || "").toLowerCase();
-// PreCompact (the highest-stakes distill) passes --prefer-fallback: use the uncontended foundry
-// gpt-4.1-mini as PRIMARY so the capture never blocks on the contended shared gpt-4o deployment.
+// PreCompact (the highest-stakes distill) passes --prefer-fallback. HISTORICAL meaning: use the
+// uncontended foundry deployment as PRIMARY so the capture never blocks on the contended shared
+// gpt-4o LEGACY deployment. As of 2026-08-01 this file's default PRIMARY already IS the foundry
+// resource (see initModel()/ask() below), so that original intent is satisfied unconditionally now;
+// the flag is effectively a no-op post-migration. Kept parsed for backward compat with existing
+// callers (kb-inject.sh still passes it) -- see the comment in ask() for exactly why it must NOT be
+// reinterpreted as "prefer the legacy fallback first".
 // intentional cheap-capture, non-summarization: this extracts 0-3 short durable-lesson candidates
-// from a session (a cheap, bounded-output classification task), NOT decision-grade quality synthesis,
-// so it stays on the gpt-4.1-mini fast/cheap path (the ban targets quality summarization work, e.g.
-// company-brain / focus-group-loop / agent-evals, not this). Left unchanged per fleet-wide fallback fix.
+// from a session (a cheap, bounded-output classification task), NOT decision-grade quality synthesis.
+// It primaries on Foundry TIERS.standard (gpt-4.1) -- NOT TIERS.cheap/gpt-4.1-mini as primary, see
+// initModel() -- with the legacy azure-openai resource as a last-resort fallback only (the ban targets
+// quality summarization work, e.g. company-brain / focus-group-loop / agent-evals, not this task).
 const PREFER_FB = argv.includes("--prefer-fallback") || !!process.env.REFLECT_PREFER_FALLBACK;
 
 function loadSA() { if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) { try { return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); } catch {} } for (const p of [process.env.HOME + "/.gcp_claude_driver_sa.json", "/root/.gcp_claude_driver_sa.json"]) { try { return JSON.parse(readFileSync(p, "utf8")); } catch {} } return null; }
@@ -34,9 +40,14 @@ function saJwt(scope) { const sa = _SA; if (!sa || !sa.private_key) return null;
 async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
-  EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-openai-key"); DEP = process.env.REFLECT_MODEL || "gpt-4o";
-  // intentional cheap-capture, non-summarization (see note above): gpt-4.1-mini stays the default here.
-  FB_EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-foundry-key"); FB_DEP = process.env.REFLECT_FALLBACK_MODEL || "gpt-4.1-mini";
+  // PRIMARY now resolves to the FOUNDRY resource (2,000K TPM GlobalStandard, ample headroom).
+  // FALLBACK resolves to the LEGACY azure-openai resource (its gpt-4o deployment is capped at 50K TPM
+  // on the regional "Standard" SKU, already 100% subscribed with zero headroom -- the confirmed root
+  // cause of the recurring "Azure OpenAI throttled (blocked_calls)" Datadog page, 2026-08-01). See
+  // setup/model-routing.mjs LEGACY_STANDARD. Never swap these back so the legacy resource is primary.
+  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.REFLECT_MODEL || "gpt-4.1";
+  // Last-resort fallback only (see note above): the legacy resource, gpt-4o.
+  FB_EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-openai-key"); FB_DEP = process.env.REFLECT_FALLBACK_MODEL || "gpt-4o";
 }
 async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   for (let a = 0; a < tries; a++) {
@@ -50,9 +61,16 @@ async function ask(system, user, maxTokens = 700) {
   const primary = () => callChat(EP, KEY, DEP, system, user, maxTokens, 4);
   const hasFB = FB_EP && FB_KEY;
   const fallback = () => hasFB ? callChat(FB_EP, FB_KEY, FB_DEP, system, user, maxTokens, 5) : Promise.reject(Object.assign(new Error("no fallback"), { throttled: true }));
-  // --prefer-fallback (PreCompact): use the uncontended foundry mini FIRST, gpt-4o only as backup.
-  if (PREFER_FB && hasFB) { try { return await fallback(); } catch { return await primary(); } }
-  // default: primary gpt-4o, fall back to the foundry deployment (separate quota) on sustained throttle.
+  // --prefer-fallback (PreCompact) HISTORICALLY meant "try the uncontended foundry deployment FIRST,
+  // gpt-4o (legacy, contended) only as backup" -- back when `primary` WAS the legacy resource. As of
+  // the 2026-08-01 migration, `primary` already IS foundry by default (see initModel()), so that
+  // original intent is now satisfied unconditionally. This branch is therefore an intentional NO-OP
+  // (identical to the default branch below): it must NOT be reinterpreted as "call `fallback` first",
+  // since `fallback` is now the legacy/contended resource and doing so would reintroduce exactly the
+  // throttle contention this fix removes on the PreCompact hot path.
+  if (PREFER_FB && hasFB) { try { return await primary(); } catch { return await fallback(); } }
+  // default: primary (foundry), fall back to the legacy deployment (separate quota, last resort) on
+  // sustained throttle.
   try { return await primary(); }
   catch (e) { if (e.throttled && hasFB) return await fallback(); throw e; }
 }

@@ -24,9 +24,22 @@
  */
 export const TIERS = {
   quality: { deployment: 'gpt-5.1', modelFamily: 'reasoning' },
-  standard: { deployment: 'gpt-4o', modelFamily: 'chat' },
+  standard: { deployment: 'gpt-4.1', modelFamily: 'chat' },
   cheap: { deployment: 'gpt-4.1-mini', modelFamily: 'chat' },
 };
+
+// LEGACY_STANDARD (2026-08-01): the deployment name for TIERS.standard on the OLD legacy Azure OpenAI
+// resource (octhealth-aoai-4701, "azure-openai-endpoint"/"azure-openai-key"), which callers should now
+// treat as a last-resort fallback ONLY, never primary. That resource's gpt-4o deployment sits on the
+// regional "Standard" SKU at 50K TPM, already 100% subscribed (50/50, zero headroom) -- a hard capacity
+// ceiling, not a config choice -- so any caller that still primaries on it will keep tripping the
+// fleet-wide Datadog "Azure OpenAI throttled (blocked_calls)" monitor. TIERS.standard.deployment now
+// points at 'gpt-4.1' on the Foundry resource ("azure-foundry-openai-endpoint"/"azure-foundry-key"),
+// which has 2,000K TPM (GlobalStandard) and is chat-family (same request-body shape as gpt-4o, so this
+// is a pure drop-in for every caller already using resolveTier('standard')/chatBody()). Callers that
+// keep a legacy fallback provider for redundancy must use LEGACY_STANDARD as that provider's deployment
+// name, NOT TIERS.standard.deployment (the legacy resource has no 'gpt-4.1' deployment).
+export const LEGACY_STANDARD = { deployment: 'gpt-4o', modelFamily: 'chat' };
 
 // Reasoning-family deployments (gpt-5.x, o-series) reject max_tokens + a non-default temperature;
 // they require max_completion_tokens and no temperature override. Chat-family (gpt-4o, gpt-4.1-mini,
