@@ -145,13 +145,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-07-27T04:10:25.031Z
 - **Closed:** 2026-07-27T04:10:25.031Z
 
-### finding:FND-20260728-b8a0 severity:high status:open | backup.mjs Cosmos work-ledger export produces 0 rows nightly despite an active ledger; finance/legal-personal rooms capped at exactly 100000 rows (pagination bug)
+### finding:FND-20260728-b8a0 severity:high status:fixed | backup.mjs Cosmos work-ledger export produces 0 rows nightly despite an active ledger; finance/legal-personal rooms capped at exactly 100000 rows (pagination bug)
 
 - **Source audit doc:** otchealth-cto/runbooks/AZURE-LOSS-DR-PLAN.md (2026-07-28)
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-07-28T00:48:44.021Z
-- **Closed:** (open)
+- **Closed:** 2026-08-04T22:38:12.376Z
 
 ### finding:FND-20260728-404d severity:critical status:open | AWS DR bucket credentials (aws-dr-access-key-id/secret) exist ONLY in Key Vault -- a total Azure loss cannot bootstrap recovery because the credential needed to reach the S3 backup bucket is itself unreachable without Key Vault. Needs a break-glass read-only IAM user provisioned outside Key Vault (Matt AWS-console action).
 

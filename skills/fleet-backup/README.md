@@ -5,9 +5,20 @@ resources they back up. This directory is a job-body skill (no SKILL.md by desig
 `xero-run`, `ocr-sweep`, `stripe-read`, and `agent-sunrise`): these scripts run as scheduled
 Container Apps Jobs or ad hoc from a session, not as interactively invoked Skill-tool skills.
 
-- `backup.mjs`: exports the Cosmos work ledger and every LIVE Azure AI Search index (per
-  `setup/expected-indexes.json`) to the Azure Blob container `ledger-backup`, with sha256 manifests
-  and fail loud, zero row discipline. Read its own header comment for the full design rationale.
+- `backup.mjs`: exports the Cosmos work ledger (`tasks`, via the gateway, plus a DIRECT dump of
+  `memory` / `events` / `decisions_pending`, see GAP-8 below) and every LIVE Azure AI Search index
+  (per `setup/expected-indexes.json`) to the Azure Blob container `ledger-backup`, with sha256
+  manifests and fail loud, zero row discipline. Read its own header comment for the full design
+  rationale.
+- `cosmos-export.mjs`: the DIRECT, read-only Cosmos DB for NoSQL REST client GAP-8 added, used ONLY by
+  `backup.mjs`. Exports `memory` (pk `/agent`), `events` (pk `/task_id`), and `decisions_pending`
+  (pk `/owner`) with real `x-ms-continuation` pagination drained to exhaustion, never capped. These
+  three bypass the gateway on purpose: `memory_search` caps at 100 results with no pagination token at
+  all, and `events`/`decisions_pending` have no gateway read tool whatsoever, so a gateway-mediated
+  export of any of them would either silently truncate or be impossible to build. `tasks` is
+  unaffected and still goes through the gateway (`task_list`/`task_get`) inside `backup.mjs` itself.
+  Read its own header comment for the full rationale and the new Key Vault secrets it requires
+  (`cosmos-agent-state-endpoint` / `cosmos-agent-state-key`, in addition to `gateway-bearer-token`).
 - `azure-blob-client.mjs`: shared Azure Blob Storage REST client (List Blobs, GET, PUT block blob,
   container HEAD). Used by `s3-mirror.mjs` and `restore-drill.mjs` below.
 - `s3-client.mjs`: shared, dependency-free AWS S3 client (PutObject, HeadObject, GetObject), signed
@@ -60,7 +71,10 @@ With the current live room registry, this means:
 
 | Room / blob | Classification | Reaches S3 by default? |
 | --- | --- | --- |
-| `tasks-<date>.jsonl` (Cosmos work ledger) | non-privileged | yes |
+| `tasks-<date>.jsonl` (Cosmos `tasks`, via the gateway) | non-privileged | yes |
+| `memory-<date>.jsonl` (Cosmos `memory`, direct, GAP-8) | non-privileged | yes |
+| `events-<date>.jsonl` (Cosmos `events`, direct, GAP-8) | non-privileged | yes |
+| `decisions-pending-<date>.jsonl` (Cosmos `decisions_pending`, direct, GAP-8) | non-privileged | yes |
 | `index-memory-exec-<date>.jsonl` | non-privileged | yes |
 | `index-commons-company-journal-<date>.jsonl` | non-privileged | yes |
 | `index-commerce-commerce-source-docs-<date>.jsonl` | non-privileged | yes |

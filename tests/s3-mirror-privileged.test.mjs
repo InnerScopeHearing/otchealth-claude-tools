@@ -22,6 +22,12 @@ test("isPrivilegedByName: the Cosmos ledger export and known-safe room dumps are
   assert.equal(isPrivilegedByName("manifest-2026-07-15.json"), false);
 });
 
+test("isPrivilegedByName: GAP-8's three new direct-Cosmos-container blobs (memory/events/decisions-pending) are NOT privileged -- they mirror to the base bucket like tasks-<date>.jsonl, no s3-mirror.mjs allowlist change was needed since it lists+classifies the whole container generically", () => {
+  assert.equal(isPrivilegedByName("memory-2026-08-04.jsonl"), false);
+  assert.equal(isPrivilegedByName("events-2026-08-04.jsonl"), false);
+  assert.equal(isPrivilegedByName("decisions-pending-2026-08-04.jsonl"), false);
+});
+
 test("isPrivilegedByName: every documented privileged substring is caught, case-insensitively", () => {
   assert.equal(isPrivilegedByName("index-legal-personal-2026-07-15.jsonl"), true);
   assert.equal(isPrivilegedByName("index-legal-company-2026-07-15.jsonl"), true);
