@@ -45,6 +45,10 @@
 //
 // Usage:
 //   node setup/page-on-failure.mjs --workflow "<Workflow Name>" [--log <path>]... [--tail-lines 40] [--test]
+//   node setup/page-on-failure.mjs --workflow "<name>" --severity info --message "<notable, not an alarm>"
+//     (--severity info: never "[RED]"/"failed"/canary_red — for a notable-but-not-an-alarm notice, e.g.
+//     azure-watchdog.mjs's "reachability RESTORED" recovery message. Default severity is "red", the
+//     original behavior, unchanged for every caller that does not pass --severity.)
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { kvSecret } from "../skills/kb-memory/azure-secret.mjs";
@@ -54,11 +58,67 @@ const opt = (name, def) => { const i = argv.indexOf(name); return i >= 0 && argv
 const optAll = (name) => argv.reduce((acc, a, i) => (a === name && argv[i + 1] !== undefined ? [...acc, argv[i + 1]] : acc), []);
 
 const GW = process.env.GATEWAY_BASE_URL || "https://mcp.otchealth.app";
+
+// Bounded network calls (2026-07-28 review finding): none of this file's fetch() calls had a timeout,
+// so during a real Azure/gateway outage the email path (ctoBearer's token mint + sendPageEmail's /mcp
+// call) could hang for however long the runtime's default socket timeout is — long enough, stacked with
+// azure-watchdog.mjs's own emergency-backup attempt beforehand, to eat the watchdog job's 10-minute
+// budget and get the runner killed BEFORE the independent PostHog fallback below ever runs, and before
+// the caller gets to save episode state. 8s per call is generous for a healthy gateway and still leaves
+// ample time in a 10-minute job for the PostHog fallback + episode-state save afterward.
+const FETCH_TIMEOUT_MS = 8000;
+async function timedFetch(url, init) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e) {
+    if (e?.name === "AbortError") throw new Error(`timed out after ${FETCH_TIMEOUT_MS}ms: ${url}`);
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// WHOLE-ATTEMPT timeout (2026-07-28 review finding, corrected same day, then corrected again): timedFetch
+// above only bounds this file's OWN fetch() calls. ctoBearer() also calls kvSecret()
+// (skills/kb-memory/azure-secret.mjs) TWICE before it ever reaches a fetch() this file controls, and
+// kvSecret() makes its own unbounded network calls internally. This wraps the ENTIRE email-page attempt
+// in an outer Promise.race against MAIL_ATTEMPT_TIMEOUT_MS so main() stops WAITING on it and falls
+// through to the independent PostHog path promptly in the common case. IMPORTANT LIMITATION (a further
+// review round correctly caught this): Promise.race does not CANCEL the losing promise -- JS has no true
+// cancellation without an AbortSignal threaded through every dependency, which kvSecret() does not
+// support. If sendPageEmail() is genuinely hung (not just slow), its open network handle keeps running in
+// the background after main() moves on, and can keep THIS PROCESS's event loop alive past
+// MAIL_ATTEMPT_TIMEOUT_MS. The actual worst-case guarantee against that is external to this file: the
+// `timeout 60`/`timeout 45` OS-level wrapper around every `node setup/page-on-failure.mjs` invocation in
+// the calling workflows, which SIGKILLs the whole process tree unconditionally. Treat this in-process
+// race as a fast/common-path optimization (falls through to PostHog quickly when the hang is short), not
+// the correctness backstop -- the workflow-level `timeout` is that backstop.
+const MAIL_ATTEMPT_TIMEOUT_MS = 20000;
+async function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const RECIPIENT = process.env.PAGE_RECIPIENT || "matthew@otchealth.app";
 const WORKFLOW = opt("--workflow", process.env.GITHUB_WORKFLOW || "unknown workflow");
 const TAIL_LINES = parseInt(opt("--tail-lines", "40"), 10);
 const LOG_PATHS = optAll("--log");
 const TEST_MODE = argv.includes("--test") || process.env.PAGE_TEST_MODE === "1";
+// SEVERITY (2026-07-28, added for azure-watchdog.mjs's recovery notice): default "red" is BYTE-FOR-BYTE
+// the original behavior for every existing caller (every nightly-*.yml workflow) -- none of them pass
+// --severity, so pageSubject/posthogEventName/buildPageBody's severity branch is never taken for them.
+// "info" exists for a message that is notable but NOT an alarm (e.g. "reachability restored"), so it
+// does not get delivered/indexed with red-alert semantics ([RED] subject, "failed" body, canary_red event).
+const SEVERITY = opt("--severity", "red");
+const MESSAGE = opt("--message", null);
 
 /** The GitHub Actions run URL from the runner's own standard env vars (no new inputs needed). Pure
  *  given process.env. */
@@ -85,21 +145,29 @@ export function tailFile(path, n) {
 
 /** Email subject line. Pure. In self-test mode the subject is unmistakably a test (never "[RED]", never
  *  "failed") so it can never be confused with a real page in an inbox or a phone notification preview,
- *  which is often just the subject line. */
-export function pageSubject(workflow, testMode) {
-  return testMode ? `[SELF-TEST] ${workflow} pager self-test (not a real incident)` : `[RED] ${workflow} failed`;
+ *  which is often just the subject line. severity="info" (default "red", unchanged for every existing
+ *  caller) is the same idea applied to a notable-but-not-an-alarm message: never "[RED]", never "failed". */
+export function pageSubject(workflow, testMode, severity = "red") {
+  if (testMode) return `[SELF-TEST] ${workflow} pager self-test (not a real incident)`;
+  return severity === "info" ? `[INFO] ${workflow}` : `[RED] ${workflow} failed`;
 }
 
 /** Which PostHog event the fallback path emits. Pure. Kept a distinct event name in self-test mode (not
  *  'canary_red' with a property flag) so a dashboard/alert built on 'canary_red' counts can never be
  *  polluted by self-test runs, and so a query for 'pager_selftest' cleanly answers "when did we last
- *  prove the pager works" on its own. */
-export function posthogEventName(testMode) { return testMode ? "pager_selftest" : "canary_red"; }
+ *  prove the pager works" on its own. Same reasoning for severity="info" -> 'canary_info': a dashboard
+ *  built on 'canary_red' counts must not be polluted by informational (e.g. recovery) notices either. */
+export function posthogEventName(testMode, severity = "red") {
+  if (testMode) return "pager_selftest";
+  return severity === "info" ? "canary_info" : "canary_red";
+}
 
 /** Plain-text page body. Pure. No em/en dashes (fleet copy convention). In self-test mode a loud banner
  *  is prepended so the body itself (not just the subject) states this is not a real incident, in case a
- *  mail client shows only a body preview or the subject gets stripped by a forwarding rule. */
-export function buildPageBody(workflow, url, logSections, testMode) {
+ *  mail client shows only a body preview or the subject gets stripped by a forwarding rule. severity="info"
+ *  uses the caller-supplied `message` verbatim instead of the hardcoded "X failed on the nightly
+ *  schedule" line, so a recovery/informational notice reads as what it actually is, not as a fresh alarm. */
+export function buildPageBody(workflow, url, logSections, testMode, severity = "red", message = null) {
   const banner = testMode
     ? [
         "THIS IS A PAGER SELF-TEST. No real incident occurred.",
@@ -108,9 +176,13 @@ export function buildPageBody(workflow, url, logSections, testMode) {
         "",
       ]
     : [];
+  let headline;
+  if (testMode) headline = `${workflow} pager self-test (deliberate synthetic failure, see .github/workflows/pager-selftest.yml).`;
+  else if (severity === "info") headline = message || `${workflow}: informational notice (no message supplied).`;
+  else headline = `${workflow} failed on the nightly schedule.`;
   const lines = [
     ...banner,
-    testMode ? `${workflow} pager self-test (deliberate synthetic failure, see .github/workflows/pager-selftest.yml).` : `${workflow} failed on the nightly schedule.`,
+    headline,
     "",
     `Run: ${url}`,
     "",
@@ -126,7 +198,7 @@ async function ctoBearer() {
   const cid = await kvSecret("oauth-lane-cto-id");
   const csec = await kvSecret("oauth-lane-cto-secret");
   if (!cid || !csec) throw new Error("cto-lane creds unavailable (oauth-lane-cto-id/secret)");
-  const r = await fetch(`${GW}/oauth/token`, {
+  const r = await timedFetch(`${GW}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "client_credentials", client_id: cid, client_secret: csec }),
@@ -141,7 +213,7 @@ async function ctoBearer() {
  *  any failure so the caller can fall back; never logs a secret. */
 async function sendPageEmail(subject, body) {
   const bearer = await ctoBearer();
-  const r = await fetch(`${GW}/mcp`, {
+  const r = await timedFetch(`${GW}/mcp`, {
     method: "POST",
     headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "graph_send_email", arguments: { to: RECIPIENT, subject, body, body_type: "Text" } } }),
@@ -159,12 +231,19 @@ async function sendPageEmail(subject, body) {
 
 /** Fallback trace: the SAME secret + capture endpoint canary.mjs's own emitPosthog() already uses,
  *  event 'canary_red' (or 'pager_selftest' in --test mode, see posthogEventName()) instead of
- *  'azure_canary'. Throws on failure so the caller can report it. */
+ *  'azure_canary'. Throws on failure so the caller can report it.
+ *
+ *  Credential resolution checks POSTHOG_FLEET_INGEST_KEY in the environment FIRST, kvSecret() second
+ *  (2026-07-28, added for azure-watchdog.mjs). Every OTHER caller of this script (the nightly canary/
+ *  sentinel workflows) never sets that env var, so their behavior is byte-for-byte unchanged — kvSecret
+ *  still resolves it exactly as before. The one caller that DOES need this — the outage watchdog — is
+ *  reporting on a scenario where Key Vault itself may be down, so its "independent PostHog fallback"
+ *  claim was not actually independent until this credential could come from somewhere off-Azure too. */
 async function emitPosthogFallback(props, eventName) {
-  const key = await kvSecret("posthog-fleet-ingest-key");
-  if (!key) throw new Error("posthog-fleet-ingest-key unavailable");
+  const key = process.env.POSTHOG_FLEET_INGEST_KEY || await kvSecret("posthog-fleet-ingest-key");
+  if (!key) throw new Error("posthog-fleet-ingest-key unavailable (checked POSTHOG_FLEET_INGEST_KEY env and Key Vault)");
   const host = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
-  const r = await fetch(`${host}/capture/`, {
+  const r = await timedFetch(`${host}/capture/`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_key: key, event: eventName, distinct_id: TEST_MODE ? "fleet-pager-selftest" : "fleet-page-on-failure", properties: props }),
   });
@@ -175,13 +254,19 @@ async function emitPosthogFallback(props, eventName) {
 async function main() {
   const url = runUrl();
   const logSections = LOG_PATHS.length ? LOG_PATHS.map((p) => tailFile(p, TAIL_LINES)) : ["(no --log path supplied)"];
-  const subject = pageSubject(WORKFLOW, TEST_MODE);
-  const body = buildPageBody(WORKFLOW, url, logSections, TEST_MODE);
-  const eventName = posthogEventName(TEST_MODE);
+  const subject = pageSubject(WORKFLOW, TEST_MODE, SEVERITY);
+  const body = buildPageBody(WORKFLOW, url, logSections, TEST_MODE, SEVERITY, MESSAGE);
+  const eventName = posthogEventName(TEST_MODE, SEVERITY);
 
   let emailed = false, emailErr = null, posted = false, postErr = null;
   try {
-    emailed = await sendPageEmail(subject, body);
+    // withTimeout() races, it does not cancel -- if sendPageEmail() is still hung when the race times
+    // out, a permanent no-op .catch() on the SAME promise reference (attaching a second consumer does
+    // not affect the race) keeps Node from ever surfacing it as an unhandled rejection once it finally
+    // settles in the background, after main() has already moved on to the PostHog fallback.
+    const emailPromise = sendPageEmail(subject, body);
+    emailPromise.catch(() => {});
+    emailed = await withTimeout(emailPromise, MAIL_ATTEMPT_TIMEOUT_MS, "email page attempt");
   } catch (e) {
     emailErr = e.message;
     console.error(`[page-on-failure] email page failed: ${emailErr}`);
@@ -216,5 +301,18 @@ async function main() {
 // artifact, self-evidently not a real incident — but it is exactly the accident this guard exists to
 // prevent, so it is not a hypothetical.)
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  main().catch((e) => { console.error(`::error::[page-on-failure] FATAL: ${e.message}`); process.exit(1); });
+  main()
+    // Explicit process.exit() (2026-07-28 review, final round): main() only ever SET
+    // process.exitCode, never called process.exit(). Node only exits naturally once the event loop is
+    // empty -- if the LOSING side of the internal email-vs-timeout race (see WHOLE-ATTEMPT timeout
+    // comment above) still has an orphaned open socket, the process would sit alive past a SUCCESSFUL
+    // delivery on the other channel, waiting on something nobody cares about anymore. A caller like
+    // azure-watchdog.mjs's page() (execFileSync with `timeout: 60000`) would then see this process get
+    // killed on the OS timeout even though the page it asked for actually succeeded, throw, and the
+    // caller's fail-loud "must NOT persist state past a failed page() call" contract would wrongly treat
+    // a SUCCESSFUL page as a failed one -- state never saved, next run re-declares and re-pages the same
+    // outage. Once main() has decided the outcome, exit immediately and deliberately abandon any
+    // still-pending background operation; we already have what we came for.
+    .then(() => process.exit(process.exitCode || 0))
+    .catch((e) => { console.error(`::error::[page-on-failure] FATAL: ${e.message}`); process.exit(1); });
 }
