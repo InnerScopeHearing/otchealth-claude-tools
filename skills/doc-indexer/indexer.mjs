@@ -242,6 +242,24 @@ async function leaseRelease(id) { if (id) try { await fetch(azLockUrl() + "&comp
 // ---------------- text extraction ----------------
 const stripTags = (s) => s.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#?\w+;/g, " ").replace(/\s+/g, " ").trim();
 const alnum = (s) => (s.match(/[a-z0-9]/gi) || []).length;
+// 2026-08-04 (CLO brief §3, task #53): a real legal-correctness bug, root-caused via company-brain
+// against two concrete live paths (Broadridge + VStock NOBO shareholder-election request forms) --
+// NOT a mojibake/encoding issue (verified: the pipeline's installed poppler-utils already defaults
+// -enc to UTF-8; a synthetic checkbox/curly-quote/em-dash reproduction round-tripped byte-identical
+// with and without an explicit -enc UTF-8 flag, so that earlier lead was a dead end). Both real
+// documents are XFA (Adobe LiveCycle dynamic) forms: pdftotext's non-rendering content-stream
+// extraction on an XFA-only PDF returns Adobe's standard "Please wait... if this message is not
+// eventually replaced by the proper contents of the document" static placeholder page instead of
+// the actual (checkbox-bearing) form content -- the real data lives only in an embedded XFA XML
+// stream pdftotext never reads. That placeholder boilerplate is ~540 alnum characters, 18x the
+// alnum>=30 "did we get real text" gate below, so it was silently ACCEPTED as a successful
+// pdftotext extraction and the DocIntel OCR fallback (which rasterizes the page and CAN read the
+// visually-rendered form, XFA or not) never ran -- a shareholder-election form indexes as if fully
+// extracted while containing zero of its actual checkbox/selection data. Detect the placeholder by
+// its stable, Adobe-standard signature phrase and treat it as NO real content regardless of alnum
+// count, so extract() falls through to OCR/DocIntel the same as any other image-only/thin PDF.
+const XFA_PLACEHOLDER_RE = /if this message is not eventually replaced by the proper contents of the document/i;
+export const isXfaPlaceholder = (s) => XFA_PLACEHOLDER_RE.test(s);
 function sh(bin, args, opts) { try { return execFileSync(bin, args, { maxBuffer: 128 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"], ...(opts || {}) }).toString("utf8"); } catch { return ""; } }
 function officeToText(buf, ext) {
   const inF = tmp(ext); writeFileSync(inF, buf); const outDir = tmp(""); mkdirSync(outDir, { recursive: true }); const prof = "file://" + tmp("");
@@ -277,9 +295,13 @@ async function extract(name, buf) {
   if ([".html", ".htm", ".xml", ".eml"].includes(ext)) return { text: (ext === ".eml" ? buf.toString("utf8") : stripTags(buf.toString("utf8"))).slice(0, MAXTEXT), ocr: false, engine: "text" };
   if (ext === ".pdf") {
     const f = tmp(".pdf"); writeFileSync(f, buf); let text = ""; try { text = sh("pdftotext", ["-layout", f, "-"]); } catch {} try { unlinkSync(f); } catch {}
-    if (alnum(text) >= 30) return { text: text.slice(0, MAXTEXT), ocr: false, engine: "pdftotext" };
+    const xfaPlaceholder = isXfaPlaceholder(text);
+    if (!xfaPlaceholder && alnum(text) >= 30) return { text: text.slice(0, MAXTEXT), ocr: false, engine: "pdftotext" };
     if (!NO_OCR) { try { const di = await docintel(buf); if (di && alnum(di) >= 10) return { text: di.slice(0, MAXTEXT), ocr: true, engine: "docintel:" + OCR_MODEL }; } catch {} }
-    return { text: text.slice(0, MAXTEXT), ocr: false, engine: text ? "pdftotext-thin" : "none", err: alnum(text) < 30 ? "image-only/thin-text" : "" };
+    // XFA placeholder text is real, well-formed prose (easily clears alnum>=30) but is NOT the
+    // document's actual content, so if DocIntel also failed/was skipped, report it honestly as
+    // no-real-content rather than silently indexing the boilerplate as if it were the document.
+    return { text: text.slice(0, MAXTEXT), ocr: false, engine: text ? "pdftotext-thin" : "none", err: xfaPlaceholder ? "xfa-form-placeholder-only" : alnum(text) < 30 ? "image-only/thin-text" : "" };
   }
   if ([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"].includes(ext)) {
     if (!NO_OCR) { try { const di = await docintel(buf); if (di !== null) return { text: di.slice(0, MAXTEXT), ocr: true, engine: "docintel:" + OCR_MODEL }; } catch {} const t = tesseractImg(buf, ext); if (t) return { text: t.slice(0, MAXTEXT), ocr: true, engine: "tesseract" }; }
@@ -740,19 +762,26 @@ async function runCuCalibrate() {
   console.log(`  PROJECTED full corpus (${total} docs): ~$${(perDoc * total).toFixed(0)}`);
 }
 
-try {
-  if (cmd === "index") await runIndex();
-  else if (cmd === "search") await runSearch(pos.slice(1).join(" "));
-  else if (cmd === "build-index") await runBuildIndex();
-  else if (cmd === "status") await runStatus();
-  else if (cmd === "propose-mapping") await runProposeMapping();
-  else if (cmd === "build-csv") await runBuildCsv();
-  else if (cmd === "search-init") await runSearchInit();
-  else if (cmd === "push-search") await runPushSearch();
-  else if (cmd === "cloud-search") await runCloudSearch(pos.slice(1).join(" "));
-  else if (cmd === "cu-defaults") await cuSetDefaults();
-  else if (cmd === "cu-init") { await cuInit(); await cuEnsureAnalyzer(); console.log("CU analyzer ready: " + CU_ANALYZER); }
-  else if (cmd === "understand") await runUnderstand();
-  else if (cmd === "cu-calibrate") await runCuCalibrate();
-  else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
-} catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+// CLI entrypoint guard: only dispatch when this file is run directly (`node indexer.mjs ...`),
+// never when imported (e.g. by tests importing `isXfaPlaceholder` for regression coverage) --
+// without this guard, importing the module for its exports would unconditionally hit the final
+// `process.exit(2)` (no-args -> cmd="help" -> falls into the usage-error branch) and kill the
+// importing process, exactly the kind of import-time side effect fixed in backup.mjs the same day.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  try {
+    if (cmd === "index") await runIndex();
+    else if (cmd === "search") await runSearch(pos.slice(1).join(" "));
+    else if (cmd === "build-index") await runBuildIndex();
+    else if (cmd === "status") await runStatus();
+    else if (cmd === "propose-mapping") await runProposeMapping();
+    else if (cmd === "build-csv") await runBuildCsv();
+    else if (cmd === "search-init") await runSearchInit();
+    else if (cmd === "push-search") await runPushSearch();
+    else if (cmd === "cloud-search") await runCloudSearch(pos.slice(1).join(" "));
+    else if (cmd === "cu-defaults") await cuSetDefaults();
+    else if (cmd === "cu-init") { await cuInit(); await cuEnsureAnalyzer(); console.log("CU analyzer ready: " + CU_ANALYZER); }
+    else if (cmd === "understand") await runUnderstand();
+    else if (cmd === "cu-calibrate") await runCuCalibrate();
+    else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
+  } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+}

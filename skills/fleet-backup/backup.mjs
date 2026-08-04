@@ -1,24 +1,44 @@
 #!/usr/bin/env node
 /**
  * fleet-backup — daily offline copy of the fleet's two most central, least-redundant stores:
- *   (a) the Cosmos work-ledger (tasks + the append-only event log per task), and
- *   (b) a full document dump of the Azure AI Search index `otchealth-brain` (~67,645 docs).
+ *   (a) the Cosmos work-ledger (tasks + their event-log history via the gateway, PLUS a direct dump
+ *       of the `memory`, `events`, and `decisions_pending` containers — see the GAP-8 note below),
+ *       and
+ *   (b) a full document dump of every LIVE Azure AI Search index (see the LIVE-brain repoint note
+ *       further down in this file).
  *
  * WHY THIS EXISTS (CROSS-BOARD-HARDENING.md item #7): both stores currently have ZERO offline copy.
- * If the Cosmos account or the `otchealth-brain-search` service were ever deleted, corrupted, or
- * suffered a bad write, there is no independent restore path. This job gives that independent,
- * version-controlled (blob-versioned) copy, decoupled from the live Azure resources it backs up.
+ * If the Cosmos account or the search service were ever deleted, corrupted, or suffered a bad write,
+ * there is no independent restore path. This job gives that independent, version-controlled
+ * (blob-versioned) copy, decoupled from the live Azure resources it backs up.
+ *
+ * GAP-8 (2026-08, DR gap-analysis item #8): the agent-state Cosmos account has FOUR containers —
+ * `tasks`, `events`, `memory`, `decisions_pending` — but this job originally only exported `tasks`.
+ * `memory` is the deterministic memory-of-record (distinct from the `memory-exec` AI Search index,
+ * which is a lossy DERIVED projection of it, and IS covered by the AI-Search-index export in (b));
+ * `events` is the append-only task event log; `decisions_pending` is the decision-clock's open-gate
+ * tracker. None of the three had ANY backup coverage — working or broken — until this job's
+ * `exportCosmosContainer()` (which delegates to skills/fleet-backup/cosmos-export.mjs) closed that
+ * gap. Unlike the gateway-mediated `tasks` export below, these three go DIRECT to Cosmos (see
+ * cosmos-export.mjs's own header for the full rationale: the gateway's `memory_search` tool caps
+ * results at 100 with no pagination token at all, and `events`/`decisions_pending` have no gateway
+ * read tool whatsoever, so a gateway-mediated export of any of the three would either silently
+ * truncate or be impossible to build).
  *
  * DESIGN NOTE / correction to the original runbook wording: the runbook text says "export ... to
  * otchealth-cto/ledger-backup/<date>.jsonl", which reads like a literal path inside the otchealth-cto
  * GIT REPO. That is NOT what this job does, deliberately: committing a daily growing ledger dump
- * (and a 67k-document search-index dump) into git would bloat repo history unboundedly and git is
- * not a backup store (no lifecycle policy, no versioning-with-retention, clones get slower forever).
- * Every other durable-artifact pattern in this fleet (kb-memory ledgers, cfo-source-docs, the legal
- * store) uses Azure Blob Storage, not git, for exactly this reason. This job therefore writes to Blob:
+ * (and a many-thousand-document search-index dump) into git would bloat repo history unboundedly and
+ * git is not a backup store (no lifecycle policy, no versioning-with-retention, clones get slower
+ * forever). Every other durable-artifact pattern in this fleet (kb-memory ledgers, cfo-source-docs,
+ * the legal store) uses Azure Blob Storage, not git, for exactly this reason. This job therefore
+ * writes to Blob:
  *   container: ledger-backup  (name mirrors the runbook path's directory component)
- *   blobs:     ledger-backup/tasks-<date>.jsonl
- *              ledger-backup/brain-index-<date>.jsonl
+ *   blobs:     ledger-backup/tasks-<date>.jsonl               Cosmos tasks (via the gateway)
+ *              ledger-backup/memory-<date>.jsonl               Cosmos memory (direct, GAP-8)
+ *              ledger-backup/events-<date>.jsonl                Cosmos events (direct, GAP-8)
+ *              ledger-backup/decisions-pending-<date>.jsonl     Cosmos decisions_pending (direct, GAP-8)
+ *              ledger-backup/index-<indexName>-<date>.jsonl    one per LIVE AI Search index
  *              ledger-backup/manifest-<date>.json   (counts + hashes, for verifying completeness)
  * on the existing fleet storage account (see IAC_NOTES.md for exactly which account/RG to use —
  * this script takes the account name via env so it is not hardcoded to one choice).
@@ -28,16 +48,21 @@
  *     same resolution helper style as skills/kb-memory/azure-secret.mjs. No client secret baked into
  *     the job spec; the job's managed identity must be granted:
  *       - "Key Vault Secrets User" on kv-otc-55c84f6bef (scoped to the specific secrets it reads, or
- *         the vault if per-secret RBAC isn't in use)
+ *         the vault if per-secret RBAC isn't in use) — GAP-8 ADDS two secrets to this list, see
+ *         REQUIRED SECRETS below (cosmos-agent-state-endpoint / cosmos-agent-state-key). If the grant
+ *         is per-secret RBAC rather than vault-wide, granting read on those two is a real, separate
+ *         deploy step, not automatic just because this code exists.
  *       - "Storage Blob Data Contributor" scoped to ONLY the `ledger-backup` container (not the whole
  *         storage account) on the backup storage account
- *   - Cosmos work-ledger and AI Search are NOT reached directly (no Cosmos connection string / AI
- *     Search admin key is provisioned to this job). Both are reached exclusively through the existing
- *     read-only gateway HTTP API (mcp.otchealth.app), using the SAME least-privilege posture already
- *     enforced there (task_list/task_get for the ledger; a paginated raw index read for the brain).
- *     This avoids handing the backup job its own Cosmos/Search credentials at all — it inherits
- *     whatever the gateway already exposes read-only, which is strictly less privilege than a raw
- *     Cosmos "read" role or a Search "read" API key would be.
+ *   - `tasks` continues to be reached exclusively through the existing read-only gateway HTTP API
+ *     (mcp.otchealth.app: task_list/task_get), the same least-privilege posture as before GAP-8 — that
+ *     part of this job still hands Cosmos no direct credential at all. `memory` / `events` /
+ *     `decisions_pending` are the ONE deliberate exception (see the GAP-8 note above and
+ *     cosmos-export.mjs's header for why): those three go direct to Cosmos via a read-only master-key
+ *     REST client, because there is no complete, non-truncating gateway path for them today. The AI
+ *     Search index dump also goes direct (see the LIVE-brain repoint note further down), using a
+ *     read-only per-service QUERY key minted via this job's own managed identity (ARM
+ *     listQueryKeys) — Search Service Contributor, not Owner/Contributor on the index itself.
  *
  *   GATEWAY PROTOCOL (fixed 2026-07-10): the gateway is an MCP server, not a plain REST API — it
  *   exposes exactly GET /health, POST /mcp, GET /oauth/authorize, POST /oauth/token,
@@ -50,7 +75,11 @@
  *   and 404'd on every real run; this was only discovered on first live deploy.
  *
  * REQUIRED SECRETS (Key Vault, names mirror existing SM->KV 1:1 convention):
- *   gateway-bearer-token       bearer/API token the job presents to mcp.otchealth.app (read-only scope)
+ *   gateway-bearer-token         bearer/API token the job presents to mcp.otchealth.app (read-only scope)
+ *   cosmos-agent-state-endpoint  Cosmos account URI (GAP-8; read directly by cosmos-export.mjs)
+ *   cosmos-agent-state-key       Cosmos read-capable master key (GAP-8; same two secrets every other
+ *                                job Cosmos client in this repo already reads — see
+ *                                skills/kb-memory/cosmos-memory-read.mjs / skills/decision-clock)
  *
  * REQUIRED ENV (set in the Container Apps Job spec, non-secret):
  *   BACKUP_STORAGE_ACCOUNT     e.g. stotc55c84f6bef (see IAC_NOTES.md — confirm exact account name
@@ -60,14 +89,17 @@
  *   AZURE_KEYVAULT_NAME        default kv-otc-55c84f6bef
  *
  * USAGE:
- *   node backup.mjs run                 # full run: ledger export + brain index export + manifest
- *   node backup.mjs run --ledger-only
- *   node backup.mjs run --brain-only
+ *   node backup.mjs run                 # full run: Cosmos export (tasks+memory+events+decisions_pending)
+ *                                        # + AI Search index export + manifest
+ *   node backup.mjs run --ledger-only   # Cosmos export only (skips the AI Search index export)
+ *   node backup.mjs run --brain-only    # AI Search index export only (skips the Cosmos export)
  *   node backup.mjs selftest            # no writes: verify identity token + KV secret + blob container reachable
  */
 
 import { readFileSync } from "node:fs";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { dumpContainer } from "./cosmos-export.mjs";
 
 // ---------- Key Vault (managed identity, mirrors skills/kb-memory/azure-secret.mjs) ----------
 let _tok = null, _exp = 0;
@@ -179,22 +211,49 @@ async function mcpCall(bearer, toolName, args) {
   return result;
 }
 
-/** Pull the full payload for a JIT-offloaded result (see src/tools/result-store.ts on the gateway). */
-async function fetchOffloaded(bearer, resultId) {
+/**
+ * Pull the full payload for a JIT-offloaded result (see src/tools/result-store.ts and
+ * src/tools/gateway-fetch-result.ts on the gateway).
+ *
+ * 2026-08-04 (FND-20260728-b8a0, "backup.mjs Cosmos work-ledger export produces 0 rows nightly"):
+ * this function's contract was wrong on two counts, confirmed live against the real gateway
+ * (`gateway_fetch_result` on a real jitres_ id, 8-page payload). The tool is 0-indexed
+ * (`page` default 0) and its output shape is `{found, total_bytes, page, pages, chunk, expired}`
+ * -- there is no `has_more`/`hasMore`/`next_page` field anywhere in it. The old code started at
+ * `page = 1` (silently skipping page 0, ~1/8 of every offloaded payload) and used
+ * `chunk.has_more ?? chunk.hasMore ?? false`, which is unconditionally `false` since neither key
+ * exists -- so the loop always stopped after exactly one (wrong) page. The resulting `combined`
+ * string was a truncated JSON fragment starting mid-document; JSON.parse failed and the old
+ * `catch { return combined; }` silently handed the caller a raw broken string instead of an
+ * object, which `page.tasks || page.items || []` in exportLedger() then read as "0 tasks" --
+ * a job that reports "Succeeded" while quietly exporting nothing, exactly the July-27 incident.
+ * Any large task_list/task_get or brain_search response that gets JIT-offloaded hits this same
+ * path, so this was not specific to the ledger export. Fixed to walk real `page`/`pages`, and to
+ * THROW (not silently degrade) on an unparseable/missing/expired page, so a future offload-layer
+ * bug fails the job loudly instead of writing an empty, "successful" backup.
+ */
+export async function fetchOffloaded(bearer, resultId) {
   const parts = [];
-  let page = 1;
+  let page = 0;
+  let totalPages = null;
   for (;;) {
     const chunk = await gatewayCall(bearer, "gateway_fetch_result", { result_id: resultId, page });
-    if (chunk == null) break;
-    if (typeof chunk === "string") { parts.push(chunk); break; }
-    const text = chunk.text ?? chunk.chunk ?? chunk.data ?? null;
-    if (text != null) parts.push(String(text));
-    const hasMore = chunk.has_more ?? chunk.hasMore ?? false;
-    if (!hasMore) break;
-    page = chunk.next_page ?? page + 1;
+    if (chunk == null || typeof chunk !== "object") {
+      throw new Error(`gateway_fetch_result(${resultId}, page=${page}): unexpected response shape (got ${typeof chunk})`);
+    }
+    if (chunk.expired) throw new Error(`gateway_fetch_result(${resultId}, page=${page}): result has expired`);
+    if (chunk.found === false) throw new Error(`gateway_fetch_result(${resultId}, page=${page}): not found (invalid id or expired)`);
+    parts.push(String(chunk.chunk ?? ""));
+    totalPages = chunk.pages ?? totalPages ?? 1;
+    page += 1;
+    if (page >= totalPages) break;
   }
   const combined = parts.join("");
-  try { return JSON.parse(combined); } catch { return combined; }
+  try {
+    return JSON.parse(combined);
+  } catch (e) {
+    throw new Error(`gateway_fetch_result(${resultId}): failed to parse combined ${combined.length}-char payload across ${page} page(s): ${e.message}`);
+  }
 }
 
 /** High-level: call a gateway tool and return its actual data (unwraps structuredContent + JIT offload). */
@@ -236,6 +295,32 @@ async function exportLedger(bearer) {
     cursor = page.next_cursor || page.cursor || null;
   } while (cursor);
   return rows;
+}
+
+// ---------- (a2) direct Cosmos container export (GAP-8: memory / events / decisions_pending) ----------
+// Unlike exportLedger() above (gateway task_list/task_get), this goes straight to Cosmos via
+// cosmos-export.mjs's read-only master-key REST client with real x-ms-continuation pagination drained
+// to exhaustion — no row cap, no gateway search-shaped API involved. See this file's own header
+// ("GAP-8") and cosmos-export.mjs's header for the full rationale (the gateway's memory_search tool
+// caps at 100 with no continuation token at all; events/decisions_pending have no gateway read tool
+// whatsoever). Throws on failure (never returns a silently-truncated array) so run() below reports it
+// the same way it already reports a failed AI Search index dump — a partial GAP-8 container export
+// must never be recorded in the manifest as if it were complete.
+export async function exportCosmosContainer(container) {
+  return dumpContainer(container);
+}
+
+/** Pure: append `additions` onto `existing` (never overwrite/clobber a prior value) -- the exact
+ *  fix for a real bug class this file already hit once (see run()'s "Merge (never overwrite)"
+ *  comments at both call sites): the AI-Search-index block and the GAP-8 Cosmos-container block
+ *  both write to manifest.backup_incomplete, and a plain `manifest.backup_incomplete = failures`
+ *  assignment in either block would silently discard whatever the OTHER block had already recorded,
+ *  turning a real, reported failure into an unreported one. Exported + regression-tested directly so
+ *  this invariant cannot regress without a test catching it, independent of exercising the rest of
+ *  run()'s network-heavy machinery. */
+export function mergeBackupIncomplete(existing, additions) {
+  if (!additions || !additions.length) return existing;
+  return [...(existing || []), ...additions];
 }
 
 // ---------- (b) AI Search index full dump ----------
@@ -345,7 +430,7 @@ async function run({ ledgerOnly, brainOnly }) {
   const ok = await containerExists(account, container);
   if (!ok) { console.error(`[FATAL] container '${container}' not reachable/does not exist on ${account}. Create it (least-privilege scope) before deploying this job.`); process.exit(78); }
 
-  const manifest = { date, account, container, ledger: null, brain: null };
+  const manifest = { date, account, container, ledger: null, brain: null, memory: null, events: null, decisions_pending: null };
 
   if (!brainOnly) {
     console.log("[fleet-backup] exporting Cosmos work-ledger via gateway task_list/task_get ...");
@@ -355,6 +440,43 @@ async function run({ ledgerOnly, brainOnly }) {
     await putBlockBlob(account, container, blobName, ledgerBuf, "application/x-ndjson");
     manifest.ledger = { blob: blobName, rows: ledgerRows.length, bytes: ledgerBuf.length, sha256: sha256(ledgerBuf) };
     console.log(`[fleet-backup] ledger export OK: ${ledgerRows.length} tasks, ${ledgerBuf.length} bytes -> ${container}/${blobName}`);
+
+    // GAP-8: direct Cosmos export of the three containers with no complete gateway read path (see
+    // this file's header "GAP-8" note and cosmos-export.mjs's own header for the full rationale).
+    // `zeroRowsIsFailure: false` on decisions_pending means a genuinely empty decision-clock queue
+    // ("nothing pending right now") is NOT treated as a failure -- unlike `memory`/`events`, which are
+    // append-only and effectively never legitimately empty on this live account, an empty
+    // decisions_pending is a real, healthy, and common state; hard-failing the DR job on it would
+    // just train operators to ignore the alert. A row-count of 0 is still logged for all three either
+    // way, so the signal is never silently dropped -- only whether it escalates to a job failure differs.
+    const GAP8_CONTAINERS = [
+      { container: "memory", blobPrefix: "memory", zeroRowsIsFailure: true },
+      { container: "events", blobPrefix: "events", zeroRowsIsFailure: true },
+      { container: "decisions_pending", blobPrefix: "decisions-pending", zeroRowsIsFailure: false },
+    ];
+    const cosmosFailures = [];
+    for (const { container: coll, blobPrefix, zeroRowsIsFailure } of GAP8_CONTAINERS) {
+      const collBlobName = `${blobPrefix}-${date}.jsonl`;
+      try {
+        console.log(`[fleet-backup] exporting Cosmos ${coll} directly (GAP-8) -> ${container}/${collBlobName} ...`);
+        const rows = await exportCosmosContainer(coll);
+        const buf = Buffer.from(toNdjson(rows), "utf8");
+        await putBlockBlob(account, container, collBlobName, buf, "application/x-ndjson");
+        manifest[coll] = { blob: collBlobName, rows: rows.length, bytes: buf.length, sha256: sha256(buf) };
+        console.log(`[fleet-backup] ${coll} export OK: ${rows.length} rows, ${buf.length} bytes -> ${container}/${collBlobName}`);
+        if (rows.length === 0) {
+          console.warn(`::warning::[fleet-backup] Cosmos ${coll} dumped ZERO documents${zeroRowsIsFailure ? "" : " (not treated as a failure for this container -- an empty queue is a legitimate state)"}.`);
+          if (zeroRowsIsFailure) cosmosFailures.push(`${coll}: 0 rows`);
+        }
+      } catch (e) {
+        console.error(`::error::[fleet-backup] Cosmos ${coll} export FAILED: ${e.message}`);
+        manifest[coll] = { blob: collBlobName, error: e.message };
+        cosmosFailures.push(`${coll}: ${e.message}`);
+      }
+    }
+    // Merge (never overwrite) -- the AI Search index block below also writes manifest.backup_incomplete
+    // when it runs, and both blocks must contribute to the SAME final failure list, not clobber each other.
+    manifest.backup_incomplete = mergeBackupIncomplete(manifest.backup_incomplete, cosmosFailures);
   }
 
   if (!ledgerOnly) {
@@ -415,17 +537,19 @@ async function run({ ledgerOnly, brainOnly }) {
     console.log(`[fleet-backup] LIVE brain export: ${manifest.indexes.length}/${liveIndexes.length} index(es) OK, ${totalDocs} docs total.`);
     // Persist the manifest (below) BEFORE failing, so partial progress is recorded -- but FAIL LOUD if
     // any live index could not be captured. A silent partial backup is exactly how we got here.
-    if (failures.length) manifest.backup_incomplete = failures;
+    // Merge (never overwrite) -- the GAP-8 Cosmos-container block above may have already populated
+    // manifest.backup_incomplete this same run; both sources must contribute to one final list.
+    manifest.backup_incomplete = mergeBackupIncomplete(manifest.backup_incomplete, failures);
   }
 
   const manifestBuf = Buffer.from(JSON.stringify(manifest, null, 2), "utf8");
   await putBlockBlob(account, container, `manifest-${date}.json`, manifestBuf, "application/json");
   console.log(`[fleet-backup] manifest written: ${container}/manifest-${date}.json`);
   console.log(JSON.stringify(manifest, null, 2));
-  // Manifest is persisted (partial progress recorded). Now FAIL LOUD if any live index was missed, so a
-  // partial brain backup can never masquerade as a green run.
+  // Manifest is persisted (partial progress recorded). Now FAIL LOUD if any live index OR GAP-8 Cosmos
+  // container was missed, so a partial backup (search or Cosmos) can never masquerade as a green run.
   if (Array.isArray(manifest.backup_incomplete) && manifest.backup_incomplete.length) {
-    throw new Error(`[fleet-backup] INCOMPLETE: ${manifest.backup_incomplete.length} live index(es) not captured -> ${manifest.backup_incomplete.join("; ")}`);
+    throw new Error(`[fleet-backup] INCOMPLETE: ${manifest.backup_incomplete.length} item(s) not captured -> ${manifest.backup_incomplete.join("; ")}`);
   }
 }
 
@@ -445,14 +569,22 @@ async function selftest() {
   console.log(JSON.stringify(report, null, 2));
 }
 
-const cmd = process.argv[2] || "run";
-const flags = new Set(process.argv.slice(3));
-if (cmd === "selftest") {
-  selftest().catch((e) => { console.error("ERR", e.message); process.exit(1); });
-} else if (cmd === "run") {
-  run({ ledgerOnly: flags.has("--ledger-only"), brainOnly: flags.has("--brain-only") })
-    .catch((e) => { console.error("ERR", e.message); process.exit(1); });
-} else {
-  console.error("usage: node backup.mjs run [--ledger-only|--brain-only] | selftest");
-  process.exit(2);
+// CLI entrypoint guard: only dispatch when this file is run directly (`node backup.mjs ...`), never
+// when imported (e.g. by tests importing fetchOffloaded / exportCosmosContainer /
+// mergeBackupIncomplete for regression coverage) -- without this guard, importing this module for its
+// exports would unconditionally kick off a real production run() (the default cmd) as a side effect
+// of the import itself. Mirrors the fleet's established convention (see skills/fleet-backup/
+// s3-mirror.mjs, skills/azure-canary/canary.mjs).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const cmd = process.argv[2] || "run";
+  const flags = new Set(process.argv.slice(3));
+  if (cmd === "selftest") {
+    selftest().catch((e) => { console.error("ERR", e.message); process.exit(1); });
+  } else if (cmd === "run") {
+    run({ ledgerOnly: flags.has("--ledger-only"), brainOnly: flags.has("--brain-only") })
+      .catch((e) => { console.error("ERR", e.message); process.exit(1); });
+  } else {
+    console.error("usage: node backup.mjs run [--ledger-only|--brain-only] | selftest");
+    process.exit(2);
+  }
 }

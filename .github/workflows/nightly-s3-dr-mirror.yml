@@ -14,9 +14,10 @@
 #
 # This workflow runs the mirror, THEN skills/fleet-backup/restore-drill.mjs against that same run's
 # manifest, so every scheduled run proves the backup is actually RESTORABLE (bytes round-trip, sha256
-# matches), not merely writable. Non-privileged lane only, the safe default posture; the privileged lane
-# (--include-privileged plus S3_DR_INCLUDE_PRIVILEGED=1) stays a deliberate, manual, double-opt-in
-# action and is never scheduled here.
+# matches), not merely writable. Non-privileged lane only, the safe default posture; the two privileged
+# lanes (--include-personal-legal + S3_DR_INCLUDE_PERSONAL_LEGAL=1, and --include-finance-legal +
+# S3_DR_INCLUDE_FINANCE_LEGAL=1 -- see s3-mirror.mjs's 2026-08-04 two-lane split) each stay a
+# deliberate, manual, double-opt-in action and are never scheduled here.
 #
 # Azure auth here is TWO-PART, unlike the other nightly-*.yml monitors in this repo:
 #   1. azure/login OIDC (vars.AZURE_CLIENT_ID/TENANT_ID/SUBSCRIPTION_ID, id-token: write, no secret at

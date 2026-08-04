@@ -31,9 +31,31 @@
  *   never happen). This is cross-checked against setup/expected-indexes.json's `queried_by` field
  *   (anything gated behind "kb_search_privileged" is ALSO forced privileged) as a second, independent
  *   signal — best-effort only, the substring check above is the primary, always-on gate.
- *   Privileged rooms are mirrored ONLY when BOTH `--include-privileged` (this CLI flag) AND
- *   `S3_DR_INCLUDE_PRIVILEGED=1` (this env var) are set, and even then go to a SEPARATE bucket/credential
- *   (aws-dr-privileged-*), never co-mingled with the non-privileged bucket.
+ *
+ *   TWO-LANE SPLIT (2026-08-04, AZURE-LOSS-DR-PLAN.md gap #3): a privileged room is NEVER just "arm
+ *   one shared privileged lane." That original v1 design (a single aws-dr-privileged-* credential/
+ *   bucket shared by CFO + CLO + Matt) would give CFO read access to legal-personal content (Matt's
+ *   California divorce/family/civil matters, including minors' data) the moment anyone armed it —
+ *   recreating the exact P0 cross-ring leak the gateway itself had and closed on 2026-07-16
+ *   (otchealth-mcp-server PR #124, PERSONAL_LEGAL_RING = ['clo-personal','exec'], CFO deliberately
+ *   excluded from legal-personal/legal-personal-memory at that layer). This file now mirrors that same
+ *   ring split at the S3-mirror layer, with a THIRD, permanent category on top:
+ *     1. NEVER-MIRROR (medreview, phi): PHI is absolute-wall, GCP-BAA-only, and never enters this
+ *        non-PHI Azure/AWS plane in the first place per fleet architecture — any blob whose name still
+ *        matches these substrings is excluded from EVERY lane, unconditionally, with no opt-in flag
+ *        that can ever re-include it. This is not "extra privileged," it is "never leaves Azure at all
+ *        via this script," full stop.
+ *     2. PERSONAL-LEGAL (legal-personal, legal-personal-memory, any other *-personal* room): its own
+ *        bucket + credential (aws-dr-personal-legal-*), armed only by
+ *        `--include-personal-legal` + `S3_DR_INCLUDE_PERSONAL_LEGAL=1`. This credential is for CLO +
+ *        Matt only — never hand it to CFO, never let it share a bucket with lane 3.
+ *     3. FINANCE-COMPANY-LEGAL (legal-company, cfo, finance-, and any other ring-gated-privileged room
+ *        not caught by lane 1 or 2): its own bucket + credential (aws-dr-finance-legal-*), armed only
+ *        by `--include-finance-legal` + `S3_DR_INCLUDE_FINANCE_LEGAL=1`. This one CAN be shared by
+ *        CFO + CLO + Matt, matching the gateway's existing (non-personal) exec-ring access today.
+ *   All three lanes/buckets/credentials must be pairwise distinct — the code below refuses to run if
+ *   any two resolve to the same bucket name. Nothing is armed by default; both opt-ins require BOTH
+ *   the CLI flag AND the matching env var, same double-opt-in shape as the original design.
  *
  * INERT-SAFE (permanent defense-in-depth, NOT the current reason this has never run): if any of the
  * four base aws-dr-* secrets is missing from Key Vault, this prints a clear message and exits 0. No
@@ -53,16 +75,19 @@
  *     -> the non-privileged DR mirror. ALL FOUR required or the run is a no-op (see INERT-SAFE above).
  *     CONFIRMED LIVE 2026-07-22 (see above) -- this lane is fully self-serve, no further provisioning
  *     needed; the INERT-SAFE gate above will not trip for it under normal operation.
- *   aws-dr-privileged-access-key-id / aws-dr-privileged-secret-access-key / aws-dr-privileged-s3-bucket
- *     -> the privileged DR mirror, a DISTINCT credential + bucket (not just a different prefix) so a
- *        leaked/over-scoped non-privileged key structurally cannot reach the privileged bucket.
- *        aws-dr-privileged-region is optional and falls back to aws-dr-region (region is not sensitive).
- *     -> only read/required when BOTH --include-privileged and S3_DR_INCLUDE_PRIVILEGED=1 are set.
- *   The privileged lane's own secrets were NOT part of the 2026-07-22 confirmation above -- only the
- *   base four were verified live. Run `node s3-mirror.mjs selftest` to check current state; the
- *   privileged lane stays inert-safe (by design, double opt-in) until those are separately confirmed.
+ *   aws-dr-personal-legal-access-key-id / aws-dr-personal-legal-secret-access-key /
+ *   aws-dr-personal-legal-s3-bucket -> the personal-legal lane (CLO + Matt only). Region optional,
+ *     falls back to aws-dr-region. Only read/required when BOTH --include-personal-legal and
+ *     S3_DR_INCLUDE_PERSONAL_LEGAL=1 are set.
+ *   aws-dr-finance-legal-access-key-id / aws-dr-finance-legal-secret-access-key /
+ *   aws-dr-finance-legal-s3-bucket -> the finance/company-legal lane (CFO + CLO + Matt). Region
+ *     optional, falls back to aws-dr-region. Only read/required when BOTH --include-finance-legal and
+ *     S3_DR_INCLUDE_FINANCE_LEGAL=1 are set.
+ *   NEITHER privileged lane's secrets exist in Key Vault yet as of this change (2026-08-04) -- both
+ *   stay inert-safe (by design, double opt-in) until Matt provisions genuinely distinct AWS
+ *   credentials/buckets for each. Run `node s3-mirror.mjs selftest` to check current state.
  *   See README.md for the exact `az keyvault secret set` commands and the recommended least-privilege
- *   IAM policy.
+ *   IAM policy for each lane.
  *
  * REQUIRED ENV (non-secret, same names backup.mjs already uses — deploy this as a sibling job with
  * the identical env block):
@@ -73,7 +98,7 @@
  *                            and not OOM-risked by an unbounded in-memory buffer.
  *
  * USAGE:
- *   node s3-mirror.mjs run [--include-privileged] [--dry-run]
+ *   node s3-mirror.mjs run [--include-personal-legal] [--include-finance-legal] [--dry-run]
  *   node s3-mirror.mjs selftest       # no writes: reports Azure auth, source container, AWS creds presence
  */
 
@@ -86,14 +111,33 @@ import { s3Put, s3Head, sha256Hex } from "./s3-client.mjs";
 const MAX_MIRROR_BYTES = Number(process.env.S3_DR_MAX_MB || 500) * 1024 * 1024;
 
 // ---------- ring segregation ----------
-// Exported (isPrivilegedByName / isPrivileged / indexNameFromBlob / ringGatedIndexNames): this is the
-// hard compliance boundary of the whole mirror (README.md "ring segregation, hard compliance
-// requirement") and pure/deterministic, so it is unit-tested directly (tests/s3-mirror-privileged.test.mjs)
-// rather than only exercised indirectly through a full `run()` with live Azure/AWS credentials.
-export const PRIVILEGED_SUBSTRINGS = ["legal-personal", "legal-company", "cfo", "finance-", "-personal", "medreview", "phi"];
-export function isPrivilegedByName(blobName) {
+// Exported: this is the hard compliance boundary of the whole mirror (README.md "ring segregation,
+// hard compliance requirement") and pure/deterministic, so it is unit-tested directly
+// (tests/s3-mirror-privileged.test.mjs) rather than only exercised indirectly through a full `run()`
+// with live Azure/AWS credentials.
+//
+// PRIVILEGED_SUBSTRINGS stays as the AGGREGATE "does this need to stay out of the non-privileged
+// bucket" check (unchanged meaning/behavior from before the lane split). NEVER_MIRROR_SUBSTRINGS and
+// PERSONAL_LEGAL_SUBSTRINGS are checked FIRST, in that priority order, so classify() below always
+// resolves each privileged blob to exactly one lane -- never-mirror wins over personal-legal, which
+// wins over finance-company-legal (the catch-all for anything else privileged).
+export const NEVER_MIRROR_SUBSTRINGS = ["medreview", "phi"];
+export const PERSONAL_LEGAL_SUBSTRINGS = ["legal-personal", "-personal"];
+export const FINANCE_COMPANY_LEGAL_SUBSTRINGS = ["legal-company", "cfo", "finance-"];
+export const PRIVILEGED_SUBSTRINGS = [...PERSONAL_LEGAL_SUBSTRINGS, ...FINANCE_COMPANY_LEGAL_SUBSTRINGS, ...NEVER_MIRROR_SUBSTRINGS];
+
+const hasAny = (blobName, substrings) => {
   const lower = blobName.toLowerCase();
-  return PRIVILEGED_SUBSTRINGS.some((s) => lower.includes(s));
+  return substrings.some((s) => lower.includes(s));
+};
+export function isPrivilegedByName(blobName) {
+  return hasAny(blobName, PRIVILEGED_SUBSTRINGS);
+}
+export function isNeverMirrorByName(blobName) {
+  return hasAny(blobName, NEVER_MIRROR_SUBSTRINGS);
+}
+export function isPersonalLegalByName(blobName) {
+  return !isNeverMirrorByName(blobName) && hasAny(blobName, PERSONAL_LEGAL_SUBSTRINGS);
 }
 
 function loadExpectedIndexRegistry() {
@@ -118,6 +162,20 @@ export function isPrivileged(blobName, ringGatedNames) {
   for (const n of ringGatedNames) if (blobName.includes(n)) return true;
   return false;
 }
+// Resolves a blob to exactly ONE of four lanes: "never-mirror" (medreview/phi, no bucket, ever),
+// "personal-legal", "finance-company-legal", or "non-privileged". A ring-gated-registry hit that
+// isn't caught by any name substring falls through to "finance-company-legal" -- the less-restrictive
+// of the two arm-able lanes -- rather than silently landing in "non-privileged"; a room the registry
+// itself flags as privileged must never reach the open bucket by default.
+export function classifyLane(blobName, ringGatedNames) {
+  if (isNeverMirrorByName(blobName)) return "never-mirror";
+  if (isPersonalLegalByName(blobName)) return "personal-legal";
+  if (hasAny(blobName, FINANCE_COMPANY_LEGAL_SUBSTRINGS)) return "finance-company-legal";
+  for (const n of ringGatedNames || []) {
+    if (blobName.includes(n)) return "finance-company-legal";
+  }
+  return "non-privileged";
+}
 export function indexNameFromBlob(blobName) {
   const m = blobName.match(/^index-(.+)-\d{4}-\d{2}-\d{2}\.jsonl$/);
   return m ? m[1] : null;
@@ -136,6 +194,14 @@ async function loadManifestShaMap(account, container, blobs) {
       const buf = await getBlob(account, container, mb.name);
       const manifest = JSON.parse(buf.toString("utf8"));
       if (manifest.ledger && manifest.ledger.blob && manifest.ledger.sha256) shaMap.set(manifest.ledger.blob, manifest.ledger.sha256);
+      // GAP-8 (2026-08): backup.mjs also records manifest.memory / manifest.events /
+      // manifest.decisions_pending in the same {blob, sha256} shape as manifest.ledger -- pick those
+      // up too so the idempotent-skip check below works for the three new Cosmos-container blobs, not
+      // just the pre-existing tasks-<date>.jsonl.
+      for (const key of ["memory", "events", "decisions_pending"]) {
+        const entry = manifest[key];
+        if (entry && entry.blob && entry.sha256) shaMap.set(entry.blob, entry.sha256);
+      }
       for (const ix of manifest.indexes || []) {
         if (ix.blob && ix.sha256) shaMap.set(ix.blob, ix.sha256);
       }
@@ -146,7 +212,7 @@ async function loadManifestShaMap(account, container, blobs) {
   return shaMap;
 }
 
-async function run({ includePrivileged, dryRun }) {
+async function run({ includePersonalLegal, includeFinanceLegal, dryRun }) {
   const account = process.env.BACKUP_STORAGE_ACCOUNT;
   const container = process.env.BACKUP_CONTAINER || "ledger-backup";
   if (!account) {
@@ -189,51 +255,86 @@ async function run({ includePrivileged, dryRun }) {
   const ringGated = ringGatedIndexNames(registry);
 
   const nonPrivileged = [];
-  const privileged = [];
+  const personalLegal = [];
+  const financeCompanyLegal = [];
+  const neverMirror = [];
   for (const b of blobs) {
-    (isPrivileged(b.name, ringGated) ? privileged : nonPrivileged).push(b);
+    const lane = classifyLane(b.name, ringGated);
+    if (lane === "never-mirror") neverMirror.push(b);
+    else if (lane === "personal-legal") personalLegal.push(b);
+    else if (lane === "finance-company-legal") financeCompanyLegal.push(b);
+    else nonPrivileged.push(b);
   }
-  console.log(`[s3-mirror] classified ${blobs.length} blob(s): ${nonPrivileged.length} non-privileged, ${privileged.length} privileged.`);
-  if (privileged.length) {
-    console.log(`[s3-mirror] SKIPPED-as-privileged (excluded from the non-privileged mirror by default, never silently -- listed here): ${privileged.map((b) => b.name).join(", ")}`);
+  console.log(`[s3-mirror] classified ${blobs.length} blob(s): ${nonPrivileged.length} non-privileged, ${personalLegal.length} personal-legal, ${financeCompanyLegal.length} finance-company-legal, ${neverMirror.length} never-mirror (PHI wall).`);
+  if (personalLegal.length) console.log(`[s3-mirror] SKIPPED-as-personal-legal (excluded from the non-privileged mirror by default, never silently -- listed here): ${personalLegal.map((b) => b.name).join(", ")}`);
+  if (financeCompanyLegal.length) console.log(`[s3-mirror] SKIPPED-as-finance-company-legal (excluded from the non-privileged mirror by default, never silently -- listed here): ${financeCompanyLegal.map((b) => b.name).join(", ")}`);
+  if (neverMirror.length) console.log(`[s3-mirror] BLOCKED (PHI wall, never mirrored anywhere by any flag): ${neverMirror.map((b) => b.name).join(", ")}`);
+
+  // ---- opt-in privileged lanes: BOTH the flag AND the matching env var are required, INDEPENDENTLY
+  // per lane. Getting one armed never implicitly arms the other, and the two credentials/buckets must
+  // be genuinely distinct from each other AND from the non-privileged bucket. ----
+  async function resolveLaneCreds({ requested, envVar, envName, secretPrefix, laneLabel, otherBuckets }) {
+    if (!requested) return null;
+    if (process.env[envVar] !== "1") {
+      console.warn(`[s3-mirror] --include-${laneLabel} was passed but ${envVar}=1 is NOT set in env -- BOTH are required. ${envName} rooms stay EXCLUDED this run.`);
+      return null;
+    }
+    const [akidL, asecretL, bucketL, regionOwnL] = await Promise.all([
+      kvSecret(`aws-dr-${secretPrefix}-access-key-id`),
+      kvSecret(`aws-dr-${secretPrefix}-secret-access-key`),
+      kvSecret(`aws-dr-${secretPrefix}-s3-bucket`),
+      kvSecret(`aws-dr-${secretPrefix}-region`),
+    ]);
+    const missing = [];
+    if (!akidL) missing.push(`aws-dr-${secretPrefix}-access-key-id`);
+    if (!asecretL) missing.push(`aws-dr-${secretPrefix}-secret-access-key`);
+    if (!bucketL) missing.push(`aws-dr-${secretPrefix}-s3-bucket`);
+    if (missing.length) {
+      console.warn(`[s3-mirror] --include-${laneLabel} + ${envVar}=1 requested, but AWS creds are not provisioned (${missing.join(", ")}) -- ${envName} rooms stay SKIPPED.`);
+      return null;
+    }
+    const collision = otherBuckets.find((ob) => ob.name === bucketL);
+    if (collision) {
+      console.error(`::error::[s3-mirror] aws-dr-${secretPrefix}-s3-bucket resolves to the SAME bucket as ${collision.label} (${bucketL}) -- refusing to co-mingle lanes in one bucket. Provision a genuinely separate bucket. ${envName} rooms stay SKIPPED this run.`);
+      return null;
+    }
+    const creds = { accessKeyId: akidL, secretAccessKey: asecretL, bucket: bucketL, region: regionOwnL || region };
+    console.log(`[s3-mirror] ${envName} mirror ENABLED -> separate bucket s3://${creds.bucket}.`);
+    return creds;
   }
 
-  // ---- opt-in privileged lane: BOTH the flag AND the env var are required ----
-  let privCreds = null;
-  if (includePrivileged) {
-    if (process.env.S3_DR_INCLUDE_PRIVILEGED !== "1") {
-      console.warn("[s3-mirror] --include-privileged was passed but S3_DR_INCLUDE_PRIVILEGED=1 is NOT set in env -- BOTH are required. Privileged rooms stay EXCLUDED this run.");
-    } else if (privileged.length) {
-      const [pakid, pasecret, pbucket, pregionOwn] = await Promise.all([
-        kvSecret("aws-dr-privileged-access-key-id"),
-        kvSecret("aws-dr-privileged-secret-access-key"),
-        kvSecret("aws-dr-privileged-s3-bucket"),
-        kvSecret("aws-dr-privileged-region"),
-      ]);
-      const missingPriv = [];
-      if (!pakid) missingPriv.push("aws-dr-privileged-access-key-id");
-      if (!pasecret) missingPriv.push("aws-dr-privileged-secret-access-key");
-      if (!pbucket) missingPriv.push("aws-dr-privileged-s3-bucket");
-      if (missingPriv.length) {
-        console.warn(`[s3-mirror] --include-privileged + S3_DR_INCLUDE_PRIVILEGED=1 requested, but privileged AWS creds are not provisioned (${missingPriv.join(", ")}) -- privileged rooms stay SKIPPED; continuing with the non-privileged mirror only.`);
-      } else if (pbucket === bucket) {
-        console.error(`::error::[s3-mirror] aws-dr-privileged-s3-bucket resolves to the SAME bucket as aws-dr-s3-bucket (${bucket}) -- refusing to co-mingle privileged and non-privileged rooms in one bucket. Provision a genuinely separate bucket. Privileged rooms stay SKIPPED this run.`);
-      } else {
-        privCreds = { accessKeyId: pakid, secretAccessKey: pasecret, bucket: pbucket, region: pregionOwn || region };
-        console.log(`[s3-mirror] privileged mirror ENABLED -> separate bucket s3://${privCreds.bucket} (never co-mingled with the non-privileged bucket s3://${bucket}).`);
-      }
-    }
-  }
+  const personalLegalCreds = await resolveLaneCreds({
+    requested: includePersonalLegal,
+    envVar: "S3_DR_INCLUDE_PERSONAL_LEGAL",
+    envName: "personal-legal",
+    secretPrefix: "personal-legal",
+    laneLabel: "personal-legal",
+    otherBuckets: [{ name: bucket, label: "aws-dr-s3-bucket (non-privileged)" }],
+  });
+  const financeLegalCreds = await resolveLaneCreds({
+    requested: includeFinanceLegal,
+    envVar: "S3_DR_INCLUDE_FINANCE_LEGAL",
+    envName: "finance-company-legal",
+    secretPrefix: "finance-legal",
+    laneLabel: "finance-legal",
+    otherBuckets: [
+      { name: bucket, label: "aws-dr-s3-bucket (non-privileged)" },
+      ...(personalLegalCreds ? [{ name: personalLegalCreds.bucket, label: "aws-dr-personal-legal-s3-bucket" }] : []),
+    ],
+  });
 
   const manifest = {
     ts: new Date().toISOString(),
     source: { account, container },
     dryRun: Boolean(dryRun),
     nonPrivilegedBucket: bucket,
-    privilegedBucket: privCreds ? privCreds.bucket : null,
+    personalLegalBucket: personalLegalCreds ? personalLegalCreds.bucket : null,
+    financeCompanyLegalBucket: financeLegalCreds ? financeLegalCreds.bucket : null,
     mirrored: [],
     skippedUnchanged: [],
-    skippedPrivileged: privileged.map((b) => b.name),
+    skippedPersonalLegal: personalLegal.map((b) => b.name),
+    skippedFinanceCompanyLegal: financeCompanyLegal.map((b) => b.name),
+    blockedNeverMirror: neverMirror.map((b) => b.name),
     skippedOversize: [],
     failed: [],
   };
@@ -279,7 +380,9 @@ async function run({ includePrivileged, dryRun }) {
   }
 
   await mirrorGroup(nonPrivileged, baseCreds, "non-privileged");
-  if (privCreds) await mirrorGroup(privileged, privCreds, "PRIVILEGED");
+  if (personalLegalCreds) await mirrorGroup(personalLegal, personalLegalCreds, "PERSONAL-LEGAL");
+  if (financeLegalCreds) await mirrorGroup(financeCompanyLegal, financeLegalCreds, "FINANCE-COMPANY-LEGAL");
+  // neverMirror is NEVER passed to mirrorGroup, under any flag combination -- see the file header.
 
   // ---- fail-loud coverage check: an expected non-privileged room with NO blob found at all is a
   // real gap (backup.mjs may not have run for it), not just "0 rows inside a blob that exists" (that
@@ -349,12 +452,19 @@ async function selftest() {
   ]);
   report.awsDrCredsProvisioned = Boolean(akid && asecret && bucket && region);
   report.awsDrMissing = [!akid && "aws-dr-access-key-id", !asecret && "aws-dr-secret-access-key", !bucket && "aws-dr-s3-bucket", !region && "aws-dr-region"].filter(Boolean);
-  const [pakid, pasecret, pbucket] = await Promise.all([
-    kvSecret("aws-dr-privileged-access-key-id"),
-    kvSecret("aws-dr-privileged-secret-access-key"),
-    kvSecret("aws-dr-privileged-s3-bucket"),
+  const [plakid, plasecret, plbucket] = await Promise.all([
+    kvSecret("aws-dr-personal-legal-access-key-id"),
+    kvSecret("aws-dr-personal-legal-secret-access-key"),
+    kvSecret("aws-dr-personal-legal-s3-bucket"),
   ]);
-  report.awsDrPrivilegedCredsProvisioned = Boolean(pakid && pasecret && pbucket);
+  report.awsDrPersonalLegalCredsProvisioned = Boolean(plakid && plasecret && plbucket);
+  const [flakid, flasecret, flbucket] = await Promise.all([
+    kvSecret("aws-dr-finance-legal-access-key-id"),
+    kvSecret("aws-dr-finance-legal-secret-access-key"),
+    kvSecret("aws-dr-finance-legal-s3-bucket"),
+  ]);
+  report.awsDrFinanceCompanyLegalCredsProvisioned = Boolean(flakid && flasecret && flbucket);
+  if (plbucket && plbucket === flbucket) report.laneCollisionWarning = "aws-dr-personal-legal-s3-bucket and aws-dr-finance-legal-s3-bucket resolve to the SAME bucket -- this must be fixed before either lane is armed.";
   console.log(JSON.stringify(report, null, 2));
 }
 
@@ -371,12 +481,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       process.exit(1);
     });
   } else if (cmd === "run") {
-    run({ includePrivileged: flags.has("--include-privileged"), dryRun: flags.has("--dry-run") }).catch((e) => {
+    run({
+      includePersonalLegal: flags.has("--include-personal-legal"),
+      includeFinanceLegal: flags.has("--include-finance-legal"),
+      dryRun: flags.has("--dry-run"),
+    }).catch((e) => {
       console.error("ERR", e.message);
       process.exit(1);
     });
   } else {
-    console.error("usage: node s3-mirror.mjs run [--include-privileged] [--dry-run] | selftest");
+    console.error("usage: node s3-mirror.mjs run [--include-personal-legal] [--include-finance-legal] [--dry-run] | selftest");
     process.exit(2);
   }
 }
