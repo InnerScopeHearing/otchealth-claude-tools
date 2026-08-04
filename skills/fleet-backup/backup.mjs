@@ -179,22 +179,49 @@ async function mcpCall(bearer, toolName, args) {
   return result;
 }
 
-/** Pull the full payload for a JIT-offloaded result (see src/tools/result-store.ts on the gateway). */
-async function fetchOffloaded(bearer, resultId) {
+/**
+ * Pull the full payload for a JIT-offloaded result (see src/tools/result-store.ts and
+ * src/tools/gateway-fetch-result.ts on the gateway).
+ *
+ * 2026-08-04 (FND-20260728-b8a0, "backup.mjs Cosmos work-ledger export produces 0 rows nightly"):
+ * this function's contract was wrong on two counts, confirmed live against the real gateway
+ * (`gateway_fetch_result` on a real jitres_ id, 8-page payload). The tool is 0-indexed
+ * (`page` default 0) and its output shape is `{found, total_bytes, page, pages, chunk, expired}`
+ * -- there is no `has_more`/`hasMore`/`next_page` field anywhere in it. The old code started at
+ * `page = 1` (silently skipping page 0, ~1/8 of every offloaded payload) and used
+ * `chunk.has_more ?? chunk.hasMore ?? false`, which is unconditionally `false` since neither key
+ * exists -- so the loop always stopped after exactly one (wrong) page. The resulting `combined`
+ * string was a truncated JSON fragment starting mid-document; JSON.parse failed and the old
+ * `catch { return combined; }` silently handed the caller a raw broken string instead of an
+ * object, which `page.tasks || page.items || []` in exportLedger() then read as "0 tasks" --
+ * a job that reports "Succeeded" while quietly exporting nothing, exactly the July-27 incident.
+ * Any large task_list/task_get or brain_search response that gets JIT-offloaded hits this same
+ * path, so this was not specific to the ledger export. Fixed to walk real `page`/`pages`, and to
+ * THROW (not silently degrade) on an unparseable/missing/expired page, so a future offload-layer
+ * bug fails the job loudly instead of writing an empty, "successful" backup.
+ */
+export async function fetchOffloaded(bearer, resultId) {
   const parts = [];
-  let page = 1;
+  let page = 0;
+  let totalPages = null;
   for (;;) {
     const chunk = await gatewayCall(bearer, "gateway_fetch_result", { result_id: resultId, page });
-    if (chunk == null) break;
-    if (typeof chunk === "string") { parts.push(chunk); break; }
-    const text = chunk.text ?? chunk.chunk ?? chunk.data ?? null;
-    if (text != null) parts.push(String(text));
-    const hasMore = chunk.has_more ?? chunk.hasMore ?? false;
-    if (!hasMore) break;
-    page = chunk.next_page ?? page + 1;
+    if (chunk == null || typeof chunk !== "object") {
+      throw new Error(`gateway_fetch_result(${resultId}, page=${page}): unexpected response shape (got ${typeof chunk})`);
+    }
+    if (chunk.expired) throw new Error(`gateway_fetch_result(${resultId}, page=${page}): result has expired`);
+    if (chunk.found === false) throw new Error(`gateway_fetch_result(${resultId}, page=${page}): not found (invalid id or expired)`);
+    parts.push(String(chunk.chunk ?? ""));
+    totalPages = chunk.pages ?? totalPages ?? 1;
+    page += 1;
+    if (page >= totalPages) break;
   }
   const combined = parts.join("");
-  try { return JSON.parse(combined); } catch { return combined; }
+  try {
+    return JSON.parse(combined);
+  } catch (e) {
+    throw new Error(`gateway_fetch_result(${resultId}): failed to parse combined ${combined.length}-char payload across ${page} page(s): ${e.message}`);
+  }
 }
 
 /** High-level: call a gateway tool and return its actual data (unwraps structuredContent + JIT offload). */
@@ -445,14 +472,20 @@ async function selftest() {
   console.log(JSON.stringify(report, null, 2));
 }
 
-const cmd = process.argv[2] || "run";
-const flags = new Set(process.argv.slice(3));
-if (cmd === "selftest") {
-  selftest().catch((e) => { console.error("ERR", e.message); process.exit(1); });
-} else if (cmd === "run") {
-  run({ ledgerOnly: flags.has("--ledger-only"), brainOnly: flags.has("--brain-only") })
-    .catch((e) => { console.error("ERR", e.message); process.exit(1); });
-} else {
-  console.error("usage: node backup.mjs run [--ledger-only|--brain-only] | selftest");
-  process.exit(2);
+// CLI entrypoint guard: only dispatch when this file is run directly (`node backup.mjs ...`),
+// never when imported (e.g. by tests importing `fetchOffloaded` for regression coverage) --
+// without this guard, importing the module for its exports would unconditionally kick off a
+// real production `run()` (the default `cmd`) as a side effect of the import itself.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const cmd = process.argv[2] || "run";
+  const flags = new Set(process.argv.slice(3));
+  if (cmd === "selftest") {
+    selftest().catch((e) => { console.error("ERR", e.message); process.exit(1); });
+  } else if (cmd === "run") {
+    run({ ledgerOnly: flags.has("--ledger-only"), brainOnly: flags.has("--brain-only") })
+      .catch((e) => { console.error("ERR", e.message); process.exit(1); });
+  } else {
+    console.error("usage: node backup.mjs run [--ledger-only|--brain-only] | selftest");
+    process.exit(2);
+  }
 }
