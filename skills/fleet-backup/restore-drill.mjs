@@ -16,22 +16,28 @@
  * this drills comes from the Azure-side manifest, never from asking S3 to enumerate itself.
  *
  * USAGE:
- *   node restore-drill.mjs                        # drill EVERY blob in the latest manifest (full proof)
- *   node restore-drill.mjs <blobKey>               # drill just one blob, non-privileged bucket
- *   node restore-drill.mjs --privileged            # drill every blob mirrored to the privileged bucket
- *   node restore-drill.mjs --privileged <blobKey>  # drill just one blob, privileged bucket
+ *   node restore-drill.mjs                             # drill EVERY blob in the latest manifest (full proof)
+ *   node restore-drill.mjs <blobKey>                    # drill just one blob, non-privileged bucket
+ *   node restore-drill.mjs --lane personal-legal        # drill every blob mirrored to the personal-legal bucket
+ *   node restore-drill.mjs --lane finance-legal <blobKey>  # drill just one blob, finance-company-legal bucket
  *
  * SCHEDULED INVOCATION (added 2026-07-22): .github/workflows/nightly-s3-dr-mirror.yml runs this,
  * non-privileged lane, right after s3-mirror.mjs run in the same job, so every scheduled run proves the
  * mirror is actually RESTORABLE, not just that a write succeeded. Manual invocation (drilling one
- * specific blob, or the privileged lane once it is ever armed) is still the commands above, run ad hoc
+ * specific blob, or a privileged lane once it is ever armed) is still the commands above, run ad hoc
  * from a session with the same env this file already documents.
  *
- * INERT-SAFE: exits 0 with a clear message if the relevant aws-dr-* (or aws-dr-privileged-*) secrets
- * are not yet in Key Vault. As of 2026-07-22 the base (non-privileged) aws-dr-* secrets are confirmed
- * live in Key Vault (see s3-mirror.mjs's header for the verification details), so this guard is now a
- * permanent fail-open safety net for that lane, not the reason it had never run; the privileged lane's
- * own secrets remain unconfirmed and this guard is still the expected, live gate for it. If creds ARE
+ * TWO-LANE SPLIT (2026-08-04, matches s3-mirror.mjs's AZURE-LOSS-DR-PLAN.md gap #3 fix): the single
+ * `--privileged` flag / `aws-dr-privileged-*` prefix is gone. `--lane personal-legal` and
+ * `--lane finance-legal` are independent, resolve to `aws-dr-personal-legal-*` and
+ * `aws-dr-finance-legal-*` respectively, and are never conflated -- a personal-legal drill can never
+ * accidentally read the finance-legal bucket's manifest entries or vice versa.
+ *
+ * INERT-SAFE: exits 0 with a clear message if the relevant aws-dr-* secrets are not yet in Key Vault.
+ * As of 2026-07-22 the base (non-privileged) aws-dr-* secrets are confirmed live in Key Vault (see
+ * s3-mirror.mjs's header for the verification details), so this guard is now a permanent fail-open
+ * safety net for that lane, not the reason it had never run; neither privileged lane's own secrets
+ * exist yet (2026-08-04) and this guard is still the expected, live gate for both. If creds ARE
  * present but no manifest can be found/read in Azure, or the manifest has nothing recorded for the
  * requested bucket, that IS a real problem (nothing to verify a restore against) and this exits non-zero.
  */
@@ -79,26 +85,29 @@ export function selectDrillTargets(manifestData, bucket, blobKey) {
   return { targets, reason: null };
 }
 
-async function resolveCreds(privileged) {
-  const prefix = privileged ? "aws-dr-privileged-" : "aws-dr-";
+const VALID_LANES = { "personal-legal": "aws-dr-personal-legal-", "finance-legal": "aws-dr-finance-legal-" };
+
+async function resolveCreds(lane) {
+  const prefix = lane ? VALID_LANES[lane] : "aws-dr-";
+  if (lane && !prefix) throw new Error(`unknown --lane "${lane}" -- valid lanes: ${Object.keys(VALID_LANES).join(", ")}`);
   const [akid, asecret, bucket, ownRegion, fallbackRegion] = await Promise.all([
     kvSecret(`${prefix}access-key-id`),
     kvSecret(`${prefix}secret-access-key`),
     kvSecret(`${prefix}s3-bucket`),
-    privileged ? kvSecret("aws-dr-privileged-region") : kvSecret("aws-dr-region"),
-    privileged ? kvSecret("aws-dr-region") : Promise.resolve(null),
+    lane ? kvSecret(`${prefix}region`) : kvSecret("aws-dr-region"),
+    lane ? kvSecret("aws-dr-region") : Promise.resolve(null),
   ]);
   const region = ownRegion || fallbackRegion;
   const missing = [];
   if (!akid) missing.push(`${prefix}access-key-id`);
   if (!asecret) missing.push(`${prefix}secret-access-key`);
   if (!bucket) missing.push(`${prefix}s3-bucket`);
-  if (!region) missing.push(privileged ? "aws-dr-privileged-region (or aws-dr-region as a fallback)" : "aws-dr-region");
+  if (!region) missing.push(lane ? `${prefix}region (or aws-dr-region as a fallback)` : "aws-dr-region");
   if (missing.length) return { missing };
   return { creds: { accessKeyId: akid, secretAccessKey: asecret, bucket, region } };
 }
 
-async function run({ blobKey, privileged }) {
+async function run({ blobKey, lane }) {
   const account = process.env.BACKUP_STORAGE_ACCOUNT;
   const container = process.env.BACKUP_CONTAINER || "ledger-backup";
   if (!account) {
@@ -106,7 +115,7 @@ async function run({ blobKey, privileged }) {
     process.exit(78);
   }
 
-  const { creds, missing } = await resolveCreds(privileged);
+  const { creds, missing } = await resolveCreds(lane);
   if (missing) {
     console.log(`[restore-drill] AWS DR credentials not provisioned (Matt gate: store ${missing.join(", ")} in Key Vault) -- nothing to drill.`);
     process.exit(0);
@@ -138,7 +147,7 @@ async function run({ blobKey, privileged }) {
     process.exit(1);
   }
   if (reason === "NO_CANDIDATES_FOR_BUCKET") {
-    console.error(`[FATAL] manifest ${manifest.name} has no mirrored blob(s) recorded for bucket ${creds.bucket} (${privileged ? "privileged" : "non-privileged"} lane). Nothing to drill.`);
+    console.error(`[FATAL] manifest ${manifest.name} has no mirrored blob(s) recorded for bucket ${creds.bucket} (${lane || "non-privileged"} lane). Nothing to drill.`);
     process.exit(1);
   }
 
@@ -162,7 +171,7 @@ async function run({ blobKey, privileged }) {
 
   const passed = results.filter((r) => r.status === "PASS").length;
   const failed = results.filter((r) => r.status === "FAIL");
-  const report = { ts: new Date().toISOString(), manifest: manifest.name, bucket: creds.bucket, lane: privileged ? "privileged" : "non-privileged", drilled: results.length, passed, failed: failed.length, results };
+  const report = { ts: new Date().toISOString(), manifest: manifest.name, bucket: creds.bucket, lane: lane || "non-privileged", drilled: results.length, passed, failed: failed.length, results };
   console.log(JSON.stringify(report, null, 2));
   console.log(`[restore-drill] ${passed}/${results.length} PASS.`);
   if (failed.length) {
@@ -177,9 +186,12 @@ async function run({ blobKey, privileged }) {
 // guard added to skills/fleet-backup/s3-mirror.mjs in this same change).
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const argv = process.argv.slice(2);
-  const privileged = argv.includes("--privileged");
-  const blobKey = argv.find((a) => !a.startsWith("--"));
-  run({ blobKey, privileged }).catch((e) => {
+  const laneIdx = argv.indexOf("--lane");
+  const lane = laneIdx !== -1 ? argv[laneIdx + 1] : null;
+  // exclude both "--lane" and its value token from blobKey detection
+  const rest = laneIdx !== -1 ? [...argv.slice(0, laneIdx), ...argv.slice(laneIdx + 2)] : argv;
+  const blobKey = rest.find((a) => !a.startsWith("--"));
+  run({ blobKey, lane }).catch((e) => {
     console.error("ERR", e.message);
     process.exit(1);
   });

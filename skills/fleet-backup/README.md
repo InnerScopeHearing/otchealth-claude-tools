@@ -37,6 +37,25 @@ a privileged room into the wrong bucket, which must never happen. As a second, i
 `kb_search_privileged` is force classified privileged even if its name does not match the substring
 list above.
 
+**Privileged rooms split into THREE non-negotiable destinations (2026-08-04, closes AZURE-LOSS-DR-PLAN.md
+gap #3), never one shared "privileged" bucket:**
+
+1. **NEVER-MIRROR (`medreview`, `phi`):** PHI is absolute-wall, GCP-BAA-only, and never enters this
+   non-PHI Azure/AWS plane by design — a blob matching these substrings is excluded from EVERY lane,
+   unconditionally, with no flag combination that can ever re-include it.
+2. **PERSONAL-LEGAL (`legal-personal`, `legal-personal-memory`, any other `*-personal*` room):** Matt's
+   California divorce/family/civil matters, including minors' data. Its own bucket + credential, for
+   CLO + Matt only.
+3. **FINANCE-COMPANY-LEGAL (`legal-company`, `cfo`, `finance-`):** MNPI and company-attorney-privileged
+   material. Its own, separate bucket + credential, shareable by CFO + CLO + Matt.
+
+The original v1 design armed a SINGLE shared `aws-dr-privileged-*` credential/bucket for all of the
+above. That must never be resurrected: giving CFO that single credential would hand CFO read access to
+`legal-personal` content, recreating the exact P0 cross-ring leak the gateway itself had and closed on
+2026-07-16 (`otchealth-mcp-server` PR #124, `PERSONAL_LEGAL_RING = ['clo-personal','exec']`, CFO
+deliberately excluded from `legal-personal`/`legal-personal-memory` at that layer). The split above
+mirrors that same ring boundary at the S3-mirror layer.
+
 With the current live room registry, this means:
 
 | Room / blob | Classification | Reaches S3 by default? |
@@ -46,26 +65,27 @@ With the current live room registry, this means:
 | `index-commons-company-journal-<date>.jsonl` | non-privileged | yes |
 | `index-commerce-commerce-source-docs-<date>.jsonl` | non-privileged | yes |
 | `manifest-<date>.json` (backup.mjs's own manifest; metadata only) | non-privileged | yes |
-| `index-finance-cfo-source-docs-<date>.jsonl` | privileged (MNPI ring) | no, unless double opt-in |
-| `index-legal-company-<date>.jsonl` | privileged (attorney ring) | no, unless double opt-in |
-| `index-legal-personal-<date>.jsonl` | privileged (attorney-personal ring) | no, unless double opt-in |
+| `index-finance-cfo-source-docs-<date>.jsonl` | finance-company-legal (MNPI ring) | no, unless double opt-in |
+| `index-legal-company-<date>.jsonl` | finance-company-legal (attorney ring) | no, unless double opt-in |
+| `index-legal-personal-<date>.jsonl` | personal-legal (attorney-personal ring) | no, unless double opt-in |
+| any `medreview`/`phi`-named blob | never-mirror | **never**, no flag can change this |
 
-Every run logs which blobs were mirrored and which were skipped as privileged. Coverage is never
+Every run logs which blobs were mirrored and which were skipped/blocked, per lane. Coverage is never
 silently dropped: a room that is expected (per the registry) but produces no blob at all, or a missing
 Cosmos ledger export, fails the run loudly (after the manifest is still persisted, so partial progress
 is never lost).
 
-### Including privileged rooms (double opt-in, separate bucket)
+### Including privileged rooms (double opt-in PER LANE, always a separate bucket)
 
-Privileged rooms are mirrored only when BOTH of these are set on the same run:
+Each privileged lane is armed independently — arming one never implicitly arms the other:
 
-- CLI flag `--include-privileged`
-- Environment variable `S3_DR_INCLUDE_PRIVILEGED=1`
+- Personal-legal: CLI flag `--include-personal-legal` AND env var `S3_DR_INCLUDE_PERSONAL_LEGAL=1`
+- Finance-company-legal: CLI flag `--include-finance-legal` AND env var `S3_DR_INCLUDE_FINANCE_LEGAL=1`
 
-When both are set, privileged blobs go to a SEPARATE bucket and a SEPARATE AWS credential
-(`aws-dr-privileged-*`), never co-mingled with the non-privileged bucket. `s3-mirror.mjs` refuses to
-run the privileged lane at all if `aws-dr-privileged-s3-bucket` resolves to the same bucket as
-`aws-dr-s3-bucket`.
+When a lane's pair is set, its blobs go to that lane's SEPARATE bucket and SEPARATE AWS credential
+(`aws-dr-personal-legal-*` / `aws-dr-finance-legal-*`), never co-mingled with the non-privileged bucket
+or with each other. `s3-mirror.mjs` refuses to run any lane whose bucket resolves to the same bucket as
+either of the other two.
 
 ### Secrets to provision
 
@@ -73,9 +93,9 @@ UPDATE 2026-07-22: the base (non-privileged) four secrets below are now CONFIRME
 independently verified with a real STS GetCallerIdentity call (IAM user cto-hyperagent, AWS account
 900915535335) and a real S3 ListObjectsV2 call against the destination bucket (HTTP 200, bucket exists).
 This lane is fully self-serve; nobody needs to provision anything further for it. The scheduled
-`.github/workflows/nightly-s3-dr-mirror.yml` runs it nightly. Only the privileged lane's secrets remain
-unconfirmed (see "Including privileged rooms" above); that lane is a deliberate, manual, double opt-in
-action and stays inert until someone provisions and arms it on purpose.
+`.github/workflows/nightly-s3-dr-mirror.yml` runs it nightly. Neither privileged lane's secrets exist
+yet as of 2026-08-04 (see "Including privileged rooms" above); both are a deliberate, manual, double
+opt-in action per lane and stay inert until someone provisions and arms each one on purpose.
 
 Both scripts stay inert safe regardless: with any of the base four secrets absent, `s3-mirror.mjs run`
 prints a clear message and exits 0, no error, no partial state. That is now a permanent fail-open guard
@@ -100,14 +120,25 @@ set_kv aws-dr-s3-bucket           "<destination bucket name, no dots, see the bu
 set_kv aws-dr-region              "<e.g. us-east-1>"
 ```
 
-Optional, only needed to enable the privileged lane (both `--include-privileged` and
-`S3_DR_INCLUDE_PRIVILEGED=1` must also be set):
+Optional, only needed to enable the personal-legal lane (both `--include-personal-legal` and
+`S3_DR_INCLUDE_PERSONAL_LEGAL=1` must also be set). This credential is for CLO + Matt only — never
+hand it to CFO:
 
 ```bash
-set_kv aws-dr-privileged-access-key-id     "<a DISTINCT AWS access key, not the IAM user above>"
-set_kv aws-dr-privileged-secret-access-key "<matching secret access key>"
-set_kv aws-dr-privileged-s3-bucket         "<a SEPARATE bucket name from aws-dr-s3-bucket>"
-set_kv aws-dr-privileged-region            "<optional, falls back to aws-dr-region if unset>"
+set_kv aws-dr-personal-legal-access-key-id     "<a DISTINCT AWS access key, not the base IAM user>"
+set_kv aws-dr-personal-legal-secret-access-key "<matching secret access key>"
+set_kv aws-dr-personal-legal-s3-bucket         "<a bucket name distinct from BOTH other lanes>"
+set_kv aws-dr-personal-legal-region            "<optional, falls back to aws-dr-region if unset>"
+```
+
+Optional, only needed to enable the finance-company-legal lane (both `--include-finance-legal` and
+`S3_DR_INCLUDE_FINANCE_LEGAL=1` must also be set). This credential can be shared by CFO + CLO + Matt:
+
+```bash
+set_kv aws-dr-finance-legal-access-key-id     "<a DISTINCT AWS access key, not the base IAM user>"
+set_kv aws-dr-finance-legal-secret-access-key "<matching secret access key>"
+set_kv aws-dr-finance-legal-s3-bucket         "<a bucket name distinct from BOTH other lanes>"
+set_kv aws-dr-finance-legal-region            "<optional, falls back to aws-dr-region if unset>"
 ```
 
 ### Recommended IAM policy (least privilege)
@@ -129,8 +160,9 @@ from asking S3 to enumerate itself, so the IAM policy can be this narrow:
 }
 ```
 
-Attach a copy of the same policy, with the Resource ARN pointed at the privileged bucket instead, to
-the separate `aws-dr-privileged-*` IAM user if the privileged lane is ever armed.
+Attach a copy of the same policy, with the Resource ARN pointed at that lane's own bucket, to each of
+the separate `aws-dr-personal-legal-*` and `aws-dr-finance-legal-*` IAM users if/when either lane is
+armed — two distinct users, two distinct buckets, never shared.
 
 A static access key and secret key pair is the simplest credential shape to wire into Key Vault and
 this dependency-free SigV4 client, and is what this v1 build expects. A more secure v2 upgrade path,
@@ -147,7 +179,7 @@ requests, not the legacy path-style fallback.
 
 ```bash
 # no writes, reports Azure auth reachability, source container reachability, and whether AWS creds
-# (base and privileged) are provisioned, without touching S3 at all
+# (base + both privileged lanes) are provisioned, without touching S3 at all
 node skills/fleet-backup/s3-mirror.mjs selftest
 
 # see what WOULD be mirrored without uploading anything (still requires real AWS creds, since it
@@ -157,8 +189,15 @@ node skills/fleet-backup/s3-mirror.mjs run --dry-run
 # the real mirror run, non-privileged rooms only (the default posture)
 node skills/fleet-backup/s3-mirror.mjs run
 
-# the real mirror run, including privileged rooms to the separate bucket
-S3_DR_INCLUDE_PRIVILEGED=1 node skills/fleet-backup/s3-mirror.mjs run --include-privileged
+# the real mirror run, including the personal-legal lane (CLO + Matt only)
+S3_DR_INCLUDE_PERSONAL_LEGAL=1 node skills/fleet-backup/s3-mirror.mjs run --include-personal-legal
+
+# the real mirror run, including the finance-company-legal lane (CFO + CLO + Matt)
+S3_DR_INCLUDE_FINANCE_LEGAL=1 node skills/fleet-backup/s3-mirror.mjs run --include-finance-legal
+
+# both privileged lanes in one run (each still requires its own env var + flag pair)
+S3_DR_INCLUDE_PERSONAL_LEGAL=1 S3_DR_INCLUDE_FINANCE_LEGAL=1 \
+  node skills/fleet-backup/s3-mirror.mjs run --include-personal-legal --include-finance-legal
 ```
 
 Required environment (same names `backup.mjs` already uses; deploy this as a sibling job with an
@@ -184,8 +223,9 @@ node skills/fleet-backup/restore-drill.mjs
 # drill just one blob
 node skills/fleet-backup/restore-drill.mjs index-memory-exec-2026-07-15.jsonl
 
-# drill the privileged bucket instead (only meaningful once the privileged lane has actually run)
-node skills/fleet-backup/restore-drill.mjs --privileged
+# drill a privileged lane instead (only meaningful once that lane has actually run)
+node skills/fleet-backup/restore-drill.mjs --lane personal-legal
+node skills/fleet-backup/restore-drill.mjs --lane finance-legal
 ```
 
 Same inert-safe behavior: exits 0 with a clear message if the relevant `aws-dr-*` secrets are absent.

@@ -10,6 +10,9 @@ import {
   isPrivileged,
   indexNameFromBlob,
   ringGatedIndexNames,
+  isNeverMirrorByName,
+  isPersonalLegalByName,
+  classifyLane,
 } from "../skills/fleet-backup/s3-mirror.mjs";
 
 test("isPrivilegedByName: the Cosmos ledger export and known-safe room dumps are NOT privileged", () => {
@@ -74,4 +77,65 @@ test("isPrivileged: fail-closed direction -- when in doubt, classify privileged,
   // a blob name that merely CONTAINS a privileged substring anywhere, not just as a clean token, is
   // still classified privileged (deliberately over-inclusive per the file's own design comment).
   assert.equal(isPrivilegedByName("weird-cfoadjacent-name-2026-07-15.jsonl"), true);
+});
+
+// ---------- two-lane split (2026-08-04, AZURE-LOSS-DR-PLAN.md gap #3) ----------
+// The load-bearing guarantee this whole section pins: a personal-legal room (Matt's CA divorce/
+// family/civil matters, including minors' data) can NEVER classify into the same lane as a
+// finance/CFO room, and PHI/medreview can NEVER classify into ANY arm-able lane at all -- those are
+// the exact two failure modes that would recreate the P0 cross-ring leak this split exists to prevent.
+
+test("isNeverMirrorByName: medreview and phi are blocked, unconditionally, case-insensitively", () => {
+  assert.equal(isNeverMirrorByName("MEDREVIEW-dump-2026-07-15.jsonl"), true);
+  assert.equal(isNeverMirrorByName("PHI-audit-2026-07-15.jsonl"), true);
+  assert.equal(isNeverMirrorByName("index-legal-personal-2026-07-15.jsonl"), false);
+  assert.equal(isNeverMirrorByName("index-finance-cfo-source-docs-2026-07-15.jsonl"), false);
+});
+
+test("isPersonalLegalByName: legal-personal and any *-personal* room, but NEVER a medreview/phi blob (never-mirror wins)", () => {
+  assert.equal(isPersonalLegalByName("index-legal-personal-2026-07-15.jsonl"), true);
+  assert.equal(isPersonalLegalByName("index-legal-personal-memory-2026-07-15.jsonl"), true);
+  assert.equal(isPersonalLegalByName("some-personal-export-2026-07-15.jsonl"), true);
+  assert.equal(isPersonalLegalByName("index-legal-company-2026-07-15.jsonl"), false);
+  assert.equal(isPersonalLegalByName("index-finance-cfo-source-docs-2026-07-15.jsonl"), false);
+  // regression pin: a name that happens to contain BOTH a personal substring and a never-mirror
+  // substring must resolve as never-mirror, not personal-legal -- the PHI wall always wins.
+  assert.equal(isPersonalLegalByName("medreview-personal-notes-2026-07-15.jsonl"), false);
+});
+
+test("classifyLane: resolves every blob to exactly one of four lanes, with the documented priority order", () => {
+  const noRingGate = new Set();
+  assert.equal(classifyLane("tasks-2026-07-15.jsonl", noRingGate), "non-privileged");
+  assert.equal(classifyLane("index-memory-exec-2026-07-15.jsonl", noRingGate), "non-privileged");
+  assert.equal(classifyLane("index-legal-personal-2026-07-15.jsonl", noRingGate), "personal-legal");
+  assert.equal(classifyLane("index-legal-personal-memory-2026-07-15.jsonl", noRingGate), "personal-legal");
+  assert.equal(classifyLane("some-other-personal-room-2026-07-15.jsonl", noRingGate), "personal-legal");
+  assert.equal(classifyLane("index-legal-company-2026-07-15.jsonl", noRingGate), "finance-company-legal");
+  assert.equal(classifyLane("index-finance-cfo-source-docs-2026-07-15.jsonl", noRingGate), "finance-company-legal");
+  assert.equal(classifyLane("index-cfo-memory-2026-07-15.jsonl", noRingGate), "finance-company-legal");
+  // never-mirror wins over every other signal, including one that also looks personal or finance-y
+  assert.equal(classifyLane("MEDREVIEW-dump-2026-07-15.jsonl", noRingGate), "never-mirror");
+  assert.equal(classifyLane("PHI-audit-2026-07-15.jsonl", noRingGate), "never-mirror");
+  assert.equal(classifyLane("medreview-cfo-crossover-2026-07-15.jsonl", noRingGate), "never-mirror");
+});
+
+test("classifyLane: a ring-gated room not caught by any substring falls through to finance-company-legal, never non-privileged", () => {
+  // the registry cross-check is a second, independent signal for rooms the naming convention alone
+  // doesn't catch -- it must never silently land in the open, non-privileged bucket.
+  const ringGated = new Set(["some-newly-ring-gated-room"]);
+  assert.equal(classifyLane("index-some-newly-ring-gated-room-2026-07-15.jsonl", ringGated), "finance-company-legal");
+});
+
+test("classifyLane: a ring-gated room that ALSO matches the personal-legal substring still lands in personal-legal, not finance-company-legal", () => {
+  const ringGated = new Set(["legal-personal"]);
+  assert.equal(classifyLane("index-legal-personal-2026-07-15.jsonl", ringGated), "personal-legal");
+});
+
+test("classifyLane: regression pin -- a personal-legal blob and a finance/CFO blob NEVER resolve to the same lane (the exact P0 recurrence this split prevents)", () => {
+  const noRingGate = new Set();
+  const personalLane = classifyLane("index-legal-personal-2026-07-15.jsonl", noRingGate);
+  const financeLane = classifyLane("index-finance-cfo-source-docs-2026-07-15.jsonl", noRingGate);
+  assert.notEqual(personalLane, financeLane);
+  assert.equal(personalLane, "personal-legal");
+  assert.equal(financeLane, "finance-company-legal");
 });
