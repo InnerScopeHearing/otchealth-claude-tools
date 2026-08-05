@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" role="img" aria-label="Long-lasting battery">
+  <title>All-Day Battery</title>
+  <rect x="3.5" y="8" width="15" height="8" rx="2" stroke="#241F19" stroke-width="1.75"/>
+  <path d="M18.5 10.5H20C20.55 10.5 21 10.95 21 11.5V12.5C21 13.05 20.55 13.5 20 13.5H18.5" stroke="#241F19" stroke-width="1.75" fill="none"/>
+  <rect x="5.3" y="9.8" width="10.4" height="4.4" rx="0.8" fill="#B5603C"/>
+</svg>

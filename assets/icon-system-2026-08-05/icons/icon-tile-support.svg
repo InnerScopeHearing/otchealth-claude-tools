@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" role="img" aria-label="Real support, real guarantee">
+  <title>Real Support</title>
+  <path d="M5 13V11.5C5 7.9 8.1 5 12 5C15.9 5 19 7.9 19 11.5V13" stroke="#241F19" stroke-width="1.75" stroke-linecap="round" fill="none"/>
+  <rect x="3.5" y="13" width="4" height="5.5" rx="2" stroke="#241F19" stroke-width="1.75"/>
+  <rect x="16.5" y="13" width="4" height="5.5" rx="2" stroke="#241F19" stroke-width="1.75"/>
+  <path d="M7.5 17.5V19C7.5 20.1 8.4 21 9.5 21H11" stroke="#241F19" stroke-width="1.75" stroke-linecap="round" fill="none"/>
+  <circle cx="11" cy="21" r="1.15" fill="#B5603C"/>
+</svg>

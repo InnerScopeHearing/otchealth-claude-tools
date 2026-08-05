@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="US-based customer support">
+  <title>US-Based Support</title>
+  <circle cx="48" cy="48" r="44" fill="#F7F1E4" stroke="#241F19" stroke-width="2"/>
+  <path d="M32 50V46C32 37.2 39.2 30 48 30C56.8 30 64 37.2 64 46V50" stroke="#241F19" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <rect x="29" y="50" width="8" height="11" rx="4" stroke="#241F19" stroke-width="2.2" fill="none"/>
+  <rect x="59" y="50" width="8" height="11" rx="4" stroke="#241F19" stroke-width="2.2" fill="none"/>
+  <path d="M37 58.5V61.5C37 63.4 38.6 65 40.5 65H43" stroke="#241F19" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <circle cx="43" cy="65" r="1.7" fill="#B5603C"/>
+  <text x="48" y="76" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="6" letter-spacing="0.3" fill="#241F19">US-BASED SUPPORT</text>
+</svg>

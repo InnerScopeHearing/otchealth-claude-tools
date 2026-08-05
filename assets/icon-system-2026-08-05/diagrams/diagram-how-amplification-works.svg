@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 260" role="img" aria-label="Generic amplification signal path: sound in, microphone, amplifier, speaker, sound out">
+  <title>How Amplification Works (generic signal path — product-neutral)</title>
+  <rect x="0" y="0" width="480" height="260" fill="#F7F1E4"/>
+
+  <path d="M30,110 C34,104 34,116 38,110" stroke="#241F19" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <path d="M42,100 C48,90 48,130 54,120" stroke="#241F19" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <path d="M58,90 C66,75 66,145 74,130" stroke="#241F19" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+
+  <rect x="95" y="70" width="290" height="90" rx="20" stroke="#241F19" stroke-width="1.75" fill="#FFFDF8"/>
+
+  <circle cx="140" cy="115" r="16" stroke="#241F19" stroke-width="1.75" fill="none"/>
+  <text x="140" y="119" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" fill="#241F19">MIC</text>
+
+  <path d="M160,115H188" stroke="#241F19" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M182,110L188,115L182,120" stroke="#241F19" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <rect x="198" y="97" width="60" height="36" rx="4" fill="#B5603C"/>
+  <text x="228" y="119" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" fill="#F7F1E4">AMPLIFIER</text>
+
+  <path d="M262,115H290" stroke="#241F19" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M284,110L290,115L284,120" stroke="#241F19" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <path d="M300,105H312L326,95V135L312,125H300V105Z" stroke="#241F19" stroke-width="1.75" stroke-linejoin="round" fill="none"/>
+  <text x="313" y="150" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" fill="#241F19">SPEAKER</text>
+
+  <path d="M400,105 C406,110 406,120 400,125" stroke="#241F19" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <path d="M410,98 C420,106 420,124 410,132" stroke="#241F19" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+  <path d="M420,90 C434,102 434,128 420,140" stroke="#241F19" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+
+  <text x="240" y="235" text-anchor="middle" font-family="'IBM Plex Mono', 'Courier New', monospace" font-size="7" fill="#8A7A6C">Generic signal path — actual components vary by device. No product name or claim intentionally shown here.</text>
+</svg>
