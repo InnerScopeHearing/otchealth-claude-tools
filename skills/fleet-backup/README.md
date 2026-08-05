@@ -24,6 +24,8 @@ Container Apps Jobs or ad hoc from a session, not as interactively invoked Skill
 - `s3-client.mjs`: shared, dependency-free AWS S3 client (PutObject, HeadObject, GetObject), signed
   with a hand-rolled AWS Signature Version 4 implementation (node:crypto only, no aws-sdk).
 - `s3-mirror.mjs` and `restore-drill.mjs`: the Phase 6 disaster-recovery mirror, documented below.
+- `pg-dump.mjs`: nightly `pg_dump` of Flatstick's and FourVault's production Azure Postgres databases
+  to the same `ledger-backup` container, documented below (closes AZURE-LOSS-DR-PLAN.md gap #9).
 
 ## S3 DR mirror (Phase 6)
 
@@ -246,6 +248,70 @@ Same inert-safe behavior: exits 0 with a clear message if the relevant `aws-dr-*
 If creds are present but no manifest can be found in Azure, or the manifest has nothing recorded for
 the requested bucket, that is a real failure (nothing to verify a restore against) and it exits
 non-zero.
+
+## Postgres -> S3 DR backup (closes AZURE-LOSS-DR-PLAN.md gap #9)
+
+Flatstick's and FourVault's production databases (`flatstick` and `fourvault`, both on the Azure
+Database for PostgreSQL Flexible Server `otchealth-nonphi-pg-cus1`) had NO off-Azure backup. Azure's own
+point-in-time-restore, if enabled, lives inside Azure and does not survive a total Azure loss -- the
+exact scenario the DR plan is for. `pg-dump.mjs` fixes this: it `pg_dump`s both databases nightly, gzips
+the result, and writes it into the SAME `ledger-backup` Blob container `backup.mjs` already writes to,
+under a `pg-dumps/` prefix. From there `s3-mirror.mjs` and `restore-drill.mjs` above need **zero code
+changes** to pick these up: they already list the whole container generically, and `pg-dumps/<db>-<date>.
+sql.gz` does not match any of `s3-mirror.mjs`'s privileged-substring patterns (pinned by
+`tests/pg-dump-not-privileged.test.mjs`, a regression guard against a future rename accidentally
+reclassifying it).
+
+**Why this does NOT connect to Postgres directly from GitHub Actions** (read `pg-dump.mjs`'s own header
+for the full detail): a live check this session proved neither this repo's cloud sandbox NOR, by the same
+firewall evidence, a plain `ubuntu-latest` GitHub Actions runner can reach the Postgres server on `:5432`
+-- the server's firewall allows exactly one named IP (a leftover from the original 2026-06-17 migration)
+and `AllowAllAzureServices` (Azure-internal only, not "the public internet"). Rather than widen that
+firewall to arbitrary public IPs (a real security downgrade on a server holding financial and COPPA-
+relevant data), `pg-dump.mjs` runs the actual dump from a short-lived **Azure Container Apps Job**
+execution (`pg-dump-nonphi`, image `postgres:16` straight from Docker Hub, no custom image build needed)
+on the SAME `otchealth-jobs-env` environment the original Neon->Azure migration jobs already used --
+already reachable to the Postgres server with zero firewall change. The GitHub Actions workflow's role is
+to create/update that job via ARM, mint a short-lived write SAS + fresh credentials, start one execution,
+poll it, and verify the result -- it never itself opens a socket to Postgres.
+
+**Least privilege:** the job bootstraps a dedicated `backup_ro` role (LOGIN, NOSUPERUSER, NOCREATEDB,
+NOCREATEROLE, NOREPLICATION, granted only the built-in Postgres 14+ `pg_read_all_data` predefined role
+plus explicit `CONNECT` on both target databases) the first time it runs, using the admin credential ONLY
+ephemerally inside that one Azure-internal job execution -- the admin credential is never used for the
+dump itself and never leaves Azure. (NOT named `pg_dump_ro`: Postgres reserves every role name starting
+with `pg_` for system use and refuses to create one -- found by an actual failed live run, not by
+inspection; see the comment on the `ROLE` constant in `pg-dump.mjs`.)
+
+Secrets used (Key Vault): `azure-pg-nonphi-server` / `azure-pg-nonphi-admin-user` /
+`azure-pg-nonphi-admin-password` / `azure-subscription-id` (all pre-existing from the original migration).
+`azure-pg-nonphi-dumpro-password` and `azure-backup-storage-key` are self-provisioned by `pg-dump.mjs` on
+its first run (generated / fetched via ARM `listKeys` respectively, then stored for reuse).
+
+```bash
+# no writes: reports Key Vault + ARM + source-account reachability
+node skills/fleet-backup/pg-dump.mjs selftest
+
+# the real run: ensure the job, mint fresh creds/SAS, start + poll one execution, verify each blob
+# (non-empty, gunzips cleanly, contains the real pg_dump banner)
+node skills/fleet-backup/pg-dump.mjs run
+```
+
+**LIVE-PROVEN end to end** (2026-08-04, the session that built this): a real run against production --
+`pg-dump-nonphi` execution Succeeded, `flatstick` dump = 150727 bytes gzipped, `fourvault` dump = 15595
+bytes gzipped, both landed in Azure Blob and passed the gunzip/pg_dump-banner content check, both were
+then picked up by an unmodified `s3-mirror.mjs run` and landed in the S3 DR bucket (verified via a direct
+`s3Head` against `otchealth-brain-dr-55c84f6b`, byte counts matching exactly), and both PASSED
+`restore-drill.mjs`'s byte-identity check pulling them back from S3.
+
+Scheduled via `.github/workflows/pg-dump-to-s3.yml` (daily, 07:05 UTC, 15 minutes after
+`nightly-s3-dr-mirror.yml`'s own 06:50 UTC run so the two scheduled invocations of `s3-mirror.mjs` never
+race each other's manifest write into the shared source container). Same Azure auth shape as
+`nightly-s3-dr-mirror.yml` (OIDC login + `AZURE_SP_*` secrets for the Blob-touching / ARM-touching steps).
+
+Adding a third database (e.g. once Companion cuts over to this same server, per
+`azure-migration-runbook.md`) is a one-line `PG_DUMP_DATABASES` env change on the workflow, no code change
+and no new job resource.
 
 ### Deployment note
 

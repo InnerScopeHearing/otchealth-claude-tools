@@ -1,0 +1,25 @@
+{
+  "_comment": "Manifest for setup/search-deletion-policy.mjs. One row per Azure AI Search blob-backed datasource on otchealth-dataroom-s1, mapping it to the storage account that actually backs its container (the datasource GET response never reveals this -- credentials.connectionString always comes back redacted/null -- so it cannot be inferred live and must be declared here). storageAccount naming follows the fleet's existing per-domain convention (skills/kb-memory/*.mjs: azure-legal-storage-account -> otchealthlegalstore, azure-commons-storage-account -> otchealthcommons, azure-cfo-storage-account -> otchealthcfodata, azure-commerce-storage-account -> otchealthcommerce). Verified live 2026-08-04: all 4 accounts sit in resourceGroup otchealth-automation-rg (subscription 55c84f6b-ef90-4259-a58b-50835cc4cab4) -- resourceGroup is given here as a fast-path hint; search-deletion-policy.mjs falls back to a subscription-wide list-and-match (same pattern as setup/resource-reconcile.mjs) if a hinted RG lookup 404s, so this file does not need to be perfectly current to stay correct.",
+  "resourceGroup": "otchealth-automation-rg",
+  "retentionDays": 14,
+  "datasources": [
+    { "name": "ds-legal-personal", "storageAccount": "otchealthlegalstore", "container": "personal" },
+    { "name": "ds-legal-company", "storageAccount": "otchealthlegalstore", "container": "company" },
+    { "name": "ds-finance-cfo-source-docs", "storageAccount": "otchealthcfodata", "container": "cfo-source-docs" },
+    { "name": "ds-commerce-commerce-source-docs", "storageAccount": "otchealthcommerce", "container": "commerce-source-docs" },
+    { "name": "ds-commons-bulletinseen", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-daily", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-debug", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-docs", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-fleetwatch", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-handoff", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-heartbeat", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-journal", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-medic", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-notion", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-recovery", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-research", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-state", "storageAccount": "otchealthcommons", "container": "company-journal" },
+    { "name": "ds-commons-vault", "storageAccount": "otchealthcommons", "container": "company-journal" }
+  ]
+}
