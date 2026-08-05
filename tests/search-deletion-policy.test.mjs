@@ -4,7 +4,7 @@
 //
 // Load-bearing guarantees pinned here:
 //   1. dry-run-by-default: runApply()/applyDatasource() without commit=true never issues a PUT or a
-//      storage PATCH, even when the live state is wrong and would otherwise need fixing.
+//      storage write, even when the live state is wrong and would otherwise need fixing.
 //   2. connectionString-preservation: buildPutBody() ALWAYS forces credentials.connectionString to
 //      the literal "<unchanged>" sentinel, regardless of what the GET response's own (redacted)
 //      connectionString value was (null, undefined, or even a stray real-looking string) -- this is
@@ -265,16 +265,16 @@ function accountResolveStub(accountName, resourceGroup, extraGet) {
   };
 }
 
-test("ensureAccountSoftDelete: dry-run (commit=false) on a disabled account reports would-enable and issues no PATCH", async () => {
+test("ensureAccountSoftDelete: dry-run (commit=false) on a disabled account reports would-enable and issues no write", async () => {
   const calls = [];
   const stub = accountResolveStub("otchealthlegalstore", "rg1", (u, method) => {
     calls.push(method);
     if (method === "GET") return jsonResponse(200, { properties: { deleteRetentionPolicy: { enabled: false } } });
-    throw new Error("must not PATCH in dry-run");
+    throw new Error("must not write in dry-run");
   });
   const result = await withStubbedFetch(stub, () => ensureAccountSoftDelete("tok", "sub1", "otchealthlegalstore", "rg1", 14, { commit: false }));
   assert.equal(result.action, "would-enable");
-  assert.equal(calls.filter((m) => m === "PATCH").length, 0);
+  assert.equal(calls.filter((m) => m !== "GET").length, 0);
 });
 
 test("ensureAccountSoftDelete: already-enabled account is a no-op even with commit=true", async () => {
@@ -282,24 +282,33 @@ test("ensureAccountSoftDelete: already-enabled account is a no-op even with comm
   const stub = accountResolveStub("otchealthcommons", "otchealth-automation-rg", (u, method) => {
     calls.push(method);
     if (method === "GET") return jsonResponse(200, { properties: { deleteRetentionPolicy: { enabled: true, days: 14 } } });
-    throw new Error("must not PATCH an already-enabled account");
+    throw new Error("must not write to an already-enabled account");
   });
   const result = await withStubbedFetch(stub, () => ensureAccountSoftDelete("tok", "sub1", "otchealthcommons", "otchealth-automation-rg", 14, { commit: true }));
   assert.equal(result.action, "noop");
-  assert.equal(calls.filter((m) => m === "PATCH").length, 0);
+  assert.equal(calls.filter((m) => m !== "GET").length, 0);
 });
 
-test("ensureAccountSoftDelete: commit=true on a disabled account issues exactly one PATCH with the correct retention body", async () => {
-  const patchBodies = [];
+// REGRESSION PIN (2026-08-05): this test previously asserted PATCH, which encoded a real bug --
+// blobServices/default does NOT support PATCH and answers HTTP 404 HttpResourceNotFound, which reads
+// like a wrong resource group and sends you chasing the wrong problem. It went undetected because the
+// only two accounts exercised live were already soft-delete-enabled and short-circuited to "noop", so
+// the write path never ran. Verified live on otchealthcfodata + otchealthcommerce: PATCH 404'd, PUT to
+// the byte-identical URL returned 200. Assert PUT, and assert PATCH is never issued.
+test("ensureAccountSoftDelete: commit=true on a disabled account issues exactly one PUT (never PATCH) with the correct retention body", async () => {
+  const putBodies = [];
+  const methods = [];
   const stub = accountResolveStub("otchealthcfodata", "otchealth-automation-rg", (u, method, opts) => {
+    methods.push(method);
     if (method === "GET") return jsonResponse(200, { properties: { deleteRetentionPolicy: { enabled: false } } });
-    if (method === "PATCH") { patchBodies.push(JSON.parse(opts.body)); return jsonResponse(200, {}); }
-    throw new Error("unexpected");
+    if (method === "PUT") { putBodies.push(JSON.parse(opts.body)); return jsonResponse(200, {}); }
+    throw new Error("unexpected verb " + method);
   });
   const result = await withStubbedFetch(stub, () => ensureAccountSoftDelete("tok", "sub1", "otchealthcfodata", "otchealth-automation-rg", 14, { commit: true }));
   assert.equal(result.action, "enabled");
-  assert.equal(patchBodies.length, 1);
-  assert.deepEqual(patchBodies[0], { properties: { deleteRetentionPolicy: { enabled: true, days: 14 } } });
+  assert.equal(putBodies.length, 1);
+  assert.deepEqual(putBodies[0], { properties: { deleteRetentionPolicy: { enabled: true, days: 14 } } });
+  assert.equal(methods.filter((m) => m === "PATCH").length, 0, "blobServices/default 404s on PATCH -- must never be used");
 });
 
 test("ensureAccountSoftDelete: falls back to a subscription-wide list when the resourceGroup hint 404s", async () => {

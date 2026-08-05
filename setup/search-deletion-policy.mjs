@@ -37,8 +37,9 @@
 //
 // `apply` is dry-run BY DEFAULT (plans and prints what it would do, makes zero network writes).
 // `--commit` is required to actually mutate anything: (1) enables blob soft-delete (14-day retention)
-// on any backing storage account that lacks it, via an ARM PATCH scoped to that account's
-// blobServices/default; (2) PUTs each datasource back with dataDeletionDetectionPolicy set to
+// on any backing storage account that lacks it, via an ARM PUT scoped to that account's
+// blobServices/default (PUT, not PATCH -- that sub-resource 404s on PATCH, see enableBlobSoftDelete);
+// (2) PUTs each datasource back with dataDeletionDetectionPolicy set to
 // NativeBlobSoftDeleteDeletionDetectionPolicy, preserving every other field. Idempotent: a datasource
 // already carrying the correct policy is skipped (no PUT issued) on every re-run. `--only <name>`
 // scopes a run to a single datasource (used to prove the approach on ds-commons-journal before any
@@ -150,7 +151,12 @@ export async function getBlobSoftDelete(tok, storageAccountId) {
 
 export async function enableBlobSoftDelete(tok, storageAccountId, days) {
   const r = await fetch(`https://management.azure.com${storageAccountId}/blobServices/default?api-version=${STORAGE_API}`, {
-    method: "PATCH",
+    // PUT, not PATCH. The blobServices/default sub-resource does NOT support PATCH -- it answers
+    // HTTP 404 HttpResourceNotFound, which reads like a missing account/resource-group and sends you
+    // hunting for the wrong bug (verified live 2026-08-05 on otchealthcfodata + otchealthcommerce:
+    // PATCH 404'd, PUT to the byte-identical URL returned 200). The PUT body carries only
+    // deleteRetentionPolicy, and blobServices merges rather than replacing sibling properties.
+    method: "PUT",
     headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
     body: JSON.stringify({ properties: { deleteRetentionPolicy: { enabled: true, days } } }),
   });
@@ -281,7 +287,7 @@ export async function ensureAccountSoftDelete(tok, sub, accountName, resourceGro
   if (before.enabled) return { account: accountName, action: "noop", detail: `already enabled (${before.days}d)` };
   if (!commit) return { account: accountName, action: "would-enable", detail: `retention ${retentionDays}d (dry-run, no write made)` };
   const res = await enableBlobSoftDelete(tok, acctId, retentionDays);
-  if (!res.ok) return { account: accountName, action: "error", detail: `PATCH failed HTTP ${res.status}: ${res.body.slice(0, 300)}` };
+  if (!res.ok) return { account: accountName, action: "error", detail: `PUT failed HTTP ${res.status}: ${res.body.slice(0, 300)}` };
   return { account: accountName, action: "enabled", detail: `retention ${retentionDays}d` };
 }
 
