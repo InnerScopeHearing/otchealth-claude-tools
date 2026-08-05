@@ -468,13 +468,22 @@ export async function reapIndex(ctx, indexName, opts = {}) {
 // ---------------------------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { cmd: argv[0] || null, index: null, prefix: null, all: false, commit: false };
+  const out = { cmd: argv[0] || null, index: null, prefix: null, all: false, commit: false, concurrency: null };
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--index") out.index = argv[++i];
     else if (a === "--prefix") out.prefix = argv[++i];
     else if (a === "--all") out.all = true;
     else if (a === "--commit") out.commit = true;
+    // --concurrency: the default 16 is fine for small rooms but leaves a large one (legal-personal,
+    // ~165k docs / tens of thousands of unique paths) running long enough to trip an outer timeout,
+    // which reads as a tool failure when it is only slow. Bounded 1..64 so a typo cannot fire an
+    // unbounded HEAD storm at storage.
+    else if (a === "--concurrency") {
+      const n = Number.parseInt(argv[++i], 10);
+      if (!Number.isFinite(n) || n < 1 || n > 64) { console.error("--concurrency must be an integer 1..64"); process.exit(2); }
+      out.concurrency = n;
+    }
   }
   return out;
 }
@@ -501,7 +510,7 @@ function printSummary(r) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.cmd !== "scan" && args.cmd !== "reap") {
-    console.error("usage: node reaper.mjs scan --index <name> [--prefix <p>] | scan --all");
+    console.error("usage: node reaper.mjs scan --index <name> [--prefix <p>] [--concurrency N] | scan --all");
     console.error("       node reaper.mjs reap --index <name> [--commit] [--prefix <p>] | reap --all [--commit]");
     process.exit(2);
   }
@@ -515,6 +524,7 @@ async function main() {
   }
 
   const opts = { prefix: args.prefix || null, commit: args.commit };
+  if (args.concurrency) opts.concurrency = args.concurrency;
   for (const idx of indexes) {
     console.log(`\n=== ${args.cmd} ${idx} ===`);
     try {
