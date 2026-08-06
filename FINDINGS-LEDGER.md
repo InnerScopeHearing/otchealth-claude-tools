@@ -160,3 +160,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-07-28T01:02:45.658Z
 - **Closed:** (open)
+
+### finding:safety-escalation-rota-gap-2026-08-06 severity:high status:open | Safety Escalations team (Intercom team_assignee_id 11247295) has no human member on rota; Safety Monitor tags/routes correctly but flagged conversations then age indefinitely with zero human notification beyond the next daily digest email
+
+- **Source audit doc:** CRO daily digest 2026-08-05 and 2026-08-06 (Intercom Safety Monitor live audit)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-06T18:21:03.936Z
+- **Closed:** (open)
