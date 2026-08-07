@@ -1,0 +1,25 @@
+{
+  "program": "OTCHealth Warranty & Product Registration",
+  "status": "disabled synthetic drafts only",
+  "project_id": "7Pkd81AdBDhJCMwc",
+  "project_name": "Matthew Moore <matthew@otchealthmart.com>",
+  "created_at": "2026-08-07",
+  "controls": {
+    "all_inactive": true,
+    "all_active_version_null": true,
+    "all_trigger_count_zero": true,
+    "all_credentials_empty": true,
+    "external_calls": 0,
+    "authorization_consumed": false,
+    "live_execution_permitted": false,
+    "customer_contact_permitted": false
+  },
+  "workflows": [
+    {"code":"WTY-00","id":"f9hT19JCNh2tQi7v","name":"Signed Event Intake and Router — Synthetic Draft","test_execution":"46905","test_status":"PASS"},
+    {"code":"WTY-01","id":"AyA4BGMspfpoSeTf","name":"Intercom Care Handoff — Synthetic Draft","test_execution":"46901","test_status":"PASS"},
+    {"code":"WTY-02","id":"cdlb1eaRgTVJooU1","name":"Customer Communication — Synthetic Draft","test_execution":"46902","test_status":"PASS"},
+    {"code":"WTY-03","id":"yGML7VPfrLTSP2ra","name":"Operations Action — Synthetic Draft","test_execution":"46903","test_status":"PASS"},
+    {"code":"WTY-04","id":"9BMtCKBfxi9aiXcR","name":"Provider Event Normalize — Synthetic Draft","test_execution":"46900","test_status":"PASS"},
+    {"code":"WTY-05","id":"VyyFdtwj2aLNns8N","name":"Reconciliation Exception — Synthetic Draft","test_execution":"46904","test_status":"PASS"}
+  ]
+}

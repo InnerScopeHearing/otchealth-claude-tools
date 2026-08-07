@@ -60,6 +60,21 @@ from the top of this list. Update status as items complete.
     (Matrix etc.), not TReO's PSAP inventory (a correction made today). Fund after the $25K NET
     reignition trigger per existing sequencing.
 
+## WARRANTY OPERATIONS (nonpublic build authorized 2026-08-07; no live activation)
+17. **Close the Warranty Program owner/backup and authority matrix.** Matt remains the launch
+    approver for repair, replacement, denial, and business remedy; Finance controls every
+    monetary action; Product Safety controls containment and closure. Name the Matt backup,
+    Warranty Program/Operations owners, Safety rota, Finance backup, Warehouse/Repair leads,
+    Appeals lead, and incident/vendor/accessibility owners before any pilot. [Matt + domain owners]
+18. **Turn the verified design into the owned Warranty Service/Ledger in synthetic dev/test.**
+    Canonical packet: project document `cmsjkrs2u06t007adz7d95egh`; readiness board
+    `cmsjkr41b06u706adkck6sjtg`. Six n8n contract scaffolds WTY-00 through WTY-05 are built,
+    tested, and inactive with no triggers, credentials, or external actions. [CTO/Developer]
+19. **Keep every public or consequential warranty action gated.** Do not create the public route,
+    publish Fin/Intercom warranty content, contact customers, move money, reserve inventory,
+    create orders/labels/shipments/repair work, close Safety, or decide appeals until the signed
+    Legal/Safety/Identity/Security/Privacy/Integrity/AI/Ops/Access/CX/Finance/Pilot evidence closes.
+
 ## BANKED (do not spend focus on)
 - More tooling. The operating system is DONE. Building is the avoidance pattern.
 - New grants that duplicate a filled lane — and note today's finding that credits/grants
