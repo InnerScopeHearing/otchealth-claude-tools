@@ -20,6 +20,33 @@
     "approved_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
     "approved_policy_url": "https://otchealthmart.com/policies/refund-policy"
   },
+  "vendor_dependency": {
+    "delivery_date_basis_requires_app": "AfterShip Tracking",
+    "authorized_delivery_date_source": "AfterShip Tracking Free 50 Monthly",
+    "dependency_satisfied": true,
+    "tracking_app_installed": true,
+    "tracking_app_install_authorized": true,
+    "admin_ui_warning": "To use this option, you need to install the AfterShip Tracking app. Try for free.",
+    "admin_save_state_without_dependency": "disabled",
+    "unsavable_draft_disposition": "discarded_before_authorized_install",
+    "order_date_approximation_permitted": false,
+    "procurement_scope_review_required": false,
+    "plan": "Tracking Free 50 Monthly",
+    "monthly_price_usd": 0,
+    "shipment_quota_per_month": 50,
+    "plan_auto_upgrade": false,
+    "tracking_notifications_enabled": false,
+    "tracking_page_launched": false,
+    "auto_synced_shipments": 1,
+    "reviewed_scope_categories": [
+      "customer and browser data",
+      "products, inventory and collections",
+      "orders, fulfillments, draft orders and order edits",
+      "discounts, gift cards and price rules",
+      "web pixels and Online Store content/navigation",
+      "markets and locations"
+    ]
+  },
   "public_expected": {
     "visible_page_not_found": true,
     "returns_page_access_status": "denied",
@@ -56,5 +83,5 @@
     "claims_check_owner": "CCO claims-check lane",
     "wrong_recipient_incident_owner": "Communications/Privacy incident owner - UNASSIGNED"
   },
-  "hard_rule": "Admin, public runtime, visible public page, policy link, and notification release configuration must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability."
+  "hard_rule": "Admin, public runtime, visible public page, policy link, notification release configuration, and the authorized delivery-date data source must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability. Order-date approximation is never permitted for the approved 75-days-from-delivery policy."
 }

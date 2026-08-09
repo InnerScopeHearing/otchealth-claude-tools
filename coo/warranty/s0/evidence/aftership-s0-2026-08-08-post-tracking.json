@@ -1,6 +1,6 @@
 {
   "report_type": "aftership_daily_s0_readback",
-  "observed_at": "2026-08-09T02:13:51.379Z",
+  "observed_at": "2026-08-09T03:23:03.751Z",
   "read_only": true,
   "external_writes": 0,
   "customer_contacts": 0,
@@ -9,7 +9,7 @@
     {
       "url": "https://hearingassist.aftership.com/",
       "http_status": 200,
-      "response_sha256": "00d1218dd764c7328ab3d9a63732fecf80e7f65e480b99cd2582af1fa90bb7f8",
+      "response_sha256": "81ac5ddcd85e5f87793b807db665c06a65a57ee3c15bd08dbf03e0a80219ee81",
       "visible_page_not_found": true,
       "soft_404": true,
       "runtime": {
@@ -17,16 +17,16 @@
         "store_name": "OTCHealth Inc.",
         "returns_page_status": "unpublished",
         "returns_page_block_search_engine": false,
-        "returns_page_setting_updated_at": "2026-08-09T01:01:01.739001Z",
+        "returns_page_setting_updated_at": "2026-08-09T03:09:26.073471Z",
         "returns_page_access_status": "denied",
         "returns_page_access_code": "returns_page_not_published",
-        "return_window_base_on": "order_date",
+        "return_window_base_on": "delivery_date",
         "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
-        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
-        "policy_url": "https://otchealthmart.com/policies/refund-policy.",
-        "contact_url": null,
-        "privacy_url": null,
-        "terms_url": null,
+        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+        "policy_url": "https://otchealthmart.com/policies/refund-policy",
+        "contact_url": "https://otchealthmart.com/pages/important-safety-information",
+        "privacy_url": "https://otchealthmart.com/policies/privacy-policy",
+        "terms_url": "https://otchealthmart.com/policies/terms-of-service",
         "default_language": "en-US",
         "order_lookup_methods": null
       },
@@ -51,7 +51,7 @@
           "id": "NO_ACTIONABLE_ORDER_LOOKUP",
           "pass": true,
           "severity": "S0",
-          "observed": "Hassle-free returns Page not found Back to the store page",
+          "observed": "OTCHealth Returns Center Page not found Back to the store page",
           "expected": "Page not found only",
           "owner": "Warranty Operations"
         },
@@ -87,9 +87,9 @@
         },
         {
           "id": "WINDOW_BASE_MATCHES_ADMIN",
-          "pass": false,
+          "pass": true,
           "severity": "S0",
-          "observed": "order_date",
+          "observed": "delivery_date",
           "expected": "delivery_date",
           "owner": "Care Team admin 11167146"
         },
@@ -99,7 +99,7 @@
           "severity": "S0",
           "observed": [
             "We accept returns of unused and undamaged items according to our returns policy.",
-            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy."
+            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions."
           ],
           "expected": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
           "owner": "Care/Communications"
@@ -116,9 +116,9 @@
         },
         {
           "id": "POLICY_URL_EXACT",
-          "pass": false,
+          "pass": true,
           "severity": "S0",
-          "observed": "https://otchealthmart.com/policies/refund-policy.",
+          "observed": "https://otchealthmart.com/policies/refund-policy",
           "expected": "https://otchealthmart.com/policies/refund-policy",
           "owner": "Care Team admin 11167146"
         },
@@ -132,44 +132,39 @@
         },
         {
           "id": "CONTACT_URL_SET",
-          "pass": false,
+          "pass": true,
           "severity": "S1",
-          "observed": null,
+          "observed": "https://otchealthmart.com/pages/important-safety-information",
           "expected": "REQUIRED_BEFORE_LAUNCH",
           "owner": "Care/Communications"
         },
         {
           "id": "PRIVACY_URL_SET",
-          "pass": false,
+          "pass": true,
           "severity": "S1",
-          "observed": null,
+          "observed": "https://otchealthmart.com/policies/privacy-policy",
           "expected": "REQUIRED_BEFORE_LAUNCH",
           "owner": "Privacy"
         },
         {
           "id": "TERMS_URL_SET",
-          "pass": false,
+          "pass": true,
           "severity": "S1",
-          "observed": null,
+          "observed": "https://otchealthmart.com/policies/terms-of-service",
           "expected": "REQUIRED_BEFORE_LAUNCH",
           "owner": "Legal"
         }
       ],
       "failed_check_ids": [
-        "WINDOW_BASE_MATCHES_ADMIN",
         "FORBIDDEN_POLICY_COPY_ABSENT",
-        "POLICY_URL_EXACT",
-        "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
-        "CONTACT_URL_SET",
-        "PRIVACY_URL_SET",
-        "TERMS_URL_SET"
+        "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED"
       ],
       "status": "HOLD_S0"
     },
     {
       "url": "https://hearingassist.aftership.com/return-policy",
       "http_status": 200,
-      "response_sha256": "83db4ad2752a98e00ea2e2c774e2e8973d6f8a6d62bcd0628c57bdfb8ba11956",
+      "response_sha256": "980fa76818e8c66e0991f37946df3917ef259d18abcc141ed6793e24b835c76c",
       "visible_page_not_found": true,
       "soft_404": true,
       "runtime": {
@@ -177,16 +172,16 @@
         "store_name": "OTCHealth Inc.",
         "returns_page_status": "unpublished",
         "returns_page_block_search_engine": false,
-        "returns_page_setting_updated_at": "2026-08-09T01:01:01.739001Z",
+        "returns_page_setting_updated_at": "2026-08-09T03:09:26.073471Z",
         "returns_page_access_status": "denied",
         "returns_page_access_code": "returns_page_not_published",
-        "return_window_base_on": "order_date",
+        "return_window_base_on": "delivery_date",
         "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
-        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
-        "policy_url": "https://otchealthmart.com/policies/refund-policy.",
-        "contact_url": null,
-        "privacy_url": null,
-        "terms_url": null,
+        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+        "policy_url": "https://otchealthmart.com/policies/refund-policy",
+        "contact_url": "https://otchealthmart.com/pages/important-safety-information",
+        "privacy_url": "https://otchealthmart.com/policies/privacy-policy",
+        "terms_url": "https://otchealthmart.com/policies/terms-of-service",
         "default_language": "en-US",
         "order_lookup_methods": null
       },
@@ -211,7 +206,7 @@
           "id": "NO_ACTIONABLE_ORDER_LOOKUP",
           "pass": true,
           "severity": "S0",
-          "observed": "Hassle-free returns Page not found Back to the store page",
+          "observed": "OTCHealth Returns Center Page not found Back to the store page",
           "expected": "Page not found only",
           "owner": "Warranty Operations"
         },
@@ -247,9 +242,9 @@
         },
         {
           "id": "WINDOW_BASE_MATCHES_ADMIN",
-          "pass": false,
+          "pass": true,
           "severity": "S0",
-          "observed": "order_date",
+          "observed": "delivery_date",
           "expected": "delivery_date",
           "owner": "Care Team admin 11167146"
         },
@@ -259,7 +254,7 @@
           "severity": "S0",
           "observed": [
             "We accept returns of unused and undamaged items according to our returns policy.",
-            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy."
+            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions."
           ],
           "expected": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
           "owner": "Care/Communications"
@@ -276,9 +271,9 @@
         },
         {
           "id": "POLICY_URL_EXACT",
-          "pass": false,
+          "pass": true,
           "severity": "S0",
-          "observed": "https://otchealthmart.com/policies/refund-policy.",
+          "observed": "https://otchealthmart.com/policies/refund-policy",
           "expected": "https://otchealthmart.com/policies/refund-policy",
           "owner": "Care Team admin 11167146"
         },
@@ -292,9 +287,7 @@
         }
       ],
       "failed_check_ids": [
-        "WINDOW_BASE_MATCHES_ADMIN",
         "FORBIDDEN_POLICY_COPY_ABSENT",
-        "POLICY_URL_EXACT",
         "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED"
       ],
       "status": "HOLD_S0"
@@ -302,7 +295,7 @@
     {
       "url": "https://hearingassist.returnscenter.com/",
       "http_status": 200,
-      "response_sha256": "fe9f392292136919c8bc845788ac55dba53d2ecb1db2a04efb221828009ef912",
+      "response_sha256": "3be9feeb3469839deb71fc4fd80c141e522c5a8b397ebba4678a88e030d1f213",
       "visible_page_not_found": true,
       "soft_404": true,
       "runtime": {
@@ -310,16 +303,16 @@
         "store_name": "OTCHealth Inc.",
         "returns_page_status": "unpublished",
         "returns_page_block_search_engine": false,
-        "returns_page_setting_updated_at": "2026-08-09T01:01:01.739001Z",
+        "returns_page_setting_updated_at": "2026-08-09T03:09:26.073471Z",
         "returns_page_access_status": "denied",
         "returns_page_access_code": "returns_page_not_published",
-        "return_window_base_on": "order_date",
+        "return_window_base_on": "delivery_date",
         "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
-        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
-        "policy_url": "https://otchealthmart.com/policies/refund-policy.",
-        "contact_url": null,
-        "privacy_url": null,
-        "terms_url": null,
+        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+        "policy_url": "https://otchealthmart.com/policies/refund-policy",
+        "contact_url": "https://otchealthmart.com/pages/important-safety-information",
+        "privacy_url": "https://otchealthmart.com/policies/privacy-policy",
+        "terms_url": "https://otchealthmart.com/policies/terms-of-service",
         "default_language": "en-US",
         "order_lookup_methods": null
       },
@@ -344,7 +337,7 @@
           "id": "NO_ACTIONABLE_ORDER_LOOKUP",
           "pass": true,
           "severity": "S0",
-          "observed": "Hassle-free returns Page not found Back to the store page",
+          "observed": "OTCHealth Returns Center Page not found Back to the store page",
           "expected": "Page not found only",
           "owner": "Warranty Operations"
         },
@@ -380,9 +373,9 @@
         },
         {
           "id": "WINDOW_BASE_MATCHES_ADMIN",
-          "pass": false,
+          "pass": true,
           "severity": "S0",
-          "observed": "order_date",
+          "observed": "delivery_date",
           "expected": "delivery_date",
           "owner": "Care Team admin 11167146"
         },
@@ -392,7 +385,7 @@
           "severity": "S0",
           "observed": [
             "We accept returns of unused and undamaged items according to our returns policy.",
-            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy."
+            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions."
           ],
           "expected": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
           "owner": "Care/Communications"
@@ -409,9 +402,9 @@
         },
         {
           "id": "POLICY_URL_EXACT",
-          "pass": false,
+          "pass": true,
           "severity": "S0",
-          "observed": "https://otchealthmart.com/policies/refund-policy.",
+          "observed": "https://otchealthmart.com/policies/refund-policy",
           "expected": "https://otchealthmart.com/policies/refund-policy",
           "owner": "Care Team admin 11167146"
         },
@@ -425,44 +418,39 @@
         },
         {
           "id": "CONTACT_URL_SET",
-          "pass": false,
+          "pass": true,
           "severity": "S1",
-          "observed": null,
+          "observed": "https://otchealthmart.com/pages/important-safety-information",
           "expected": "REQUIRED_BEFORE_LAUNCH",
           "owner": "Care/Communications"
         },
         {
           "id": "PRIVACY_URL_SET",
-          "pass": false,
+          "pass": true,
           "severity": "S1",
-          "observed": null,
+          "observed": "https://otchealthmart.com/policies/privacy-policy",
           "expected": "REQUIRED_BEFORE_LAUNCH",
           "owner": "Privacy"
         },
         {
           "id": "TERMS_URL_SET",
-          "pass": false,
+          "pass": true,
           "severity": "S1",
-          "observed": null,
+          "observed": "https://otchealthmart.com/policies/terms-of-service",
           "expected": "REQUIRED_BEFORE_LAUNCH",
           "owner": "Legal"
         }
       ],
       "failed_check_ids": [
-        "WINDOW_BASE_MATCHES_ADMIN",
         "FORBIDDEN_POLICY_COPY_ABSENT",
-        "POLICY_URL_EXACT",
-        "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
-        "CONTACT_URL_SET",
-        "PRIVACY_URL_SET",
-        "TERMS_URL_SET"
+        "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED"
       ],
       "status": "HOLD_S0"
     },
     {
       "url": "https://hearingassist.returnscenter.com/return-policy",
       "http_status": 200,
-      "response_sha256": "f7154ba25eb84668a538687d733a8dc17332dad59017cbdd5b46192d76a3ee8e",
+      "response_sha256": "11e7b72c2a39659a92b4ee0c4943099a507e8d65315f2625b189d8aeffbd1c60",
       "visible_page_not_found": true,
       "soft_404": true,
       "runtime": {
@@ -470,16 +458,16 @@
         "store_name": "OTCHealth Inc.",
         "returns_page_status": "unpublished",
         "returns_page_block_search_engine": false,
-        "returns_page_setting_updated_at": "2026-08-09T01:01:01.739001Z",
+        "returns_page_setting_updated_at": "2026-08-09T03:09:26.073471Z",
         "returns_page_access_status": "denied",
         "returns_page_access_code": "returns_page_not_published",
-        "return_window_base_on": "order_date",
+        "return_window_base_on": "delivery_date",
         "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
-        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
-        "policy_url": "https://otchealthmart.com/policies/refund-policy.",
-        "contact_url": null,
-        "privacy_url": null,
-        "terms_url": null,
+        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+        "policy_url": "https://otchealthmart.com/policies/refund-policy",
+        "contact_url": "https://otchealthmart.com/pages/important-safety-information",
+        "privacy_url": "https://otchealthmart.com/policies/privacy-policy",
+        "terms_url": "https://otchealthmart.com/policies/terms-of-service",
         "default_language": "en-US",
         "order_lookup_methods": null
       },
@@ -504,7 +492,7 @@
           "id": "NO_ACTIONABLE_ORDER_LOOKUP",
           "pass": true,
           "severity": "S0",
-          "observed": "Hassle-free returns Page not found Back to the store page",
+          "observed": "OTCHealth Returns Center Page not found Back to the store page",
           "expected": "Page not found only",
           "owner": "Warranty Operations"
         },
@@ -540,9 +528,9 @@
         },
         {
           "id": "WINDOW_BASE_MATCHES_ADMIN",
-          "pass": false,
+          "pass": true,
           "severity": "S0",
-          "observed": "order_date",
+          "observed": "delivery_date",
           "expected": "delivery_date",
           "owner": "Care Team admin 11167146"
         },
@@ -552,7 +540,7 @@
           "severity": "S0",
           "observed": [
             "We accept returns of unused and undamaged items according to our returns policy.",
-            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy."
+            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions."
           ],
           "expected": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
           "owner": "Care/Communications"
@@ -569,9 +557,9 @@
         },
         {
           "id": "POLICY_URL_EXACT",
-          "pass": false,
+          "pass": true,
           "severity": "S0",
-          "observed": "https://otchealthmart.com/policies/refund-policy.",
+          "observed": "https://otchealthmart.com/policies/refund-policy",
           "expected": "https://otchealthmart.com/policies/refund-policy",
           "owner": "Care Team admin 11167146"
         },
@@ -585,9 +573,7 @@
         }
       ],
       "failed_check_ids": [
-        "WINDOW_BASE_MATCHES_ADMIN",
         "FORBIDDEN_POLICY_COPY_ABSENT",
-        "POLICY_URL_EXACT",
         "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED"
       ],
       "status": "HOLD_S0"
@@ -595,15 +581,24 @@
   ],
   "vendor_dependency": {
     "delivery_date_basis_requires_app": "AfterShip Tracking",
-    "authorized_delivery_date_source": null,
-    "dependency_satisfied": false,
-    "tracking_app_installed": false,
-    "tracking_app_install_authorized": false,
+    "authorized_delivery_date_source": "AfterShip Tracking",
+    "dependency_satisfied": true,
+    "tracking_app_installed": true,
+    "tracking_app_install_authorized": true,
+    "scope_review_completed": true,
+    "authorized_by": "Matt via parent CRO",
+    "tracking_plan": "Free 50 Monthly",
+    "monthly_price_usd": 0,
+    "plan_auto_upgrade_enabled": false,
+    "tracking_notifications_locked_off": true,
+    "tracking_page_launched": false,
+    "shipments_auto_synced": 1,
     "admin_ui_warning": "Try for free",
     "admin_save_state_without_dependency": "disabled",
     "unsavable_draft_disposition": "discarded",
     "order_date_approximation_permitted": false,
     "procurement_scope_review_required": true,
+    "procurement_scope_review_status": "completed",
     "required_before_any_install": [
       "price and trial-to-paid behavior",
       "Shopify scopes and protected-customer-data access",
@@ -640,31 +635,15 @@
     "NOTIFICATION_OWNERSHIP_INCOMPLETE"
   ],
   "failed_s0": [
-    "GLOBAL:DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED",
-    "GLOBAL:ORDER_DATE_APPROXIMATION_PROHIBITED",
-    "https://hearingassist.aftership.com/:WINDOW_BASE_MATCHES_ADMIN",
     "https://hearingassist.aftership.com/:FORBIDDEN_POLICY_COPY_ABSENT",
-    "https://hearingassist.aftership.com/:POLICY_URL_EXACT",
-    "https://hearingassist.aftership.com/return-policy:WINDOW_BASE_MATCHES_ADMIN",
     "https://hearingassist.aftership.com/return-policy:FORBIDDEN_POLICY_COPY_ABSENT",
-    "https://hearingassist.aftership.com/return-policy:POLICY_URL_EXACT",
-    "https://hearingassist.returnscenter.com/:WINDOW_BASE_MATCHES_ADMIN",
     "https://hearingassist.returnscenter.com/:FORBIDDEN_POLICY_COPY_ABSENT",
-    "https://hearingassist.returnscenter.com/:POLICY_URL_EXACT",
-    "https://hearingassist.returnscenter.com/return-policy:WINDOW_BASE_MATCHES_ADMIN",
-    "https://hearingassist.returnscenter.com/return-policy:FORBIDDEN_POLICY_COPY_ABSENT",
-    "https://hearingassist.returnscenter.com/return-policy:POLICY_URL_EXACT"
+    "https://hearingassist.returnscenter.com/return-policy:FORBIDDEN_POLICY_COPY_ABSENT"
   ],
   "failed_s1": [
     "https://hearingassist.aftership.com/:SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
-    "https://hearingassist.aftership.com/:CONTACT_URL_SET",
-    "https://hearingassist.aftership.com/:PRIVACY_URL_SET",
-    "https://hearingassist.aftership.com/:TERMS_URL_SET",
     "https://hearingassist.aftership.com/return-policy:SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
     "https://hearingassist.returnscenter.com/:SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
-    "https://hearingassist.returnscenter.com/:CONTACT_URL_SET",
-    "https://hearingassist.returnscenter.com/:PRIVACY_URL_SET",
-    "https://hearingassist.returnscenter.com/:TERMS_URL_SET",
     "https://hearingassist.returnscenter.com/return-policy:SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED"
   ],
   "overall": "HOLD_S0",

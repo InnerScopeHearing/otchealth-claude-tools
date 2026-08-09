@@ -153,6 +153,20 @@ test('approved translated summary is parsed from props.resources and must match 
   assert.ok(drift.failed_s0.some((id) => id.endsWith('APPROVED_POLICY_SUMMARY_EXACT')));
 });
 
+test('authorized Tracking Free dependency is explicit and cost-contained', () => {
+  const dependency = baseExpected.vendor_dependency;
+  assert.equal(dependency.dependency_satisfied, true);
+  assert.equal(dependency.tracking_app_installed, true);
+  assert.equal(dependency.tracking_app_install_authorized, true);
+  assert.equal(dependency.authorized_delivery_date_source, 'AfterShip Tracking Free 50 Monthly');
+  assert.equal(dependency.monthly_price_usd, 0);
+  assert.equal(dependency.shipment_quota_per_month, 50);
+  assert.equal(dependency.plan_auto_upgrade, false);
+  assert.equal(dependency.tracking_notifications_enabled, false);
+  assert.equal(dependency.tracking_page_launched, false);
+  assert.equal(dependency.order_date_approximation_permitted, false);
+});
+
 test('expected contract v2 requires exact summary, timestamp and cross-domain parity', () => {
   assert.equal(baseExpected.version, 2);
   assert.equal(baseExpected.public_expected.approved_policy_summary_exact, true);
@@ -165,6 +179,7 @@ test('daily S0, notification ownership and launch addendum carry the mandatory d
   const notifications = fs.readFileSync(path.join(root, 'NOTIFICATION-OWNERSHIP-MATRIX.md'), 'utf8');
   const launch = fs.readFileSync(path.join(root, 'LAUNCH-CHECKLIST-ADDENDUM.md'), 'utf8');
   const investigation = fs.readFileSync(path.join(root, 'AFTERSHIP-STATE-INCONSISTENCY-2026-08-08.md'), 'utf8');
+  const procurement = fs.readFileSync(path.join(root, 'AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md'), 'utf8');
   const workflow = fs.readFileSync(path.resolve(root, '../../../.github/workflows/warranty-aftership-s0.yml'), 'utf8');
   for (const required of ['hearingassist.aftership.com', 'hearingassist.returnscenter.com', 'return_window_base_on', 'soft 404', '75 days', 'policy URL', 'projection fingerprint', 'exactly equals', 'warranty-aftership-s0']) {
     assert.ok(daily.toLowerCase().includes(required.toLowerCase()), `daily S0 missing ${required}`);
@@ -177,6 +192,9 @@ test('daily S0, notification ownership and launch addendum carry the mandatory d
   }
   for (const required of ['partial vendor-state projection', 'public runtime is the authoritative customer-facing evidence', 'projection fingerprint', 'cf-cache-status: dynamic', 'two consecutive clean daily readbacks']) {
     assert.ok(investigation.toLowerCase().includes(required.toLowerCase()), `investigation missing ${required}`);
+  }
+  for (const required of ['Tracking Free 50 Monthly', '$0', 'auto-upgrade off', 'auto-synced one shipment', 'notifications remained off/locked', 'return_window_base_on=delivery_date', 'Clean receipts: 0 of 2']) {
+    assert.ok(procurement.toLowerCase().includes(required.toLowerCase()), `procurement gate missing ${required}`);
   }
   for (const required of ['pull_request', 'workflow_dispatch', 'schedule', 'Run live anonymous launch smoke', 'Preserve smoke evidence', 'Enforce launch block']) {
     assert.ok(workflow.includes(required), `workflow missing ${required}`);

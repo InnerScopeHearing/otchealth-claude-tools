@@ -140,6 +140,15 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
   if (projectionFingerprints.length !== pages.length) globalS0Alerts.push('RUNTIME_PROJECTION_MISSING');
   if (new Set(projectionFingerprints).size > 1) globalS0Alerts.push('RUNTIME_PROJECTION_DIVERGED_ACROSS_DOMAINS');
 
+  const vendorDependency = expected.vendor_dependency ?? null;
+  if (vendorDependency && vendorDependency.dependency_satisfied !== true) {
+    globalS0Alerts.push('DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED');
+  }
+  const runtimeUsesOrderDate = domainResults.some((result) => result.runtime?.return_window_base_on === 'order_date');
+  if (vendorDependency && vendorDependency.order_date_approximation_permitted === false && runtimeUsesOrderDate) {
+    globalS0Alerts.push('ORDER_DATE_APPROXIMATION_PROHIBITED');
+  }
+
   const notificationEntries = Object.entries(expected.notification_ownership);
   const unassignedNotificationOwners = notificationEntries
     .filter(([, value]) => /UNASSIGNED/.test(String(value)))
@@ -157,6 +166,7 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
     customer_contacts: 0,
     domains_checked: domainResults.length,
     domain_results: domainResults,
+    vendor_dependency: vendorDependency,
     notification_ownership: expected.notification_ownership,
     unassigned_notification_owners: unassignedNotificationOwners,
     global_s0_alerts: globalS0Alerts,

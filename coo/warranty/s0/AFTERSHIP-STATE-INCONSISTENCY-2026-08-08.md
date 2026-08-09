@@ -34,6 +34,16 @@ Because new and stale values coexist in the same runtime projection after the sa
 - Fresh no-cache requests to all four endpoints returned `cache-control: private, no-cache, no-store, max-age=0, must-revalidate` and Cloudflare `cf-cache-status: DYNAMIC`. The four runtime projections were identical. This rules out a stale edge-cache object as the primary explanation and localizes the inconsistency to AfterShip origin/runtime state or field mapping.
 - No real customer, order, claim, return request, message, label, shipment, refund, credit, inventory, payment, or PHI was used.
 
+## Dependency resolution under Matt authorization
+
+The exact cause of the `order_date` basis was the missing cross-product dependency, not an alternate Returns-only setting. In authenticated Admin, selecting Delivery date displayed `To use this option, you need to install the AfterShip Tracking app. Try for free.` Save could not persist before installation.
+
+After broad Shopify-permission review, Matt authorized the bounded install. AfterShip Tracking auto-synced one shipment. The plan was explicitly changed from the initial trial to `Tracking Free 50 Monthly`, `$0/month`, 50 shipments/month, with auto-upgrade off. Tracking notifications stayed off/locked and no tracking page was launched. Returns then persisted Delivery date + 75 days with no fulfillment fallback. Anonymous runtime on all four checked endpoints now reports `return_window_base_on=delivery_date` with one matching projection fingerprint.
+
+This supplies authoritative basis evidence through two independent planes: authenticated Admin persistence proves the configured 75-day duration, and anonymous runtime proves the effective delivery-date basis. It closes the delivery-date dependency gate without order-date or fulfillment-date approximation.
+
+The release gate remains HOLD because runtime `policy_text` is stale, search blocking remains false, notification ownership is incomplete, and two clean daily receipts do not yet exist.
+
 ## Control decision
 
 Five planes must reconcile before pilot or publication:
@@ -68,4 +78,4 @@ The workflow preserves its JSON artifact even when the live smoke fails, then fa
 
 ## Current outcome
 
-The current anonymous readback is `HOLD_S0`. Keep both AfterShip domains inaccessible, keep Shopify warranty routes absent, and do not enable customer traffic until the vendor projection is reconciled and independently re-read cleanly twice.
+The current anonymous readback is `HOLD_S0`, narrowed to stale forbidden `policy_text`; delivery-date basis, exact translated summary, exact policy URL, contact/privacy/terms links, access denial, timestamp and cross-domain parity now pass. Search blocking and notification ownership remain S1. Keep both AfterShip domains inaccessible, keep Shopify warranty routes absent, and do not enable customer traffic until the stale policy is removed and two consecutive clean daily readbacks exist.
