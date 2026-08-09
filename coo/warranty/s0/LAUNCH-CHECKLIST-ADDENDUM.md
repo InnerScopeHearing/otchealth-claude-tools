@@ -12,8 +12,11 @@ Any Admin/public/runtime/policy/notification mismatch is a launch blocker. `Unpu
 - [ ] Inventory every AfterShip public hostname, default domain, custom hostname, app proxy and policy path.
 - [ ] Anonymous readback of each domain/path shows Page not found and no order lookup, gift return, policy action or return-start action.
 - [ ] Runtime returns page status is unpublished and access is denied with `returns_page_not_published`.
+- [ ] Runtime `returns_page_setting_updated_at` is parseable and newer than the last Admin/vendor change.
+- [ ] Both default domains and both checked paths expose the same normalized runtime projection fingerprint.
 - [ ] Runtime `return_window_base_on` equals Admin-approved `delivery_date`.
 - [ ] Runtime and visible policy use 75 days from delivery.
+- [ ] Runtime translated summary exactly equals the approved claims-checked summary, with no editor instruction, suffix or stale variation.
 - [ ] No stale 30-day, purchase-date, unused/undamaged, original-packaging, resellable, discounted-item or seven-day condition survives in any runtime field, translation, FAQ, template or link.
 - [ ] Policy URL exactly equals `https://otchealthmart.com/policies/refund-policy` and resolves without punctuation/redirect error.
 - [ ] Unpublished portal blocks search indexing.
@@ -22,6 +25,7 @@ Any Admin/public/runtime/policy/notification mismatch is a launch blocker. `Unpu
 - [ ] Rejection/adverse, Safety, recall, financial and appeal notifications are OFF or protected by the signed human release matrix.
 - [ ] Named primary and backup own daily S0, configuration, content, ordinary release, adverse release, Safety/recall release, Finance release and wrong-recipient incidents.
 - [ ] Probe evidence is newer than 24 hours and newer than the last Admin/vendor change.
+- [ ] The `warranty-aftership-s0` workflow has a successful exact-head run and retained JSON artifact; missing or failed is HOLD.
 - [ ] Two consecutive clean daily readbacks exist after the final correction.
 
 ## Additional evidence before public launch

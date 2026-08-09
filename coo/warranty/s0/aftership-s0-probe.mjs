@@ -54,6 +54,28 @@ function addCheck(checks, id, pass, severity, observed, expected, owner) {
   checks.push({ id, pass: Boolean(pass), severity, observed, expected, owner });
 }
 
+function normalizeText(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function projectionFingerprint(runtime) {
+  const projection = {
+    returns_page_status: runtime.returns_page_status,
+    returns_page_access_status: runtime.returns_page_access_status,
+    returns_page_access_code: runtime.returns_page_access_code,
+    returns_page_setting_updated_at: runtime.returns_page_setting_updated_at,
+    return_window_base_on: runtime.return_window_base_on,
+    policy_text: normalizeText(runtime.policy_text),
+    translated_policy_summary: normalizeText(runtime.translated_policy_summary),
+    policy_url: runtime.policy_url,
+    contact_url: runtime.contact_url,
+    privacy_url: runtime.privacy_url,
+    terms_url: runtime.terms_url,
+    returns_page_block_search_engine: runtime.returns_page_block_search_engine
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(projection)).digest('hex');
+}
+
 export function evaluatePages(expected, pages, observedAt = new Date().toISOString()) {
   const domainResults = [];
   const globalAlerts = [];
@@ -71,11 +93,11 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
     const soft404 = page.status === 200 && visiblePageNotFound;
     const runtimeTexts = runtime ? [runtime.policy_text, runtime.translated_policy_summary].filter(Boolean) : [];
     const forbiddenHits = expected.public_expected.forbidden_policy_phrases.filter((phrase) =>
-      runtimeTexts.some((text) => text.toLowerCase().includes(phrase.toLowerCase()))
+      runtimeTexts.some((text) => normalizeText(text).toLowerCase().includes(normalizeText(phrase).toLowerCase()))
     );
-    const approvedSummaryPresent = runtimeTexts.some((text) =>
-      text.includes(expected.admin_expected.approved_policy_summary)
-    );
+    const approvedSummaryExpected = normalizeText(expected.admin_expected.approved_policy_summary);
+    const approvedSummaryObserved = normalizeText(runtime?.translated_policy_summary);
+    const approvedSummaryExact = approvedSummaryObserved === approvedSummaryExpected;
     const rootPath = new URL(page.url).pathname === '/';
 
     addCheck(checks, 'HTTP_RESPONSE', page.status >= 200 && page.status < 500, 'S0', page.status, '2xx-4xx readable', 'Warranty Operations');
@@ -84,9 +106,10 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
     addCheck(checks, 'RUNTIME_PARSEABLE', runtime !== null, 'S0', parseError, null, 'Warranty Operations');
     if (runtime) {
       addCheck(checks, 'RUNTIME_STATUS_UNPUBLISHED', runtime.returns_page_status === expected.admin_expected.returns_page_status, 'S0', runtime.returns_page_status, expected.admin_expected.returns_page_status, 'Care Team admin 11167146');
+      addCheck(checks, 'RUNTIME_CONFIG_TIMESTAMP_PRESENT', Number.isFinite(Date.parse(runtime.returns_page_setting_updated_at ?? '')), 'S0', runtime.returns_page_setting_updated_at, 'parseable runtime configuration timestamp', 'Warranty Operations');
       addCheck(checks, 'RUNTIME_ACCESS_DENIED', runtime.returns_page_access_status === expected.public_expected.returns_page_access_status && runtime.returns_page_access_code === expected.public_expected.returns_page_access_code, 'S0', { status: runtime.returns_page_access_status, code: runtime.returns_page_access_code }, { status: expected.public_expected.returns_page_access_status, code: expected.public_expected.returns_page_access_code }, 'Warranty Operations');
       addCheck(checks, 'WINDOW_BASE_MATCHES_ADMIN', runtime.return_window_base_on === expected.admin_expected.return_window_base_on, 'S0', runtime.return_window_base_on, expected.admin_expected.return_window_base_on, 'Care Team admin 11167146');
-      addCheck(checks, 'APPROVED_POLICY_SUMMARY_PRESENT', approvedSummaryPresent, 'S0', runtimeTexts, expected.admin_expected.approved_policy_summary, 'Care/Communications');
+      addCheck(checks, 'APPROVED_POLICY_SUMMARY_EXACT', approvedSummaryExact, 'S0', runtime?.translated_policy_summary ?? null, expected.admin_expected.approved_policy_summary, 'Care/Communications');
       addCheck(checks, 'FORBIDDEN_POLICY_COPY_ABSENT', forbiddenHits.length === 0, 'S0', forbiddenHits, [], 'Care/Communications');
       addCheck(checks, 'POLICY_URL_EXACT', runtime.policy_url === expected.admin_expected.approved_policy_url, 'S0', runtime.policy_url, expected.admin_expected.approved_policy_url, 'Care Team admin 11167146');
       addCheck(checks, 'SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED', runtime.returns_page_block_search_engine === true, 'S1', runtime.returns_page_block_search_engine, true, 'Care Team admin 11167146');
@@ -105,11 +128,17 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
       visible_page_not_found: visiblePageNotFound,
       soft_404: soft404,
       runtime,
+      projection_fingerprint: runtime ? projectionFingerprint(runtime) : null,
       checks,
       failed_check_ids: failed.map((check) => check.id),
       status: failed.some((check) => check.severity === 'S0') ? 'HOLD_S0' : failed.length ? 'HOLD_S1' : 'PASS'
     });
   }
+
+  const globalS0Alerts = [];
+  const projectionFingerprints = domainResults.map((result) => result.projection_fingerprint).filter(Boolean);
+  if (projectionFingerprints.length !== pages.length) globalS0Alerts.push('RUNTIME_PROJECTION_MISSING');
+  if (new Set(projectionFingerprints).size > 1) globalS0Alerts.push('RUNTIME_PROJECTION_DIVERGED_ACROSS_DOMAINS');
 
   const notificationEntries = Object.entries(expected.notification_ownership);
   const unassignedNotificationOwners = notificationEntries
@@ -119,7 +148,7 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
 
   const failedS0 = domainResults.flatMap((result) => result.checks.filter((check) => !check.pass && check.severity === 'S0').map((check) => `${result.url}:${check.id}`));
   const failedS1 = domainResults.flatMap((result) => result.checks.filter((check) => !check.pass && check.severity === 'S1').map((check) => `${result.url}:${check.id}`));
-  const overall = failedS0.length ? 'HOLD_S0' : (failedS1.length || globalAlerts.length) ? 'HOLD_S1' : 'PASS';
+  const overall = failedS0.length || globalS0Alerts.length ? 'HOLD_S0' : (failedS1.length || globalAlerts.length) ? 'HOLD_S1' : 'PASS';
   return {
     report_type: 'aftership_daily_s0_readback',
     observed_at: observedAt,
@@ -130,6 +159,7 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
     domain_results: domainResults,
     notification_ownership: expected.notification_ownership,
     unassigned_notification_owners: unassignedNotificationOwners,
+    global_s0_alerts: globalS0Alerts,
     alerts: globalAlerts,
     failed_s0: failedS0,
     failed_s1: failedS1,
@@ -177,6 +207,7 @@ async function main() {
     overall: report.overall,
     launch_decision: report.launch_decision,
     domains_checked: report.domains_checked,
+    global_s0_alerts: report.global_s0_alerts,
     failed_s0: report.failed_s0,
     failed_s1: report.failed_s1,
     unassigned_notification_owners: report.unassigned_notification_owners,

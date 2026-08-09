@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "source": {
     "pilot_document_id": "cmsl2xi0z0wpp06adkysp6t6m",
     "pilot_document_version": 3,
@@ -27,7 +27,10 @@
     "actionable_order_lookup_visible": false,
     "approved_policy_summary_present_in_runtime": true,
     "approved_policy_url_exact": true,
+    "approved_policy_summary_exact": true,
     "return_window_base_on_matches_admin": true,
+    "runtime_config_timestamp_required": true,
+    "projection_fingerprint_must_match_all_domains": true,
     "forbidden_policy_phrases": [
       "30 days from purchase",
       "unused and undamaged",
