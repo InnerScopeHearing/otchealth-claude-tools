@@ -28,7 +28,7 @@ node coo/warranty/s0/aftership-s0-probe.mjs \
 
 The command exits nonzero on HOLD. `--allow-hold` is for evidence capture only and must not be used by a production monitor.
 
-The launch-blocking automation is `.github/workflows/warranty-aftership-s0.yml`. It runs the deterministic tests plus the live anonymous probe on a daily schedule and by `workflow_dispatch`, uploads the JSON receipt even when the probe fails, and then fails the job if the live probe is not clean. The workflow grants no automatic launch authority; its successful run is one required receipt, not a publication action.
+The launch-blocking automation is `.github/workflows/warranty-aftership-s0.yml`. It runs the deterministic tests plus the live anonymous probe on relevant pull requests, a daily schedule, and by `workflow_dispatch`, uploads the JSON receipt even when the probe fails, and then fails the job if the live probe is not clean. The workflow grants no automatic launch authority; its successful run is one required receipt, not a publication action.
 
 ## Public endpoints checked
 

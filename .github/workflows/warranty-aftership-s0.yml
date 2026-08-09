@@ -1,6 +1,10 @@
 name: warranty-aftership-s0
 
 on:
+  pull_request:
+    paths:
+      - 'coo/warranty/s0/**'
+      - '.github/workflows/warranty-aftership-s0.yml'
   workflow_dispatch:
   schedule:
     - cron: '17 15 * * *'
