@@ -1,0 +1,45 @@
+{
+  "observed_at": "2026-08-09T01:07:00Z",
+  "mode": "anonymous_read_only",
+  "pilot_document": {
+    "id": "cmsl2xi0z0wpp06adkysp6t6m",
+    "version": 3
+  },
+  "domains": [
+    {
+      "url": "https://hearingassist.aftership.com/",
+      "visible_result": "Page not found",
+      "http_behavior": "200 soft 404",
+      "screenshot_file_id": "cmsl3rj8r0uxk06ad6i8vncr9"
+    },
+    {
+      "url": "https://hearingassist.returnscenter.com/",
+      "visible_result": "Page not found",
+      "http_behavior": "200 soft 404",
+      "screenshot_file_id": "cmsl3sd5y0wy107ad5ma62unq"
+    }
+  ],
+  "runtime_readback": {
+    "returns_page_status": "unpublished",
+    "returns_page_access": {
+      "status": "denied",
+      "code": "returns_page_not_published"
+    },
+    "return_window_base_on": "order_date",
+    "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
+    "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
+    "policy_url": "https://otchealthmart.com/policies/refund-policy.",
+    "returns_page_block_search_engine": false,
+    "contact_url": null,
+    "privacy_url": null,
+    "terms_url": null
+  },
+  "admin_expected": {
+    "return_window_base_on": "delivery_date",
+    "return_window_days": 75,
+    "portal_status": "unpublished"
+  },
+  "overall": "HOLD_S0",
+  "writes": 0,
+  "customer_effects": 0
+}

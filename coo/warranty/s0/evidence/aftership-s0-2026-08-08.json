@@ -1,0 +1,648 @@
+{
+  "report_type": "aftership_daily_s0_readback",
+  "observed_at": "2026-08-09T01:11:27.448Z",
+  "read_only": true,
+  "external_writes": 0,
+  "customer_contacts": 0,
+  "domains_checked": 4,
+  "domain_results": [
+    {
+      "url": "https://hearingassist.aftership.com/",
+      "http_status": 200,
+      "response_sha256": "00d1218dd764c7328ab3d9a63732fecf80e7f65e480b99cd2582af1fa90bb7f8",
+      "visible_page_not_found": true,
+      "soft_404": true,
+      "runtime": {
+        "shop_host_name": "hearingassist.aftership.com",
+        "store_name": "OTCHealth Inc.",
+        "returns_page_status": "unpublished",
+        "returns_page_block_search_engine": false,
+        "returns_page_setting_updated_at": "2026-08-09T01:01:01.739001Z",
+        "returns_page_access_status": "denied",
+        "returns_page_access_code": "returns_page_not_published",
+        "return_window_base_on": "order_date",
+        "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
+        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
+        "policy_url": "https://otchealthmart.com/policies/refund-policy.",
+        "contact_url": null,
+        "privacy_url": null,
+        "terms_url": null,
+        "default_language": "en-US",
+        "order_lookup_methods": null
+      },
+      "checks": [
+        {
+          "id": "HTTP_RESPONSE",
+          "pass": true,
+          "severity": "S0",
+          "observed": 200,
+          "expected": "2xx-4xx readable",
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "VISIBLE_PUBLIC_ACCESS_DENIED",
+          "pass": true,
+          "severity": "S0",
+          "observed": true,
+          "expected": true,
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "NO_ACTIONABLE_ORDER_LOOKUP",
+          "pass": true,
+          "severity": "S0",
+          "observed": "Hassle-free returns Page not found Back to the store page",
+          "expected": "Page not found only",
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "RUNTIME_PARSEABLE",
+          "pass": true,
+          "severity": "S0",
+          "observed": null,
+          "expected": null,
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "RUNTIME_STATUS_UNPUBLISHED",
+          "pass": true,
+          "severity": "S0",
+          "observed": "unpublished",
+          "expected": "unpublished",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "RUNTIME_ACCESS_DENIED",
+          "pass": true,
+          "severity": "S0",
+          "observed": {
+            "status": "denied",
+            "code": "returns_page_not_published"
+          },
+          "expected": {
+            "status": "denied",
+            "code": "returns_page_not_published"
+          },
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "WINDOW_BASE_MATCHES_ADMIN",
+          "pass": false,
+          "severity": "S0",
+          "observed": "order_date",
+          "expected": "delivery_date",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "APPROVED_POLICY_SUMMARY_PRESENT",
+          "pass": true,
+          "severity": "S0",
+          "observed": [
+            "We accept returns of unused and undamaged items according to our returns policy.",
+            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy."
+          ],
+          "expected": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "FORBIDDEN_POLICY_COPY_ABSENT",
+          "pass": false,
+          "severity": "S0",
+          "observed": [
+            "unused and undamaged"
+          ],
+          "expected": [],
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "POLICY_URL_EXACT",
+          "pass": false,
+          "severity": "S0",
+          "observed": "https://otchealthmart.com/policies/refund-policy.",
+          "expected": "https://otchealthmart.com/policies/refund-policy",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+          "pass": false,
+          "severity": "S1",
+          "observed": false,
+          "expected": true,
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "CONTACT_URL_SET",
+          "pass": false,
+          "severity": "S1",
+          "observed": null,
+          "expected": "REQUIRED_BEFORE_LAUNCH",
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "PRIVACY_URL_SET",
+          "pass": false,
+          "severity": "S1",
+          "observed": null,
+          "expected": "REQUIRED_BEFORE_LAUNCH",
+          "owner": "Privacy"
+        },
+        {
+          "id": "TERMS_URL_SET",
+          "pass": false,
+          "severity": "S1",
+          "observed": null,
+          "expected": "REQUIRED_BEFORE_LAUNCH",
+          "owner": "Legal"
+        }
+      ],
+      "failed_check_ids": [
+        "WINDOW_BASE_MATCHES_ADMIN",
+        "FORBIDDEN_POLICY_COPY_ABSENT",
+        "POLICY_URL_EXACT",
+        "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+        "CONTACT_URL_SET",
+        "PRIVACY_URL_SET",
+        "TERMS_URL_SET"
+      ],
+      "status": "HOLD_S0"
+    },
+    {
+      "url": "https://hearingassist.aftership.com/return-policy",
+      "http_status": 200,
+      "response_sha256": "83db4ad2752a98e00ea2e2c774e2e8973d6f8a6d62bcd0628c57bdfb8ba11956",
+      "visible_page_not_found": true,
+      "soft_404": true,
+      "runtime": {
+        "shop_host_name": "hearingassist.aftership.com",
+        "store_name": "OTCHealth Inc.",
+        "returns_page_status": "unpublished",
+        "returns_page_block_search_engine": false,
+        "returns_page_setting_updated_at": "2026-08-09T01:01:01.739001Z",
+        "returns_page_access_status": "denied",
+        "returns_page_access_code": "returns_page_not_published",
+        "return_window_base_on": "order_date",
+        "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
+        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
+        "policy_url": "https://otchealthmart.com/policies/refund-policy.",
+        "contact_url": null,
+        "privacy_url": null,
+        "terms_url": null,
+        "default_language": "en-US",
+        "order_lookup_methods": null
+      },
+      "checks": [
+        {
+          "id": "HTTP_RESPONSE",
+          "pass": true,
+          "severity": "S0",
+          "observed": 200,
+          "expected": "2xx-4xx readable",
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "VISIBLE_PUBLIC_ACCESS_DENIED",
+          "pass": true,
+          "severity": "S0",
+          "observed": true,
+          "expected": true,
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "NO_ACTIONABLE_ORDER_LOOKUP",
+          "pass": true,
+          "severity": "S0",
+          "observed": "Hassle-free returns Page not found Back to the store page",
+          "expected": "Page not found only",
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "RUNTIME_PARSEABLE",
+          "pass": true,
+          "severity": "S0",
+          "observed": null,
+          "expected": null,
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "RUNTIME_STATUS_UNPUBLISHED",
+          "pass": true,
+          "severity": "S0",
+          "observed": "unpublished",
+          "expected": "unpublished",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "RUNTIME_ACCESS_DENIED",
+          "pass": true,
+          "severity": "S0",
+          "observed": {
+            "status": "denied",
+            "code": "returns_page_not_published"
+          },
+          "expected": {
+            "status": "denied",
+            "code": "returns_page_not_published"
+          },
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "WINDOW_BASE_MATCHES_ADMIN",
+          "pass": false,
+          "severity": "S0",
+          "observed": "order_date",
+          "expected": "delivery_date",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "APPROVED_POLICY_SUMMARY_PRESENT",
+          "pass": true,
+          "severity": "S0",
+          "observed": [
+            "We accept returns of unused and undamaged items according to our returns policy.",
+            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy."
+          ],
+          "expected": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "FORBIDDEN_POLICY_COPY_ABSENT",
+          "pass": false,
+          "severity": "S0",
+          "observed": [
+            "unused and undamaged"
+          ],
+          "expected": [],
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "POLICY_URL_EXACT",
+          "pass": false,
+          "severity": "S0",
+          "observed": "https://otchealthmart.com/policies/refund-policy.",
+          "expected": "https://otchealthmart.com/policies/refund-policy",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+          "pass": false,
+          "severity": "S1",
+          "observed": false,
+          "expected": true,
+          "owner": "Care Team admin 11167146"
+        }
+      ],
+      "failed_check_ids": [
+        "WINDOW_BASE_MATCHES_ADMIN",
+        "FORBIDDEN_POLICY_COPY_ABSENT",
+        "POLICY_URL_EXACT",
+        "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED"
+      ],
+      "status": "HOLD_S0"
+    },
+    {
+      "url": "https://hearingassist.returnscenter.com/",
+      "http_status": 200,
+      "response_sha256": "fe9f392292136919c8bc845788ac55dba53d2ecb1db2a04efb221828009ef912",
+      "visible_page_not_found": true,
+      "soft_404": true,
+      "runtime": {
+        "shop_host_name": "hearingassist.returnscenter.com",
+        "store_name": "OTCHealth Inc.",
+        "returns_page_status": "unpublished",
+        "returns_page_block_search_engine": false,
+        "returns_page_setting_updated_at": "2026-08-09T01:01:01.739001Z",
+        "returns_page_access_status": "denied",
+        "returns_page_access_code": "returns_page_not_published",
+        "return_window_base_on": "order_date",
+        "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
+        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
+        "policy_url": "https://otchealthmart.com/policies/refund-policy.",
+        "contact_url": null,
+        "privacy_url": null,
+        "terms_url": null,
+        "default_language": "en-US",
+        "order_lookup_methods": null
+      },
+      "checks": [
+        {
+          "id": "HTTP_RESPONSE",
+          "pass": true,
+          "severity": "S0",
+          "observed": 200,
+          "expected": "2xx-4xx readable",
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "VISIBLE_PUBLIC_ACCESS_DENIED",
+          "pass": true,
+          "severity": "S0",
+          "observed": true,
+          "expected": true,
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "NO_ACTIONABLE_ORDER_LOOKUP",
+          "pass": true,
+          "severity": "S0",
+          "observed": "Hassle-free returns Page not found Back to the store page",
+          "expected": "Page not found only",
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "RUNTIME_PARSEABLE",
+          "pass": true,
+          "severity": "S0",
+          "observed": null,
+          "expected": null,
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "RUNTIME_STATUS_UNPUBLISHED",
+          "pass": true,
+          "severity": "S0",
+          "observed": "unpublished",
+          "expected": "unpublished",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "RUNTIME_ACCESS_DENIED",
+          "pass": true,
+          "severity": "S0",
+          "observed": {
+            "status": "denied",
+            "code": "returns_page_not_published"
+          },
+          "expected": {
+            "status": "denied",
+            "code": "returns_page_not_published"
+          },
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "WINDOW_BASE_MATCHES_ADMIN",
+          "pass": false,
+          "severity": "S0",
+          "observed": "order_date",
+          "expected": "delivery_date",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "APPROVED_POLICY_SUMMARY_PRESENT",
+          "pass": true,
+          "severity": "S0",
+          "observed": [
+            "We accept returns of unused and undamaged items according to our returns policy.",
+            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy."
+          ],
+          "expected": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "FORBIDDEN_POLICY_COPY_ABSENT",
+          "pass": false,
+          "severity": "S0",
+          "observed": [
+            "unused and undamaged"
+          ],
+          "expected": [],
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "POLICY_URL_EXACT",
+          "pass": false,
+          "severity": "S0",
+          "observed": "https://otchealthmart.com/policies/refund-policy.",
+          "expected": "https://otchealthmart.com/policies/refund-policy",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+          "pass": false,
+          "severity": "S1",
+          "observed": false,
+          "expected": true,
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "CONTACT_URL_SET",
+          "pass": false,
+          "severity": "S1",
+          "observed": null,
+          "expected": "REQUIRED_BEFORE_LAUNCH",
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "PRIVACY_URL_SET",
+          "pass": false,
+          "severity": "S1",
+          "observed": null,
+          "expected": "REQUIRED_BEFORE_LAUNCH",
+          "owner": "Privacy"
+        },
+        {
+          "id": "TERMS_URL_SET",
+          "pass": false,
+          "severity": "S1",
+          "observed": null,
+          "expected": "REQUIRED_BEFORE_LAUNCH",
+          "owner": "Legal"
+        }
+      ],
+      "failed_check_ids": [
+        "WINDOW_BASE_MATCHES_ADMIN",
+        "FORBIDDEN_POLICY_COPY_ABSENT",
+        "POLICY_URL_EXACT",
+        "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+        "CONTACT_URL_SET",
+        "PRIVACY_URL_SET",
+        "TERMS_URL_SET"
+      ],
+      "status": "HOLD_S0"
+    },
+    {
+      "url": "https://hearingassist.returnscenter.com/return-policy",
+      "http_status": 200,
+      "response_sha256": "f7154ba25eb84668a538687d733a8dc17332dad59017cbdd5b46192d76a3ee8e",
+      "visible_page_not_found": true,
+      "soft_404": true,
+      "runtime": {
+        "shop_host_name": "hearingassist.returnscenter.com",
+        "store_name": "OTCHealth Inc.",
+        "returns_page_status": "unpublished",
+        "returns_page_block_search_engine": false,
+        "returns_page_setting_updated_at": "2026-08-09T01:01:01.739001Z",
+        "returns_page_access_status": "denied",
+        "returns_page_access_code": "returns_page_not_published",
+        "return_window_base_on": "order_date",
+        "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
+        "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy.",
+        "policy_url": "https://otchealthmart.com/policies/refund-policy.",
+        "contact_url": null,
+        "privacy_url": null,
+        "terms_url": null,
+        "default_language": "en-US",
+        "order_lookup_methods": null
+      },
+      "checks": [
+        {
+          "id": "HTTP_RESPONSE",
+          "pass": true,
+          "severity": "S0",
+          "observed": 200,
+          "expected": "2xx-4xx readable",
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "VISIBLE_PUBLIC_ACCESS_DENIED",
+          "pass": true,
+          "severity": "S0",
+          "observed": true,
+          "expected": true,
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "NO_ACTIONABLE_ORDER_LOOKUP",
+          "pass": true,
+          "severity": "S0",
+          "observed": "Hassle-free returns Page not found Back to the store page",
+          "expected": "Page not found only",
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "RUNTIME_PARSEABLE",
+          "pass": true,
+          "severity": "S0",
+          "observed": null,
+          "expected": null,
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "RUNTIME_STATUS_UNPUBLISHED",
+          "pass": true,
+          "severity": "S0",
+          "observed": "unpublished",
+          "expected": "unpublished",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "RUNTIME_ACCESS_DENIED",
+          "pass": true,
+          "severity": "S0",
+          "observed": {
+            "status": "denied",
+            "code": "returns_page_not_published"
+          },
+          "expected": {
+            "status": "denied",
+            "code": "returns_page_not_published"
+          },
+          "owner": "Warranty Operations"
+        },
+        {
+          "id": "WINDOW_BASE_MATCHES_ADMIN",
+          "pass": false,
+          "severity": "S0",
+          "observed": "order_date",
+          "expected": "delivery_date",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "APPROVED_POLICY_SUMMARY_PRESENT",
+          "pass": true,
+          "severity": "S0",
+          "observed": [
+            "We accept returns of unused and undamaged items according to our returns policy.",
+            "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions. Leave the link text as View return policy."
+          ],
+          "expected": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "FORBIDDEN_POLICY_COPY_ABSENT",
+          "pass": false,
+          "severity": "S0",
+          "observed": [
+            "unused and undamaged"
+          ],
+          "expected": [],
+          "owner": "Care/Communications"
+        },
+        {
+          "id": "POLICY_URL_EXACT",
+          "pass": false,
+          "severity": "S0",
+          "observed": "https://otchealthmart.com/policies/refund-policy.",
+          "expected": "https://otchealthmart.com/policies/refund-policy",
+          "owner": "Care Team admin 11167146"
+        },
+        {
+          "id": "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+          "pass": false,
+          "severity": "S1",
+          "observed": false,
+          "expected": true,
+          "owner": "Care Team admin 11167146"
+        }
+      ],
+      "failed_check_ids": [
+        "WINDOW_BASE_MATCHES_ADMIN",
+        "FORBIDDEN_POLICY_COPY_ABSENT",
+        "POLICY_URL_EXACT",
+        "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED"
+      ],
+      "status": "HOLD_S0"
+    }
+  ],
+  "notification_ownership": {
+    "configuration_owner": "Care Team admin 11167146",
+    "daily_s0_monitor_owner": "Warranty Operations Lead - UNASSIGNED",
+    "daily_s0_monitor_backup": "Warranty Operations backup - UNASSIGNED",
+    "ordinary_transactional_content_owner": "Care/Communications owner - UNASSIGNED",
+    "ordinary_transactional_release_owner": "Warranty Operations Lead - UNASSIGNED",
+    "adverse_or_rejection_release_owner": "Matt or signed delegate plus Legal - BACKUP UNASSIGNED",
+    "safety_or_recall_release_owner": "Product Safety plus Legal - ROSTER UNASSIGNED",
+    "claims_check_owner": "CCO claims-check lane",
+    "wrong_recipient_incident_owner": "Communications/Privacy incident owner - UNASSIGNED"
+  },
+  "unassigned_notification_owners": [
+    "daily_s0_monitor_owner",
+    "daily_s0_monitor_backup",
+    "ordinary_transactional_content_owner",
+    "ordinary_transactional_release_owner",
+    "adverse_or_rejection_release_owner",
+    "safety_or_recall_release_owner",
+    "wrong_recipient_incident_owner"
+  ],
+  "alerts": [
+    "NOTIFICATION_OWNERSHIP_INCOMPLETE"
+  ],
+  "failed_s0": [
+    "https://hearingassist.aftership.com/:WINDOW_BASE_MATCHES_ADMIN",
+    "https://hearingassist.aftership.com/:FORBIDDEN_POLICY_COPY_ABSENT",
+    "https://hearingassist.aftership.com/:POLICY_URL_EXACT",
+    "https://hearingassist.aftership.com/return-policy:WINDOW_BASE_MATCHES_ADMIN",
+    "https://hearingassist.aftership.com/return-policy:FORBIDDEN_POLICY_COPY_ABSENT",
+    "https://hearingassist.aftership.com/return-policy:POLICY_URL_EXACT",
+    "https://hearingassist.returnscenter.com/:WINDOW_BASE_MATCHES_ADMIN",
+    "https://hearingassist.returnscenter.com/:FORBIDDEN_POLICY_COPY_ABSENT",
+    "https://hearingassist.returnscenter.com/:POLICY_URL_EXACT",
+    "https://hearingassist.returnscenter.com/return-policy:WINDOW_BASE_MATCHES_ADMIN",
+    "https://hearingassist.returnscenter.com/return-policy:FORBIDDEN_POLICY_COPY_ABSENT",
+    "https://hearingassist.returnscenter.com/return-policy:POLICY_URL_EXACT"
+  ],
+  "failed_s1": [
+    "https://hearingassist.aftership.com/:SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+    "https://hearingassist.aftership.com/:CONTACT_URL_SET",
+    "https://hearingassist.aftership.com/:PRIVACY_URL_SET",
+    "https://hearingassist.aftership.com/:TERMS_URL_SET",
+    "https://hearingassist.aftership.com/return-policy:SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+    "https://hearingassist.returnscenter.com/:SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED",
+    "https://hearingassist.returnscenter.com/:CONTACT_URL_SET",
+    "https://hearingassist.returnscenter.com/:PRIVACY_URL_SET",
+    "https://hearingassist.returnscenter.com/:TERMS_URL_SET",
+    "https://hearingassist.returnscenter.com/return-policy:SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED"
+  ],
+  "overall": "HOLD_S0",
+  "launch_decision": "HOLD_NO_GO",
+  "rule": "Admin, public runtime, visible public page, policy link, and notification release configuration must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability."
+}

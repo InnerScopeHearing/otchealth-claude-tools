@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "source": {
+    "pilot_document_id": "cmsl2xi0z0wpp06adkysp6t6m",
+    "pilot_document_version": 3,
+    "owner_directive_date": "2026-08-08"
+  },
+  "domains": [
+    "https://hearingassist.aftership.com",
+    "https://hearingassist.returnscenter.com"
+  ],
+  "paths": [
+    "/",
+    "/return-policy"
+  ],
+  "admin_expected": {
+    "returns_page_status": "unpublished",
+    "return_window_base_on": "delivery_date",
+    "return_window_days": 75,
+    "approved_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+    "approved_policy_url": "https://otchealthmart.com/policies/refund-policy"
+  },
+  "public_expected": {
+    "visible_page_not_found": true,
+    "returns_page_access_status": "denied",
+    "returns_page_access_code": "returns_page_not_published",
+    "actionable_order_lookup_visible": false,
+    "approved_policy_summary_present_in_runtime": true,
+    "approved_policy_url_exact": true,
+    "return_window_base_on_matches_admin": true,
+    "forbidden_policy_phrases": [
+      "30 days from purchase",
+      "unused and undamaged",
+      "original packaging",
+      "resellable condition",
+      "discounted items are not eligible",
+      "seven days"
+    ]
+  },
+  "launch_required_links": {
+    "contact_url": "REQUIRED_BEFORE_LAUNCH",
+    "privacy_url": "REQUIRED_BEFORE_LAUNCH",
+    "terms_url": "REQUIRED_BEFORE_LAUNCH"
+  },
+  "notification_ownership": {
+    "configuration_owner": "Care Team admin 11167146",
+    "daily_s0_monitor_owner": "Warranty Operations Lead - UNASSIGNED",
+    "daily_s0_monitor_backup": "Warranty Operations backup - UNASSIGNED",
+    "ordinary_transactional_content_owner": "Care/Communications owner - UNASSIGNED",
+    "ordinary_transactional_release_owner": "Warranty Operations Lead - UNASSIGNED",
+    "adverse_or_rejection_release_owner": "Matt or signed delegate plus Legal - BACKUP UNASSIGNED",
+    "safety_or_recall_release_owner": "Product Safety plus Legal - ROSTER UNASSIGNED",
+    "claims_check_owner": "CCO claims-check lane",
+    "wrong_recipient_incident_owner": "Communications/Privacy incident owner - UNASSIGNED"
+  },
+  "hard_rule": "Admin, public runtime, visible public page, policy link, and notification release configuration must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability."
+}

@@ -71,7 +71,12 @@ from the top of this list. Update status as items complete.
     facility, live Safety/PHMSA evidence, warehouse/repair capacity, signed human authority and
     training, notification owners/toggles, manual WCAG/assisted proof, and real serial/scan traces.
     Source: `coo/warranty/synthetic-drills/`. [named owners]
-19. **Run no pilot until every upstream gate is signed.** Then synthetic -> employee -> separately
+19. **Reconcile AfterShip's five control planes and run daily S0.** Both default domains now show
+    Page not found, but live runtime still says `order_date`, retains `unused and undamaged` copy,
+    has a policy URL with a trailing period, leaves search blocking false, and has null contact,
+    privacy and terms URLs despite Admin Delivery+75. Daily probe + owner matrix + launch addendum:
+    `coo/warranty/s0/`. No pilot until two consecutive clean post-fix readbacks.
+20. **Run no pilot until every upstream gate is signed.** Then synthetic -> employee -> separately
     approved small cohort, with AI shadow-only, all kill switches drilled, no advance/returnless
     exchange, and two reconciled operating plus Finance/GL cycles. Until then keep AfterShip and
     Shopify surfaces unpublished and perform no customer, claim, money, inventory, label,

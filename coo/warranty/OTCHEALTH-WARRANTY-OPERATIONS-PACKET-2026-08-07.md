@@ -384,3 +384,37 @@ These are executable contract scaffolds, not production integrations. They inten
 13. Security, privacy, accessibility, identity, concurrency, duplicate-side-effect, outage, restore, deletion, vendor-exit, kill-switch, and two-close pilot evidence is not yet complete.
 
 Public or pilot activation requires the signed Legal, Safety, Identity, Security, Privacy, Integrity, AI, Operations, Accessibility, Customer Experience, Vendor if used, Finance, and Pilot gates defined in the blueprint and implementation planner.
+
+## 9. AfterShip public-domain, policy, window, and notification S0 addendum - 2026-08-08
+
+The CRO negative-path pilot proved that AfterShip Admin status `Unpublished` is not sufficient containment evidence. Both default domains were publicly actionable before the corrected draft was resaved and exposed stale 30-day policy content. After the draft save, both domains visibly returned Page not found, but Operations anonymous readback found a soft 404: HTTP 200 plus hidden runtime state.
+
+Current five-plane reconciliation:
+
+- Admin expectation: Delivery date + 75 days.
+- Anonymous visible page: Page not found on `hearingassist.aftership.com` and `hearingassist.returnscenter.com`, including `/return-policy`.
+- Public runtime: access denied / `returns_page_not_published`, but `return_window_base_on=order_date`.
+- Public runtime policy fields: translated summary includes the approved 75-day delivery copy, while `policy_text` still says unused and undamaged.
+- Public runtime policy URL: canonical URL plus a trailing period; contact, privacy and terms URLs are null; search-engine blocking is false.
+
+This is an S0 launch HOLD, not a clean containment PASS. A visible 404 cannot override contradictory runtime policy, and a correct Admin screenshot cannot override public runtime.
+
+Required daily readback:
+
+1. Probe both default domains and every policy/custom/app-proxy path anonymously.
+2. Evaluate visible content and runtime JSON; do not rely on HTTP status because AfterShip returns soft 404s.
+3. Compare Admin, public visible page, public runtime, canonical Shopify policy and notification configuration.
+4. Fail launch if window basis/days, policy text/link, publication state, search indexing, contact/privacy/terms links, or any notification event/owner disagrees.
+5. Preserve the JSON receipt and open one human reconciliation exception; never auto-correct vendor state.
+6. Require two consecutive clean daily readbacks after the final correction before pilot or launch evidence may cite this gate as ready.
+
+Durable controls:
+
+- `coo/warranty/s0/aftership-s0-probe.mjs`
+- `coo/warranty/s0/aftership-expected.json`
+- `coo/warranty/s0/DAILY-S0-AFTERSHIP-CHECKLIST.md`
+- `coo/warranty/s0/NOTIFICATION-OWNERSHIP-MATRIX.md`
+- `coo/warranty/s0/LAUNCH-CHECKLIST-ADDENDUM.md`
+- `coo/warranty/s0/evidence/aftership-s0-2026-08-08.json`
+
+No public page, return, claim, message, label, refund, shipment, inventory or customer effect was created by this readback.
