@@ -175,7 +175,7 @@ test('daily S0, notification ownership and launch addendum carry the mandatory d
   for (const required of ['two consecutive clean daily readbacks', 'runtime `return_window_base_on`', 'search-engine blocking', 'contact, privacy and terms', 'successful exact-head run']) {
     assert.ok(launch.toLowerCase().includes(required.toLowerCase()), `launch checklist missing ${required}`);
   }
-  for (const required of ['partial vendor-state projection', 'public runtime is the authoritative customer-facing evidence', 'projection fingerprint', 'two consecutive clean daily readbacks']) {
+  for (const required of ['partial vendor-state projection', 'public runtime is the authoritative customer-facing evidence', 'projection fingerprint', 'cf-cache-status: dynamic', 'two consecutive clean daily readbacks']) {
     assert.ok(investigation.toLowerCase().includes(required.toLowerCase()), `investigation missing ${required}`);
   }
   for (const required of ['pull_request', 'workflow_dispatch', 'schedule', 'Run live anonymous launch smoke', 'Preserve smoke evidence', 'Enforce launch block']) {

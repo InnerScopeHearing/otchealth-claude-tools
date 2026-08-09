@@ -31,6 +31,7 @@ Because new and stale values coexist in the same runtime projection after the sa
   - `https://hearingassist.returnscenter.com/return-policy`
 - Before containment: default domains exposed an unauthenticated order-lookup form and stale 30-day policy.
 - After draft save: all four visible pages show Page not found; HTTP remains 200 soft-404, so status code alone is insufficient.
+- Fresh no-cache requests to all four endpoints returned `cache-control: private, no-cache, no-store, max-age=0, must-revalidate` and Cloudflare `cf-cache-status: DYNAMIC`. The four runtime projections were identical. This rules out a stale edge-cache object as the primary explanation and localizes the inconsistency to AfterShip origin/runtime state or field mapping.
 - No real customer, order, claim, return request, message, label, shipment, refund, credit, inventory, payment, or PHI was used.
 
 ## Control decision
