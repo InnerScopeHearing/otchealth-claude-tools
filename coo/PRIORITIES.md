@@ -60,20 +60,20 @@ from the top of this list. Update status as items complete.
     (Matrix etc.), not TReO's PSAP inventory (a correction made today). Fund after the $25K NET
     reignition trigger per existing sequencing.
 
-## WARRANTY OPERATIONS (nonpublic build authorized 2026-08-07; no live activation)
-17. **Close the Warranty Program owner/backup and authority matrix.** Matt remains the launch
-    approver for repair, replacement, denial, and business remedy; Finance controls every
-    monetary action; Product Safety controls containment and closure. Name the Matt backup,
-    Warranty Program/Operations owners, Safety rota, Finance backup, Warehouse/Repair leads,
-    Appeals lead, and incident/vendor/accessibility owners before any pilot. [Matt + domain owners]
-18. **Turn the verified design into the owned Warranty Service/Ledger in synthetic dev/test.**
-    Canonical packet: project document `cmsjkrs2u06t007adz7d95egh`; readiness board
-    `cmsjkr41b06u706adkck6sjtg`. Six n8n contract scaffolds WTY-00 through WTY-05 are built,
-    tested, and inactive with no triggers, credentials, or external actions. [CTO/Developer]
-19. **Keep every public or consequential warranty action gated.** Do not create the public route,
-    publish Fin/Intercom warranty content, contact customers, move money, reserve inventory,
-    create orders/labels/shipments/repair work, close Safety, or decide appeals until the signed
-    Legal/Safety/Identity/Security/Privacy/Integrity/AI/Ops/Access/CX/Finance/Pilot evidence closes.
+## WARRANTY OPERATIONS (canonical HOLD/NO-GO reconfirmed 2026-08-08)
+17. **Close the named people and authority system first.** Matt must name his backup and sign
+    decision/execution thresholds; Product Safety must name a 24/7 rota; Operations must name
+    Program, Care, Warehouse, Repair, Appeals, Accessibility, Communications, Incident, Finance,
+    and Vendor owners/backups. Canonical closure packet: `cmsl1jwqm0w7m07adew99tcjf`.
+18. **Prove the physical and human operating lanes.** Required evidence is carrier + return
+    facility, PHMSA hazardous-return path and drill, quarantine/inspection/disposition, primary
+    and backup repair capacity, training, notification controls, WCAG assisted completion,
+    serial/ownership/fulfillment scans, and approved remedy/fee/replacement rules. [named owners]
+19. **Run no pilot until every upstream gate is signed.** Then synthetic -> employee -> separately
+    approved small cohort, with AI shadow-only, all kill switches drilled, no advance/returnless
+    exchange, and two reconciled operating plus Finance/GL cycles. Until then keep AfterShip and
+    Shopify surfaces unpublished and perform no customer, claim, money, inventory, label,
+    shipment, repair, Safety-closure, adverse-message, or appeal action.
 
 ## BANKED (do not spend focus on)
 - More tooling. The operating system is DONE. Building is the avoidance pattern.
