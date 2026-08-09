@@ -15,7 +15,9 @@ On 2026-08-08 both AfterShip default domains were publicly actionable even while
 - `returns_page_block_search_engine=false` while unpublished.
 - contact, privacy and terms URLs are null.
 
-Therefore `Unpublished` is not evidence of non-reachability, and visible Page not found is not evidence that hidden runtime policy is correct. AfterShip returns HTTP 200 with a soft-404 page, so HTTP status alone is not an acceptable check.
+Root cause is now verified: AfterShip Returns cannot persist Delivery date basis unless the separate AfterShip Tracking app is installed. The Returns UI displays `Try for free`; Save stays disabled; runtime remains `order_date`. CRO discarded the unsavable draft and installed nothing.
+
+Therefore `Unpublished` is not evidence of non-reachability, and visible Page not found is not evidence that hidden runtime policy is correct. AfterShip returns HTTP 200 with a soft-404 page, so HTTP status alone is not an acceptable check. Order-date approximation is prohibited against the approved 75-days-from-delivery policy.
 
 ## Daily command
 
@@ -43,8 +45,9 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 |---|---|---|---|
 | Visible public access | Page visibly says Page not found; no order lookup or return action | S0 launch hold | Warranty Operations Lead |
 | Runtime access | `returns_page_status=unpublished`, access status `denied`, code `returns_page_not_published` | S0 launch hold | Care Team admin 11167146 |
-| Window basis | Public runtime equals Admin-approved `delivery_date` | S0 launch hold | Care Team admin 11167146 |
-| Window duration | Public/runtime eligibility and policy consistently use 75 days | S0 launch hold | Care + Counsel + Operations |
+| Delivery-date dependency | Authorized delivery-date source exists and its procurement/scope gate is signed; for current vendor this means approved AfterShip Tracking or an approved least-privilege alternative | S0 launch hold | Matt + Operations + Privacy/Security + Finance |
+| Window basis | Public runtime equals Admin-approved `delivery_date`; `order_date` is never accepted as a fallback | S0 launch hold | Care Team admin 11167146 |
+| Window duration | Public/runtime eligibility and policy consistently use 75 days from delivery | S0 launch hold | Care + Counsel + Operations |
 | Policy summary | Approved claims-checked 75-day summary is present | S0 launch hold | Care/Communications |
 | Forbidden copy | No 30-day, unused/undamaged, original-packaging, resellable, discounted-item, seven-day or other superseded condition | S0 launch hold | Care/Communications + Legal |
 | Policy URL | Exact `https://otchealthmart.com/policies/refund-policy`, no punctuation or redirect drift | S0 launch hold | Care Team admin 11167146 |
@@ -62,14 +65,17 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 4. A correct Admin screenshot cannot override contradictory public runtime.
 5. A visible 404 cannot override stale or contradictory runtime policy.
 6. Do not correct drift automatically. Draft the exact bounded change, obtain the named authorization, apply once, and re-read all five planes.
-7. Require two consecutive clean daily readbacks after the final correction before a launch packet may cite this gate as ready.
+7. If Delivery date requires a new app or paid dependency, stop at `AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md`; no install, trial, scope grant or spend occurs without explicit owner approval.
+8. Never substitute order date for delivery date. Missing dependency or delivery data is HOLD, not approximation.
+9. Require two consecutive clean daily readbacks after the final correction before a launch packet may cite this gate as ready.
 
 ## Current baseline, 2026-08-08
 
 - Anonymous visible domains: Page not found on both default domains and both policy paths.
 - HTTP behavior: 200 soft 404, not a real HTTP 404.
 - Runtime access control: denied / returns_page_not_published.
-- Overall probe: `HOLD_S0` because runtime window basis, legacy policy_text and malformed policy URL disagree with the approved Admin/policy expectation.
+- Root cause: AfterShip Tracking is required to persist Delivery date; it is not installed or authorized; CRO discarded the unsavable draft.
+- Overall probe: `HOLD_S0` because the delivery-date dependency is unsatisfied and runtime window basis, legacy policy_text and malformed policy URL disagree with the approved Admin/policy expectation.
 - Additional S1: search blocking false; contact/privacy/terms links absent; notification owners/backups unresolved.
 - Evidence: `evidence/aftership-s0-2026-08-08.json`.
 

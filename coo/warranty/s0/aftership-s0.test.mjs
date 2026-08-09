@@ -8,8 +8,17 @@ import { evaluatePages } from './aftership-s0-probe.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const baseExpected = JSON.parse(fs.readFileSync(path.join(root, 'aftership-expected.json'), 'utf8'));
 
-function expectedWithAssignedOwners() {
+function expectedWithSatisfiedDependency() {
   const expected = structuredClone(baseExpected);
+  expected.vendor_dependency.dependency_satisfied = true;
+  expected.vendor_dependency.tracking_app_installed = true;
+  expected.vendor_dependency.tracking_app_install_authorized = true;
+  expected.vendor_dependency.authorized_delivery_date_source = 'AfterShip Tracking';
+  return expected;
+}
+
+function expectedWithAssignedOwners() {
+  const expected = expectedWithSatisfiedDependency();
   for (const key of Object.keys(expected.notification_ownership)) {
     expected.notification_ownership[key] = `Assigned ${key}`;
   }
@@ -114,7 +123,7 @@ test('public order lookup leakage is S0 even if Admin says unpublished', () => {
 });
 
 test('unassigned notification owners hold launch even when pages and runtime align', () => {
-  const report = evaluatePages(baseExpected, fourPages(), '2026-08-09T00:00:00Z');
+  const report = evaluatePages(expectedWithSatisfiedDependency(), fourPages(), '2026-08-09T00:00:00Z');
   assert.equal(report.overall, 'HOLD_S1');
   assert.ok(report.alerts.includes('NOTIFICATION_OWNERSHIP_INCOMPLETE'));
   assert.ok(report.unassigned_notification_owners.length >= 1);
@@ -126,17 +135,31 @@ test('approved translated summary is parsed from props.resources', () => {
   assert.equal(check.pass, true);
 });
 
+test('unsatisfied Tracking dependency is S0 even if public runtime otherwise aligns', () => {
+  const expected = structuredClone(baseExpected);
+  for (const key of Object.keys(expected.notification_ownership)) expected.notification_ownership[key] = `Assigned ${key}`;
+  const report = evaluatePages(expected, fourPages(), '2026-08-09T00:00:00Z');
+  assert.equal(report.overall, 'HOLD_S0');
+  assert.ok(report.failed_s0.includes('GLOBAL:DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED'));
+  assert.equal(report.vendor_dependency.delivery_date_basis_requires_app, 'AfterShip Tracking');
+  assert.equal(report.vendor_dependency.order_date_approximation_permitted, false);
+});
+
 test('daily S0, notification ownership and launch addendum carry the mandatory drift controls', () => {
   const daily = fs.readFileSync(path.join(root, 'DAILY-S0-AFTERSHIP-CHECKLIST.md'), 'utf8');
   const notifications = fs.readFileSync(path.join(root, 'NOTIFICATION-OWNERSHIP-MATRIX.md'), 'utf8');
   const launch = fs.readFileSync(path.join(root, 'LAUNCH-CHECKLIST-ADDENDUM.md'), 'utf8');
+  const procurement = fs.readFileSync(path.join(root, 'AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md'), 'utf8');
   for (const required of ['hearingassist.aftership.com', 'hearingassist.returnscenter.com', 'return_window_base_on', 'soft 404', '75 days', 'policy URL']) {
     assert.ok(daily.toLowerCase().includes(required.toLowerCase()), `daily S0 missing ${required}`);
   }
   for (const required of ['configuration owner', 'content owner', 'release authority', 'rejection/adverse', 'safety/stop-use', 'wrong-recipient']) {
     assert.ok(notifications.toLowerCase().includes(required.toLowerCase()), `notification matrix missing ${required}`);
   }
-  for (const required of ['two consecutive clean daily readbacks', 'runtime `return_window_base_on`', 'search-engine blocking', 'contact, privacy and terms']) {
+  for (const required of ['two consecutive clean daily readbacks', 'runtime `return_window_base_on`', 'search-engine blocking', 'contact, privacy and terms', 'AfterShip Tracking', 'order-date approximation']) {
     assert.ok(launch.toLowerCase().includes(required.toLowerCase()), `launch checklist missing ${required}`);
+  }
+  for (const required of ['Try for free', 'Save is disabled', 'Order date is not an acceptable approximation', 'Shopify scopes', 'trial conversion', 'uninstall', 'recurring spend']) {
+    assert.ok(procurement.toLowerCase().includes(required.toLowerCase()), `procurement gate missing ${required}`);
   }
 });

@@ -111,13 +111,26 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
     });
   }
 
+  const globalS0 = [];
+  const vendorDependency = expected.vendor_dependency ?? null;
+  if (vendorDependency && vendorDependency.dependency_satisfied !== true) {
+    globalS0.push('GLOBAL:DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED');
+  }
+  const runtimeUsesOrderDate = domainResults.some((result) => result.runtime?.return_window_base_on === 'order_date');
+  if (vendorDependency && vendorDependency.order_date_approximation_permitted === false && runtimeUsesOrderDate) {
+    globalS0.push('GLOBAL:ORDER_DATE_APPROXIMATION_PROHIBITED');
+  }
+
   const notificationEntries = Object.entries(expected.notification_ownership);
   const unassignedNotificationOwners = notificationEntries
     .filter(([, value]) => /UNASSIGNED/.test(String(value)))
     .map(([key]) => key);
   if (unassignedNotificationOwners.length) globalAlerts.push('NOTIFICATION_OWNERSHIP_INCOMPLETE');
 
-  const failedS0 = domainResults.flatMap((result) => result.checks.filter((check) => !check.pass && check.severity === 'S0').map((check) => `${result.url}:${check.id}`));
+  const failedS0 = [
+    ...globalS0,
+    ...domainResults.flatMap((result) => result.checks.filter((check) => !check.pass && check.severity === 'S0').map((check) => `${result.url}:${check.id}`))
+  ];
   const failedS1 = domainResults.flatMap((result) => result.checks.filter((check) => !check.pass && check.severity === 'S1').map((check) => `${result.url}:${check.id}`));
   const overall = failedS0.length ? 'HOLD_S0' : (failedS1.length || globalAlerts.length) ? 'HOLD_S1' : 'PASS';
   return {
@@ -128,6 +141,7 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
     customer_contacts: 0,
     domains_checked: domainResults.length,
     domain_results: domainResults,
+    vendor_dependency: vendorDependency,
     notification_ownership: expected.notification_ownership,
     unassigned_notification_owners: unassignedNotificationOwners,
     alerts: globalAlerts,

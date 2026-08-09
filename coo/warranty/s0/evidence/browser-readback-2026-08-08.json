@@ -39,6 +39,15 @@
     "return_window_days": 75,
     "portal_status": "unpublished"
   },
+  "vendor_dependency": {
+    "required_for_delivery_date_basis": "AfterShip Tracking",
+    "ui_warning": "Try for free",
+    "save_without_dependency": "disabled",
+    "tracking_app_installed": false,
+    "tracking_app_install_authorized": false,
+    "unsavable_draft_disposition": "discarded",
+    "order_date_approximation_permitted": false
+  },
   "overall": "HOLD_S0",
   "writes": 0,
   "customer_effects": 0

@@ -10,6 +10,7 @@ No vendor default notification is trusted. Every return and warranty event requi
 |---|---|---|---|---|---|---|
 | Ordinary transactional receipt/status | Care Team admin 11167146 | Care/Communications - unassigned | Warranty Operations Lead - unassigned | Unassigned | toggle, template hash, recipient check, send-key dedupe | HOLD |
 | Return approved/in-progress/item received/resolved/canceled/reminder | Care Team admin 11167146 | Care/Communications - unassigned | Warranty Operations Lead - unassigned | Unassigned | each vendor event independently read back | HOLD |
+| AfterShip Tracking pages/delivery notifications/marketing | Not installed; configuration owner unassigned if approved | Care/Communications - unassigned | Warranty Operations Lead - unassigned | Unassigned | scope inventory plus every Tracking notification/page/automation disabled unless separately approved | HOLD / NOT INSTALLED |
 | Rejection/adverse coverage | Care Team admin 11167146 | Legal + Care - unassigned | Matt or signed delegate + Legal | Matt backup unassigned | toggle must remain OFF until signed adverse template and appeal path | HOLD |
 | Safety/stop-use | Care Team admin 11167146 | Product Safety + Legal | Named Product Safety duty owner + Legal | Safety secondary unassigned | exact template, recipient, urgency and acknowledgment path | HOLD |
 | Recall/bulk safety | Care Team admin 11167146 | Product Safety + Legal + Communications | Named Product Safety lead + Legal | Safety secondary unassigned | affected-population proof, lot/serial scope, dedupe and release token | HOLD |
@@ -20,7 +21,7 @@ No vendor default notification is trusted. Every return and warranty event requi
 
 ## Daily S0 notification checks
 
-1. Enumerate every enabled and disabled return/warranty notification event. Do not rely on prior screenshots or group summaries.
+1. Enumerate every enabled and disabled return/warranty event and, if ever installed, every AfterShip Tracking page, delivery notification, marketing message and automation. Do not rely on prior screenshots or group summaries.
 2. Compare the inventory to the signed release matrix. A new event, renamed event, reset toggle or unknown default is S0 HOLD.
 3. Verify the rejection/adverse notification remains OFF until Matt/delegate + Legal sign exact template, evidence disclosure, correction and appeal path.
 4. Verify Safety and recall events cannot release without Product Safety + Legal authority.

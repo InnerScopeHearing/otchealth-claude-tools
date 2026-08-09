@@ -397,6 +397,8 @@ Current five-plane reconciliation:
 - Public runtime policy fields: translated summary includes the approved 75-day delivery copy, while `policy_text` still says unused and undamaged.
 - Public runtime policy URL: canonical URL plus a trailing period; contact, privacy and terms URLs are null; search-engine blocking is false.
 
+Root cause: AfterShip Returns cannot persist Delivery date basis unless the separate AfterShip Tracking app is installed. The UI shows `Try for free`; Save is disabled; runtime remains order date. CRO discarded the unsavable draft and did not install the dependency. Order-date approximation is prohibited against the approved 75-days-from-delivery policy.
+
 This is an S0 launch HOLD, not a clean containment PASS. A visible 404 cannot override contradictory runtime policy, and a correct Admin screenshot cannot override public runtime.
 
 Required daily readback:
@@ -404,14 +406,17 @@ Required daily readback:
 1. Probe both default domains and every policy/custom/app-proxy path anonymously.
 2. Evaluate visible content and runtime JSON; do not rely on HTTP status because AfterShip returns soft 404s.
 3. Compare Admin, public visible page, public runtime, canonical Shopify policy and notification configuration.
-4. Fail launch if window basis/days, policy text/link, publication state, search indexing, contact/privacy/terms links, or any notification event/owner disagrees.
+4. Fail launch if delivery-date dependency, window basis/days, policy text/link, publication state, search indexing, contact/privacy/terms links, or any notification event/owner disagrees.
 5. Preserve the JSON receipt and open one human reconciliation exception; never auto-correct vendor state.
-6. Require two consecutive clean daily readbacks after the final correction before pilot or launch evidence may cite this gate as ready.
+6. Route any proposed AfterShip Tracking installation through procurement, cost, Shopify scope, data-sharing, notification, security, uninstall and vendor-exit review. Installation remains a separate Matt approval.
+7. Never approximate delivery with order date.
+8. Require two consecutive clean daily readbacks after the final correction before pilot or launch evidence may cite this gate as ready.
 
 Durable controls:
 
 - `coo/warranty/s0/aftership-s0-probe.mjs`
 - `coo/warranty/s0/aftership-expected.json`
+- `coo/warranty/s0/AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md`
 - `coo/warranty/s0/DAILY-S0-AFTERSHIP-CHECKLIST.md`
 - `coo/warranty/s0/NOTIFICATION-OWNERSHIP-MATRIX.md`
 - `coo/warranty/s0/LAUNCH-CHECKLIST-ADDENDUM.md`

@@ -1,6 +1,6 @@
 {
   "report_type": "aftership_daily_s0_readback",
-  "observed_at": "2026-08-09T01:11:27.448Z",
+  "observed_at": "2026-08-09T02:13:51.379Z",
   "read_only": true,
   "external_writes": 0,
   "customer_contacts": 0,
@@ -593,6 +593,29 @@
       "status": "HOLD_S0"
     }
   ],
+  "vendor_dependency": {
+    "delivery_date_basis_requires_app": "AfterShip Tracking",
+    "authorized_delivery_date_source": null,
+    "dependency_satisfied": false,
+    "tracking_app_installed": false,
+    "tracking_app_install_authorized": false,
+    "admin_ui_warning": "Try for free",
+    "admin_save_state_without_dependency": "disabled",
+    "unsavable_draft_disposition": "discarded",
+    "order_date_approximation_permitted": false,
+    "procurement_scope_review_required": true,
+    "required_before_any_install": [
+      "price and trial-to-paid behavior",
+      "Shopify scopes and protected-customer-data access",
+      "AfterShip organization/data sharing between Returns and Tracking",
+      "tracking data sources, carrier subprocessors and retention/deletion",
+      "theme, pixel, script tag, app proxy, checkout and customer-account changes",
+      "webhooks, API keys, outbound notifications and automations",
+      "uninstall behavior, data export/deletion and rollback",
+      "least-privilege alternative and Shopify-native delivery-date source",
+      "explicit owner approval for installation and recurring spend"
+    ]
+  },
   "notification_ownership": {
     "configuration_owner": "Care Team admin 11167146",
     "daily_s0_monitor_owner": "Warranty Operations Lead - UNASSIGNED",
@@ -617,6 +640,8 @@
     "NOTIFICATION_OWNERSHIP_INCOMPLETE"
   ],
   "failed_s0": [
+    "GLOBAL:DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED",
+    "GLOBAL:ORDER_DATE_APPROXIMATION_PROHIBITED",
     "https://hearingassist.aftership.com/:WINDOW_BASE_MATCHES_ADMIN",
     "https://hearingassist.aftership.com/:FORBIDDEN_POLICY_COPY_ABSENT",
     "https://hearingassist.aftership.com/:POLICY_URL_EXACT",
@@ -644,5 +669,5 @@
   ],
   "overall": "HOLD_S0",
   "launch_decision": "HOLD_NO_GO",
-  "rule": "Admin, public runtime, visible public page, policy link, and notification release configuration must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability."
+  "rule": "Admin, public runtime, visible public page, policy link, notification release configuration, and the authorized delivery-date data source must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability. Order-date approximation is never permitted for the approved 75-days-from-delivery policy."
 }

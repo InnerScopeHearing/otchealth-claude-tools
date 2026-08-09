@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "source": {
     "pilot_document_id": "cmsl2xi0z0wpp06adkysp6t6m",
     "pilot_document_version": 3,
@@ -19,6 +19,29 @@
     "return_window_days": 75,
     "approved_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
     "approved_policy_url": "https://otchealthmart.com/policies/refund-policy"
+  },
+  "vendor_dependency": {
+    "delivery_date_basis_requires_app": "AfterShip Tracking",
+    "authorized_delivery_date_source": null,
+    "dependency_satisfied": false,
+    "tracking_app_installed": false,
+    "tracking_app_install_authorized": false,
+    "admin_ui_warning": "Try for free",
+    "admin_save_state_without_dependency": "disabled",
+    "unsavable_draft_disposition": "discarded",
+    "order_date_approximation_permitted": false,
+    "procurement_scope_review_required": true,
+    "required_before_any_install": [
+      "price and trial-to-paid behavior",
+      "Shopify scopes and protected-customer-data access",
+      "AfterShip organization/data sharing between Returns and Tracking",
+      "tracking data sources, carrier subprocessors and retention/deletion",
+      "theme, pixel, script tag, app proxy, checkout and customer-account changes",
+      "webhooks, API keys, outbound notifications and automations",
+      "uninstall behavior, data export/deletion and rollback",
+      "least-privilege alternative and Shopify-native delivery-date source",
+      "explicit owner approval for installation and recurring spend"
+    ]
   },
   "public_expected": {
     "visible_page_not_found": true,
@@ -53,5 +76,5 @@
     "claims_check_owner": "CCO claims-check lane",
     "wrong_recipient_incident_owner": "Communications/Privacy incident owner - UNASSIGNED"
   },
-  "hard_rule": "Admin, public runtime, visible public page, policy link, and notification release configuration must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability."
+  "hard_rule": "Admin, public runtime, visible public page, policy link, notification release configuration, and the authorized delivery-date data source must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability. Order-date approximation is never permitted for the approved 75-days-from-delivery policy."
 }
