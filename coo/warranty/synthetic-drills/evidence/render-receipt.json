@@ -1,0 +1,14 @@
+{
+  "output": "SYNTHETIC-EVIDENCE-PACKET-2026-08-08.md",
+  "output_sha256": "43f4f220a5c1085795459cd4902407d9f051f0447d9bf9308719b8416949dde1",
+  "source_report_sha256": "448bab7cf1ed85d39cefac3d355b25750a667169fbaf4e55b28bea17671d3019",
+  "n8n_execution_ids": [
+    "48337",
+    "48336",
+    "48333",
+    "48334",
+    "48335",
+    "48332"
+  ],
+  "launch_decision": "HOLD_NO_GO_UNCHANGED"
+}

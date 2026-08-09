@@ -1,0 +1,29 @@
+{
+  "report_path": "evidence/synthetic-drill-report.json",
+  "report_sha256": "448bab7cf1ed85d39cefac3d355b25750a667169fbaf4e55b28bea17671d3019",
+  "fixture_sha256": "4adef814fa2c21811e237c64985a2c1f75d5f88581cca282f1d2ac32c8b95ba6",
+  "runner_sha256": "14fd881bd95aa726edc915e550a3a4fae9f34b035e3f77a9098451c155cfb2e6",
+  "overall": "PASS_SYNTHETIC_EVIDENCE_ONLY",
+  "launch_decision": "HOLD_NO_GO_UNCHANGED",
+  "test_summary": {
+    "tests": 14,
+    "passed": 14,
+    "failed": 0,
+    "assertions": 58
+  },
+  "no_effect_counters": {
+    "real_customer_records_used": 0,
+    "network_calls": 0,
+    "customer_contacts": 0,
+    "provider_calls": 0,
+    "labels_created": 0,
+    "shipments_created": 0,
+    "refunds_or_credits": 0,
+    "inventory_mutations": 0,
+    "repair_orders": 0,
+    "canonical_state_mutations": 0,
+    "authorizations_consumed": 0,
+    "real_kill_switches_changed": 0,
+    "operational_gates_closed_by_agent": 0
+  }
+}

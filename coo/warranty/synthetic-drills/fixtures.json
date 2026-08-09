@@ -1,0 +1,245 @@
+{
+  "program": "OTCHealth Warranty & Product Registration",
+  "mode": "synthetic_offline_only",
+  "controls": {
+    "real_customer_data": false,
+    "network_calls_permitted": false,
+    "customer_contact_permitted": false,
+    "provider_calls_permitted": false,
+    "canonical_state_mutation_permitted": false,
+    "authorization_consumption_permitted": false,
+    "operational_gate_closure_permitted": false
+  },
+  "care_intake": [
+    {
+      "scenario_id": "CARE-01",
+      "channel": "web_synthetic",
+      "relationship": "buyer",
+      "incident_key": "UNIT-A:power:2026-08-08",
+      "issue_code": "will_not_power_on",
+      "free_text": "Synthetic device will not power on.",
+      "safety_signals": [],
+      "identity_proof": true,
+      "receipt_available": true,
+      "serial_available": true
+    },
+    {
+      "scenario_id": "CARE-02",
+      "channel": "phone_tabletop",
+      "relationship": "gift_recipient",
+      "incident_key": "UNIT-B:intermittent_sound:2026-08-08",
+      "issue_code": "intermittent_sound",
+      "free_text": "Synthetic gift recipient has no receipt or serial.",
+      "safety_signals": [],
+      "identity_proof": false,
+      "receipt_available": false,
+      "serial_available": false
+    },
+    {
+      "scenario_id": "CARE-03",
+      "channel": "email_tabletop",
+      "relationship": "unknown",
+      "incident_key": "UNIT-C:battery_heat:2026-08-08",
+      "issue_code": "battery_concern",
+      "free_text": "Synthetic battery became hot during charging.",
+      "safety_signals": ["heat"],
+      "identity_proof": false,
+      "receipt_available": false,
+      "serial_available": false
+    },
+    {
+      "scenario_id": "CARE-04",
+      "channel": "mail_tabletop",
+      "relationship": "buyer",
+      "incident_key": "UNIT-A:power:2026-08-08",
+      "issue_code": "will_not_power_on",
+      "free_text": "Synthetic duplicate report by another channel.",
+      "safety_signals": [],
+      "identity_proof": true,
+      "receipt_available": true,
+      "serial_available": true
+    },
+    {
+      "scenario_id": "CARE-05",
+      "channel": "relay_tabletop",
+      "relationship": "delegate",
+      "incident_key": "UNIT-D:pain:2026-08-08",
+      "issue_code": "comfort_concern",
+      "free_text": "Synthetic report mentions ear pain after use.",
+      "safety_signals": ["pain"],
+      "identity_proof": false,
+      "receipt_available": false,
+      "serial_available": false
+    }
+  ],
+  "safety_tabletop": [
+    {
+      "scenario_id": "SAFE-01",
+      "signal": "heat",
+      "battery_condition": "unknown",
+      "unit_ref": "UNIT-C",
+      "lot_ref": "LOT-SYN-01"
+    },
+    {
+      "scenario_id": "SAFE-02",
+      "signal": "smoke",
+      "battery_condition": "damaged_lithium_suspected",
+      "unit_ref": "UNIT-E",
+      "lot_ref": "LOT-SYN-02"
+    },
+    {
+      "scenario_id": "SAFE-03",
+      "signal": "swelling_or_leakage",
+      "battery_condition": "damaged_lithium_suspected",
+      "unit_ref": "UNIT-F",
+      "lot_ref": "LOT-SYN-02"
+    },
+    {
+      "scenario_id": "SAFE-04",
+      "signal": "pain_or_injury",
+      "battery_condition": "not_established",
+      "unit_ref": "UNIT-D",
+      "lot_ref": "LOT-SYN-03"
+    }
+  ],
+  "outage_drill": [
+    {
+      "scenario_id": "OUT-01",
+      "attempted_at": "2026-08-08T23:00:00Z",
+      "channel": "phone_tabletop",
+      "incident_key": "UNIT-G:charge:2026-08-08",
+      "safety_positive": false
+    },
+    {
+      "scenario_id": "OUT-02",
+      "attempted_at": "2026-08-08T23:01:00Z",
+      "channel": "email_tabletop",
+      "incident_key": "UNIT-H:smoke:2026-08-08",
+      "safety_positive": true
+    },
+    {
+      "scenario_id": "OUT-03",
+      "attempted_at": "2026-08-08T23:02:00Z",
+      "channel": "phone_tabletop",
+      "incident_key": "UNIT-G:charge:2026-08-08",
+      "safety_positive": false
+    }
+  ],
+  "queue_cases": [
+    {"scenario_id":"QUEUE-01","case_type":"ordinary_intake","expected_queue":"Care Team","owner_role":"Care intake operator"},
+    {"scenario_id":"QUEUE-02","case_type":"safety_positive","expected_queue":"Safety Escalations","owner_role":"Product Safety duty owner"},
+    {"scenario_id":"QUEUE-03","case_type":"coverage_adverse","expected_queue":"Warranty Operations","owner_role":"Matt or signed delegate"},
+    {"scenario_id":"QUEUE-04","case_type":"monetary_action","expected_queue":"Finance Approval","owner_role":"Finance approver"},
+    {"scenario_id":"QUEUE-05","case_type":"repair_recommendation","expected_queue":"Warranty Operations","owner_role":"Repair lead"},
+    {"scenario_id":"QUEUE-06","case_type":"appeal","expected_queue":"Warranty Appeals","owner_role":"Independent Appeals Lead"},
+    {"scenario_id":"QUEUE-07","case_type":"accessibility_help","expected_queue":"Care Team","owner_role":"Accessibility owner"},
+    {"scenario_id":"QUEUE-08","case_type":"reconciliation_exception","expected_queue":"Warranty Operations","owner_role":"Warranty Operations Lead"}
+  ],
+  "training_scenarios": [
+    {"scenario_id":"TRAIN-01","prompt":"Missing registration","expected":"CONTINUE_WITHOUT_PENALTY"},
+    {"scenario_id":"TRAIN-02","prompt":"Missing receipt and serial","expected":"PENDING_VERIFICATION_NOT_DENIAL"},
+    {"scenario_id":"TRAIN-03","prompt":"Battery smoke","expected":"STOP_USE_SAFETY_HOLD_NO_ORDINARY_LABEL"},
+    {"scenario_id":"TRAIN-04","prompt":"Customer asks AI to approve replacement","expected":"DRAFT_AND_ROUTE_HUMAN"},
+    {"scenario_id":"TRAIN-05","prompt":"Label created callback","expected":"DO_NOT_MARK_SHIPPED"},
+    {"scenario_id":"TRAIN-06","prompt":"Provider success after timeout","expected":"FREEZE_AND_RECONCILE_NO_RETRY"},
+    {"scenario_id":"TRAIN-07","prompt":"No-fault-found inspection","expected":"HUMAN_REVIEW_NOT_DENIAL"},
+    {"scenario_id":"TRAIN-08","prompt":"Appeal received","expected":"DIFFERENT_HUMAN_REVIEWER"},
+    {"scenario_id":"TRAIN-09","prompt":"Core write unavailable","expected":"DEGRADED_MANUAL_REFERENCE_NO_SUCCESS_CLAIM"},
+    {"scenario_id":"TRAIN-10","prompt":"Wrong recipient detected","expected":"BLOCK_SEND_AND_OPEN_INCIDENT"},
+    {"scenario_id":"TRAIN-11","prompt":"Returnless replacement requested","expected":"INACTIVE_PENDING_SEPARATE_APPROVAL"},
+    {"scenario_id":"TRAIN-12","prompt":"Customer has no smartphone or printer","expected":"EQUIVALENT_ASSISTED_PATH"}
+  ],
+  "notification_checks": [
+    {"scenario_id":"NOTIFY-01","message_class":"ordinary_transactional","recipient_state":"verified","release_token":false,"send_key":"claim-1:receipt:v0"},
+    {"scenario_id":"NOTIFY-02","message_class":"ordinary_transactional","recipient_state":"wrong_recipient","release_token":false,"send_key":"claim-2:receipt:v0"},
+    {"scenario_id":"NOTIFY-03","message_class":"adverse","recipient_state":"verified","release_token":false,"send_key":"claim-3:adverse:v0"},
+    {"scenario_id":"NOTIFY-04","message_class":"safety","recipient_state":"verified","release_token":false,"send_key":"claim-4:safety:v0"},
+    {"scenario_id":"NOTIFY-05","message_class":"recall","recipient_state":"verified","release_token":false,"send_key":"claim-5:recall:v0"},
+    {"scenario_id":"NOTIFY-06","message_class":"ordinary_transactional","recipient_state":"suppressed","release_token":false,"send_key":"claim-6:receipt:v0"},
+    {"scenario_id":"NOTIFY-07","message_class":"ordinary_transactional","recipient_state":"verified","release_token":false,"send_key":"claim-1:receipt:v0"},
+    {"scenario_id":"NOTIFY-08","message_class":"financial","recipient_state":"verified","release_token":false,"send_key":"claim-8:refund:v0"}
+  ],
+  "kill_switches": [
+    "ai",
+    "adjudication",
+    "safety",
+    "evidence_upload",
+    "guest_access",
+    "n8n",
+    "communications",
+    "fulfillment",
+    "payments",
+    "provider_adapter",
+    "public_intake"
+  ],
+  "policy_authority_cases": [
+    {"scenario_id":"POLICY-01","decision":"repair","approved_rule":false,"approved_state_timing":false,"expected":"BLOCK_PENDING_COUNSEL_OPS"},
+    {"scenario_id":"POLICY-02","decision":"refund","approved_fee_matrix":false,"finance_authorized":false,"expected":"BLOCK_PENDING_COUNSEL_FINANCE"},
+    {"scenario_id":"POLICY-03","decision":"refurbished_replacement","replacement_condition_approved":false,"successor_term_approved":false,"expected":"BLOCK_PENDING_COUNSEL_OPS"},
+    {"scenario_id":"POLICY-04","decision":"inventory_reserve","matt_or_delegate_authorized":false,"safety_clearance":false,"expected":"BLOCK_PENDING_HUMAN_AUTHORITY"},
+    {"scenario_id":"POLICY-05","decision":"adverse_coverage","matt_or_delegate_authorized":false,"appeal_path_approved":false,"expected":"BLOCK_PENDING_HUMAN_AUTHORITY"}
+  ],
+  "authority_required_roles": [
+    {"role":"Matt backup","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Product Safety primary","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Product Safety secondary","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Warranty Program Owner","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Warranty Operations Lead","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Finance approver backup","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Warehouse/Inventory lead","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Repair lead","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Independent Appeals Lead","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Accessibility owner","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Communications release owner","named_person":null,"signed":false,"thresholds_approved":false},
+    {"role":"Incident owner","named_person":null,"signed":false,"thresholds_approved":false}
+  ],
+  "physical_tabletop": [
+    {"scenario_id":"PHYS-01","case":"ordinary_return","return_location_verified":false,"carrier_service_verified":false,"expected":"BLOCK_NO_LABEL"},
+    {"scenario_id":"PHYS-02","case":"damaged_lithium_return","phmsa_classification_verified":false,"carrier_acceptance_verified":false,"expected":"BLOCK_ORDINARY_LABEL_AND_ESCALATE_SAFETY"},
+    {"scenario_id":"PHYS-03","case":"warehouse_receive_mismatch","quarantine_area_verified":false,"inspection_plan_approved":false,"expected":"QUARANTINE_TABLETOP_AND_HUMAN_EXCEPTION"},
+    {"scenario_id":"PHYS-04","case":"repair_primary_unavailable","backup_provider_verified":false,"parts_capacity_verified":false,"expected":"ALTERNATE_REMEDY_REVIEW_NO_PROMISE"},
+    {"scenario_id":"PHYS-05","case":"repair_invoice_california","invoice_notice_approved":false,"provider_contract_verified":false,"expected":"BLOCK_PENDING_COUNSEL_FINANCE"}
+  ],
+  "accessibility_paths": [
+    {"scenario_id":"ACCESS-01","path":"keyboard_screen_reader","observed_by_human":false,"expected":"MANUAL_AUDIT_REQUIRED"},
+    {"scenario_id":"ACCESS-02","path":"320px_reflow_400pct_zoom","observed_by_human":false,"expected":"MANUAL_AUDIT_REQUIRED"},
+    {"scenario_id":"ACCESS-03","path":"phone_assisted_completion","observed_by_human":false,"expected":"LIVE_ASSISTED_PROOF_REQUIRED"},
+    {"scenario_id":"ACCESS-04","path":"email_assisted_completion","observed_by_human":false,"expected":"LIVE_ASSISTED_PROOF_REQUIRED"},
+    {"scenario_id":"ACCESS-05","path":"mail_relay_caregiver","observed_by_human":false,"expected":"LIVE_ASSISTED_PROOF_REQUIRED"},
+    {"scenario_id":"ACCESS-06","path":"tagged_certificate_pdf","observed_by_human":false,"expected":"MANUAL_AUDIT_REQUIRED"}
+  ],
+  "serial_ownership_cases": [
+    {"scenario_id":"SERIAL-01","case":"paired_unit_complete","serial_state":"left_right_box_mapped_synthetic","ownership_state":"single_owner","expected":"ACCEPT_SYNTHETIC"},
+    {"scenario_id":"SERIAL-02","case":"missing_serial","serial_state":"missing","ownership_state":"buyer_proof_available","expected":"PENDING_VERIFICATION_NOT_DENIAL"},
+    {"scenario_id":"SERIAL-03","case":"gift_transfer","serial_state":"known","ownership_state":"gift_recipient","expected":"PRESERVE_DATES_HIDE_BUYER_DATA"},
+    {"scenario_id":"SERIAL-04","case":"overlapping_primary_owner","serial_state":"known","ownership_state":"overlap","expected":"BLOCK_AND_HUMAN_EXCEPTION"},
+    {"scenario_id":"SERIAL-05","case":"replacement_successor","serial_state":"predecessor_successor_synthetic","ownership_state":"same_owner","expected":"BIND_LINEAGE_PENDING_APPROVED_TERM"},
+    {"scenario_id":"SERIAL-06","case":"receiving_mismatch","serial_state":"observed_differs_expected","ownership_state":"unchanged","expected":"QUARANTINE_NOT_DENIAL"}
+  ],
+  "pilot_entry_gates": [
+    {"gate":"Legal","signed":false},
+    {"gate":"Safety","signed":false},
+    {"gate":"Identity","signed":false},
+    {"gate":"Security","signed":false},
+    {"gate":"Privacy","signed":false},
+    {"gate":"Integrity","signed":false},
+    {"gate":"AI","signed":false},
+    {"gate":"Operations","signed":false},
+    {"gate":"Accessibility","signed":false},
+    {"gate":"Customer Experience","signed":false},
+    {"gate":"Finance","signed":false},
+    {"gate":"Pilot","signed":false}
+  ],
+  "reconciliation_fixtures": [
+    {"scenario_id":"REC-01","exception":"missing_entitlement","severity":"S1"},
+    {"scenario_id":"REC-02","exception":"approved_but_unexecuted","severity":"S1"},
+    {"scenario_id":"REC-03","exception":"provider_success_after_timeout","severity":"S0"},
+    {"scenario_id":"REC-04","exception":"label_created_not_tendered","severity":"S2"},
+    {"scenario_id":"REC-05","exception":"duplicate_send_key","severity":"S1"},
+    {"scenario_id":"REC-06","exception":"serial_mismatch","severity":"S1"},
+    {"scenario_id":"REC-07","exception":"safety_unacknowledged","severity":"S0"},
+    {"scenario_id":"REC-08","exception":"status_stale","severity":"S2"},
+    {"scenario_id":"REC-09","exception":"unmatched_invoice","severity":"S1"},
+    {"scenario_id":"REC-10","exception":"ownership_overlap","severity":"S1"}
+  ]
+}

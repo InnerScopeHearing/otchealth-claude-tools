@@ -1,0 +1,97 @@
+{
+  "verified_at": "2026-08-09T00:25:46Z",
+  "mode": "manual_synthetic_only",
+  "workflow_preconditions": {
+    "all_active": false,
+    "all_active_version_null": true,
+    "all_trigger_count_zero": true,
+    "all_credentials_empty": true,
+    "all_nodes_manual_trigger_set_or_sticky_only": true
+  },
+  "executions": [
+    {
+      "code": "WTY-00",
+      "workflow_id": "f9hT19JCNh2tQi7v",
+      "execution_id": "48337",
+      "status": "success",
+      "outcome": "ROUTED_TO_DRAFT_ONLY",
+      "external_call_count": 0,
+      "authorization_consumed": false,
+      "live_execution_permitted": false,
+      "customer_contact_permitted": false
+    },
+    {
+      "code": "WTY-01",
+      "workflow_id": "AyA4BGMspfpoSeTf",
+      "execution_id": "48336",
+      "status": "success",
+      "outcome": "INTERCOM_ACTION_DRAFT_ONLY",
+      "target_team": "Care Team",
+      "external_call_count": 0,
+      "authorization_consumed": false,
+      "live_execution_permitted": false,
+      "customer_contact_permitted": false
+    },
+    {
+      "code": "WTY-02",
+      "workflow_id": "cdlb1eaRgTVJooU1",
+      "execution_id": "48333",
+      "status": "success",
+      "outcome": "MESSAGE_DRAFT_ONLY",
+      "recipient_verified": false,
+      "release_authorization_required": true,
+      "external_call_count": 0,
+      "authorization_consumed": false,
+      "live_execution_permitted": false,
+      "customer_contact_permitted": false
+    },
+    {
+      "code": "WTY-03",
+      "workflow_id": "yGML7VPfrLTSP2ra",
+      "execution_id": "48334",
+      "status": "success",
+      "outcome": "OPERATIONS_ACTION_DRAFT_ONLY",
+      "provider_call_permitted": false,
+      "operations_status": "AWAITING_HUMAN",
+      "external_call_count": 0,
+      "authorization_consumed": false,
+      "live_execution_permitted": false,
+      "customer_contact_permitted": false
+    },
+    {
+      "code": "WTY-04",
+      "workflow_id": "9BMtCKBfxi9aiXcR",
+      "execution_id": "48335",
+      "status": "success",
+      "outcome": "PROVIDER_OBSERVATION_DRAFT_ONLY",
+      "domain_transition_applied": false,
+      "external_call_count": 0,
+      "authorization_consumed": false,
+      "live_execution_permitted": false,
+      "customer_contact_permitted": false
+    },
+    {
+      "code": "WTY-05",
+      "workflow_id": "VyyFdtwj2aLNns8N",
+      "execution_id": "48332",
+      "status": "success",
+      "outcome": "RECONCILIATION_EXCEPTION_DRAFT_ONLY",
+      "auto_repair_permitted": false,
+      "operations_status": "OPEN_FOR_HUMAN_REVIEW",
+      "external_call_count": 0,
+      "authorization_consumed": false,
+      "live_execution_permitted": false,
+      "customer_contact_permitted": false
+    }
+  ],
+  "summary": {
+    "executions": 6,
+    "success": 6,
+    "failed": 0,
+    "external_calls": 0,
+    "authorizations_consumed": 0,
+    "customer_contacts": 0,
+    "live_effects": 0
+  },
+  "launch_decision": "HOLD_NO_GO_UNCHANGED"
+}

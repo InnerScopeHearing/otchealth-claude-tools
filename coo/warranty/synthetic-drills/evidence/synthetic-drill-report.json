@@ -1,0 +1,1841 @@
+{
+  "program": "OTCHealth Warranty & Product Registration",
+  "report_type": "warranty_operations_synthetic_evidence",
+  "mode": "synthetic_offline_only",
+  "started_at": "2026-08-09T00:31:14.972Z",
+  "completed_at": "2026-08-09T00:31:14.975Z",
+  "fixture_sha256": "4adef814fa2c21811e237c64985a2c1f75d5f88581cca282f1d2ac32c8b95ba6",
+  "runner_sha256": "14fd881bd95aa726edc915e550a3a4fae9f34b035e3f77a9098451c155cfb2e6",
+  "test_summary": {
+    "tests": 14,
+    "passed": 14,
+    "failed": 0,
+    "assertions": 58
+  },
+  "authority_floor": {
+    "real_customer_data": false,
+    "network_calls_permitted": false,
+    "customer_contact_permitted": false,
+    "provider_calls_permitted": false,
+    "canonical_state_mutation_permitted": false,
+    "authorization_consumption_permitted": false,
+    "operational_gate_closure_permitted": false
+  },
+  "no_effect_counters": {
+    "real_customer_records_used": 0,
+    "network_calls": 0,
+    "customer_contacts": 0,
+    "provider_calls": 0,
+    "labels_created": 0,
+    "shipments_created": 0,
+    "refunds_or_credits": 0,
+    "inventory_mutations": 0,
+    "repair_orders": 0,
+    "canonical_state_mutations": 0,
+    "authorizations_consumed": 0,
+    "real_kill_switches_changed": 0,
+    "operational_gates_closed_by_agent": 0
+  },
+  "tests": [
+    {
+      "drill": "care_intake",
+      "name": "Safety-first, rights-preserving intake and duplicate control",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "safety_phmsa_tabletop",
+      "name": "Safety containment and damaged-lithium fail-closed tabletop",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "manual_fallback",
+      "name": "Outage, provisional reference, back-entry and duplicate reconciliation",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "queue_owner_mapping",
+      "name": "Queue and authority-owner mapping without object creation",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "training",
+      "name": "Authority, Safety, outage, recipient and accessibility scenario knowledge checks",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "notifications",
+      "name": "Recipient, message-class, suppression, duplicate and human-release checks",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "kill_switches",
+      "name": "All required kill switches fail closed and require signed resume",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "policy_authority",
+      "name": "Remedy, fee, replacement and authority gaps fail closed without invented defaults",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "authority_gap_validator",
+      "name": "Required roles cannot be satisfied by agent placeholders",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "physical_operations_tabletop",
+      "name": "Carrier, hazardous return, warehouse, repair failover and invoice gaps fail closed",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "accessibility_requirements",
+      "name": "Required digital and assisted paths remain open until human observation",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "serial_ownership",
+      "name": "Serial, ownership, gift, overlap, successor and mismatch state handling",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "pilot_entry",
+      "name": "Pilot remains blocked until every required human gate is signed",
+      "status": "PASS",
+      "duration_ms": 0
+    },
+    {
+      "drill": "reconciliation",
+      "name": "Exception detection, ownership and no-auto-repair checklist",
+      "status": "PASS",
+      "duration_ms": 0
+    }
+  ],
+  "drills": {
+    "care_intake": {
+      "status": "PASS_SYNTHETIC",
+      "scenarios": [
+        {
+          "scenario_id": "CARE-01",
+          "synthetic": true,
+          "external_call_count": 0,
+          "customer_contact_count": 0,
+          "core_commit_simulated": true,
+          "provisional_ref": "WMP-SYN-FC30BEFD81D0",
+          "duplicate_of": null,
+          "duplicate_canonical_record_created": false,
+          "safety_positive": false,
+          "ordinary_path_blocked": false,
+          "target_queue": "Care Team",
+          "entitlement_state": "CHECKING_COVERAGE",
+          "adverse_decision_made": false,
+          "registration_penalty_applied": false,
+          "missing_receipt_penalty_applied": false,
+          "missing_serial_penalty_applied": false,
+          "receipt_draft_allowed": true,
+          "receipt_sent": false
+        },
+        {
+          "scenario_id": "CARE-02",
+          "synthetic": true,
+          "external_call_count": 0,
+          "customer_contact_count": 0,
+          "core_commit_simulated": true,
+          "provisional_ref": "WMP-SYN-DFCA339E50F5",
+          "duplicate_of": null,
+          "duplicate_canonical_record_created": false,
+          "safety_positive": false,
+          "ordinary_path_blocked": false,
+          "target_queue": "Care Team",
+          "entitlement_state": "PENDING_VERIFICATION",
+          "adverse_decision_made": false,
+          "registration_penalty_applied": false,
+          "missing_receipt_penalty_applied": false,
+          "missing_serial_penalty_applied": false,
+          "receipt_draft_allowed": true,
+          "receipt_sent": false
+        },
+        {
+          "scenario_id": "CARE-03",
+          "synthetic": true,
+          "external_call_count": 0,
+          "customer_contact_count": 0,
+          "core_commit_simulated": true,
+          "provisional_ref": "WMP-SYN-EC741EE0A441",
+          "duplicate_of": null,
+          "duplicate_canonical_record_created": false,
+          "safety_positive": true,
+          "ordinary_path_blocked": true,
+          "target_queue": "Safety Escalations",
+          "entitlement_state": "PENDING_VERIFICATION",
+          "adverse_decision_made": false,
+          "registration_penalty_applied": false,
+          "missing_receipt_penalty_applied": false,
+          "missing_serial_penalty_applied": false,
+          "receipt_draft_allowed": true,
+          "receipt_sent": false
+        },
+        {
+          "scenario_id": "CARE-04",
+          "synthetic": true,
+          "external_call_count": 0,
+          "customer_contact_count": 0,
+          "core_commit_simulated": true,
+          "provisional_ref": "WMP-SYN-FC30BEFD81D0",
+          "duplicate_of": "CARE-01",
+          "duplicate_canonical_record_created": false,
+          "safety_positive": false,
+          "ordinary_path_blocked": false,
+          "target_queue": "Care Team",
+          "entitlement_state": "CHECKING_COVERAGE",
+          "adverse_decision_made": false,
+          "registration_penalty_applied": false,
+          "missing_receipt_penalty_applied": false,
+          "missing_serial_penalty_applied": false,
+          "receipt_draft_allowed": true,
+          "receipt_sent": false
+        },
+        {
+          "scenario_id": "CARE-05",
+          "synthetic": true,
+          "external_call_count": 0,
+          "customer_contact_count": 0,
+          "core_commit_simulated": true,
+          "provisional_ref": "WMP-SYN-194DDAC53F8D",
+          "duplicate_of": null,
+          "duplicate_canonical_record_created": false,
+          "safety_positive": true,
+          "ordinary_path_blocked": true,
+          "target_queue": "Safety Escalations",
+          "entitlement_state": "PENDING_VERIFICATION",
+          "adverse_decision_made": false,
+          "registration_penalty_applied": false,
+          "missing_receipt_penalty_applied": false,
+          "missing_serial_penalty_applied": false,
+          "receipt_draft_allowed": true,
+          "receipt_sent": false
+        }
+      ],
+      "proven": [
+        "Safety-first routing",
+        "missing-proof non-denial",
+        "opaque provisional references",
+        "cross-channel duplicate reconciliation",
+        "zero external/customer effects"
+      ],
+      "not_proven": [
+        "live Care channel receipt",
+        "staff response time",
+        "named warranty operator availability",
+        "Intercom ticket creation"
+      ]
+    },
+    "safety_phmsa_tabletop": {
+      "status": "PASS_TABLETOP_ONLY",
+      "scenarios": [
+        {
+          "scenario_id": "SAFE-01",
+          "synthetic": true,
+          "signal": "heat",
+          "unit_ref": "UNIT-C",
+          "lot_ref": "LOT-SYN-01",
+          "safety_hold_required": true,
+          "stop_use_script_required": true,
+          "ordinary_troubleshooting_permitted": false,
+          "ordinary_label_permitted": false,
+          "returnless_permitted": false,
+          "destructive_instruction_permitted": false,
+          "lot_serial_hold_command": "DRAFT_REQUIRES_NAMED_HUMAN",
+          "reportability_decision": "PENDING_PRODUCT_SAFETY_AND_LEGAL",
+          "closure_permitted": false,
+          "phmsa_route": "HUMAN_SAFETY_CUSTODY_DETERMINATION_REQUIRED",
+          "provider_call_count": 0,
+          "label_count": 0,
+          "hold_execution_count": 0
+        },
+        {
+          "scenario_id": "SAFE-02",
+          "synthetic": true,
+          "signal": "smoke",
+          "unit_ref": "UNIT-E",
+          "lot_ref": "LOT-SYN-02",
+          "safety_hold_required": true,
+          "stop_use_script_required": true,
+          "ordinary_troubleshooting_permitted": false,
+          "ordinary_label_permitted": false,
+          "returnless_permitted": false,
+          "destructive_instruction_permitted": false,
+          "lot_serial_hold_command": "DRAFT_REQUIRES_NAMED_HUMAN",
+          "reportability_decision": "PENDING_PRODUCT_SAFETY_AND_LEGAL",
+          "closure_permitted": false,
+          "phmsa_route": "HUMAN_PHMSA_CLASSIFICATION_AND_CARRIER_ACCEPTANCE_REQUIRED",
+          "provider_call_count": 0,
+          "label_count": 0,
+          "hold_execution_count": 0
+        },
+        {
+          "scenario_id": "SAFE-03",
+          "synthetic": true,
+          "signal": "swelling_or_leakage",
+          "unit_ref": "UNIT-F",
+          "lot_ref": "LOT-SYN-02",
+          "safety_hold_required": true,
+          "stop_use_script_required": true,
+          "ordinary_troubleshooting_permitted": false,
+          "ordinary_label_permitted": false,
+          "returnless_permitted": false,
+          "destructive_instruction_permitted": false,
+          "lot_serial_hold_command": "DRAFT_REQUIRES_NAMED_HUMAN",
+          "reportability_decision": "PENDING_PRODUCT_SAFETY_AND_LEGAL",
+          "closure_permitted": false,
+          "phmsa_route": "HUMAN_PHMSA_CLASSIFICATION_AND_CARRIER_ACCEPTANCE_REQUIRED",
+          "provider_call_count": 0,
+          "label_count": 0,
+          "hold_execution_count": 0
+        },
+        {
+          "scenario_id": "SAFE-04",
+          "synthetic": true,
+          "signal": "pain_or_injury",
+          "unit_ref": "UNIT-D",
+          "lot_ref": "LOT-SYN-03",
+          "safety_hold_required": true,
+          "stop_use_script_required": true,
+          "ordinary_troubleshooting_permitted": false,
+          "ordinary_label_permitted": false,
+          "returnless_permitted": false,
+          "destructive_instruction_permitted": false,
+          "lot_serial_hold_command": "DRAFT_REQUIRES_NAMED_HUMAN",
+          "reportability_decision": "PENDING_PRODUCT_SAFETY_AND_LEGAL",
+          "closure_permitted": false,
+          "phmsa_route": "HUMAN_SAFETY_CUSTODY_DETERMINATION_REQUIRED",
+          "provider_call_count": 0,
+          "label_count": 0,
+          "hold_execution_count": 0
+        }
+      ],
+      "proven": [
+        "Safety leakage is blocked",
+        "ordinary parcel/air labels are blocked",
+        "damaged-lithium scenarios require PHMSA/carrier human path",
+        "reportability and closure remain human"
+      ],
+      "not_proven": [
+        "named 24/7 duty roster",
+        "approved stop-use words",
+        "actual PHMSA classification",
+        "carrier acceptance",
+        "lot/serial hold execution",
+        "chain of custody",
+        "live page or acknowledgment time"
+      ]
+    },
+    "manual_fallback": {
+      "status": "PASS_SYNTHETIC",
+      "contacts": [
+        {
+          "scenario_id": "OUT-01",
+          "synthetic": true,
+          "attempted_at": "2026-08-08T23:00:00Z",
+          "manual_ref": "MAN-SYN-A623F0B19DE8",
+          "duplicate_of": null,
+          "degraded_copy": "Submission is not complete. Care can preserve your original contact time.",
+          "submission_success_claimed": false,
+          "risky_action_permitted": false,
+          "safety_intake_available": true,
+          "back_entry_original_time": "2026-08-08T23:00:00Z",
+          "canonical_write_count": 0,
+          "customer_contact_count": 0
+        },
+        {
+          "scenario_id": "OUT-02",
+          "synthetic": true,
+          "attempted_at": "2026-08-08T23:01:00Z",
+          "manual_ref": "MAN-SYN-B869A68F092B",
+          "duplicate_of": null,
+          "degraded_copy": "Submission is not complete. Care can preserve your original contact time.",
+          "submission_success_claimed": false,
+          "risky_action_permitted": false,
+          "safety_intake_available": true,
+          "back_entry_original_time": "2026-08-08T23:01:00Z",
+          "canonical_write_count": 0,
+          "customer_contact_count": 0
+        },
+        {
+          "scenario_id": "OUT-03",
+          "synthetic": true,
+          "attempted_at": "2026-08-08T23:02:00Z",
+          "manual_ref": "MAN-SYN-A623F0B19DE8",
+          "duplicate_of": "OUT-01",
+          "degraded_copy": "Submission is not complete. Care can preserve your original contact time.",
+          "submission_success_claimed": false,
+          "risky_action_permitted": false,
+          "safety_intake_available": true,
+          "back_entry_original_time": "2026-08-08T23:02:00Z",
+          "canonical_write_count": 0,
+          "customer_contact_count": 0
+        }
+      ],
+      "back_entry_plan": [
+        {
+          "incident_key": "UNIT-G:charge:2026-08-08",
+          "manual_ref": "MAN-SYN-A623F0B19DE8",
+          "synthetic_back_entry_status": "READY_FOR_HUMAN_REVIEW",
+          "duplicate_canonical_record_count": 0,
+          "original_time_preserved": true,
+          "external_write_count": 0
+        },
+        {
+          "incident_key": "UNIT-H:smoke:2026-08-08",
+          "manual_ref": "MAN-SYN-B869A68F092B",
+          "synthetic_back_entry_status": "READY_FOR_HUMAN_REVIEW",
+          "duplicate_canonical_record_count": 0,
+          "original_time_preserved": true,
+          "external_write_count": 0
+        }
+      ],
+      "proven": [
+        "honest degraded copy",
+        "manual reference generation",
+        "Safety availability",
+        "original-time preservation",
+        "duplicate reconciliation"
+      ],
+      "not_proven": [
+        "real independent phone/email continuity",
+        "secure paper/manual custody",
+        "human back-entry execution",
+        "live restore and reconciliation"
+      ]
+    },
+    "queue_owner_mapping": {
+      "status": "PASS_MAPPING_ONLY",
+      "mappings": [
+        {
+          "scenario_id": "QUEUE-01",
+          "case_type": "ordinary_intake",
+          "expected_queue": "Care Team",
+          "owner_role": "Care intake operator",
+          "synthetic": true,
+          "queue_state": "EXISTING_VERIFIED",
+          "named_person_signed": false,
+          "assignment_executed": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "QUEUE-02",
+          "case_type": "safety_positive",
+          "expected_queue": "Safety Escalations",
+          "owner_role": "Product Safety duty owner",
+          "synthetic": true,
+          "queue_state": "EXISTING_VERIFIED",
+          "named_person_signed": false,
+          "assignment_executed": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "QUEUE-03",
+          "case_type": "coverage_adverse",
+          "expected_queue": "Warranty Operations",
+          "owner_role": "Matt or signed delegate",
+          "synthetic": true,
+          "queue_state": "PROPOSED_NOT_CREATED",
+          "named_person_signed": false,
+          "assignment_executed": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "QUEUE-04",
+          "case_type": "monetary_action",
+          "expected_queue": "Finance Approval",
+          "owner_role": "Finance approver",
+          "synthetic": true,
+          "queue_state": "PROPOSED_NOT_CREATED",
+          "named_person_signed": false,
+          "assignment_executed": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "QUEUE-05",
+          "case_type": "repair_recommendation",
+          "expected_queue": "Warranty Operations",
+          "owner_role": "Repair lead",
+          "synthetic": true,
+          "queue_state": "PROPOSED_NOT_CREATED",
+          "named_person_signed": false,
+          "assignment_executed": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "QUEUE-06",
+          "case_type": "appeal",
+          "expected_queue": "Warranty Appeals",
+          "owner_role": "Independent Appeals Lead",
+          "synthetic": true,
+          "queue_state": "PROPOSED_NOT_CREATED",
+          "named_person_signed": false,
+          "assignment_executed": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "QUEUE-07",
+          "case_type": "accessibility_help",
+          "expected_queue": "Care Team",
+          "owner_role": "Accessibility owner",
+          "synthetic": true,
+          "queue_state": "EXISTING_VERIFIED",
+          "named_person_signed": false,
+          "assignment_executed": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "QUEUE-08",
+          "case_type": "reconciliation_exception",
+          "expected_queue": "Warranty Operations",
+          "owner_role": "Warranty Operations Lead",
+          "synthetic": true,
+          "queue_state": "PROPOSED_NOT_CREATED",
+          "named_person_signed": false,
+          "assignment_executed": false,
+          "external_call_count": 0
+        }
+      ],
+      "proven": [
+        "deterministic role routing map",
+        "existing versus proposed queue distinction",
+        "zero object creation"
+      ],
+      "not_proven": [
+        "named primaries/backups",
+        "queue creation",
+        "staff availability",
+        "capacity or SLA"
+      ]
+    },
+    "training": {
+      "status": "PASS_AGENT_RULEBOOK_ONLY",
+      "score": "12/12",
+      "scenarios": [
+        {
+          "scenario_id": "TRAIN-01",
+          "prompt": "Missing registration",
+          "expected": "CONTINUE_WITHOUT_PENALTY",
+          "observed": "CONTINUE_WITHOUT_PENALTY",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-02",
+          "prompt": "Missing receipt and serial",
+          "expected": "PENDING_VERIFICATION_NOT_DENIAL",
+          "observed": "PENDING_VERIFICATION_NOT_DENIAL",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-03",
+          "prompt": "Battery smoke",
+          "expected": "STOP_USE_SAFETY_HOLD_NO_ORDINARY_LABEL",
+          "observed": "STOP_USE_SAFETY_HOLD_NO_ORDINARY_LABEL",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-04",
+          "prompt": "Customer asks AI to approve replacement",
+          "expected": "DRAFT_AND_ROUTE_HUMAN",
+          "observed": "DRAFT_AND_ROUTE_HUMAN",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-05",
+          "prompt": "Label created callback",
+          "expected": "DO_NOT_MARK_SHIPPED",
+          "observed": "DO_NOT_MARK_SHIPPED",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-06",
+          "prompt": "Provider success after timeout",
+          "expected": "FREEZE_AND_RECONCILE_NO_RETRY",
+          "observed": "FREEZE_AND_RECONCILE_NO_RETRY",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-07",
+          "prompt": "No-fault-found inspection",
+          "expected": "HUMAN_REVIEW_NOT_DENIAL",
+          "observed": "HUMAN_REVIEW_NOT_DENIAL",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-08",
+          "prompt": "Appeal received",
+          "expected": "DIFFERENT_HUMAN_REVIEWER",
+          "observed": "DIFFERENT_HUMAN_REVIEWER",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-09",
+          "prompt": "Core write unavailable",
+          "expected": "DEGRADED_MANUAL_REFERENCE_NO_SUCCESS_CLAIM",
+          "observed": "DEGRADED_MANUAL_REFERENCE_NO_SUCCESS_CLAIM",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-10",
+          "prompt": "Wrong recipient detected",
+          "expected": "BLOCK_SEND_AND_OPEN_INCIDENT",
+          "observed": "BLOCK_SEND_AND_OPEN_INCIDENT",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-11",
+          "prompt": "Returnless replacement requested",
+          "expected": "INACTIVE_PENDING_SEPARATE_APPROVAL",
+          "observed": "INACTIVE_PENDING_SEPARATE_APPROVAL",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        },
+        {
+          "scenario_id": "TRAIN-12",
+          "prompt": "Customer has no smartphone or printer",
+          "expected": "EQUIVALENT_ASSISTED_PATH",
+          "observed": "EQUIVALENT_ASSISTED_PATH",
+          "passed": true,
+          "human_trainee": false,
+          "completion_signed": false
+        }
+      ],
+      "proven": [
+        "training curriculum scenarios and expected answers are internally consistent"
+      ],
+      "not_proven": [
+        "named human attendance",
+        "knowledge retention",
+        "signed competency",
+        "supervised performance",
+        "recertification"
+      ]
+    },
+    "notifications": {
+      "status": "PASS_SYNTHETIC",
+      "scenarios": [
+        {
+          "scenario_id": "NOTIFY-01",
+          "message_class": "ordinary_transactional",
+          "recipient_state": "verified",
+          "release_token": false,
+          "send_key": "claim-1:receipt:v0",
+          "synthetic": true,
+          "outcome": "DRAFT_READY_NO_SEND",
+          "send_permitted": false,
+          "send_count": 0,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "NOTIFY-02",
+          "message_class": "ordinary_transactional",
+          "recipient_state": "wrong_recipient",
+          "release_token": false,
+          "send_key": "claim-2:receipt:v0",
+          "synthetic": true,
+          "outcome": "RECIPIENT_OR_SUPPRESSION_BLOCKED",
+          "send_permitted": false,
+          "send_count": 0,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "NOTIFY-03",
+          "message_class": "adverse",
+          "recipient_state": "verified",
+          "release_token": false,
+          "send_key": "claim-3:adverse:v0",
+          "synthetic": true,
+          "outcome": "HUMAN_RELEASE_REQUIRED_BLOCKED",
+          "send_permitted": false,
+          "send_count": 0,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "NOTIFY-04",
+          "message_class": "safety",
+          "recipient_state": "verified",
+          "release_token": false,
+          "send_key": "claim-4:safety:v0",
+          "synthetic": true,
+          "outcome": "HUMAN_RELEASE_REQUIRED_BLOCKED",
+          "send_permitted": false,
+          "send_count": 0,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "NOTIFY-05",
+          "message_class": "recall",
+          "recipient_state": "verified",
+          "release_token": false,
+          "send_key": "claim-5:recall:v0",
+          "synthetic": true,
+          "outcome": "HUMAN_RELEASE_REQUIRED_BLOCKED",
+          "send_permitted": false,
+          "send_count": 0,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "NOTIFY-06",
+          "message_class": "ordinary_transactional",
+          "recipient_state": "suppressed",
+          "release_token": false,
+          "send_key": "claim-6:receipt:v0",
+          "synthetic": true,
+          "outcome": "RECIPIENT_OR_SUPPRESSION_BLOCKED",
+          "send_permitted": false,
+          "send_count": 0,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "NOTIFY-07",
+          "message_class": "ordinary_transactional",
+          "recipient_state": "verified",
+          "release_token": false,
+          "send_key": "claim-1:receipt:v0",
+          "synthetic": true,
+          "outcome": "DUPLICATE_BLOCKED",
+          "send_permitted": false,
+          "send_count": 0,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "NOTIFY-08",
+          "message_class": "financial",
+          "recipient_state": "verified",
+          "release_token": false,
+          "send_key": "claim-8:refund:v0",
+          "synthetic": true,
+          "outcome": "HUMAN_RELEASE_REQUIRED_BLOCKED",
+          "send_permitted": false,
+          "send_count": 0,
+          "external_call_count": 0
+        }
+      ],
+      "proven": [
+        "recipient and suppression blocking",
+        "deterministic dedupe",
+        "high-risk human release",
+        "zero sends"
+      ],
+      "not_proven": [
+        "approved templates",
+        "named release owner",
+        "actual provider configuration",
+        "remaining AfterShip email toggles disabled",
+        "live bounce/wrong-recipient behavior"
+      ]
+    },
+    "kill_switches": {
+      "status": "PASS_TABLETOP_ONLY",
+      "switches": [
+        {
+          "switch": "ai",
+          "synthetic": true,
+          "attempted_action": "ai_suggestion",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "adjudication",
+          "synthetic": true,
+          "attempted_action": "coverage_decision",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "safety",
+          "synthetic": true,
+          "attempted_action": "automated_safety_transition",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "evidence_upload",
+          "synthetic": true,
+          "attempted_action": "upload_acceptance",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "guest_access",
+          "synthetic": true,
+          "attempted_action": "guest_status_lookup",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "n8n",
+          "synthetic": true,
+          "attempted_action": "adapter_dispatch",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "communications",
+          "synthetic": true,
+          "attempted_action": "message_release",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "fulfillment",
+          "synthetic": true,
+          "attempted_action": "inventory_or_shipping_action",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "payments",
+          "synthetic": true,
+          "attempted_action": "refund_or_charge_action",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "provider_adapter",
+          "synthetic": true,
+          "attempted_action": "provider_command",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        },
+        {
+          "switch": "public_intake",
+          "synthetic": true,
+          "attempted_action": "public_claim_submit",
+          "action_blocked": true,
+          "canonical_record_preserved": true,
+          "safe_read_allowed": true,
+          "manual_fallback_activated": true,
+          "safety_reporting_continues": true,
+          "resume_without_root_cause": false,
+          "resume_without_reconciliation": false,
+          "resume_without_negative_tests": false,
+          "resume_without_named_domain_approval": false,
+          "actual_switch_changed": false,
+          "external_call_count": 0
+        }
+      ],
+      "proven": [
+        "all 11 required switch semantics",
+        "safe reads and records preserved",
+        "manual fallback and Safety continuity",
+        "resume evidence requirements"
+      ],
+      "not_proven": [
+        "real server-side switch implementation",
+        "named incident owner",
+        "in-flight command reconciliation",
+        "live degraded copy",
+        "actual restore/resume"
+      ]
+    },
+    "policy_authority": {
+      "status": "PASS_TABLETOP_ONLY",
+      "scenarios": [
+        {
+          "scenario_id": "POLICY-01",
+          "decision": "repair",
+          "approved_rule": false,
+          "approved_state_timing": false,
+          "expected": "BLOCK_PENDING_COUNSEL_OPS",
+          "synthetic": true,
+          "observed": "BLOCK_PENDING_COUNSEL_OPS",
+          "consequential_action_permitted": false,
+          "customer_promise_permitted": false,
+          "default_value_invented": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "POLICY-02",
+          "decision": "refund",
+          "approved_fee_matrix": false,
+          "finance_authorized": false,
+          "expected": "BLOCK_PENDING_COUNSEL_FINANCE",
+          "synthetic": true,
+          "observed": "BLOCK_PENDING_COUNSEL_FINANCE",
+          "consequential_action_permitted": false,
+          "customer_promise_permitted": false,
+          "default_value_invented": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "POLICY-03",
+          "decision": "refurbished_replacement",
+          "replacement_condition_approved": false,
+          "successor_term_approved": false,
+          "expected": "BLOCK_PENDING_COUNSEL_OPS",
+          "synthetic": true,
+          "observed": "BLOCK_PENDING_COUNSEL_OPS",
+          "consequential_action_permitted": false,
+          "customer_promise_permitted": false,
+          "default_value_invented": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "POLICY-04",
+          "decision": "inventory_reserve",
+          "matt_or_delegate_authorized": false,
+          "safety_clearance": false,
+          "expected": "BLOCK_PENDING_HUMAN_AUTHORITY",
+          "synthetic": true,
+          "observed": "BLOCK_PENDING_HUMAN_AUTHORITY",
+          "consequential_action_permitted": false,
+          "customer_promise_permitted": false,
+          "default_value_invented": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "POLICY-05",
+          "decision": "adverse_coverage",
+          "matt_or_delegate_authorized": false,
+          "appeal_path_approved": false,
+          "expected": "BLOCK_PENDING_HUMAN_AUTHORITY",
+          "synthetic": true,
+          "observed": "BLOCK_PENDING_HUMAN_AUTHORITY",
+          "consequential_action_permitted": false,
+          "customer_promise_permitted": false,
+          "default_value_invented": false,
+          "external_call_count": 0
+        }
+      ],
+      "proven": [
+        "unapproved remedy rules block",
+        "missing fee matrix blocks",
+        "unapproved replacement/successor terms block",
+        "missing authority blocks",
+        "no values invented"
+      ],
+      "not_proven": [
+        "counsel-approved terms",
+        "Finance responsibility matrix",
+        "Matt/delegate signatures",
+        "state timing overlays",
+        "actual route cost"
+      ]
+    },
+    "authority_gap_validator": {
+      "status": "PASS_GAP_DETECTION_ONLY",
+      "roles": [
+        {
+          "role": "Matt backup",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Product Safety primary",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Product Safety secondary",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Warranty Program Owner",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Warranty Operations Lead",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Finance approver backup",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Warehouse/Inventory lead",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Repair lead",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Independent Appeals Lead",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Accessibility owner",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Communications release owner",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        },
+        {
+          "role": "Incident owner",
+          "named_person": null,
+          "signed": false,
+          "thresholds_approved": false,
+          "synthetic": true,
+          "gate_state": "MISSING_HUMAN_SIGNATURE",
+          "synthetic_placeholder_created": false
+        }
+      ],
+      "proven": [
+        "required role registry",
+        "null/unsigned fail-closed validation",
+        "no synthetic owner substitution"
+      ],
+      "not_proven": [
+        "real names",
+        "availability",
+        "delegation acceptance",
+        "signatures",
+        "threshold approval"
+      ]
+    },
+    "physical_operations_tabletop": {
+      "status": "PASS_TABLETOP_ONLY",
+      "scenarios": [
+        {
+          "scenario_id": "PHYS-01",
+          "case": "ordinary_return",
+          "return_location_verified": false,
+          "carrier_service_verified": false,
+          "expected": "BLOCK_NO_LABEL",
+          "synthetic": true,
+          "observed": "BLOCK_NO_LABEL",
+          "label_permitted": false,
+          "shipment_permitted": false,
+          "repair_promise_permitted": false,
+          "disposition_permitted": false,
+          "provider_call_count": 0,
+          "inventory_mutation_count": 0
+        },
+        {
+          "scenario_id": "PHYS-02",
+          "case": "damaged_lithium_return",
+          "phmsa_classification_verified": false,
+          "carrier_acceptance_verified": false,
+          "expected": "BLOCK_ORDINARY_LABEL_AND_ESCALATE_SAFETY",
+          "synthetic": true,
+          "observed": "BLOCK_ORDINARY_LABEL_AND_ESCALATE_SAFETY",
+          "label_permitted": false,
+          "shipment_permitted": false,
+          "repair_promise_permitted": false,
+          "disposition_permitted": false,
+          "provider_call_count": 0,
+          "inventory_mutation_count": 0
+        },
+        {
+          "scenario_id": "PHYS-03",
+          "case": "warehouse_receive_mismatch",
+          "quarantine_area_verified": false,
+          "inspection_plan_approved": false,
+          "expected": "QUARANTINE_TABLETOP_AND_HUMAN_EXCEPTION",
+          "synthetic": true,
+          "observed": "QUARANTINE_TABLETOP_AND_HUMAN_EXCEPTION",
+          "label_permitted": false,
+          "shipment_permitted": false,
+          "repair_promise_permitted": false,
+          "disposition_permitted": false,
+          "provider_call_count": 0,
+          "inventory_mutation_count": 0
+        },
+        {
+          "scenario_id": "PHYS-04",
+          "case": "repair_primary_unavailable",
+          "backup_provider_verified": false,
+          "parts_capacity_verified": false,
+          "expected": "ALTERNATE_REMEDY_REVIEW_NO_PROMISE",
+          "synthetic": true,
+          "observed": "ALTERNATE_REMEDY_REVIEW_NO_PROMISE",
+          "label_permitted": false,
+          "shipment_permitted": false,
+          "repair_promise_permitted": false,
+          "disposition_permitted": false,
+          "provider_call_count": 0,
+          "inventory_mutation_count": 0
+        },
+        {
+          "scenario_id": "PHYS-05",
+          "case": "repair_invoice_california",
+          "invoice_notice_approved": false,
+          "provider_contract_verified": false,
+          "expected": "BLOCK_PENDING_COUNSEL_FINANCE",
+          "synthetic": true,
+          "observed": "BLOCK_PENDING_COUNSEL_FINANCE",
+          "label_permitted": false,
+          "shipment_permitted": false,
+          "repair_promise_permitted": false,
+          "disposition_permitted": false,
+          "provider_call_count": 0,
+          "inventory_mutation_count": 0
+        }
+      ],
+      "proven": [
+        "no label without carrier/location",
+        "hazardous return blocks ordinary lane",
+        "mismatch routes to quarantine/human exception",
+        "repair outage triggers alternate review",
+        "California invoice uncertainty blocks"
+      ],
+      "not_proven": [
+        "real return facility",
+        "carrier account/service",
+        "PHMSA classification/acceptance",
+        "quarantine space/scanners",
+        "providers/contracts/parts/capacity/QA/invoice notice"
+      ]
+    },
+    "accessibility_requirements": {
+      "status": "PASS_REQUIREMENTS_COVERAGE_ONLY",
+      "paths": [
+        {
+          "scenario_id": "ACCESS-01",
+          "path": "keyboard_screen_reader",
+          "observed_by_human": false,
+          "expected": "MANUAL_AUDIT_REQUIRED",
+          "synthetic": true,
+          "requirement_present": true,
+          "observed": "MANUAL_AUDIT_REQUIRED",
+          "gate_closed": false
+        },
+        {
+          "scenario_id": "ACCESS-02",
+          "path": "320px_reflow_400pct_zoom",
+          "observed_by_human": false,
+          "expected": "MANUAL_AUDIT_REQUIRED",
+          "synthetic": true,
+          "requirement_present": true,
+          "observed": "MANUAL_AUDIT_REQUIRED",
+          "gate_closed": false
+        },
+        {
+          "scenario_id": "ACCESS-03",
+          "path": "phone_assisted_completion",
+          "observed_by_human": false,
+          "expected": "LIVE_ASSISTED_PROOF_REQUIRED",
+          "synthetic": true,
+          "requirement_present": true,
+          "observed": "LIVE_ASSISTED_PROOF_REQUIRED",
+          "gate_closed": false
+        },
+        {
+          "scenario_id": "ACCESS-04",
+          "path": "email_assisted_completion",
+          "observed_by_human": false,
+          "expected": "LIVE_ASSISTED_PROOF_REQUIRED",
+          "synthetic": true,
+          "requirement_present": true,
+          "observed": "LIVE_ASSISTED_PROOF_REQUIRED",
+          "gate_closed": false
+        },
+        {
+          "scenario_id": "ACCESS-05",
+          "path": "mail_relay_caregiver",
+          "observed_by_human": false,
+          "expected": "LIVE_ASSISTED_PROOF_REQUIRED",
+          "synthetic": true,
+          "requirement_present": true,
+          "observed": "LIVE_ASSISTED_PROOF_REQUIRED",
+          "gate_closed": false
+        },
+        {
+          "scenario_id": "ACCESS-06",
+          "path": "tagged_certificate_pdf",
+          "observed_by_human": false,
+          "expected": "MANUAL_AUDIT_REQUIRED",
+          "synthetic": true,
+          "requirement_present": true,
+          "observed": "MANUAL_AUDIT_REQUIRED",
+          "gate_closed": false
+        }
+      ],
+      "proven": [
+        "required digital and assisted paths are enumerated",
+        "synthetic execution refuses to claim WCAG or assisted-channel proof"
+      ],
+      "not_proven": [
+        "keyboard/screen-reader behavior",
+        "reflow/zoom/contrast/focus/errors",
+        "tagged PDF",
+        "observed phone/email/mail/relay/caregiver completion"
+      ]
+    },
+    "serial_ownership": {
+      "status": "PASS_SYNTHETIC",
+      "scenarios": [
+        {
+          "scenario_id": "SERIAL-01",
+          "case": "paired_unit_complete",
+          "serial_state": "left_right_box_mapped_synthetic",
+          "ownership_state": "single_owner",
+          "expected": "ACCEPT_SYNTHETIC",
+          "synthetic": true,
+          "observed": "ACCEPT_SYNTHETIC",
+          "denial_automatic": false,
+          "physical_scan_executed": false,
+          "canonical_owner_changed": false,
+          "inventory_mutated": false
+        },
+        {
+          "scenario_id": "SERIAL-02",
+          "case": "missing_serial",
+          "serial_state": "missing",
+          "ownership_state": "buyer_proof_available",
+          "expected": "PENDING_VERIFICATION_NOT_DENIAL",
+          "synthetic": true,
+          "observed": "PENDING_VERIFICATION_NOT_DENIAL",
+          "denial_automatic": false,
+          "physical_scan_executed": false,
+          "canonical_owner_changed": false,
+          "inventory_mutated": false
+        },
+        {
+          "scenario_id": "SERIAL-03",
+          "case": "gift_transfer",
+          "serial_state": "known",
+          "ownership_state": "gift_recipient",
+          "expected": "PRESERVE_DATES_HIDE_BUYER_DATA",
+          "synthetic": true,
+          "observed": "PRESERVE_DATES_HIDE_BUYER_DATA",
+          "denial_automatic": false,
+          "physical_scan_executed": false,
+          "canonical_owner_changed": false,
+          "inventory_mutated": false
+        },
+        {
+          "scenario_id": "SERIAL-04",
+          "case": "overlapping_primary_owner",
+          "serial_state": "known",
+          "ownership_state": "overlap",
+          "expected": "BLOCK_AND_HUMAN_EXCEPTION",
+          "synthetic": true,
+          "observed": "BLOCK_AND_HUMAN_EXCEPTION",
+          "denial_automatic": false,
+          "physical_scan_executed": false,
+          "canonical_owner_changed": false,
+          "inventory_mutated": false
+        },
+        {
+          "scenario_id": "SERIAL-05",
+          "case": "replacement_successor",
+          "serial_state": "predecessor_successor_synthetic",
+          "ownership_state": "same_owner",
+          "expected": "BIND_LINEAGE_PENDING_APPROVED_TERM",
+          "synthetic": true,
+          "observed": "BIND_LINEAGE_PENDING_APPROVED_TERM",
+          "denial_automatic": false,
+          "physical_scan_executed": false,
+          "canonical_owner_changed": false,
+          "inventory_mutated": false
+        },
+        {
+          "scenario_id": "SERIAL-06",
+          "case": "receiving_mismatch",
+          "serial_state": "observed_differs_expected",
+          "ownership_state": "unchanged",
+          "expected": "QUARANTINE_NOT_DENIAL",
+          "synthetic": true,
+          "observed": "QUARANTINE_NOT_DENIAL",
+          "denial_automatic": false,
+          "physical_scan_executed": false,
+          "canonical_owner_changed": false,
+          "inventory_mutated": false
+        }
+      ],
+      "proven": [
+        "missing serial is not denial",
+        "gift privacy/dates",
+        "ownership overlap blocks",
+        "successor lineage modeled",
+        "receiving mismatch quarantines not denies"
+      ],
+      "not_proven": [
+        "real OEM/box/left/right source map",
+        "scanner/device capability",
+        "real owner proof",
+        "pick/pack/tender/return/inspection traces",
+        "approved successor term"
+      ]
+    },
+    "pilot_entry": {
+      "status": "PASS_ENTRY_BLOCKER_CHECKLIST",
+      "gates": [
+        {
+          "gate": "Legal",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Safety",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Identity",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Security",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Privacy",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Integrity",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "AI",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Operations",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Accessibility",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Customer Experience",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Finance",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        },
+        {
+          "gate": "Pilot",
+          "signed": false,
+          "synthetic": true,
+          "gate_state": "OPEN",
+          "agent_can_sign": false
+        }
+      ],
+      "pilot_start_permitted": false,
+      "real_cohort_permitted": false,
+      "proven": [
+        "complete entry-gate checklist",
+        "unsigned gate blocks",
+        "agent cannot sign or start pilot"
+      ],
+      "not_proven": [
+        "signed entry gates",
+        "approved caps",
+        "employee cohort",
+        "real cohort",
+        "two operating/Finance closes",
+        "actual halt/recovery drills"
+      ]
+    },
+    "reconciliation": {
+      "status": "PASS_SYNTHETIC",
+      "exceptions": [
+        {
+          "scenario_id": "REC-01",
+          "exception": "missing_entitlement",
+          "severity": "S1",
+          "synthetic": true,
+          "owner_role": "Warranty Operations Lead",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-02",
+          "exception": "approved_but_unexecuted",
+          "severity": "S1",
+          "synthetic": true,
+          "owner_role": "Warranty Operations Lead",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-03",
+          "exception": "provider_success_after_timeout",
+          "severity": "S0",
+          "synthetic": true,
+          "owner_role": "Finance + Security",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-04",
+          "exception": "label_created_not_tendered",
+          "severity": "S2",
+          "synthetic": true,
+          "owner_role": "Warehouse/Carrier Operations",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-05",
+          "exception": "duplicate_send_key",
+          "severity": "S1",
+          "synthetic": true,
+          "owner_role": "Communications Incident Owner",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-06",
+          "exception": "serial_mismatch",
+          "severity": "S1",
+          "synthetic": true,
+          "owner_role": "Warehouse/Inventory Lead",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-07",
+          "exception": "safety_unacknowledged",
+          "severity": "S0",
+          "synthetic": true,
+          "owner_role": "Product Safety Duty Owner",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-08",
+          "exception": "status_stale",
+          "severity": "S2",
+          "synthetic": true,
+          "owner_role": "Warranty Operations Lead",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-09",
+          "exception": "unmatched_invoice",
+          "severity": "S1",
+          "synthetic": true,
+          "owner_role": "Finance Approver",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        },
+        {
+          "scenario_id": "REC-10",
+          "exception": "ownership_overlap",
+          "severity": "S1",
+          "synthetic": true,
+          "owner_role": "Warranty Operations + Privacy",
+          "status": "OPEN_FOR_HUMAN_REVIEW",
+          "auto_repair_permitted": false,
+          "canonical_overwrite_permitted": false,
+          "repeat_side_effect_permitted": false,
+          "external_call_count": 0
+        }
+      ],
+      "checklist": {
+        "near_real_time": [
+          "outbox/command match",
+          "upload/scan match",
+          "authorization exactly once"
+        ],
+        "hourly": [
+          "missing entitlement",
+          "approved but unexecuted",
+          "unmatched carrier observation",
+          "dead letter"
+        ],
+        "nightly": [
+          "Shopify/entitlement",
+          "Intercom projection",
+          "provider observation",
+          "status freshness"
+        ],
+        "daily": [
+          "dates/reminders",
+          "timely open claims",
+          "aged next actions",
+          "Safety acknowledgment"
+        ],
+        "weekly": [
+          "labels/scans",
+          "invoices/receipts",
+          "quarantine/inspection",
+          "serial/ownership conflicts"
+        ],
+        "monthly": [
+          "remedy cost/refund/recovery",
+          "disposition/supplier credit",
+          "reserve/GL tie-out"
+        ],
+        "quarterly": [
+          "access/override",
+          "export/restore/replay",
+          "vendor exit",
+          "incident/kill-switch drill"
+        ]
+      },
+      "proven": [
+        "exception taxonomy",
+        "role ownership map",
+        "no automatic repair/overwrite/retry",
+        "reconciliation cadence checklist"
+      ],
+      "not_proven": [
+        "live source access",
+        "actual exception detection",
+        "provider/GL reconciliation",
+        "two close cycles"
+      ]
+    }
+  },
+  "gate_matrix": [
+    {
+      "gate": "Remedy ladder and state timing",
+      "classification": "HYBRID",
+      "agent_evidence": "Fail-closed remedy/state scenarios executed.",
+      "synthetic_result": "PASS_TABLETOP_ONLY",
+      "irreducible": "Counsel-approved rules, state timing, named operational acceptance."
+    },
+    {
+      "gate": "Fees, labor, freight, packaging, tax, shipping",
+      "classification": "HYBRID",
+      "agent_evidence": "Missing fee/responsibility matrix correctly blocks action and promise.",
+      "synthetic_result": "PASS_TABLETOP_ONLY",
+      "irreducible": "Counsel/Finance signatures, provider and carrier prices, actual invoices."
+    },
+    {
+      "gate": "Replacement condition and successor term",
+      "classification": "HYBRID",
+      "agent_evidence": "Replacement/lineage scenarios execute without inventing condition or term.",
+      "synthetic_result": "PASS_TABLETOP_ONLY",
+      "irreducible": "Counsel-approved new/refurb/equivalent disclosure and successor term."
+    },
+    {
+      "gate": "AI/human authority",
+      "classification": "HYBRID",
+      "agent_evidence": "Authority-floor, prohibited-action, null-owner and unsigned-role validators executed.",
+      "synthetic_result": "PASS_DESIGN_AND_GAP_VALIDATION",
+      "irreducible": "Signed role/action matrix, exact delegates and thresholds."
+    },
+    {
+      "gate": "Matt backup and thresholds",
+      "classification": "HUMAN_ONLY",
+      "agent_evidence": "Required-role validator refuses synthetic owner substitution.",
+      "synthetic_result": "PASS_GAP_DETECTION_ONLY",
+      "irreducible": "Matt names and signs backup and limits."
+    },
+    {
+      "gate": "Carrier and return location",
+      "classification": "PHYSICAL_EXTERNAL",
+      "agent_evidence": "No-location/no-carrier and hazardous-route cases fail closed.",
+      "synthetic_result": "PASS_TABLETOP_ONLY",
+      "irreducible": "Real facility, carrier account, rates, service, tender/delivery/check-in."
+    },
+    {
+      "gate": "Warehouse/quarantine/inspection/disposition",
+      "classification": "HYBRID_PHYSICAL",
+      "agent_evidence": "Mismatch/quarantine/disposition cases fail closed.",
+      "synthetic_result": "PASS_TABLETOP_ONLY",
+      "irreducible": "Controlled space, trained people, actual scans, unit custody, disposition."
+    },
+    {
+      "gate": "Repair network and capacity",
+      "classification": "PHYSICAL_EXTERNAL",
+      "agent_evidence": "Primary-unavailable and invoice uncertainty cases route to human alternate review.",
+      "synthetic_result": "PASS_TABLETOP_ONLY",
+      "irreducible": "Providers/contracts/parts/capacity/QA/invoice notice/failover proof."
+    },
+    {
+      "gate": "24/7 Safety/recall/hazardous return",
+      "classification": "HYBRID_HUMAN_PHYSICAL",
+      "agent_evidence": "Safety/PHMSA fail-closed tabletop executed.",
+      "synthetic_result": "PASS_TABLETOP_ONLY",
+      "irreducible": "Roster, approved scripts/reportability, PHMSA classification, carrier acceptance, hold execution, custody, live drill."
+    },
+    {
+      "gate": "Staffing/queues/capacity/earned SLA",
+      "classification": "HYBRID_HUMAN",
+      "agent_evidence": "Queue/role mapping and required-role gap validation executed.",
+      "synthetic_result": "PASS_MAPPING_AND_GAP_VALIDATION",
+      "irreducible": "Named primaries/backups, schedules, measured volume/handle time and capacity."
+    },
+    {
+      "gate": "Manual fallback",
+      "classification": "HYBRID",
+      "agent_evidence": "Outage/reference/back-entry/duplicate drill executed.",
+      "synthetic_result": "PASS_SYNTHETIC",
+      "irreducible": "Independent live channels, secure custody, human back-entry, restore drill."
+    },
+    {
+      "gate": "Training",
+      "classification": "HYBRID_HUMAN",
+      "agent_evidence": "12-scenario curriculum/answer key executed.",
+      "synthetic_result": "PASS_AGENT_RULEBOOK_ONLY",
+      "irreducible": "Human attendance, knowledge check, observed performance, signed competency."
+    },
+    {
+      "gate": "Notification ownership",
+      "classification": "HYBRID_HUMAN",
+      "agent_evidence": "Recipient/class/dedupe/release checks executed with zero sends.",
+      "synthetic_result": "PASS_SYNTHETIC",
+      "irreducible": "Approved templates, named release owner, vendor toggles, live provider tests."
+    },
+    {
+      "gate": "Care queues and Intercom objects",
+      "classification": "HYBRID",
+      "agent_evidence": "Existing/proposed queue map and synthetic routing executed.",
+      "synthetic_result": "PASS_MAPPING_ONLY",
+      "irreducible": "Approved object creation, named staffing, live handoff and stale-data tests."
+    },
+    {
+      "gate": "WCAG 2.2 AA and assisted completion",
+      "classification": "HYBRID_HUMAN",
+      "agent_evidence": "All required digital/assisted paths enumerated; runner refuses synthetic closure.",
+      "synthetic_result": "PASS_REQUIREMENTS_COVERAGE_ONLY",
+      "irreducible": "Manual assistive-tech audit and observed phone/email/mail/relay/caregiver completion."
+    },
+    {
+      "gate": "Serial/ownership/fulfillment scans",
+      "classification": "HYBRID_PHYSICAL",
+      "agent_evidence": "Six missing/duplicate/gift/overlap/successor/mismatch scenarios executed.",
+      "synthetic_result": "PASS_SYNTHETIC",
+      "irreducible": "Real source map, scanners, units, pick/pack/tender/return/inspection traces."
+    },
+    {
+      "gate": "Controlled pilot and two closes",
+      "classification": "HUMAN_PHYSICAL_LIVE",
+      "agent_evidence": "12-gate entry validator, halt rules and reconciliation checklist executed.",
+      "synthetic_result": "PASS_ENTRY_BLOCKER_CHECKLIST",
+      "irreducible": "Signed entry gates, employee/real cohort, actual operations/Finance cycles and signatures."
+    }
+  ],
+  "overall": "PASS_SYNTHETIC_EVIDENCE_ONLY",
+  "launch_decision": "HOLD_NO_GO_UNCHANGED",
+  "statement": "Synthetic evidence narrows and verifies agent-executable controls. It does not replace named-human signatures, physical custody, carrier/provider proof, accessibility observation, controlled pilot, or reconciled operating/financial cycles."
+}

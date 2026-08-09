@@ -65,10 +65,12 @@ from the top of this list. Update status as items complete.
     decision/execution thresholds; Product Safety must name a 24/7 rota; Operations must name
     Program, Care, Warehouse, Repair, Appeals, Accessibility, Communications, Incident, Finance,
     and Vendor owners/backups. Canonical closure packet: `cmsl1jwqm0w7m07adew99tcjf`.
-18. **Prove the physical and human operating lanes.** Required evidence is carrier + return
-    facility, PHMSA hazardous-return path and drill, quarantine/inspection/disposition, primary
-    and backup repair capacity, training, notification controls, WCAG assisted completion,
-    serial/ownership/fulfillment scans, and approved remedy/fee/replacement rules. [named owners]
+18. **Synthetic/tabletop side DONE; now collect physical and human proof.** The 2026-08-08
+    evidence wave passed 14/14 drills with 58 assertions plus 6/6 fresh n8n executions, all with
+    zero customer/provider/fulfillment/money/inventory effects. Still required: carrier + return
+    facility, live Safety/PHMSA evidence, warehouse/repair capacity, signed human authority and
+    training, notification owners/toggles, manual WCAG/assisted proof, and real serial/scan traces.
+    Source: `coo/warranty/synthetic-drills/`. [named owners]
 19. **Run no pilot until every upstream gate is signed.** Then synthetic -> employee -> separately
     approved small cohort, with AI shadow-only, all kill switches drilled, no advance/returnless
     exchange, and two reconciled operating plus Finance/GL cycles. Until then keep AfterShip and
