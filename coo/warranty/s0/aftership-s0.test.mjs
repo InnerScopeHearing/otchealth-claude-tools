@@ -8,8 +8,17 @@ import { evaluatePages } from './aftership-s0-probe.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const baseExpected = JSON.parse(fs.readFileSync(path.join(root, 'aftership-expected.json'), 'utf8'));
 
-function expectedWithAssignedOwners() {
+function expectedWithSatisfiedDependency() {
   const expected = structuredClone(baseExpected);
+  expected.vendor_dependency.dependency_satisfied = true;
+  expected.vendor_dependency.tracking_app_installed = true;
+  expected.vendor_dependency.tracking_app_install_authorized = true;
+  expected.vendor_dependency.authorized_delivery_date_source = 'AfterShip Tracking';
+  return expected;
+}
+
+function expectedWithAssignedOwners() {
+  const expected = expectedWithSatisfiedDependency();
   for (const key of Object.keys(expected.notification_ownership)) {
     expected.notification_ownership[key] = `Assigned ${key}`;
   }
@@ -135,7 +144,7 @@ test('cross-domain runtime projection divergence is S0', () => {
 });
 
 test('unassigned notification owners hold launch even when pages and runtime align', () => {
-  const report = evaluatePages(baseExpected, fourPages(), '2026-08-09T00:00:00Z');
+  const report = evaluatePages(expectedWithSatisfiedDependency(), fourPages(), '2026-08-09T00:00:00Z');
   assert.equal(report.overall, 'HOLD_S1');
   assert.ok(report.alerts.includes('NOTIFICATION_OWNERSHIP_INCOMPLETE'));
   assert.ok(report.unassigned_notification_owners.length >= 1);
@@ -153,25 +162,42 @@ test('approved translated summary is parsed from props.resources and must match 
   assert.ok(drift.failed_s0.some((id) => id.endsWith('APPROVED_POLICY_SUMMARY_EXACT')));
 });
 
-test('authorized Tracking Free dependency is explicit and cost-contained', () => {
-  const dependency = baseExpected.vendor_dependency;
-  assert.equal(dependency.dependency_satisfied, true);
-  assert.equal(dependency.tracking_app_installed, true);
-  assert.equal(dependency.tracking_app_install_authorized, true);
-  assert.equal(dependency.authorized_delivery_date_source, 'AfterShip Tracking Free 50 Monthly');
-  assert.equal(dependency.monthly_price_usd, 0);
-  assert.equal(dependency.shipment_quota_per_month, 50);
-  assert.equal(dependency.plan_auto_upgrade, false);
-  assert.equal(dependency.tracking_notifications_enabled, false);
-  assert.equal(dependency.tracking_page_launched, false);
-  assert.equal(dependency.order_date_approximation_permitted, false);
+test('unsatisfied Tracking dependency is S0 even if public runtime otherwise aligns', () => {
+  const expected = structuredClone(baseExpected);
+  expected.vendor_dependency.dependency_satisfied = false;
+  expected.vendor_dependency.tracking_app_installed = false;
+  expected.vendor_dependency.tracking_app_install_authorized = false;
+  expected.vendor_dependency.authorized_delivery_date_source = null;
+  for (const key of Object.keys(expected.notification_ownership)) expected.notification_ownership[key] = `Assigned ${key}`;
+  const report = evaluatePages(expected, fourPages(), '2026-08-09T00:00:00Z');
+  assert.equal(report.overall, 'HOLD_S0');
+  assert.ok(report.failed_s0.includes('GLOBAL:DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED'));
+  assert.equal(report.vendor_dependency.delivery_date_basis_requires_app, 'AfterShip Tracking');
+  assert.equal(report.vendor_dependency.order_date_approximation_permitted, false);
 });
 
-test('expected contract v2 requires exact summary, timestamp and cross-domain parity', () => {
-  assert.equal(baseExpected.version, 2);
+test('expected contract v3 requires exact summary, timestamp and cross-domain parity', () => {
+  assert.equal(baseExpected.version, 3);
   assert.equal(baseExpected.public_expected.approved_policy_summary_exact, true);
   assert.equal(baseExpected.public_expected.runtime_config_timestamp_required, true);
   assert.equal(baseExpected.public_expected.projection_fingerprint_must_match_all_domains, true);
+  assert.equal(baseExpected.admin_expected.fulfillment_fallback_permitted, false);
+});
+
+test('current receipt history has zero consecutive clean receipts out of required two', () => {
+  const evidenceDir = path.join(root, 'evidence');
+  const receipts = fs.readdirSync(evidenceDir)
+    .filter((name) => /^aftership-s0-.*\.json$/.test(name))
+    .map((name) => JSON.parse(fs.readFileSync(path.join(evidenceDir, name), 'utf8')))
+    .sort((a, b) => String(a.observed_at).localeCompare(String(b.observed_at)));
+  let clean = 0;
+  for (const receipt of [...receipts].reverse()) {
+    if (receipt.overall !== 'PASS') break;
+    clean += 1;
+  }
+  assert.equal(receipts.length, 2);
+  assert.equal(clean, 0);
+  assert.equal(receipts.at(-1).overall, 'HOLD_S0');
 });
 
 test('daily S0, notification ownership and launch addendum carry the mandatory drift controls', () => {
@@ -187,14 +213,14 @@ test('daily S0, notification ownership and launch addendum carry the mandatory d
   for (const required of ['configuration owner', 'content owner', 'release authority', 'rejection/adverse', 'safety/stop-use', 'wrong-recipient']) {
     assert.ok(notifications.toLowerCase().includes(required.toLowerCase()), `notification matrix missing ${required}`);
   }
-  for (const required of ['two consecutive clean daily readbacks', 'runtime `return_window_base_on`', 'search-engine blocking', 'contact, privacy and terms', 'successful exact-head run']) {
+  for (const required of ['two consecutive clean daily readbacks', 'runtime `return_window_base_on`', 'search-engine blocking', 'contact, privacy and terms', 'AfterShip Tracking', 'order-date approximation', 'successful exact-head run']) {
     assert.ok(launch.toLowerCase().includes(required.toLowerCase()), `launch checklist missing ${required}`);
+  }
+  for (const required of ['Try for free', 'Save is disabled', 'Order date is not an acceptable approximation', 'Shopify scopes', 'trial conversion', 'uninstall', 'recurring spend', 'Free 50 Monthly', '$0/month', 'auto-upgrade', 'tracking page unlaunched', 'one existing shipment auto-sync']) {
+    assert.ok(procurement.toLowerCase().includes(required.toLowerCase()), `procurement gate missing ${required}`);
   }
   for (const required of ['partial vendor-state projection', 'public runtime is the authoritative customer-facing evidence', 'projection fingerprint', 'cf-cache-status: dynamic', 'two consecutive clean daily readbacks']) {
     assert.ok(investigation.toLowerCase().includes(required.toLowerCase()), `investigation missing ${required}`);
-  }
-  for (const required of ['Tracking Free 50 Monthly', '$0', 'auto-upgrade off', 'auto-synced one shipment', 'notifications remained off/locked', 'return_window_base_on=delivery_date', 'Clean receipts: 0 of 2']) {
-    assert.ok(procurement.toLowerCase().includes(required.toLowerCase()), `procurement gate missing ${required}`);
   }
   for (const required of ['pull_request', 'workflow_dispatch', 'schedule', 'Run live anonymous launch smoke', 'Preserve smoke evidence', 'Enforce launch block']) {
     assert.ok(workflow.includes(required), `workflow missing ${required}`);

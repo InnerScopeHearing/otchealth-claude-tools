@@ -1,13 +1,13 @@
 # AfterShip Tracking Dependency: Procurement and Scope Gate
 
-Status: TRACKING FREE DEPENDENCY INSTALLED UNDER MATT AUTHORIZATION; DELIVERY-DATE BASIS SATISFIED; OTHER S0 GATES REMAIN HOLD.
+Status: DEPENDENCY SATISFIED. Public/pilot launch remains HOLD.
 Decision date: 2026-08-08
 
 ## Root cause
 
-AfterShip Returns cannot persist the required Delivery date return-window basis unless the separate AfterShip Tracking app is installed. The Returns UI showed the explicit warning `To use this option, you need to install the AfterShip Tracking app. Try for free.` Save was disabled without the dependency and the public runtime remained `return_window_base_on=order_date`.
+AfterShip Returns cannot persist the required Delivery date return-window basis unless the separate AfterShip Tracking app is installed. The Returns UI shows an explicit `Try for free` warning; Save is disabled without the dependency; public runtime remains `return_window_base_on=order_date`.
 
-The CRO first discarded the unsupported draft. Matt then explicitly authorized a bounded installation after the broad Shopify-permission review. AfterShip Tracking auto-synced one shipment. The plan was explicitly changed from the initial trial to `Tracking Free 50 Monthly`, `$0/month`, 50 shipments/month, with auto-upgrade off. Tracking notifications remained off/locked and no tracking page was launched. Returns then persisted Delivery date + 75 days with no fulfillment fallback, and anonymous runtime readback changed to `return_window_base_on=delivery_date`.
+The CRO first discarded the unsavable draft and did not install without authority. After completing scope review and receiving Matt's authorization, CRO installed AfterShip Tracking under the bounded configuration recorded below.
 
 ## Non-negotiable policy rule
 
@@ -15,19 +15,24 @@ OTCHealth's approved return window is 75 days from delivery. Order date is not a
 
 If Delivery date cannot be persisted and read back exactly, AfterShip Returns cannot be the authoritative eligibility engine for this policy and the portal remains unpublished.
 
-## Owner decision executed
+## Owner decision and bounded installation outcome
 
-Matt selected the bounded Tracking dependency after scope review. The dependency is cost-contained on the Free 50 Monthly plan, auto-upgrade is off, notifications are off, the tracking page is unlaunched, and the return portal remains unpublished. This decision closes only the delivery-date dependency; it does not authorize publication or customer traffic.
+Matt authorized the dependency after CRO completed scope review. CRO then:
 
-The exact no-approximation alternative remains the OTCHealth-owned authority kernel or manual Care review using a verified delivery event. It is the rollback path if Tracking loses scope, is uninstalled, exceeds its free quota, stops producing delivery events, or silently reverts the runtime. No path authorizes order-date approximation.
+- installed AfterShip Tracking;
+- explicitly selected **Free 50 Monthly** at **$0/month**;
+- turned plan auto-upgrade OFF;
+- locked Tracking notifications OFF;
+- left the tracking page unlaunched;
+- observed one existing shipment auto-sync;
+- saved Returns as Delivery date + 75 days with no fulfillment fallback;
+- re-read anonymous runtime as `return_window_base_on=delivery_date` with access denied/unpublished.
 
-## Procurement review outcome and remaining obligations
+The dependency is now the authorized delivery-date source. No order-date approximation is authorized.
 
-Completed: `Tracking Free 50 Monthly`, `$0/month`, 50 shipments/month, plan auto-upgrade off. No paid recurring commitment was accepted. The initial trial selection was replaced explicitly rather than left to convert.
+## Procurement evidence required before any recommendation
 
-Still required before any public traffic or long-term reliance:
-
-- Written confirmation that Free 50 continues to provide the delivery event required by Returns, plus quota-exhaustion and cancellation behavior.
+- Exact plan, free-trial duration, trial conversion, recurring price, usage/overage and cancellation terms.
 - Whether Tracking must stay installed and paid for Returns to preserve Delivery date.
 - Whether uninstall, billing lapse or scope loss silently reverts existing policy to order date.
 - Contract/DPA/subprocessor changes and whether data crosses between Returns and Tracking organizations or products.
@@ -35,13 +40,9 @@ Still required before any public traffic or long-term reliance:
 - Written vendor statement naming the authoritative delivery timestamp and conflict behavior.
 - Proof that the delivery event covers partial shipments, reships, pre-orders, missing scans, failed delivery, pickup, international, manual fulfillment and carrier corrections.
 
-## Shopify and data-scope review outcome
+## Shopify and data-scope review required
 
-Matt approved installation after review of the displayed broad permission categories: customer/browser data; products, inventory and collections; orders, fulfillments, draft orders and order edits; discounts, gift cards and price rules; web pixels and Online Store content/navigation; markets and locations.
-
-Remaining evidence:
-
-- Preserve the exact Shopify permission-screen receipt and map the human-readable permissions to OAuth/Admin API scope codes.
+- Complete Shopify scopes requested by AfterShip Tracking, including OAuth/Admin API scopes.
 - Protected customer data fields and historical orders accessed.
 - Carrier accounts, tracking numbers, addresses, emails/phones, location events and delivery metadata collected.
 - Webhooks, script tags, theme app extensions, app proxy, pixels, checkout/customer-account surfaces and navigation changes.
@@ -59,38 +60,34 @@ Remaining evidence:
 - Kill switch, support escalation, outage fallback and rollback/uninstall procedure.
 - Exact evidence proving uninstall restores the prior state and does not leave domains, scripts, data or notifications active.
 
-## Staging-only execution receipt and remaining acceptance
+## Staging-only acceptance sequence and remaining proof
 
-Completed:
-
-1. Broad Shopify permission categories reviewed and Matt authorized the bounded install.
-2. AfterShip Tracking installed; one shipment auto-synced.
-3. Plan explicitly changed to `Tracking Free 50 Monthly`, `$0`, auto-upgrade off.
-4. Tracking notifications remained off/locked; no tracking page launched.
-5. AfterShip Returns remained unpublished/access denied.
-6. Delivery date + 75 days saved with no fulfillment fallback.
-7. Anonymous runtime changed to `return_window_base_on=delivery_date` on both default domains and both policy paths.
-
-Still required:
-
-8. Correct stale `policy_text`, enable search blocking, and assign notification owners; retain exact canonical URL/summary/link parity.
-9. Produce two consecutive clean daily S0 readbacks.
-10. Run negative tests for dependency removal, scope loss, free-quota exhaustion, missing carrier event and stale vendor projection. All must fail closed, never revert to order-date eligibility.
-11. Complete an uninstall/vendor-exit test in a safe environment and verify no orphan domain, script, webhook, data flow or notification remains.
+1. Snapshot installed apps, scopes, themes, navigation, scripts, webhooks, domains and policy/runtime state.
+2. Install only after explicit Matt approval of scope and any recurring spend.
+3. Disable all tracking pages, notifications, marketing, AI and automations not required for the policy proof.
+4. Keep AfterShip Returns and every public domain denied/unpublished.
+5. Save Delivery date + 75 days in Admin.
+6. Re-read Admin, public visible pages, public runtime JSON, canonical Shopify policy and notification configuration.
+7. Prove `return_window_base_on=delivery_date`; prove 75-day behavior on delivered, partially delivered, undelivered, reshipped and corrected synthetic orders.
+8. Run negative tests for dependency removal, scope loss, billing/trial expiry, missing carrier event and stale cache. All must fail closed, never revert to order-date eligibility.
+9. Uninstall/rollback test in staging; verify no orphan domain, script, webhook, data flow or notification remains.
+10. Produce two consecutive clean daily S0 readbacks before any pilot recommendation.
 
 ## Current decision
 
-- Tracking app installed: YES, Matt-authorized after broad-scope review.
-- Tracking plan: FREE 50 MONTHLY, `$0`, auto-upgrade OFF.
-- Auto-synced shipment count at install: 1.
-- Tracking notifications: OFF/LOCKED.
-- Tracking page: NOT LAUNCHED.
-- Unsupported pre-install draft: DISCARDED.
-- Returns Admin: DELIVERY DATE + 75 DAYS, no fulfillment fallback.
-- Returns runtime: `delivery_date` on all four checked public endpoints.
-- Delivery+75 dependency gate: PASS.
-- Public-domain access: DENIED/UNPUBLISHED.
-- Remaining S0: stale `policy_text`.
-- Remaining S1: search blocking false and notification ownership incomplete.
-- Clean receipts: 0 of 2.
-- Public/pilot launch: HOLD / NO-GO until the remaining drift is corrected and two clean receipts exist.
+- Tracking app installed: YES.
+- Tracking app installation authorized: YES, by Matt after scope review.
+- Authorized delivery-date source: AfterShip Tracking.
+- Dependency satisfied: YES.
+- Plan: Free 50 Monthly, $0/month.
+- Plan auto-upgrade: OFF.
+- Tracking notifications: OFF/locked.
+- Tracking page: UNLAUNCHED.
+- Existing shipments auto-synced: 1.
+- Returns runtime: DELIVERY DATE.
+- Returns policy: Delivery date + 75 days, no fulfillment fallback.
+- Unsavable pre-authorization draft: DISCARDED.
+- Delivery+75 dependency gate: CLOSED.
+- Daily S0: HOLD_S0 because public runtime `policy_text` still projects stale unused-and-undamaged copy.
+- Consecutive clean S0 receipts: 0 of 2.
+- Public/pilot launch: HOLD / NO-GO.

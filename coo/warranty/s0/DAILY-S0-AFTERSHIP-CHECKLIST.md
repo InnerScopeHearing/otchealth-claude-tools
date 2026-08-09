@@ -5,17 +5,18 @@ Mode: anonymous read-only. No customer record, valid order, claim, notification,
 
 ## Why this exists
 
-On 2026-08-08 both AfterShip default domains were publicly actionable even while Admin said Unpublished. They exposed stale 30-day policy content. After the claims-checked 75-day draft was resaved, both domains visibly changed to Page not found, but live page state still disagreed with Admin:
+On 2026-08-08 both AfterShip default domains were publicly actionable even while Admin said Unpublished and exposed stale 30-day policy content. After the corrected draft was resaved, both domains visibly changed to Page not found, but runtime stayed on order date. Root cause: AfterShip Returns requires AfterShip Tracking to persist Delivery date.
 
-- Admin expectation: Delivery date + 75 days.
-- Public runtime: `return_window_base_on=order_date`.
-- Public runtime `policy_text`: stale `unused and undamaged` copy.
-- Public runtime translated summary: corrected 75-days-from-delivery copy.
-- Public runtime policy URL: `https://otchealthmart.com/policies/refund-policy.` with a trailing period.
-- `returns_page_block_search_engine=false` while unpublished.
-- contact, privacy and terms URLs are null.
+CRO first discarded the unsavable draft and installed nothing. After scope review and Matt authorization, CRO installed Tracking under a bounded configuration: Free 50 Monthly at $0, auto-upgrade OFF, Tracking notifications OFF/locked, tracking page unlaunched, one existing shipment auto-synced. Returns then persisted Delivery date + 75 days with no fulfillment fallback.
 
-Root cause is verified: AfterShip Returns cannot persist Delivery date basis unless the separate AfterShip Tracking app is installed. Matt authorized the bounded dependency after broad-scope review. Tracking is now on `Free 50 Monthly`, `$0`, auto-upgrade off, notifications off/locked, and tracking page unlaunched. Returns persists Delivery date + 75 days with no fulfillment fallback, and runtime now reports `delivery_date`.
+Post-install runtime readback now shows:
+
+- `return_window_base_on=delivery_date`: PASS.
+- access denied / unpublished: PASS.
+- approved translated 75-day summary: PASS.
+- canonical policy URL and contact/privacy/terms URLs: PASS.
+- `policy_text` still contains stale `unused and undamaged` copy: S0 FAIL.
+- `returns_page_block_search_engine=false`: S1 FAIL.
 
 Therefore `Unpublished` is not evidence of non-reachability, and visible Page not found is not evidence that hidden runtime policy is correct. AfterShip returns HTTP 200 with a soft-404 page, so HTTP status alone is not an acceptable check. Order-date approximation is prohibited against the approved 75-days-from-delivery policy.
 
@@ -49,9 +50,9 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 | Runtime access | `returns_page_status=unpublished`, access status `denied`, code `returns_page_not_published` | S0 launch hold | Care Team admin 11167146 |
 | Runtime projection timestamp | `returns_page_setting_updated_at` exists and parses; evidence is newer than the last Admin/vendor change | S0 launch hold | Warranty Operations Lead |
 | Cross-domain projection parity | Both default domains and both paths expose one identical normalized runtime projection fingerprint | S0 launch hold | Warranty Operations Lead |
-| Delivery-date dependency | Authorized delivery-date source exists and its procurement/scope gate is signed; current source is `Tracking Free 50 Monthly` | S0 launch hold | Matt + Operations + Privacy/Security + Finance |
+| Delivery-date dependency | Authorized delivery-date source exists and its procurement/scope gate is signed; for current vendor this means approved AfterShip Tracking or an approved least-privilege alternative | S0 launch hold | Matt + Operations + Privacy/Security + Finance |
 | Window basis | Public runtime equals Admin-approved `delivery_date`; `order_date` is never accepted as a fallback | S0 launch hold | Care Team admin 11167146 |
-| Window duration | Authenticated Admin readback is Delivery date + 75 days with no fulfillment fallback; runtime independently proves `delivery_date` basis | S0 launch hold | Care + Counsel + Operations |
+| Window duration | Public/runtime eligibility and policy consistently use 75 days from delivery | S0 launch hold | Care + Counsel + Operations |
 | Policy summary | Runtime translation exactly equals the approved claims-checked 75-day summary; extra editor instructions or suffixes fail | S0 launch hold | Care/Communications |
 | Forbidden copy | No 30-day, unused/undamaged, original-packaging, resellable, discounted-item, seven-day or other superseded condition | S0 launch hold | Care/Communications + Legal |
 | Policy URL | Exact `https://otchealthmart.com/policies/refund-policy`, no punctuation or redirect drift | S0 launch hold | Care Team admin 11167146 |
@@ -69,8 +70,8 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 4. A correct Admin screenshot cannot override contradictory public runtime.
 5. A visible 404 cannot override stale or contradictory runtime policy.
 6. Do not correct drift automatically. Draft the exact bounded change, obtain the named authorization, apply once, and re-read all five planes.
-7. Tracking Free is the authorized dependency; any scope, billing, quota, notification, page or auto-upgrade change reopens `AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md` and is HOLD pending review.
-8. Never substitute order date or fulfillment date for delivery date. Missing dependency or delivery data is HOLD, not approximation.
+7. If Delivery date requires a new app or paid dependency, stop at `AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md`; no install, trial, scope grant or spend occurs without explicit owner approval.
+8. Never substitute order date for delivery date. Missing dependency or delivery data is HOLD, not approximation.
 9. Record the `warranty-aftership-s0` workflow run ID and retained receipt in the launch packet; missing, skipped, stale or failed is HOLD.
 10. Require two consecutive clean daily readbacks after the final correction before a launch packet may cite this gate as ready.
 
@@ -79,12 +80,12 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 - Anonymous visible domains: Page not found on both default domains and both policy paths.
 - HTTP behavior: 200 soft 404, not a real HTTP 404.
 - Runtime access control: denied / returns_page_not_published.
-- Root cause resolved: AfterShip Tracking is installed under Matt authorization on Free 50 Monthly, `$0`, auto-upgrade off; no tracking page or notification launch.
-- Authenticated Returns Admin: Delivery date + 75 days, no fulfillment fallback.
-- Anonymous runtime: `return_window_base_on=delivery_date`, exact translated summary and exact canonical policy URL across all four endpoints; contact/privacy/terms links present.
-- Overall probe: `HOLD_S0` only because stale forbidden `policy_text` remains.
-- Additional S1: search blocking false; notification owners/backups unresolved.
-- Clean receipts: 0 of 2.
-- Evidence: fresh hardened S0 receipt plus `AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md`.
+- Tracking dependency: installed and authorized after scope review; Free 50 Monthly at $0; auto-upgrade OFF; notifications OFF; tracking page unlaunched; one shipment auto-synced.
+- Runtime window: `delivery_date`; Delivery+75 persisted with no fulfillment fallback.
+- Overall probe: `HOLD_S0` only because runtime `policy_text` still contains stale unused-and-undamaged copy across all four endpoints.
+- Additional S1: search blocking remains false; seven notification owner/backup roles remain unresolved.
+- Canonical policy URL and contact/privacy/terms URLs now pass runtime readback.
+- Consecutive clean S0 receipts: 0 of 2.
+- Evidence: `evidence/aftership-s0-2026-08-08-post-tracking.json`.
 
 No public or pilot gate closes until these mismatches are reconciled and read back.

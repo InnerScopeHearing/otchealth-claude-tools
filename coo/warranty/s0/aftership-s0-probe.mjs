@@ -135,19 +135,20 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
     });
   }
 
+  const globalS0 = [];
+  const vendorDependency = expected.vendor_dependency ?? null;
+  if (vendorDependency && vendorDependency.dependency_satisfied !== true) {
+    globalS0.push('GLOBAL:DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED');
+  }
+  const runtimeUsesOrderDate = domainResults.some((result) => result.runtime?.return_window_base_on === 'order_date');
+  if (vendorDependency && vendorDependency.order_date_approximation_permitted === false && runtimeUsesOrderDate) {
+    globalS0.push('GLOBAL:ORDER_DATE_APPROXIMATION_PROHIBITED');
+  }
+
   const globalS0Alerts = [];
   const projectionFingerprints = domainResults.map((result) => result.projection_fingerprint).filter(Boolean);
   if (projectionFingerprints.length !== pages.length) globalS0Alerts.push('RUNTIME_PROJECTION_MISSING');
   if (new Set(projectionFingerprints).size > 1) globalS0Alerts.push('RUNTIME_PROJECTION_DIVERGED_ACROSS_DOMAINS');
-
-  const vendorDependency = expected.vendor_dependency ?? null;
-  if (vendorDependency && vendorDependency.dependency_satisfied !== true) {
-    globalS0Alerts.push('DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED');
-  }
-  const runtimeUsesOrderDate = domainResults.some((result) => result.runtime?.return_window_base_on === 'order_date');
-  if (vendorDependency && vendorDependency.order_date_approximation_permitted === false && runtimeUsesOrderDate) {
-    globalS0Alerts.push('ORDER_DATE_APPROXIMATION_PROHIBITED');
-  }
 
   const notificationEntries = Object.entries(expected.notification_ownership);
   const unassignedNotificationOwners = notificationEntries
@@ -155,7 +156,10 @@ export function evaluatePages(expected, pages, observedAt = new Date().toISOStri
     .map(([key]) => key);
   if (unassignedNotificationOwners.length) globalAlerts.push('NOTIFICATION_OWNERSHIP_INCOMPLETE');
 
-  const failedS0 = domainResults.flatMap((result) => result.checks.filter((check) => !check.pass && check.severity === 'S0').map((check) => `${result.url}:${check.id}`));
+  const failedS0 = [
+    ...globalS0,
+    ...domainResults.flatMap((result) => result.checks.filter((check) => !check.pass && check.severity === 'S0').map((check) => `${result.url}:${check.id}`))
+  ];
   const failedS1 = domainResults.flatMap((result) => result.checks.filter((check) => !check.pass && check.severity === 'S1').map((check) => `${result.url}:${check.id}`));
   const overall = failedS0.length || globalS0Alerts.length ? 'HOLD_S0' : (failedS1.length || globalAlerts.length) ? 'HOLD_S1' : 'PASS';
   return {
