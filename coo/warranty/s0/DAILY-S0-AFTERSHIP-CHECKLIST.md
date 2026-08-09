@@ -78,9 +78,10 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 - Tracking dependency: installed and authorized after scope review; Free 50 Monthly at $0; auto-upgrade OFF; notifications OFF; tracking page unlaunched; one shipment auto-synced.
 - Runtime window: `delivery_date`; Delivery+75 persisted with no fulfillment fallback.
 - Overall probe: `HOLD_S0` only because runtime `policy_text` still contains stale unused-and-undamaged copy across all four endpoints.
-- Additional S1: search blocking remains false; seven notification owner/backup roles remain unresolved.
+- Additional S1: search blocking remains false.
+- Notification ownership-only validation: seven of seven requested routes assigned under solo-operator correction; outbound remains OFF and substantive gates remain open.
 - Canonical policy URL and contact/privacy/terms URLs now pass runtime readback.
-- Consecutive clean S0 receipts: 0 of 2.
+- Consecutive clean S0 receipts: 0 of 2; ownership-only PASS is not a clean runtime receipt.
 - Evidence: `evidence/aftership-s0-2026-08-08-post-tracking.json`.
 
 No public or pilot gate closes until these mismatches are reconciled and read back.

@@ -412,6 +412,16 @@ Required daily readback:
 7. Never approximate delivery with order date.
 8. Require two consecutive clean daily readbacks after the final correction before pilot or launch evidence may cite this gate as ready.
 
+Solo-operator notification routing, per `cro__20260724-012-a418`:
+
+- Daily S0 owner: CRO; backup: CTO through an independent notification channel.
+- Ordinary transactional content: COO/Care; ordinary release: COO.
+- Adverse/rejection: Matt only, alerted through two independent channels; CLO reviews; no agent decides.
+- Safety/recall: Matt only, alerted through two independent channels; COO+CLO monitor/escalate but cannot close.
+- Wrong-recipient incidents: CTO/Security; Matt notified through two independent channels.
+
+Backup means channel/monitor redundancy, not another employee. Actual outbound notifications remain disabled until copy, recipient/relationship, dedupe/suppression and event-level release tests pass. These assignments do not close substantive Safety, legal, staffing, Finance, Appeals or pilot gates.
+
 Durable controls:
 
 - `coo/warranty/s0/aftership-s0-probe.mjs`
@@ -423,5 +433,7 @@ Durable controls:
 - `coo/warranty/s0/evidence/aftership-s0-2026-08-08.json`
 - `coo/warranty/s0/evidence/aftership-s0-2026-08-08-post-tracking.json`
 - `coo/warranty/s0/aftership-s0-history.mjs`
+- `coo/warranty/s0/aftership-notification-ownership.mjs`
+- `coo/warranty/s0/evidence/notification-ownership-2026-08-08.json`
 
 The authorized Tracking installation auto-synced one existing shipment. The readback itself created no additional public page, return, claim, message, label, refund, shipment, inventory or customer effect.

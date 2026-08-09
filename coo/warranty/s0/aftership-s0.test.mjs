@@ -123,7 +123,11 @@ test('public order lookup leakage is S0 even if Admin says unpublished', () => {
 });
 
 test('unassigned notification owners hold launch even when pages and runtime align', () => {
-  const report = evaluatePages(expectedWithSatisfiedDependency(), fourPages(), '2026-08-09T00:00:00Z');
+  const expected = expectedWithSatisfiedDependency();
+  for (const key of ['daily_s0_monitor_owner', 'daily_s0_monitor_backup', 'ordinary_transactional_content_owner', 'ordinary_transactional_release_owner', 'adverse_or_rejection_release_owner', 'safety_or_recall_release_owner', 'wrong_recipient_incident_owner']) {
+    expected.notification_ownership[key] = `${key} - UNASSIGNED`;
+  }
+  const report = evaluatePages(expected, fourPages(), '2026-08-09T00:00:00Z');
   assert.equal(report.overall, 'HOLD_S1');
   assert.ok(report.alerts.includes('NOTIFICATION_OWNERSHIP_INCOMPLETE'));
   assert.ok(report.unassigned_notification_owners.length >= 1);
@@ -165,6 +169,17 @@ test('current receipt history has zero consecutive clean receipts out of require
   assert.equal(receipts.at(-1).overall, 'HOLD_S0');
 });
 
+test('ownership-only evidence assigns seven routes without enabling sends or closing gates', () => {
+  const ownership = JSON.parse(fs.readFileSync(path.join(root, 'evidence', 'notification-ownership-2026-08-08.json'), 'utf8'));
+  assert.equal(ownership.status, 'PASS_OWNERSHIP_ONLY');
+  assert.equal(ownership.roles_assigned, 7);
+  assert.equal(ownership.failed, 0);
+  assert.equal(ownership.runtime_probe_performed, false);
+  assert.equal(ownership.public_domain_readback_performed, false);
+  assert.equal(ownership.outbound_notifications_enabled, false);
+  assert.equal(ownership.substantive_safety_legal_staffing_gates_closed, false);
+});
+
 test('daily S0, notification ownership and launch addendum carry the mandatory drift controls', () => {
   const daily = fs.readFileSync(path.join(root, 'DAILY-S0-AFTERSHIP-CHECKLIST.md'), 'utf8');
   const notifications = fs.readFileSync(path.join(root, 'NOTIFICATION-OWNERSHIP-MATRIX.md'), 'utf8');
@@ -173,7 +188,7 @@ test('daily S0, notification ownership and launch addendum carry the mandatory d
   for (const required of ['hearingassist.aftership.com', 'hearingassist.returnscenter.com', 'return_window_base_on', 'soft 404', '75 days', 'policy URL']) {
     assert.ok(daily.toLowerCase().includes(required.toLowerCase()), `daily S0 missing ${required}`);
   }
-  for (const required of ['configuration owner', 'content owner', 'release authority', 'rejection/adverse', 'safety/stop-use', 'wrong-recipient']) {
+  for (const required of ['configuration owner', 'content owner', 'release authority', 'rejection/adverse', 'safety/stop-use', 'wrong-recipient', 'solo-operator correction', 'two independent channels', 'outbound notifications remain disabled']) {
     assert.ok(notifications.toLowerCase().includes(required.toLowerCase()), `notification matrix missing ${required}`);
   }
   for (const required of ['two consecutive clean daily readbacks', 'runtime `return_window_base_on`', 'search-engine blocking', 'contact, privacy and terms', 'AfterShip Tracking', 'order-date approximation']) {

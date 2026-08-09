@@ -1,9 +1,10 @@
 {
-  "version": 3,
+  "version": 4,
   "source": {
     "pilot_document_id": "cmsl2xi0z0wpp06adkysp6t6m",
     "pilot_document_version": 3,
-    "owner_directive_date": "2026-08-08"
+    "owner_directive_date": "2026-08-08",
+    "solo_operator_correction_ref": "cro__20260724-012-a418"
   },
   "domains": [
     "https://hearingassist.aftership.com",
@@ -77,14 +78,31 @@
   },
   "notification_ownership": {
     "configuration_owner": "Care Team admin 11167146",
-    "daily_s0_monitor_owner": "Warranty Operations Lead - UNASSIGNED",
-    "daily_s0_monitor_backup": "Warranty Operations backup - UNASSIGNED",
-    "ordinary_transactional_content_owner": "Care/Communications owner - UNASSIGNED",
-    "ordinary_transactional_release_owner": "Warranty Operations Lead - UNASSIGNED",
-    "adverse_or_rejection_release_owner": "Matt or signed delegate plus Legal - BACKUP UNASSIGNED",
-    "safety_or_recall_release_owner": "Product Safety plus Legal - ROSTER UNASSIGNED",
+    "daily_s0_monitor_owner": "CRO",
+    "daily_s0_monitor_backup": "CTO via independent notification channel",
+    "ordinary_transactional_content_owner": "COO/Care",
+    "ordinary_transactional_release_owner": "COO",
+    "adverse_or_rejection_release_owner": "Matt only via two independent notification channels; CLO reviews; no agent decision",
+    "safety_or_recall_release_owner": "Matt only via two independent notification channels; COO+CLO monitor/escalate; no agent closure",
     "claims_check_owner": "CCO claims-check lane",
-    "wrong_recipient_incident_owner": "Communications/Privacy incident owner - UNASSIGNED"
+    "wrong_recipient_incident_owner": "CTO/Security; notify Matt via two independent notification channels"
+  },
+  "notification_controls": {
+    "solo_operator_correction_ref": "cro__20260724-012-a418",
+    "only_human_authority": "Matt",
+    "backup_definition": "independent notification channel and agent monitor, not another employee",
+    "minimum_independent_channels_for_matt_alert": 2,
+    "outbound_notifications_enabled": false,
+    "outbound_unlock_requires": [
+      "approved copy test pass",
+      "recipient and relationship test pass",
+      "dedupe and suppression test pass",
+      "event-level release authority confirmed"
+    ],
+    "agents_may_monitor_and_escalate": true,
+    "agents_may_make_adverse_or_safety_decision": false,
+    "agents_may_close_safety_or_recall": false,
+    "substantive_safety_legal_staffing_gates_closed": false
   },
   "hard_rule": "Admin, public runtime, visible public page, policy link, notification release configuration, and the authorized delivery-date data source must agree before any portal publication or customer traffic. Unpublished is not proof of non-reachability. Order-date approximation is never permitted for the approved 75-days-from-delivery policy."
 }

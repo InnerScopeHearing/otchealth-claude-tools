@@ -23,7 +23,8 @@ AfterShip Returns cannot persist Delivery date basis without AfterShip Tracking.
 - [x] Contact, privacy and terms URLs are non-null in runtime readback.
 - [ ] Every return/warranty notification event is inventoried with toggle state and template hash.
 - [ ] Rejection/adverse, Safety, recall, financial and appeal notifications are OFF or protected by the signed human release matrix.
-- [ ] Named primary and backup own daily S0, configuration, content, ordinary release, adverse release, Safety/recall release, Finance release and wrong-recipient incidents.
+- [x] Seven requested notification routes are assigned under solo-operator correction: CRO S0, CTO independent-channel backup, COO/Care content, COO ordinary release, Matt-only adverse and Safety/recall authority with two-channel alerts and no agent decision/closure, CTO/Security wrong-recipient incident owner.
+- [ ] Substantive Safety, legal, staffing, Finance and Appeals authority evidence remains open; role routing does not close those gates.
 - [x] Post-Tracking probe evidence is newer than 24 hours and newer than the dependency/policy change.
 - [ ] Two consecutive clean daily readbacks exist after the final correction.
 
@@ -41,7 +42,8 @@ AfterShip Returns cannot persist Delivery date basis without AfterShip Tracking.
 
 1. Runtime `policy_text` still says unused and undamaged on all four anonymous domain/path readbacks, producing four S0 failures.
 2. Search-engine blocking is false on all four readbacks, producing four S1 failures.
-3. Seven notification owner/backup roles remain unassigned.
-4. Consecutive clean daily receipts: 0 of 2.
+3. Actual outbound notifications remain disabled until copy, recipient/relationship, dedupe/suppression and event-level release tests pass.
+4. Substantive Safety, legal, staffing, Finance and Appeals gates remain open despite assigned monitoring/release routes.
+5. Consecutive clean daily receipts: 0 of 2.
 
-Dependency, Delivery date basis, 75-day translated summary, policy URL, contact/privacy/terms URLs and unpublished/access-denied state now pass. The remaining defects keep the gate on HOLD.
+Dependency, Delivery date basis, 75-day translated summary, policy URL, contact/privacy/terms URLs, unpublished/access-denied state and seven notification-routing assignments now pass their narrow checks. The remaining defects keep the gate on HOLD.

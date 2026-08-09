@@ -75,8 +75,9 @@ from the top of this list. Update status as items complete.
     Free 50 Monthly $0 plan after scope review, auto-upgrade OFF, notifications OFF, page unlaunched;
     runtime now says `delivery_date`, policy URL/links pass and no fulfillment fallback exists. HOLD
     remains because runtime `policy_text` still says unused and undamaged on all four readbacks,
-    search blocking is false, seven notification owners/backups are unassigned, and clean receipts
-    are 0 of 2. Source: `coo/warranty/s0/`.
+    search blocking is false, and clean receipts are 0 of 2. Seven notification routes are now
+    assigned under the solo-operator correction, but outbound stays OFF until copy/recipient tests;
+    substantive Safety/legal/staffing/Finance/Appeals gates remain open. Source: `coo/warranty/s0/`.
 20. **Run no pilot until every upstream gate is signed.** Then synthetic -> employee -> separately
     approved small cohort, with AI shadow-only, all kill switches drilled, no advance/returnless
     exchange, and two reconciled operating plus Finance/GL cycles. Until then keep AfterShip and
