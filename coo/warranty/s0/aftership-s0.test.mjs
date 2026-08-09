@@ -137,12 +137,32 @@ test('approved translated summary is parsed from props.resources', () => {
 
 test('unsatisfied Tracking dependency is S0 even if public runtime otherwise aligns', () => {
   const expected = structuredClone(baseExpected);
+  expected.vendor_dependency.dependency_satisfied = false;
+  expected.vendor_dependency.tracking_app_installed = false;
+  expected.vendor_dependency.tracking_app_install_authorized = false;
+  expected.vendor_dependency.authorized_delivery_date_source = null;
   for (const key of Object.keys(expected.notification_ownership)) expected.notification_ownership[key] = `Assigned ${key}`;
   const report = evaluatePages(expected, fourPages(), '2026-08-09T00:00:00Z');
   assert.equal(report.overall, 'HOLD_S0');
   assert.ok(report.failed_s0.includes('GLOBAL:DELIVERY_DATE_VENDOR_DEPENDENCY_UNSATISFIED'));
   assert.equal(report.vendor_dependency.delivery_date_basis_requires_app, 'AfterShip Tracking');
   assert.equal(report.vendor_dependency.order_date_approximation_permitted, false);
+});
+
+test('current receipt history has zero consecutive clean receipts out of required two', () => {
+  const evidenceDir = path.join(root, 'evidence');
+  const receipts = fs.readdirSync(evidenceDir)
+    .filter((name) => /^aftership-s0-.*\.json$/.test(name))
+    .map((name) => JSON.parse(fs.readFileSync(path.join(evidenceDir, name), 'utf8')))
+    .sort((a, b) => String(a.observed_at).localeCompare(String(b.observed_at)));
+  let clean = 0;
+  for (const receipt of [...receipts].reverse()) {
+    if (receipt.overall !== 'PASS') break;
+    clean += 1;
+  }
+  assert.equal(receipts.length, 2);
+  assert.equal(clean, 0);
+  assert.equal(receipts.at(-1).overall, 'HOLD_S0');
 });
 
 test('daily S0, notification ownership and launch addendum carry the mandatory drift controls', () => {
@@ -159,7 +179,7 @@ test('daily S0, notification ownership and launch addendum carry the mandatory d
   for (const required of ['two consecutive clean daily readbacks', 'runtime `return_window_base_on`', 'search-engine blocking', 'contact, privacy and terms', 'AfterShip Tracking', 'order-date approximation']) {
     assert.ok(launch.toLowerCase().includes(required.toLowerCase()), `launch checklist missing ${required}`);
   }
-  for (const required of ['Try for free', 'Save is disabled', 'Order date is not an acceptable approximation', 'Shopify scopes', 'trial conversion', 'uninstall', 'recurring spend']) {
+  for (const required of ['Try for free', 'Save is disabled', 'Order date is not an acceptable approximation', 'Shopify scopes', 'trial conversion', 'uninstall', 'recurring spend', 'Free 50 Monthly', '$0/month', 'auto-upgrade', 'tracking page unlaunched', 'one existing shipment auto-sync']) {
     assert.ok(procurement.toLowerCase().includes(required.toLowerCase()), `procurement gate missing ${required}`);
   }
 });

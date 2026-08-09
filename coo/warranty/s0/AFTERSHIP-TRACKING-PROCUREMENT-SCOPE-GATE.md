@@ -1,13 +1,13 @@
 # AfterShip Tracking Dependency: Procurement and Scope Gate
 
-Status: HOLD. No installation authorized or performed.
+Status: DEPENDENCY SATISFIED. Public/pilot launch remains HOLD.
 Decision date: 2026-08-08
 
 ## Root cause
 
 AfterShip Returns cannot persist the required Delivery date return-window basis unless the separate AfterShip Tracking app is installed. The Returns UI shows an explicit `Try for free` warning; Save is disabled without the dependency; public runtime remains `return_window_base_on=order_date`.
 
-The CRO discarded the unsavable draft and did not install AfterShip Tracking. This preserved the approved boundary.
+The CRO first discarded the unsavable draft and did not install without authority. After completing scope review and receiving Matt's authorization, CRO installed AfterShip Tracking under the bounded configuration recorded below.
 
 ## Non-negotiable policy rule
 
@@ -15,13 +15,20 @@ OTCHealth's approved return window is 75 days from delivery. Order date is not a
 
 If Delivery date cannot be persisted and read back exactly, AfterShip Returns cannot be the authoritative eligibility engine for this policy and the portal remains unpublished.
 
-## Options requiring owner decision
+## Owner decision and bounded installation outcome
 
-1. **Approve a bounded AfterShip Tracking dependency review.** Review first; installation is a separate explicit decision.
-2. **Use a least-privilege Shopify-native or OTCHealth-owned delivery-date source** and keep AfterShip non-authoritative, only if the vendor supports receiving/enforcing that source without silently reverting to order date.
-3. **Reject the dependency and hold AfterShip for this program.** Continue with the owned Warranty/Returns architecture or another vendor that supports delivery-date policy without bundled scope expansion.
+Matt authorized the dependency after CRO completed scope review. CRO then:
 
-No option authorizes order-date approximation.
+- installed AfterShip Tracking;
+- explicitly selected **Free 50 Monthly** at **$0/month**;
+- turned plan auto-upgrade OFF;
+- locked Tracking notifications OFF;
+- left the tracking page unlaunched;
+- observed one existing shipment auto-sync;
+- saved Returns as Delivery date + 75 days with no fulfillment fallback;
+- re-read anonymous runtime as `return_window_base_on=delivery_date` with access denied/unpublished.
+
+The dependency is now the authorized delivery-date source. No order-date approximation is authorized.
 
 ## Procurement evidence required before any recommendation
 
@@ -53,7 +60,7 @@ No option authorizes order-date approximation.
 - Kill switch, support escalation, outage fallback and rollback/uninstall procedure.
 - Exact evidence proving uninstall restores the prior state and does not leave domains, scripts, data or notifications active.
 
-## Staging-only acceptance sequence if installation is later approved
+## Staging-only acceptance sequence and remaining proof
 
 1. Snapshot installed apps, scopes, themes, navigation, scripts, webhooks, domains and policy/runtime state.
 2. Install only after explicit Matt approval of scope and any recurring spend.
@@ -68,9 +75,19 @@ No option authorizes order-date approximation.
 
 ## Current decision
 
-- Tracking app installed: NO.
-- Tracking app installation authorized: NO.
-- Unsavable draft: DISCARDED.
-- Returns runtime: ORDER DATE.
-- Delivery+75 gate: OPEN / HOLD.
+- Tracking app installed: YES.
+- Tracking app installation authorized: YES, by Matt after scope review.
+- Authorized delivery-date source: AfterShip Tracking.
+- Dependency satisfied: YES.
+- Plan: Free 50 Monthly, $0/month.
+- Plan auto-upgrade: OFF.
+- Tracking notifications: OFF/locked.
+- Tracking page: UNLAUNCHED.
+- Existing shipments auto-synced: 1.
+- Returns runtime: DELIVERY DATE.
+- Returns policy: Delivery date + 75 days, no fulfillment fallback.
+- Unsavable pre-authorization draft: DISCARDED.
+- Delivery+75 dependency gate: CLOSED.
+- Daily S0: HOLD_S0 because public runtime `policy_text` still projects stale unused-and-undamaged copy.
+- Consecutive clean S0 receipts: 0 of 2.
 - Public/pilot launch: HOLD / NO-GO.

@@ -71,12 +71,12 @@ from the top of this list. Update status as items complete.
     facility, live Safety/PHMSA evidence, warehouse/repair capacity, signed human authority and
     training, notification owners/toggles, manual WCAG/assisted proof, and real serial/scan traces.
     Source: `coo/warranty/synthetic-drills/`. [named owners]
-19. **Decide the AfterShip Tracking dependency, then reconcile five planes.** Root cause: Returns
-    cannot persist Delivery date without the separate Tracking app; Save is disabled behind `Try
-    for free`, so CRO discarded the draft and installed nothing. Order-date approximation is barred.
-    Any proposed install first needs cost/procurement, Shopify-scope, data-sharing, notification,
-    security, uninstall and vendor-exit review plus explicit Matt approval. Daily S0 remains HOLD;
-    require two clean post-fix readbacks. Source: `coo/warranty/s0/`.
+19. **Tracking dependency DONE; clear the remaining S0 projection.** CRO installed the authorized
+    Free 50 Monthly $0 plan after scope review, auto-upgrade OFF, notifications OFF, page unlaunched;
+    runtime now says `delivery_date`, policy URL/links pass and no fulfillment fallback exists. HOLD
+    remains because runtime `policy_text` still says unused and undamaged on all four readbacks,
+    search blocking is false, seven notification owners/backups are unassigned, and clean receipts
+    are 0 of 2. Source: `coo/warranty/s0/`.
 20. **Run no pilot until every upstream gate is signed.** Then synthetic -> employee -> separately
     approved small cohort, with AI shadow-only, all kill switches drilled, no advance/returnless
     exchange, and two reconciled operating plus Finance/GL cycles. Until then keep AfterShip and

@@ -7,24 +7,24 @@ Source: CRO pilot `cmsl2xi0z0wpp06adkysp6t6m` version 3 plus Operations live rea
 
 Any Admin/public/runtime/policy/notification/dependency mismatch is a launch blocker. `Unpublished` is not containment evidence by itself. A visible Page not found is not a clean policy readback by itself. HTTP 200 with a Page not found body is a soft 404 and must be evaluated by content/runtime state, not status code.
 
-AfterShip Returns cannot persist Delivery date basis without AfterShip Tracking. Save is disabled behind an explicit `Try for free` dependency; CRO discarded the draft and installed nothing. Order-date approximation is never acceptable for the approved 75-days-from-delivery policy.
+AfterShip Returns cannot persist Delivery date basis without AfterShip Tracking. CRO first discarded the unsavable draft. After scope review and Matt authorization, CRO installed Tracking on Free 50 Monthly at $0, turned auto-upgrade and notifications OFF, kept the tracking page unlaunched, and persisted Delivery date + 75 days with no fulfillment fallback. Order-date approximation remains prohibited.
 
 ## Required evidence before controlled pilot
 
 - [ ] Inventory every AfterShip public hostname, default domain, custom hostname, app proxy and policy path.
-- [ ] Anonymous readback of each domain/path shows Page not found and no order lookup, gift return, policy action or return-start action.
-- [ ] Runtime returns page status is unpublished and access is denied with `returns_page_not_published`.
-- [ ] An authorized Delivery-date data source exists. If using AfterShip Tracking, `AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md` is fully reviewed and Matt separately approved scope, trial/spend and staging-only installation.
-- [ ] Runtime `return_window_base_on` equals Admin-approved `delivery_date`; no order-date approximation or fallback exists.
-- [ ] Runtime and visible policy use 75 days from delivery.
+- [x] Anonymous readback of each domain/path shows Page not found and no order lookup, gift return, policy action or return-start action.
+- [x] Runtime returns page status is unpublished and access is denied with `returns_page_not_published`.
+- [x] An authorized Delivery-date data source exists. AfterShip Tracking was scope-reviewed and installed under Matt authorization on Free 50 Monthly at $0 with auto-upgrade OFF.
+- [x] Runtime `return_window_base_on` equals Admin-approved `delivery_date`; no order-date approximation or fulfillment fallback exists.
+- [x] Runtime translated policy uses 75 days from delivery.
 - [ ] No stale 30-day, purchase-date, unused/undamaged, original-packaging, resellable, discounted-item or seven-day condition survives in any runtime field, translation, FAQ, template or link.
-- [ ] Policy URL exactly equals `https://otchealthmart.com/policies/refund-policy` and resolves without punctuation/redirect error.
+- [x] Policy URL exactly equals `https://otchealthmart.com/policies/refund-policy` without punctuation drift.
 - [ ] Unpublished portal blocks search indexing.
-- [ ] Contact, privacy and terms URLs are approved and non-null.
+- [x] Contact, privacy and terms URLs are non-null in runtime readback.
 - [ ] Every return/warranty notification event is inventoried with toggle state and template hash.
 - [ ] Rejection/adverse, Safety, recall, financial and appeal notifications are OFF or protected by the signed human release matrix.
 - [ ] Named primary and backup own daily S0, configuration, content, ordinary release, adverse release, Safety/recall release, Finance release and wrong-recipient incidents.
-- [ ] Probe evidence is newer than 24 hours and newer than the last Admin/vendor change.
+- [x] Post-Tracking probe evidence is newer than 24 hours and newer than the dependency/policy change.
 - [ ] Two consecutive clean daily readbacks exist after the final correction.
 
 ## Additional evidence before public launch
@@ -39,12 +39,9 @@ AfterShip Returns cannot persist Delivery date basis without AfterShip Tracking.
 
 ## Current open defects found by readback
 
-1. AfterShip Tracking dependency is not installed, authorized or scope-reviewed; Delivery date cannot currently persist.
-2. Runtime `return_window_base_on=order_date` conflicts with Admin Delivery date + 75 days.
-3. Runtime `policy_text` still says unused and undamaged.
-4. Runtime policy URL ends with a trailing period.
-5. Search-engine blocking is false while unpublished.
-6. Contact, privacy and terms URLs are null.
-7. Notification owner/backup roles remain unassigned.
+1. Runtime `policy_text` still says unused and undamaged on all four anonymous domain/path readbacks, producing four S0 failures.
+2. Search-engine blocking is false on all four readbacks, producing four S1 failures.
+3. Seven notification owner/backup roles remain unassigned.
+4. Consecutive clean daily receipts: 0 of 2.
 
-The default domains currently show Page not found, but these seven defects keep the gate on HOLD.
+Dependency, Delivery date basis, 75-day translated summary, policy URL, contact/privacy/terms URLs and unpublished/access-denied state now pass. The remaining defects keep the gate on HOLD.

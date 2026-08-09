@@ -1,0 +1,48 @@
+{
+  "observed_at": "2026-08-09T03:23:03.751Z",
+  "mode": "anonymous_read_only_post_tracking",
+  "dependency_state": {
+    "authorized_delivery_date_source": "AfterShip Tracking",
+    "installed": true,
+    "authorized": true,
+    "scope_review_completed": true,
+    "plan": "Free 50 Monthly",
+    "monthly_price_usd": 0,
+    "auto_upgrade_enabled": false,
+    "tracking_notifications_locked_off": true,
+    "tracking_page_launched": false,
+    "shipments_auto_synced": 1
+  },
+  "returns_admin_state": {
+    "return_window_base_on": "delivery_date",
+    "return_window_days": 75,
+    "fulfillment_fallback_permitted": false
+  },
+  "runtime_readback": {
+    "returns_page_status": "unpublished",
+    "returns_page_access": {
+      "status": "denied",
+      "code": "returns_page_not_published"
+    },
+    "return_window_base_on": "delivery_date",
+    "policy_text": "We accept returns of unused and undamaged items according to our returns policy.",
+    "translated_policy_summary": "Eligible returns may be started within 75 days of delivery. Care reviews eligibility and provides the applicable return instructions.",
+    "policy_url": "https://otchealthmart.com/policies/refund-policy",
+    "returns_page_block_search_engine": false,
+    "contact_url": "https://otchealthmart.com/pages/important-safety-information",
+    "privacy_url": "https://otchealthmart.com/policies/privacy-policy",
+    "terms_url": "https://otchealthmart.com/policies/terms-of-service"
+  },
+  "exact_remaining": {
+    "s0_failures": 4,
+    "s0_failure_class": "FORBIDDEN_POLICY_COPY_ABSENT on all four domain/path readbacks",
+    "s1_failures": 4,
+    "s1_failure_class": "SEARCH_ENGINE_BLOCK_WHILE_UNPUBLISHED on all four domain/path readbacks",
+    "unassigned_notification_owner_roles": 7,
+    "consecutive_clean_receipts": 0,
+    "required_clean_receipts": 2
+  },
+  "overall": "HOLD_S0",
+  "writes_by_operations_readback": 0,
+  "customer_contacts_by_operations_readback": 0
+}

@@ -5,17 +5,18 @@ Mode: anonymous read-only. No customer record, valid order, claim, notification,
 
 ## Why this exists
 
-On 2026-08-08 both AfterShip default domains were publicly actionable even while Admin said Unpublished. They exposed stale 30-day policy content. After the claims-checked 75-day draft was resaved, both domains visibly changed to Page not found, but live page state still disagreed with Admin:
+On 2026-08-08 both AfterShip default domains were publicly actionable even while Admin said Unpublished and exposed stale 30-day policy content. After the corrected draft was resaved, both domains visibly changed to Page not found, but runtime stayed on order date. Root cause: AfterShip Returns requires AfterShip Tracking to persist Delivery date.
 
-- Admin expectation: Delivery date + 75 days.
-- Public runtime: `return_window_base_on=order_date`.
-- Public runtime `policy_text`: stale `unused and undamaged` copy.
-- Public runtime translated summary: corrected 75-days-from-delivery copy.
-- Public runtime policy URL: `https://otchealthmart.com/policies/refund-policy.` with a trailing period.
-- `returns_page_block_search_engine=false` while unpublished.
-- contact, privacy and terms URLs are null.
+CRO first discarded the unsavable draft and installed nothing. After scope review and Matt authorization, CRO installed Tracking under a bounded configuration: Free 50 Monthly at $0, auto-upgrade OFF, Tracking notifications OFF/locked, tracking page unlaunched, one existing shipment auto-synced. Returns then persisted Delivery date + 75 days with no fulfillment fallback.
 
-Root cause is now verified: AfterShip Returns cannot persist Delivery date basis unless the separate AfterShip Tracking app is installed. The Returns UI displays `Try for free`; Save stays disabled; runtime remains `order_date`. CRO discarded the unsavable draft and installed nothing.
+Post-install runtime readback now shows:
+
+- `return_window_base_on=delivery_date`: PASS.
+- access denied / unpublished: PASS.
+- approved translated 75-day summary: PASS.
+- canonical policy URL and contact/privacy/terms URLs: PASS.
+- `policy_text` still contains stale `unused and undamaged` copy: S0 FAIL.
+- `returns_page_block_search_engine=false`: S1 FAIL.
 
 Therefore `Unpublished` is not evidence of non-reachability, and visible Page not found is not evidence that hidden runtime policy is correct. AfterShip returns HTTP 200 with a soft-404 page, so HTTP status alone is not an acceptable check. Order-date approximation is prohibited against the approved 75-days-from-delivery policy.
 
@@ -74,9 +75,12 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 - Anonymous visible domains: Page not found on both default domains and both policy paths.
 - HTTP behavior: 200 soft 404, not a real HTTP 404.
 - Runtime access control: denied / returns_page_not_published.
-- Root cause: AfterShip Tracking is required to persist Delivery date; it is not installed or authorized; CRO discarded the unsavable draft.
-- Overall probe: `HOLD_S0` because the delivery-date dependency is unsatisfied and runtime window basis, legacy policy_text and malformed policy URL disagree with the approved Admin/policy expectation.
-- Additional S1: search blocking false; contact/privacy/terms links absent; notification owners/backups unresolved.
-- Evidence: `evidence/aftership-s0-2026-08-08.json`.
+- Tracking dependency: installed and authorized after scope review; Free 50 Monthly at $0; auto-upgrade OFF; notifications OFF; tracking page unlaunched; one shipment auto-synced.
+- Runtime window: `delivery_date`; Delivery+75 persisted with no fulfillment fallback.
+- Overall probe: `HOLD_S0` only because runtime `policy_text` still contains stale unused-and-undamaged copy across all four endpoints.
+- Additional S1: search blocking remains false; seven notification owner/backup roles remain unresolved.
+- Canonical policy URL and contact/privacy/terms URLs now pass runtime readback.
+- Consecutive clean S0 receipts: 0 of 2.
+- Evidence: `evidence/aftership-s0-2026-08-08-post-tracking.json`.
 
 No public or pilot gate closes until these mismatches are reconciled and read back.
