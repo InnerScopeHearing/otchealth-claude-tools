@@ -73,6 +73,14 @@ Decision: HOLD / NO-GO unchanged
 | WTY-04 | 48335 | PROVIDER_OBSERVATION_DRAFT_ONLY | 0 | false | false | false |
 | WTY-05 | 48332 | RECONCILIATION_EXCEPTION_DRAFT_ONLY | 0 | false | false | false |
 
+## Safety / PHMSA source-backed tabletop rule
+
+- PHMSA regulates lithium batteries as hazardous material under 49 CFR Parts 171-180 and identifies damaged, defective or recalled batteries as higher fire-risk shipments: https://www.phmsa.dot.gov/lithiumbatteries
+- PHMSA's 2024 shipper guide states DDR lithium batteries may travel only by highway, rail or vessel and are strictly forbidden by aircraft; 49 CFR 173.185(f) packaging and full training/shipping-paper/marking/labeling requirements apply: https://www.phmsa.dot.gov/sites/phmsa.dot.gov/files/2024-11/Lithium-Battery-Guide-2024.pdf
+- PHMSA states the shipper is responsible for condition assessment and may need a technical expert or manufacturer information: https://www.phmsa.dot.gov/sites/phmsa.dot.gov/files/2023-03/DDR-brochure.pdf
+- USPS Publication 52 generally prohibits damaged, defective or recalled batteries absent Product Classification approval, restricts used/damaged/defective devices to applicable surface paths domestically, and prohibits such batteries/devices internationally: https://pe.usps.com/text/pub52/pub52c3_028.htm
+- Tabletop decision: every suspected DDR case blocks ordinary return, ordinary parcel/air label, returnless handling, destructive customer instruction and agent closure. Only a trained human may classify, package, select a compliant carrier service, offer for transport, execute holds or close Safety. Full research-backed tabletop: PHMSA-TABLETOP-EVIDENCE.md.
+
 ## Irreducible signatures and observations still required
 
 1. Matt must name and sign the backup/delegate, exact decision and execution thresholds, unavailable-owner behavior, vetoes, expiry and revocation.

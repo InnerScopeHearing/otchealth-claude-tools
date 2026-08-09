@@ -63,6 +63,14 @@ for (const row of n8n.executions) {
   lines.push(`| ${row.code} | ${row.execution_id} | ${clean(row.outcome)} | ${row.external_call_count} | ${row.authorization_consumed} | ${row.customer_contact_permitted} | ${row.live_execution_permitted} |`);
 }
 lines.push('');
+lines.push('## Safety / PHMSA source-backed tabletop rule');
+lines.push('');
+lines.push('- PHMSA regulates lithium batteries as hazardous material under 49 CFR Parts 171-180 and identifies damaged, defective or recalled batteries as higher fire-risk shipments: https://www.phmsa.dot.gov/lithiumbatteries');
+lines.push('- PHMSA\'s 2024 shipper guide states DDR lithium batteries may travel only by highway, rail or vessel and are strictly forbidden by aircraft; 49 CFR 173.185(f) packaging and full training/shipping-paper/marking/labeling requirements apply: https://www.phmsa.dot.gov/sites/phmsa.dot.gov/files/2024-11/Lithium-Battery-Guide-2024.pdf');
+lines.push('- PHMSA states the shipper is responsible for condition assessment and may need a technical expert or manufacturer information: https://www.phmsa.dot.gov/sites/phmsa.dot.gov/files/2023-03/DDR-brochure.pdf');
+lines.push('- USPS Publication 52 generally prohibits damaged, defective or recalled batteries absent Product Classification approval, restricts used/damaged/defective devices to applicable surface paths domestically, and prohibits such batteries/devices internationally: https://pe.usps.com/text/pub52/pub52c3_028.htm');
+lines.push('- Tabletop decision: every suspected DDR case blocks ordinary return, ordinary parcel/air label, returnless handling, destructive customer instruction and agent closure. Only a trained human may classify, package, select a compliant carrier service, offer for transport, execute holds or close Safety. Full research-backed tabletop: PHMSA-TABLETOP-EVIDENCE.md.');
+lines.push('');
 lines.push('## Irreducible signatures and observations still required');
 lines.push('');
 lines.push('1. Matt must name and sign the backup/delegate, exact decision and execution thresholds, unavailable-owner behavior, vetoes, expiry and revocation.');

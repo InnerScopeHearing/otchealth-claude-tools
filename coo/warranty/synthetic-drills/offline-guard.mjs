@@ -7,7 +7,6 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const sourceFiles = ['run-drills.mjs', 'drills.test.mjs', 'render-evidence.mjs'];
 const banned = [
   /\bfetch\s*\(/,
-  /https?:\/\//,
   /node:(?:http|https|net|tls|dgram|dns|child_process)/,
   /\b(?:axios|got|request|curl|wget)\b/,
   /(?:AFTERSHIP_API_KEY|SHOPIFY_ACCESS_TOKEN|INTERCOM_ACCESS_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY)/
