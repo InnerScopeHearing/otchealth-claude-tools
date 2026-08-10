@@ -49,7 +49,7 @@ A large first-party MCP set is connected directly in the Claude Code session now
 
 | Service | Access path | Status | Notes |
 |---|---|---|---|
-| **Unified fleet gateway** (otchealth-mcp-server) | custom MCP @ mcp.otchealth.app/mcp | **NOT connected in this session** | code (OAuth 2.1 + Phase-2 modules) is on main; PENDING Azure redeploy + env (Matt gate). Capability Catalog tools (catalog_list_tools / _service_capabilities / _audit_unused) unavailable until connected |
+| **Unified fleet gateway** (otchealth-mcp-server) | custom MCP @ mcp.otchealth.app/mcp | **LIVE** - revision `g8d087b68`, digest `140abad8`, 985 tools | OIDC immutable blue-green release path; health/catalog/deep-health gates; `catalog_list_tools` live and authoritative. |
 | **Depot** | gateway module - FULL API (+ Actions for builds) | code BUILT; live use pending gateway redeploy + DEPOT_TOKEN | NO standalone Depot remote MCP - reaches Claude via the gateway. Builds run on Depot runners via GitHub Actions (depot-macos-26 / depot-ubuntu-24.04) |
 | RevenueCat | API-skill (gateway module) | MCP allowlist-gated | use v2 API until allowlisted |
 | Gumroad | skill | LIVE (skill) | digital products |
