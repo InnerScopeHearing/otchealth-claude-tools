@@ -67,7 +67,7 @@ The gateway's Capability Catalog (`catalog_list_tools`, `catalog_service_capabil
 `catalog_audit_unused`) introspects each provider's full surface and flags WIRED vs
 AVAILABLE-NOT-WIRED, plus what our plan/grant includes that we are not using. That
 report is the standing answer to "are we using everything we pay for / have access to".
-It is unavailable until the gateway is redeployed + connected (above).
+It is live on the production gateway; call it directly rather than trusting a stale client-side catalog cache.
 
 ## Drift to fix
 - `otchealth-cto/CLAUDE.md` and this map reference `otchealth-mcp-server/docs/UNIFIED-FLEET-GATEWAY.md`, which does NOT exist. The mcp-server repo has README.md / START_HERE.md / KICKOFF_PROMPT.md / ADR-001.md instead. Create the gateway doc or repoint the references.
