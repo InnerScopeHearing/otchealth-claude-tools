@@ -25,7 +25,7 @@ A large first-party MCP set is connected directly in the Claude Code session now
 | PostHog | first-party MCP (+ gateway mgmt module) | LIVE in Claude Code (was Hyperagent-only) | **CAUTION: MCP defaults to the MedReview PHI project 468398 - SWITCH to a non-PHI project before any work.** funnels/flags/experiments; PHI project read-only |
 | n8n (instance) | self-host native MCP | LIVE - 40 workflows / self-host (COO flows present) | **The 2026-06-13 "dead Cloud host" issue is RESOLVED**; MCP now reads automation.otchealth.app |
 | n8n (builder) | workflow-SDK MCP | LIVE - get_sdk_reference/search_nodes/create_workflow_from_code | separate toolset from the instance MCP (authoring) |
-| Customer.io | first-party MCP + governed gateway | LIVE - App/Track credential repaired on revision g20e6d988; six read-only canaries pass | Legacy App/Track is healthy. Draft gateway PR #199 adds 20 named admin reads + 22 bounded dry-run/high-risk configuration writes; wrappers are not deployed and remain inert until `cio-fly-service-account-token` is provisioned. |
+| Customer.io | first-party MCP + governed gateway | LIVE - App/Track + governed admin on `g8d087b68`, digest `140abad8`, 985-tool gateway | 112 Customer.io tools: 70 App/Track + 20 named admin reads + 22 bounded `write_orchestrated` config tools. Service-account JWT works; 22/22 writes dry-run verified; 19/20 reads pass/expected-absent. Audit-log read is externally blocked by Customer.io HTTP 403 for the least-privilege system role. |
 | Stripe | first-party MCP (+ gateway src/stripe) | LIVE - acct OTCHealth Inc. (acct_1SQyXZAwjS2xuomw) | payments (HITECH 1179) |
 | Shopify | first-party MCP (+ gateway src/shopify) | LIVE - otchealthmart.com (OTCHealth, USD) | storefront ops |
 | Cloudflare (Developer Platform) | first-party MCP | LIVE (NEW) - D1, KV, R2, Workers, Hyperdrive, docs | DISTINCT from the gateway's DNS/email-routing tools (src/cloudflare) |
@@ -49,7 +49,7 @@ A large first-party MCP set is connected directly in the Claude Code session now
 
 | Service | Access path | Status | Notes |
 |---|---|---|---|
-| **Unified fleet gateway** (otchealth-mcp-server) | custom MCP @ mcp.otchealth.app/mcp | **NOT connected in this session** | code (OAuth 2.1 + Phase-2 modules) is on main; PENDING Azure redeploy + env (Matt gate). Capability Catalog tools (catalog_list_tools / _service_capabilities / _audit_unused) unavailable until connected |
+| **Unified fleet gateway** (otchealth-mcp-server) | custom MCP @ mcp.otchealth.app/mcp | **LIVE** - revision `g8d087b68`, digest `140abad8`, 985 tools | OIDC immutable blue-green release path; health/catalog/deep-health gates; `catalog_list_tools` live and authoritative. |
 | **Depot** | gateway module - FULL API (+ Actions for builds) | code BUILT; live use pending gateway redeploy + DEPOT_TOKEN | NO standalone Depot remote MCP - reaches Claude via the gateway. Builds run on Depot runners via GitHub Actions (depot-macos-26 / depot-ubuntu-24.04) |
 | RevenueCat | API-skill (gateway module) | MCP allowlist-gated | use v2 API until allowlisted |
 | Gumroad | skill | LIVE (skill) | digital products |
@@ -67,7 +67,7 @@ The gateway's Capability Catalog (`catalog_list_tools`, `catalog_service_capabil
 `catalog_audit_unused`) introspects each provider's full surface and flags WIRED vs
 AVAILABLE-NOT-WIRED, plus what our plan/grant includes that we are not using. That
 report is the standing answer to "are we using everything we pay for / have access to".
-It is unavailable until the gateway is redeployed + connected (above).
+It is live on the production gateway; call it directly rather than trusting a stale client-side catalog cache.
 
 ## Drift to fix
 - `otchealth-cto/CLAUDE.md` and this map reference `otchealth-mcp-server/docs/UNIFIED-FLEET-GATEWAY.md`, which does NOT exist. The mcp-server repo has README.md / START_HERE.md / KICKOFF_PROMPT.md / ADR-001.md instead. Create the gateway doc or repoint the references.
