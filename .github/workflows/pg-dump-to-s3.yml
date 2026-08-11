@@ -1,0 +1,169 @@
+# Nightly Postgres -> S3 DR backup (closes AZURE-LOSS-DR-PLAN.md gap #9: Flatstick's and FourVault's
+# production Azure Database for PostgreSQL databases had NO off-Azure backup).
+#
+# skills/fleet-backup/pg-dump.mjs orchestrates a real `pg_dump` of both `flatstick` and `fourvault`
+# (the databases on `otchealth-nonphi-pg-cus1`) via a short-lived Azure Container Apps Job execution
+# (see that script's header for the full architecture and WHY it is not a plain "GitHub Actions runner
+# talks straight to Postgres" design -- the short version: this repo's own cloud sandbox and, by the
+# same firewall evidence, any plain GitHub-hosted runner, currently cannot reach the Postgres server's
+# :5432 port at all; running the dump from inside Azure instead needs zero firewall change and matches
+# the fleet's already-established pattern for Postgres work). The job bootstraps a dedicated, read-only
+# `backup_ro` role (never uses the admin credential for the dump itself), gzips each dump, and PUTs it
+# into the SAME Azure Blob container (`ledger-backup`) skills/fleet-backup/backup.mjs already writes to,
+# under a `pg-dumps/` prefix.
+#
+# From there this workflow reuses the EXISTING, already-scheduled DR machinery with zero code changes:
+# skills/fleet-backup/s3-mirror.mjs already lists that whole container and mirrors every non-privileged
+# blob it finds to the off-Azure S3 DR bucket (the pg-dump blob names do not match any of its privileged-
+# substring patterns -- see tests/pg-dump-not-privileged.test.mjs, a regression guard on exactly that),
+# and skills/fleet-backup/restore-drill.mjs proves whatever s3-mirror.mjs just mirrored round-trips byte-
+# for-byte from S3. This workflow runs pg-dump.mjs, then s3-mirror.mjs, then restore-drill.mjs, then one
+# extra pg_dump-specific content-shape re-check (gunzip + look for the real pg_dump banner) as a second,
+# independent proof beyond the generic sha256 compare restore-drill.mjs already does.
+#
+# LIVE-PROVEN end to end this same build (not just "the workflow file looks right" -- a real run, from a
+# session with the same AZURE_SP_* creds this workflow uses): pg-dump-nonphi execution Succeeded,
+# flatstick dump = 150727 bytes gzipped / fourvault dump = 15595 bytes gzipped, both landed in Azure Blob,
+# both gunzip cleanly and contain the real "PostgreSQL database dump" banner, both were then mirrored to
+# S3 by s3-mirror.mjs and PASSED restore-drill.mjs's byte-identity check pulling them back from S3.
+#
+# Runs 15 minutes after the brain S3 mirror's own 06:50 UTC schedule (nightly-s3-dr-mirror.yml) so this
+# job's OWN call into s3-mirror.mjs does not race that other scheduled invocation of the same script
+# (s3-mirror.mjs writes its own run manifest back into the source container -- two concurrent writers
+# racing that manifest write is exactly the kind of "last write wins, silently drops the other run's
+# record" bug worth avoiding by simple time separation rather than by adding real locking for a job this
+# infrequent).
+#
+# Azure auth is the SAME two-part shape nightly-s3-dr-mirror.yml already uses (see that workflow's own
+# header for the full rationale): azure/login OIDC (secretless) primes the az-CLI fallback kvSecret() can
+# use, AND AZURE_SP_CLIENT_ID/SECRET/TENANT_ID are set as env for every step that touches
+# skills/fleet-backup/azure-blob-client.mjs OR mints its own management.azure.com token (pg-dump.mjs's
+# armToken() -- a separate token resource from kvSecret()'s vault.azure.net tokens, see that script's
+# header for why it cannot reuse kvSecret()'s own token cache).
+
+name: Nightly Postgres DR Backup
+
+on:
+  schedule:
+    - cron: '5 7 * * *'   # daily 07:05 UTC -- 15min after nightly-s3-dr-mirror.yml's own 06:50 UTC run
+  workflow_dispatch: {}    # manual trigger; use this for the first real proving run after merge
+
+permissions:
+  id-token: write   # secretless OIDC login to Azure (azure/login); kvSecret reads Postgres/AWS DR secrets via the az session
+  contents: read
+
+concurrency:
+  group: nightly-pg-dump-to-s3
+  cancel-in-progress: false
+
+jobs:
+  pg-dump-to-s3:
+    name: pg_dump (Flatstick + FourVault) -> Azure Blob -> S3 DR mirror -> restore-drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Azure login (OIDC, secretless -- lets kvSecret resolve secrets via its az-CLI fallback)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: "Run pg_dump (creates/updates the pg-dump-nonphi Container Apps Job, starts + polls one execution, verifies the resulting blobs)"
+        working-directory: skills/fleet-backup
+        env:
+          BACKUP_STORAGE_ACCOUNT: ${{ vars.BACKUP_STORAGE_ACCOUNT || 'stotc55c84f6bef' }}
+          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
+          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
+        run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this job CANNOT FAIL.
+          timeout 900 node pg-dump.mjs run 2>&1 | tee "${GITHUB_WORKSPACE}/pg-dump.log"
+
+      - name: "Run S3 DR mirror (relays the fresh pg-dumps/*.sql.gz blobs -- and everything else backup.mjs writes -- to S3; zero pg-dump-specific code)"
+        if: always()
+        working-directory: skills/fleet-backup
+        env:
+          BACKUP_STORAGE_ACCOUNT: ${{ vars.BACKUP_STORAGE_ACCOUNT || 'stotc55c84f6bef' }}
+          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
+          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
+        run: |
+          set -o pipefail
+          node s3-mirror.mjs run 2>&1 | tee "${GITHUB_WORKSPACE}/s3-mirror.log"
+
+      - name: "Run restore drill (proves the pg dumps -- and every other mirrored blob -- round-trip byte-identical from S3)"
+        if: always()
+        working-directory: skills/fleet-backup
+        env:
+          BACKUP_STORAGE_ACCOUNT: ${{ vars.BACKUP_STORAGE_ACCOUNT || 'stotc55c84f6bef' }}
+          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
+          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
+        run: |
+          set -o pipefail
+          node restore-drill.mjs 2>&1 | tee "${GITHUB_WORKSPACE}/restore-drill.log"
+
+      - name: "Postgres-specific content-shape re-check (item 4: pull each dump back from S3, gunzip, confirm the real pg_dump banner is present -- a second, independent proof beyond restore-drill.mjs's generic sha256 compare)"
+        if: always()
+        working-directory: skills/fleet-backup
+        env:
+          AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
+          AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
+          AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
+        run: |
+          set -o pipefail
+          timeout 60 node -e '
+            const { kvSecret } = await import("../kb-memory/azure-secret.mjs");
+            const { s3Get } = await import("./s3-client.mjs");
+            const { looksLikePgDumpSql } = await import("./pg-dump.mjs");
+            const zlib = await import("node:zlib");
+            const akid = await kvSecret("aws-dr-access-key-id");
+            const asecret = await kvSecret("aws-dr-secret-access-key");
+            const bucket = await kvSecret("aws-dr-s3-bucket");
+            const region = await kvSecret("aws-dr-region");
+            if (!akid || !asecret || !bucket || !region) { console.log("AWS DR creds not provisioned -- skipping (pg-dump.mjs already ran this exact check against Azure Blob above; this step only adds the S3-side re-check)."); process.exit(0); }
+            const creds = { accessKeyId: akid, secretAccessKey: asecret, bucket, region };
+            const date = new Date().toISOString().slice(0, 10);
+            let anyFail = false;
+            for (const db of ["flatstick", "fourvault"]) {
+              const key = `pg-dumps/${db}-${date}.sql.gz`;
+              const buf = await s3Get(creds, key);
+              if (!buf) { console.error(`::error::${key} not found in S3`); anyFail = true; continue; }
+              let ok = false;
+              try { ok = looksLikePgDumpSql(zlib.gunzipSync(buf)); } catch (e) { console.error(`::error::${key} gunzip failed: ${e.message}`); anyFail = true; continue; }
+              console.log(`${key}: ${buf.length} bytes, looksLikePgDumpSql=${ok}`);
+              if (!ok) { console.error(`::error::${key} does not look like a valid pg_dump after round-tripping from S3`); anyFail = true; }
+            }
+            if (anyFail) process.exit(1);
+          ' --input-type=module 2>&1 | tee "${GITHUB_WORKSPACE}/pg-dump-content-check.log"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pg-dump-to-s3-logs
+          path: |
+            pg-dump.log
+            s3-mirror.log
+            restore-drill.log
+            pg-dump-content-check.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Page on failure (email, PostHog fallback)
+        if: failure()
+        run: timeout 60 node setup/page-on-failure.mjs --workflow "Nightly Postgres DR Backup" --log "${GITHUB_WORKSPACE}/pg-dump.log" --log "${GITHUB_WORKSPACE}/s3-mirror.log" --log "${GITHUB_WORKSPACE}/restore-drill.log" --log "${GITHUB_WORKSPACE}/pg-dump-content-check.log"
+
+      - name: "Heartbeat: mark this workflow's schedule as alive (independent of the dump/mirror/drill verdict above)"
+        if: always()
+        continue-on-error: true
+        run: timeout 20 node setup/heartbeat.mjs beat nightly-pg-dump-to-s3 ok >/dev/null 2>&1 || true
