@@ -192,3 +192,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Reproduced in AWARE runs 20260810T021000Z-5487e1aa and 20260810T023500Z-63b58bed: SECRET_IN_GATE_RUNTIME on TMPDIR node-compile-cache, checkpoint restored
 - **Opened:** 2026-08-11T00:28:18.999Z
 - **Closed:** (open)
+
+### finding:FND-20260811-17f2 severity:high status:open | Dedicated App Coders graph cannot carry explicit ownership for protected coordinator paths
+
+- **Source audit doc:** /agent/workspace/aware-build-2026-08-09/control/control-plane-regressions-2026-08-10.md
+- **Fix commit:** (none yet)
+- **Verified by:** Reproduced in AWARE run 20260810T013200Z-72e2b84a: planned manifest/CLAUDE/HANDOFF writes rejected PROTECTED_PATH_NOT_EXPLICITLY_OWNED
+- **Opened:** 2026-08-11T00:28:56.430Z
+- **Closed:** (open)
