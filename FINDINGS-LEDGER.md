@@ -184,3 +184,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Reproduced in AWARE run 20260810T023500Z-63b58bed: validated packet allow_delete=true, admission returned DELETE_NOT_ALLOWED
 - **Opened:** 2026-08-11T00:28:01.096Z
 - **Closed:** (open)
+
+### finding:FND-20260811-12b8 severity:high status:open | Dedicated App Coders integration gate falsely flags Node 24 compile cache as secret
+
+- **Source audit doc:** /agent/workspace/aware-build-2026-08-09/control/control-plane-regressions-2026-08-10.md
+- **Fix commit:** (none yet)
+- **Verified by:** Reproduced in AWARE runs 20260810T021000Z-5487e1aa and 20260810T023500Z-63b58bed: SECRET_IN_GATE_RUNTIME on TMPDIR node-compile-cache, checkpoint restored
+- **Opened:** 2026-08-11T00:28:18.999Z
+- **Closed:** (open)
