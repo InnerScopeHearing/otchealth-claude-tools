@@ -174,10 +174,10 @@ fi
 # auto-install. Registering + installing headlessly here makes the curated dev +
 # security plugins active every session. Best-effort; never aborts startup.
 # Curated set (see dream-team/PLUGIN-LAUNCH-PLAN.md): code-review, pr-review-toolkit,
-# commit-commands, feature-dev, frontend-design, hookify, plugin-dev, agent-sdk-dev,
+# commit-commands, feature-dev, frontend-design, plugin-dev, agent-sdk-dev,
 # security-guidance. The marketplace clones over public HTTPS (no auth).
 if command -v claude >/dev/null 2>&1; then
-  FLEET_PLUGINS="code-review pr-review-toolkit commit-commands feature-dev frontend-design hookify plugin-dev agent-sdk-dev security-guidance ralph-wiggum explanatory-output-style learning-output-style claude-opus-4-5-migration"
+  FLEET_PLUGINS="code-review pr-review-toolkit commit-commands feature-dev frontend-design plugin-dev agent-sdk-dev security-guidance ralph-wiggum explanatory-output-style learning-output-style claude-opus-4-5-migration"
   if ! claude plugin marketplace list 2>/dev/null | grep -q "claude-code-plugins"; then
     echo "[octools] Registering official plugin marketplace (anthropics/claude-code)..."
     claude plugin marketplace add anthropics/claude-code >/dev/null 2>&1 \
@@ -193,6 +193,31 @@ if command -v claude >/dev/null 2>&1; then
       fi
     done
   fi
+  # Repair the hookify plugin's broken import layout if it is present at all.
+  # hookify is no longer installed by this script and is disabled in
+  # .claude/settings.json, but a box that installed it earlier still carries it
+  # in the plugin cache, and Claude Code loads plugin hooks at SESSION START and
+  # does not re-read enabledPlugins mid-session. On those boxes every
+  # PreToolUse/PostToolUse/UserPromptSubmit/Stop prints
+  # "Hookify import error: No module named 'hookify'" - two or more messages per
+  # tool call, forever.
+  #
+  # Cause: the hook scripts put dirname(CLAUDE_PLUGIN_ROOT) on sys.path then
+  # "import hookify", which needs the content in a directory literally named
+  # hookify. The install layout is versioned (.../hookify/<version>/), so the
+  # version directory occupies the package slot and the import can never resolve.
+  # A symlink named hookify pointing at the version directory makes it resolve,
+  # so the hooks no-op silently (there are no rule files) instead of erupting.
+  # Idempotent, best-effort, and cheap; never aborts startup.
+  _hookify_root="$HOME/.claude/plugins/cache/claude-code-plugins/hookify"
+  if [ -d "$_hookify_root" ] && [ ! -e "$_hookify_root/hookify" ]; then
+    _hookify_ver="$(find "$_hookify_root" -maxdepth 1 -mindepth 1 -type d ! -name hookify 2>/dev/null | head -1)"
+    if [ -n "$_hookify_ver" ] && [ -d "$_hookify_ver/core" ]; then
+      ln -sfn "$_hookify_ver" "$_hookify_root/hookify" 2>/dev/null \
+        && echo "[octools] repaired hookify plugin import layout (was spamming every tool call)"
+    fi
+  fi
+
   # Official Anthropic Agent Skills marketplace (anthropics/skills). These skills are
   # LICENSED, NOT redistributable (Anthropic "use within the Services" terms forbid
   # copying them into our repo), so we install them the AUTHORIZED way via the official
