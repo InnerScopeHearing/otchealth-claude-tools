@@ -200,3 +200,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Reproduced in AWARE run 20260810T013200Z-72e2b84a: planned manifest/CLAUDE/HANDOFF writes rejected PROTECTED_PATH_NOT_EXPLICITLY_OWNED
 - **Opened:** 2026-08-11T00:28:56.430Z
 - **Closed:** (open)
+
+### finding:FND-20260812-c22a severity:high status:open | WISMO stager (n8n x2epOeluOYLTFgo7) rejects the real Shopify fulfillment webhook on HMAC signature mismatch -- first live fulfillment event since deploy (Aug 4) silently failed to stage, no draft exists for order #10673's real UPS shipment despite fulfillment succeeding in Shopify
+
+- **Source audit doc:** CRO daily digest 2026-08-12
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-12T14:06:00.168Z
+- **Closed:** (open)
