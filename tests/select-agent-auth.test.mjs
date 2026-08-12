@@ -64,7 +64,7 @@ test("branch (a) HARD CONSTRAINT: OAuth wins even when the Bedrock opt-in AND AW
     ...BASE_ENV,
     CLAUDE_CODE_OAUTH_TOKEN: "tok",
     ALLOW_BEDROCK_OVERFLOW: "true",
-    AWS_ACCESS_KEY_ID: "AKIA_TEST",
+    AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE",
     AWS_SECRET_ACCESS_KEY: "secret",
   });
   assert.strictEqual(r.status, 0);
@@ -76,7 +76,7 @@ test("branch (b): opt-in + AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY selects the B
   const r = runSourced({
     ...BASE_ENV,
     ALLOW_BEDROCK_OVERFLOW: "true",
-    AWS_ACCESS_KEY_ID: "AKIA_TEST",
+    AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE",
     AWS_SECRET_ACCESS_KEY: "secret",
     ANTHROPIC_API_KEY: "leaked",
   });
@@ -106,7 +106,7 @@ test("branch (c): opt-in alone with no AWS credentials at all still fails (opt-i
 });
 
 test("branch (c): AWS credentials alone with no opt-in still fails (Bedrock is never a silent default)", () => {
-  const r = runSourced({ ...BASE_ENV, AWS_ACCESS_KEY_ID: "AKIA_TEST", AWS_SECRET_ACCESS_KEY: "secret" });
+  const r = runSourced({ ...BASE_ENV, AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE", AWS_SECRET_ACCESS_KEY: "secret" });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /::error::/);
 });
@@ -115,7 +115,7 @@ test("branch (c): ALLOW_BEDROCK_OVERFLOW=false with AWS credentials present stil
   const r = runSourced({
     ...BASE_ENV,
     ALLOW_BEDROCK_OVERFLOW: "false",
-    AWS_ACCESS_KEY_ID: "AKIA_TEST",
+    AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE",
     AWS_SECRET_ACCESS_KEY: "secret",
   });
   assert.strictEqual(r.status, 1);
@@ -164,4 +164,32 @@ test("direct execution (not sourced) mirrors the same decision and exit codes", 
   const fail = runExecuted(BASE_ENV);
   assert.strictEqual(fail.status, 1);
   assert.match(fail.stderr, /::error::/);
+});
+
+// Regression: a non-empty AWS_ACCESS_KEY_ID is not evidence of usable AWS auth.
+// The Claude Code cloud sandbox injects an agent-proxy placeholder ("prox...",
+// lowercase, 14 chars) into AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY. Presence
+// alone previously selected bedrock-overflow, so every Bedrock call would fail
+// with InvalidClientTokenId while this selector reported it had found working
+// auth. Real key ids are uppercase alphanumeric and at least 16 chars.
+test("opt-in + the agent-proxy AWS placeholder does NOT select the Bedrock lane", () => {
+  const r = runSourced({
+    ...BASE_ENV,
+    ALLOW_BEDROCK_OVERFLOW: "true",
+    AWS_ACCESS_KEY_ID: "proxy-key-abc",
+    AWS_SECRET_ACCESS_KEY: "proxy-secret",
+  });
+  assert.strictEqual(r.status, 1, "placeholder credentials must not count as usable AWS auth");
+  assert.doesNotMatch(r.stdout, /bedrock-overflow/);
+});
+
+test("opt-in + a real-shaped AWS key id still selects the Bedrock lane", () => {
+  const r = runSourced({
+    ...BASE_ENV,
+    ALLOW_BEDROCK_OVERFLOW: "true",
+    AWS_ACCESS_KEY_ID: "ASIAIOSFODNN7EXAMPLE",
+    AWS_SECRET_ACCESS_KEY: "secret",
+  });
+  assert.strictEqual(r.status, 0, "STS-style ASIA keys must remain acceptable");
+  assert.match(r.stdout, /bedrock-overflow/);
 });
