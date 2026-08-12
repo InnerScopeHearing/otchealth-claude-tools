@@ -66,8 +66,25 @@ _agent_auth_bedrock_opt_in() {
   esac
 }
 
+# Real AWS access key IDs are uppercase alphanumeric and at least 16 chars
+# (AKIA... long-term, ASIA... STS, ABIA/ACCA for other principal types). A
+# non-empty value is NOT sufficient evidence: the Claude Code cloud sandbox
+# injects an AGENT-PROXY placeholder into AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+# (lowercase, 14 chars, prefix "prox") that is non-empty but authenticates to
+# nothing. A presence-only check therefore reports "AWS is available", selects
+# bedrock-overflow, and every call then fails with InvalidClientTokenId while
+# the selector claims it found working auth. This shape check is offline and
+# dependency-free; it rejects the placeholder without rejecting any real key.
+_agent_auth_aws_key_id_looks_real() {
+  case "${1:-}" in
+    *[!A-Z0-9]* | "") return 1 ;;
+  esac
+  [ "${#1}" -ge 16 ]
+}
+
 _agent_auth_aws_creds_present() {
-  if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+  if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] &&
+    _agent_auth_aws_key_id_looks_real "${AWS_ACCESS_KEY_ID:-}"; then
     return 0
   fi
   [ -n "${AWS_PROFILE:-}" ] && return 0
