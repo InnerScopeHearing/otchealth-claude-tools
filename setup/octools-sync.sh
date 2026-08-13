@@ -71,6 +71,22 @@ if [ -z "${OCTOOLS_NO_GATEWAY_SYNC:-}" ] && command -v claude >/dev/null 2>&1 \
   fi
 fi
 
+# --- Hookify plugin self-heal: same idempotent repair session-start.sh applies at boot (see there for
+# the full explanation), re-run here so a session that was ALREADY RUNNING before that fix landed also
+# self-heals, on its very next prompt, without needing to end and restart. session-start.sh's install/
+# repair block only runs at a genuinely fresh session start, not on a resume of an existing one -- this
+# is the exact "changed something, other agents/sessions aren't connected to it" gap the top of this
+# file exists to close, just for a plugin-cache file instead of the toolkit checkout. Cheap (a couple
+# [ -e ] tests), so no throttle needed; silent when already repaired or hookify isn't present at all.
+_hookify_root="$HOME/.claude/plugins/cache/claude-code-plugins/hookify"
+if [ -d "$_hookify_root" ] && [ ! -e "$_hookify_root/hookify" ]; then
+  _hookify_ver="$(find "$_hookify_root" -maxdepth 1 -mindepth 1 -type d ! -name hookify 2>/dev/null | head -1)"
+  if [ -n "$_hookify_ver" ] && [ -d "$_hookify_ver/core" ]; then
+    ln -sfn "$_hookify_ver" "$_hookify_root/hookify" 2>/dev/null \
+      && echo "[octools-sync] repaired hookify plugin import layout (was spamming every tool call in this already-running session)"
+  fi
+fi
+
 # --- Fleet bulletin: surface what changed + why (any session; cheap local read). ---
 node "$TOOLS_DIR/setup/bulletin.mjs" since 2>/dev/null || true
 
