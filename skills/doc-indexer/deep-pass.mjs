@@ -30,7 +30,7 @@ import { readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { kvSecret, requireSecrets } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -200,7 +200,10 @@ async function analyze(r) {
     return { tin, tout, patch: {
       summary_deep: filt ? '[Automated summary blocked by the Azure OpenAI content filter; manual review required.]' : '',
       title_deep: basename(r.path), doc_type: '', confidence: 'low', requires_signature: false, non_text_asset: false,
-      reocr, reocr_tried: reocr_tried || reocr, deep_softerr: String(e.message).slice(0, 90),
+      // reocr_tried = true unconditionally: a full deep-pass attempt was made and resolved to a
+      // terminal (non-retryable-via-thin-reselection) outcome. See the reocr_tried comment on the
+      // main-path assignment below for why this must NOT stay gated on the low-alnum DI branch.
+      reocr, reocr_tried: true, deep_softerr: String(e.message).slice(0, 90),
       review: 'NEEDS_CLAUDE_REVIEW', review_reasons: [filt ? 'summary blocked by content filter (manual review)' : 'summary model error'],
     } };
   }
@@ -216,7 +219,20 @@ async function analyze(r) {
   const date = patch.execution_date || patch.doc_date || '';
   patch.proposed_name = (date ? date + '_' : 'UNDATED_') + slug(patch.title_deep || r.title || basename(r.path)) + '.' + (ext || 'pdf');
   patch.dedup_key = slug((patch.doc_type || '') + '|' + (patch.counterparty || '') + '|' + (patch.principal || '')).toLowerCase();
-  patch.reocr = reocr; patch.reocr_tried = reocr_tried || reocr;
+  patch.reocr = reocr;
+  // reocr_tried = true unconditionally once a full LLM analysis pass has completed (not only when the
+  // low-alnum(<60) auto-re-OCR branch actually fired). BUG FIXED HERE (2026-08-13): this used to be
+  // `reocr_tried || reocr`, so a doc whose EXTRACTED text already cleared the 60-alnum-char threshold
+  // (re-OCR never even attempted, since it is gated on alnum(txt) < 60) but which the LLM itself still
+  // flagged e.g. ["text too thin to trust"] in its `flags` field NEVER got reocr_tried=true. Since its
+  // input text never changes between cron ticks, the deterministic (temp 0.1) model kept re-emitting
+  // the same "thin"-matching flag forever, and unresolved() below (which never checked reocr_tried)
+  // reselected it on every single pass -- a genuine infinite reselection loop burning gpt-4.1 tokens
+  // on docs that were already fully deep-processed and could never actually be healed by a repeat call
+  // (re-OCR is inapplicable once alnum(txt) >= 60; the model was never going to change its mind on
+  // identical input). Marking reocr_tried=true here means "we made our one full resolution attempt",
+  // which is exactly the "re-select ONCE" semantics unresolved()'s own comment already promised.
+  patch.reocr_tried = true;
   // CONFIDENCE GATE: flag only genuine outliers + materially-important findings, NOT routine docs
   // that merely lack a perfect title or a date (that over-flagging buries the real review list).
   const reasons = [...(patch.flags || [])];
@@ -241,6 +257,26 @@ async function loadCatalog() { const b = await getBuf(CATALOG); if (!b) throw ne
 let flushing = false;
 async function flush(rows) { if (flushing) return; flushing = true; try { await putBuf(CATALOG, Buffer.from(rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8'), 'application/x-ndjson'); } finally { flushing = false; } }
 
+// ---------- selection logic (pure, exported for regression testing -- see tests/deep-pass-loop.test.mjs) ----------
+// Re-select previously thin-flagged docs ONCE so the auto-re-OCR path (or, when re-OCR does not apply,
+// the LLM's own re-analysis) gets a chance to heal them. RESOLUTION is terminal once ANY of these hold:
+//   - reocr === true          (Document Intelligence actually healed the text this pass), or
+//   - non_text_asset === true (classified as a non-text asset -- audio/video/archive/image), or
+//   - reocr_tried === true    (a full analyze() pass has already completed for this row at least once,
+//                               whether or not the low-alnum(<60) DI branch fired -- see the reocr_tried
+//                               comment in analyze() for the exact bug this closes).
+// Without the reocr_tried check, a doc whose extracted text already cleared the 60-alnum threshold (so
+// re-OCR was never attempted and never will be) but which the LLM itself kept flagging "text too thin
+// to trust" was reselected on EVERY pass forever -- a genuine, unbounded infinite-reselection loop.
+const REOCR_RE = /thin|re-?OCR/i;
+const unresolved = (r) => (r.review_reasons || []).some((x) => REOCR_RE.test(x)) && !r.non_text_asset && !r.reocr && !r.reocr_tried;
+function selectTodo(rows, { reindex = false, prefix = '', limit = 0 } = {}) {
+  let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (reindex || !r.deep || unresolved(r)));
+  if (prefix) todo = todo.filter((r) => (r.path || '').startsWith(prefix));
+  if (limit) todo = todo.slice(0, limit);
+  return todo;
+}
+
 async function main() {
   // Fail-LOUD on the Azure secrets this run actually needs (names the real missing key), not the
   // vestigial GCP-SA precondition (removed 2026-07-05 — it was a leftover pre-migration gate that
@@ -252,16 +288,7 @@ async function main() {
   if (!FKEY) { console.error('Missing azure-foundry-key'); process.exit(2); }
   if (!(await acquireLock())) { console.error(`[deep-pass] another execution holds a fresh lock for ${CONTAINER}; exiting 0 (cron-safe, no double-run).`); return; }
   const rows = await loadCatalog();
-  // Re-select previously thin-flagged docs ONCE so the new auto-re-OCR path heals them (guarded by
-  // reocr_tried so a genuinely-empty doc is not retried every cron tick forever).
-  // Re-select thin-flagged docs not yet RESOLVED. Resolution is terminal: re-OCR heals a real scan
-  // (reocr=true) or it is classified a non-text asset (non_text_asset=true); either way it stops being
-  // selected, so the */30 cron self-terminates instead of retrying forever.
-  const REOCR_RE = /thin|re-?OCR/i;
-  const unresolved = (r) => (r.review_reasons || []).some((x) => REOCR_RE.test(x)) && !r.non_text_asset && !r.reocr;
-  let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (REINDEX || !r.deep || unresolved(r)));
-  if (PREFIX) todo = todo.filter((r) => (r.path || '').startsWith(PREFIX));
-  if (LIMIT) todo = todo.slice(0, LIMIT);
+  const todo = selectTodo(rows, { reindex: REINDEX, prefix: PREFIX, limit: LIMIT });
   console.error(`[deep-pass] profile=${PROFILE} ${ACCT}/${CONTAINER} | ${rows.length} catalog rows | ${todo.length} to process | model=${SUMMODEL} conc=${CONC}${MAXMIN ? ` budget=${MAXMIN}m` : ''}`);
   let n = 0, since = 0, next = 0, flagged = 0, tin = 0, tout = 0, budgetHit = false;
   const start = Date.now();
@@ -319,4 +346,22 @@ async function main() {
   }
   await releaseLock();
 }
-main().catch((e) => { console.error('[deep-pass] FATAL', e.message); process.exit(1); });
+
+// CLI entrypoint guard: only run main() when this file is executed directly (`node deep-pass.mjs ...`),
+// never when imported (e.g. by tests importing `selectTodo`/`unresolved` for regression coverage) --
+// without this guard, importing the module would unconditionally kick off a real Azure-credentialed
+// run (and `process.exit()` the importing process on any failure), the same import-time-side-effect
+// class of bug fixed in indexer.mjs/backup.mjs.
+//
+// pathToFileURL, NOT the `file://${process.argv[1]}` string concat: import.meta.url is a percent-
+// ENCODED URL, so the naive form silently fails to match whenever argv[1] is relative (`node
+// ./deep-pass.mjs` -> `file://./deep-pass.mjs`) or contains any character URL-encoding touches (a
+// space becomes %20). A mismatch here does not throw -- main() just never runs and the process exits
+// 0, i.e. the job reports **Succeeded while doing nothing**, which is the exact silent-failure class
+// this whole fix exists to close. The job's own deep-pass.sh happens to pass a clean absolute path
+// today, so the naive form works right now; this makes it not depend on that holding.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => { console.error('[deep-pass] FATAL', e.message); process.exit(1); });
+}
+
+export { selectTodo, unresolved, REOCR_RE };
