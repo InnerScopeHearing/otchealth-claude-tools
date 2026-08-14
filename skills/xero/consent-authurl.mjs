@@ -13,9 +13,34 @@ async function sm(t,id){ const _kv = await kvSecret(id); if (_kv != null) return
  // Xero rejects as "access_denied: Requested wrong apps scopes". This set grants the agent full read+write
  // on accounting, payroll, files, assets, projects, plus read on budgets + all 9 reports.
  // offline_access mandatory for refresh token; openid/profile/email for identity.
- const SCOPE="openid profile email offline_access accounting.settings accounting.contacts accounting.attachments accounting.invoices accounting.banktransactions accounting.payments accounting.manualjournals accounting.budgets.read accounting.reports.profitandloss.read accounting.reports.balancesheet.read accounting.reports.trialbalance.read accounting.reports.aged.read accounting.reports.banksummary.read accounting.reports.executivesummary.read accounting.reports.budgetsummary.read accounting.reports.taxreports.read accounting.reports.tenninetynine.read payroll.employees payroll.payruns payroll.payslip payroll.settings payroll.timesheets files assets projects";
+ const BASE_SCOPE="openid profile email offline_access accounting.settings accounting.contacts accounting.attachments accounting.invoices accounting.banktransactions accounting.payments accounting.manualjournals accounting.budgets.read accounting.reports.profitandloss.read accounting.reports.balancesheet.read accounting.reports.trialbalance.read accounting.reports.aged.read accounting.reports.banksummary.read accounting.reports.executivesummary.read accounting.reports.budgetsummary.read accounting.reports.taxreports.read accounting.reports.tenninetynine.read payroll.employees payroll.payruns payroll.payslip payroll.settings payroll.timesheets files assets projects";
+
+ // GET /Journals (the general-ledger journal feed) requires `accounting.journals.read`, which this
+ // set has NEVER requested. `accounting.manualjournals` above is a DIFFERENT endpoint
+ // (/ManualJournals, user-entered journals). That omission -- not a Xero cutoff -- is why
+ // GET /Journals returns HTTP 401 AuthorizationUnsuccessful on every org (reproduced 2026-08-14 on
+ // otchealth and hearingassist). The CFO needs that feed for the FY2022 close.
+ //
+ // OPT-IN, NOT DEFAULT, deliberately. Xero rejects the WHOLE consent with
+ // "access_denied: Requested wrong apps scopes" when a set contains a scope this app cannot hold,
+ // and re-consent is how CFO Xero access gets RESTORED -- so silently widening the default set
+ // risks locking the CFO out of everything to gain one endpoint. The base set above is
+ // empirically proven grantable; this flag is the experiment, run deliberately.
+ //
+ // By this file's own rule (write scope where a write twin exists, .read only where none does)
+ // journals.read is the correct form: /Journals is read-only in Xero, so there is no write twin
+ // to collide with. Expected to be granted -- but expected is not verified.
+ //
+ // IF Xero returns access_denied with this flag: re-run WITHOUT it to restore access immediately,
+ // then treat journals-scope eligibility as an app-type question for the Xero Developer Portal
+ // (see isGrandfatheredForJournals in otchealth-mcp-server, which deliberately refuses to guess).
+ const WITH_JOURNALS = process.argv.includes("--with-journals");
+ const SCOPE = WITH_JOURNALS ? `${BASE_SCOPE} accounting.journals.read` : BASE_SCOPE;
  const u=new URLSearchParams({response_type:"code",client_id:cid,redirect_uri:REDIRECT,scope:SCOPE,state:"ha"});
  console.log("AUTHORIZE_URL:");
  console.log("https://login.xero.com/identity/connect/authorize?"+u.toString());
  console.log("\nredirect_uri used:",REDIRECT,"| scopes:",SCOPE);
+ console.log(WITH_JOURNALS
+   ? "\nMODE: +accounting.journals.read (unlocks GET /Journals). If Xero answers access_denied, re-run WITHOUT --with-journals to restore the proven set."
+   : "\nMODE: proven base set. GET /Journals will keep returning 401 -- re-run with --with-journals to request that scope.");
 })().catch(e=>console.error("ERR",e.message));
