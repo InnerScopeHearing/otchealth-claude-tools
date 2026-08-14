@@ -208,3 +208,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-12T14:06:00.168Z
 - **Closed:** (open)
+
+### finding:FND-20260814-4fea severity:medium status:open | Gateway ECS task role has OpenSearch write+delete though the gateway adapter is read-only; all 25 task-def families share otchealthTaskRole so it cannot be tightened without splitting roles first
+
+- **Source audit doc:** otchealth-cto/runbooks/AWS-CUTOVER-2026-08-14.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-14T07:41:59.160Z
+- **Closed:** (open)
