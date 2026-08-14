@@ -216,3 +216,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-14T07:41:59.160Z
 - **Closed:** (open)
+
+### finding:FND-20260814-b126 severity:medium status:open | Brain-load ring backstop drops legitimate INND finance docs on a bare 'custody' token (236+ so far, fail-safe, flagged for human review, needs CLO decision before narrowing)
+
+- **Source audit doc:** otchealth-cto/runbooks/AWS-CUTOVER-2026-08-14.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-14T13:46:59.976Z
+- **Closed:** (open)
