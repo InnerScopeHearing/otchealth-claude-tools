@@ -224,3 +224,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-14T13:46:59.976Z
 - **Closed:** (open)
+
+### finding:FND-20260814-bcbc severity:medium status:open | selfrepair.mjs proposes reverting a file the PR never touched (would silently discard unrelated main-branch work if applied)
+
+- **Source audit doc:** otchealth-cto/runbooks/AWS-CUTOVER-2026-08-14.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-14T18:51:35.167Z
+- **Closed:** (open)
