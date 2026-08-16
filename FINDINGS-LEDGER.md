@@ -280,3 +280,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-16T20:53:52.156Z
 - **Closed:** (open)
+
+### finding:FND-20260816-c68c severity:medium status:open | pg-sql.ts interpolates table name into SQL; add an identifier regex guard at the top of translate() so the injection boundary is self-enforcing rather than caller-dependent
+
+- **Source audit doc:** session:2026-08-16 push security review
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-16T20:53:54.812Z
+- **Closed:** (open)
