@@ -80,11 +80,33 @@
 //   node enrich.mjs run           --profile commerce --azure [--limit n] [--concurrency 4] [--reindex]
 //   node enrich.mjs reindex-room  --profile commerce --azure [--full-reset] [--wait-minutes 3]
 //   node enrich.mjs verify        --profile commerce --azure --path "shopify-library/00-index.md"
+//
+// SEARCH_BACKEND (2026-08-16, closes a real gap: 0% entity-field coverage across all 66,668 documents
+// on the live OpenSearch brain, because this file only ever resolved AZURE_SEARCH_ENDPOINT /
+// azure-search-admin-key and hard-exited without them -- verified live before this was added):
+//   --search-backend azure       (default, byte-for-byte the pre-existing behavior above: blob custom
+//                                 metadata + the Azure native pull-indexer/skillset projection chain)
+//   --search-backend opensearch  (run ONLY: a DIRECT partial-update of every existing chunk document
+//                                 for a parent, via the bulk API's "update" action -- NEVER index/PUT
+//                                 _doc, which would replace the whole document and destroy its
+//                                 text_vector; see opensearch-client.mjs's osBulkUpdate). ensure-schema
+//                                 and reindex-room stay Azure-only by design: OpenSearch's mapping
+//                                 already carries the universal-core fields (provisioned when the room
+//                                 was created) and accepts new domain-pack fields via ordinary dynamic
+//                                 mapping (verified live, no `dynamic:strict` on any doc room), and
+//                                 there is no pull-indexer to "run" -- `run` IS the write, directly.
+// Also settable via the SEARCH_BACKEND env var (mirrors otchealth-mcp-server's own env var of the
+// same name/values, though this script and the gateway resolve it completely independently).
+// AWS credentials: env AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, else Key Vault
+// aws-cto-access-key-id/aws-cto-secret-access-key. Endpoint: env OPENSEARCH_ENDPOINT, else Key Vault
+// opensearch-endpoint (not present in the vault as of 2026-08-16), else the live otchealth-brain
+// domain's known host (see OS_DEFAULT_HOST below).
 
 import crypto from "node:crypto";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
 import * as MS from "./metadata-schema.mjs";
+import { osSearch, osBulkUpdate, osRefresh } from "./opensearch-client.mjs";
 
 // ============================ CLI ============================
 const argv = process.argv.slice(2);
@@ -100,6 +122,11 @@ const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.ENRICH_MAX_MINUTES
 const MODEL = takeVal("--model", process.env.ENRICH_MODEL || "gpt-4.1-mini");
 const VERIFY_PATH = takeVal("--path");
 const WAIT_MIN = parseInt(takeVal("--wait-minutes", "0"), 10) || 0;
+const BACKEND = (takeVal("--search-backend", process.env.SEARCH_BACKEND || "azure") || "azure").toLowerCase();
+if (BACKEND !== "azure" && BACKEND !== "opensearch") {
+  console.error(`--search-backend must be "azure" or "opensearch" (got "${BACKEND}").`);
+  process.exit(2);
+}
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help";
@@ -201,6 +228,101 @@ async function chatJson(messages, max_tokens) {
 }
 const J = (t) => { try { return JSON.parse(t); } catch { try { return JSON.parse(String(t).slice(String(t).indexOf("{"), String(t).lastIndexOf("}") + 1)); } catch { return null; } } };
 function estCost(tin, tout) { return (tin / 1e6) * 0.4 + (tout / 1e6) * 1.6; } // gpt-4.1-mini illustrative rate, same as indexer.mjs's costFromUsage
+
+// ============================ room name (shared by every Azure AI Search AND OpenSearch call) ============================
+// Both backends use the IDENTICAL room/index-name convention (verified live on OpenSearch 2026-08-16:
+// same names as the Azure rooms, e.g. "commerce-commerce-source-docs" -- see
+// otchealth-mcp-server/src/search/opensearch.ts's own file header, "ROOM/INDEX NAMES: identical to the
+// Azure rooms by design"). Factored out of what was three copy-pasted inline computations
+// (cmdEnsureSchema/cmdReindexRoom/cmdVerify) so the new OpenSearch call sites share it too rather than
+// becoming a fourth copy.
+function roomName() {
+  return `${PROFILE}-${CONTAINER}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
+}
+
+// ============================ OpenSearch (AWS) write path ============================
+// THE GAP THIS CLOSES (verified live 2026-08-16 before writing any of this): every chunked doc room on
+// the live OpenSearch brain (otchealth-brain domain) has 0% coverage on every entity/enrichment field
+// -- confirmed via `exists` queries returning 0 across legal-company, legal-personal,
+// finance-cfo-source-docs, commons-company-journal, and commerce-commerce-source-docs -- because this
+// file, until now, only ever resolved AZURE_SEARCH_ENDPOINT / azure-search-admin-key.
+//
+// The OpenSearch doc rooms' mapping ALREADY carries the 20-of-22 universal-core fields (provisioned
+// when the room's index was created; missing only contextual_prefix/word_count) and ZERO domain-pack
+// fields (commerce's 15 extras) -- verified live via osGetMapping before this was written. No
+// `dynamic:strict` is set on any doc room (verified via GET .../_settings), so writing the remaining
+// fields is safe: OpenSearch's default dynamic mapping creates them from the first document that
+// carries them, and because every write always goes through openSearchDocFields (the same
+// domain-driven field list, same types, every time), the inferred mapping stays consistent from the
+// first write onward -- there is no scenario where two different writers disagree on a new field's
+// type.
+const OS_DEFAULT_HOST = "search-otchealth-brain-uqmq2jw23cv4yjnnxblxzb7nny.us-east-1.es.amazonaws.com";
+let OS_CFG = null;
+async function resolveOpenSearch() {
+  const host = (process.env.OPENSEARCH_ENDPOINT || (await kvSecret("opensearch-endpoint")) || OS_DEFAULT_HOST)
+    .replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const region = process.env.OPENSEARCH_REGION || (await kvSecret("opensearch-region")) || "us-east-1";
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID || (await kvSecret("aws-cto-access-key-id"));
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY || (await kvSecret("aws-cto-secret-access-key"));
+  if (!accessKeyId || !secretAccessKey) {
+    console.error("Missing AWS credentials for OpenSearch (env AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, or Key Vault aws-cto-access-key-id/aws-cto-secret-access-key).");
+    process.exit(2);
+  }
+  OS_CFG = { host, region, accessKeyId, secretAccessKey, sessionToken: process.env.AWS_SESSION_TOKEN || undefined };
+}
+
+/**
+ * A catalog row needs a fresh LLM enrichment pass when it has never been enriched, or its content
+ * changed since the last enrichment (sha256 mismatch), or --reindex forces a full regen. Identical
+ * gate to the pre-existing inline `cmdRun` filter, factored out so both the "which rows need an LLM
+ * call" decision and the (backend-specific) "which rows need a write" decision can be asked
+ * independently of each other -- see needsOsSync below for why they are no longer the same question.
+ */
+function needsEnrich(r) {
+  return REINDEX || !r.enriched || r.enriched_sha256 !== r.sha256;
+}
+
+/**
+ * A row needs an OpenSearch sync when its CURRENT sha256 has not yet been pushed to OpenSearch. This
+ * is DELIBERATELY independent of needsEnrich: most catalog rows in a room that was already enriched
+ * for Azure (enriched_sha256 already matches sha256) still need their existing, already-computed
+ * fields projected to OpenSearch for the first time -- that projection costs zero LLM tokens (the
+ * fields already sit on the catalog row from the prior Azure run; see buildFieldsFromRow below), so
+ * gating it on the SAME enriched_sha256 flag Azure uses would silently skip the exact rows this
+ * write path exists to fix. enrich_os_sha256 is a new, purely additive catalog field for this.
+ */
+function needsOsSync(r) {
+  return BACKEND === "opensearch" && (REINDEX || !r.enrich_os_sha256 || r.enrich_os_sha256 !== r.sha256);
+}
+
+/** Reconstruct the exact `fields` shape enrichOne() would have returned, by reading the domain's field
+ *  names directly off an ALREADY-enriched catalog row. Used for the (common) case where a row was
+ *  enriched for Azure on a prior run and now only needs projecting to OpenSearch -- no LLM call. */
+function buildFieldsFromRow(r) {
+  const out = {};
+  for (const f of MS.fieldsForDomain(DOMAIN)) out[f.name] = r[f.name];
+  return out;
+}
+
+/** Find every existing OpenSearch chunk document for one catalog row, by exact match on its `path`
+ *  field. Verified live (2026-08-16): the bulk loader that populated OpenSearch wrote `path` as
+ *  "<account>/<container>/<catalog-row-path>" (no https://.../_TEXT/ prefix or .txt suffix the way
+ *  Azure's blob-URL `path` field carries it -- a genuinely different convention from Azure, not a
+ *  typo), identical across every chunk of the same parent, so one query returns every chunk's real
+ *  `_id` (== its chunk_id) directly with no separate parent_id lookup needed. `path` is a `text` field
+ *  with a `.keyword` sub-field (see the live mapping), so the exact-match query MUST target
+ *  `path.keyword`, not the analyzed `path` field itself, or a `term` query would rarely match. Bounded
+ *  at 500 (comfortably above the largest observed parent in commerce, 47 chunks) -- never unbounded. */
+async function osFindChunkIds(r) {
+  const pathValue = `${ACCT}/${CONTAINER}/${r.path}`;
+  const res = await osSearch(OS_CFG, roomName(), {
+    size: 500,
+    _source: false,
+    query: { term: { "path.keyword": pathValue } },
+  });
+  if (!res.ok || !res.json) throw new Error(`opensearch chunk lookup failed: http ${res.status} ${res.text.slice(0, 200)}`);
+  return (res.json.hits?.hits || []).map((h) => h._id).filter(Boolean);
+}
 
 function enrichSystemPrompt(domain, needSummary) {
   const docTypes = MS.enumFor({ enumKey: "DOC_TYPE" }, domain).join("|");
@@ -430,13 +552,15 @@ async function enrichOne(r) {
 async function cmdRun() {
   await resolveStorage();
   await resolveFoundry();
+  if (BACKEND === "opensearch") await resolveOpenSearch();
   if (!(await acquireLock())) { console.error("[enrich] another execution holds a fresh lock for this room; exiting 0 (cron-safe, no double-run)."); return; }
   let n = 0, flagged = 0, tin = 0, tout = 0, budgetHit = false;
+  let osSynced = 0, osChunks = 0, osErrors = 0;
   try {
     const rows = await loadCatalog();
-    let todo = rows.filter((r) => r.path && !r.path.startsWith("_") && r.sidecar && !r.err && (REINDEX || !r.enriched || r.enriched_sha256 !== r.sha256));
+    let todo = rows.filter((r) => r.path && !r.path.startsWith("_") && r.sidecar && !r.err && (needsEnrich(r) || needsOsSync(r)));
     if (LIMIT) todo = todo.slice(0, LIMIT);
-    console.error(`[enrich] domain=${DOMAIN} | ${rows.length} catalog rows | ${todo.length} to (re)enrich | model=${MODEL} conc=${CONCURRENCY}${MAX_MIN ? ` budget=${MAX_MIN}m` : ""}`);
+    console.error(`[enrich] domain=${DOMAIN} | search-backend=${BACKEND} | ${rows.length} catalog rows | ${todo.length} to (re)enrich/sync | model=${MODEL} conc=${CONCURRENCY}${MAX_MIN ? ` budget=${MAX_MIN}m` : ""}`);
     if (!todo.length) { console.log("[enrich] nothing to enrich (all caught up)."); return; }
     let next = 0, since = 0;
     const start = Date.now();
@@ -446,28 +570,69 @@ async function cmdRun() {
         const i = next++; if (i >= todo.length) return;
         const r = todo[i];
         try {
-          const { patch, usage, meta } = await enrichOne(r);
-          tin += usage.tin || 0; tout += usage.tout || 0;
-          Object.assign(r, patch);
-          if (patch.enrich_review) flagged++;
-          // ORDER MATTERS: Put Blob (used below to prepend the contextual-retrieval prefix) overwrites
-          // the WHOLE blob resource, including clearing any custom metadata that was not part of that
-          // same PUT (Azure Blob semantics, not an enrich.mjs choice). Content-edit FIRST, metadata-set
-          // LAST, so the metadata write is always the final word and actually sticks.
-          if (patch.contextual_prefix) await applyPrefixToSidecar(r.path, patch.contextual_prefix);
-          await setBlobMetadata(TEXT_PREFIX + r.path + ".txt", meta);
+          // A row already enriched for its CURRENT sha256 (needsEnrich false) that only needsOsSync
+          // skips the LLM call entirely -- its fields already sit on the catalog row from a prior run
+          // (Azure or otherwise); reconstruct them instead of re-asking the model (zero extra cost,
+          // see buildFieldsFromRow's doc comment).
+          let fieldsForWrite;
+          if (needsEnrich(r)) {
+            const { patch, usage, meta: azureMeta } = await enrichOne(r);
+            tin += usage.tin || 0; tout += usage.tout || 0;
+            Object.assign(r, patch);
+            if (patch.enrich_review) flagged++;
+            fieldsForWrite = buildFieldsFromRow(r);
+            if (BACKEND === "azure") {
+              // ORDER MATTERS: Put Blob (used below to prepend the contextual-retrieval prefix)
+              // overwrites the WHOLE blob resource, including clearing any custom metadata that was
+              // not part of that same PUT (Azure Blob semantics, not an enrich.mjs choice).
+              // Content-edit FIRST, metadata-set LAST, so the metadata write is always the final word
+              // and actually sticks.
+              if (patch.contextual_prefix) await applyPrefixToSidecar(r.path, patch.contextual_prefix);
+              await setBlobMetadata(TEXT_PREFIX + r.path + ".txt", azureMeta);
+            }
+          } else {
+            fieldsForWrite = buildFieldsFromRow(r);
+          }
+          if (BACKEND === "opensearch" && needsOsSync(r)) {
+            const chunkIds = await osFindChunkIds(r);
+            if (!chunkIds.length) {
+              r.enrich_os_err = "no OpenSearch chunks found for this path (not yet loaded into the room, or path convention mismatch)";
+              osErrors++;
+            } else {
+              const osDoc = MS.openSearchDocFields(fieldsForWrite, DOMAIN);
+              const bulkRes = await osBulkUpdate(OS_CFG, roomName(), chunkIds, osDoc);
+              if (bulkRes.ok) {
+                r.enrich_os_sha256 = r.sha256 || "";
+                r.enrich_os_synced_at = new Date().toISOString();
+                r.enrich_os_chunks = chunkIds.length;
+                delete r.enrich_os_err;
+                osSynced++; osChunks += chunkIds.length;
+              } else {
+                r.enrich_os_err = bulkRes.errors.map((e) => e.error).slice(0, 3).join(" | ").slice(0, 300);
+                osErrors++;
+              }
+            }
+          }
         } catch (e) { r.enrich_err = String(e.message).slice(0, 140); }
         n++; since++;
-        if (since >= 20) { since = 0; await flushCatalog(rows); await refreshLock(); console.error(`  ...${n}/${todo.length} (flagged ${flagged}; ~$${estCost(tin, tout).toFixed(3)})`); }
+        if (since >= 20) {
+          since = 0; await flushCatalog(rows); await refreshLock();
+          console.error(`  ...${n}/${todo.length} (flagged ${flagged}; ~$${estCost(tin, tout).toFixed(3)})${BACKEND === "opensearch" ? ` | os synced=${osSynced} chunks=${osChunks} errors=${osErrors}` : ""}`);
+        }
       }
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, todo.length || 1) }, worker));
     await flushCatalog(rows);
+    // Force visibility of everything just written rather than waiting for the default ~1s refresh
+    // interval -- called ONCE at the end (not per-write, which would add real latency at scale for no
+    // benefit once the caller is done batching; see osRefresh's own doc comment).
+    if (BACKEND === "opensearch" && osSynced > 0) { try { await osRefresh(OS_CFG, roomName()); } catch (e) { console.error(`  [enrich] WARN: post-sync refresh failed (results will still become visible on the next automatic refresh): ${e.message}`); } }
     const flaggedRows = rows.filter((r) => r.enrich_review);
     const csv = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""').replace(/\r?\n/g, " ") + '"';
     const out = ["path,doc_type,extraction_confidence,reasons", ...flaggedRows.map((r) => [csv(r.path), csv(r.doc_type), csv(r.extraction_confidence), csv((r.enrich_reasons || []).join("; "))].join(","))].join("\n");
     await putBuf("_REVIEW/metadata-review-queue.csv", Buffer.from(out, "utf8"), "text/csv");
-    console.log(`[enrich] +${n} docs enriched (${flagged} flagged low-confidence -> _REVIEW/metadata-review-queue.csv), ~$${estCost(tin, tout).toFixed(3)}${budgetHit ? " (time budget hit -- resumable, rerun for the tail)" : ""}.`);
+    const osSummary = BACKEND === "opensearch" ? `, opensearch: ${osSynced} doc(s) synced (${osChunks} chunk writes), ${osErrors} error(s)` : "";
+    console.log(`[enrich] +${n} docs processed (${flagged} flagged low-confidence -> _REVIEW/metadata-review-queue.csv), ~$${estCost(tin, tout).toFixed(3)}${osSummary}${budgetHit ? " (time budget hit -- resumable, rerun for the tail)" : ""}.`);
   } finally {
     await releaseLock();
   }
@@ -484,7 +649,7 @@ async function cmdEnsureSchema() {
   const FOUNDRY_KEY = process.env.AZURE_FOUNDRY_KEY || (await kvSecret("azure-foundry-key"));
   if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key."); process.exit(2); }
   if (!FOUNDRY_KEY) { console.error("Missing azure-foundry-key (needed to re-supply the redacted vectorizer/skill key on PUT)."); process.exit(2); }
-  const ROOM = `${PROFILE}-${CONTAINER}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
+  const ROOM = roomName();
   const fieldDefs = MS.fieldsForDomain(DOMAIN);
 
   // 1) INDEX: additive field add + refreshed semantic config. GET-clone-append-PUT, deredacting the
@@ -541,7 +706,7 @@ async function cmdReindexRoom() {
   const AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await kvSecret("azure-search-endpoint")) || "").replace(/\/$/, "");
   const AIS_KEY = process.env.AZURE_SEARCH_KEY || (await kvSecret("azure-search-admin-key"));
   if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key."); process.exit(2); }
-  const ROOM = `${PROFILE}-${CONTAINER}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
+  const ROOM = roomName();
   const ixrName = `ixr-${ROOM}`;
   async function post(path) { const r = await fetch(`${AIS_EP}${path}?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY } }); return r.status; }
   if (FULL_RESET) console.log("reset ->", await post(`/indexers/${ixrName}/reset`));
@@ -565,19 +730,36 @@ async function cmdReindexRoom() {
 // ============================ verify command ============================
 async function cmdVerify() {
   await resolveStorage();
+  if (!VERIFY_PATH) { console.error(`usage: verify --profile <p> --${BACKEND === "opensearch" ? "search-backend opensearch" : "azure"} --path "<catalog path, e.g. shopify-library/00-index.md>"`); process.exit(2); }
+  const ROOM = roomName();
+  const fieldDefs = MS.fieldsForDomain(DOMAIN);
+
+  if (BACKEND === "opensearch") {
+    await resolveOpenSearch();
+    const pathValue = `${ACCT}/${CONTAINER}/${VERIFY_PATH}`;
+    const select = ["chunk_id", "parent_id", "title", "path", ...fieldDefs.map((f) => f.name)];
+    const res = await osSearch(OS_CFG, ROOM, {
+      size: 10,
+      _source: { includes: select },
+      query: { term: { "path.keyword": pathValue } },
+    });
+    if (!res.ok) { console.error("verify search failed", res.status, res.text.slice(0, 300)); process.exit(1); }
+    const hits = res.json.hits?.hits || [];
+    console.log(JSON.stringify(hits.map((h) => ({ _id: h._id, ...h._source })), null, 2));
+    console.log(`(${hits.length} chunk row(s) for ${VERIFY_PATH} in ${ROOM}, OpenSearch)`);
+    return;
+  }
+
   const AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await kvSecret("azure-search-endpoint")) || "").replace(/\/$/, "");
   const AIS_KEY = process.env.AZURE_SEARCH_KEY || (await kvSecret("azure-search-admin-key"));
   if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key."); process.exit(2); }
-  if (!VERIFY_PATH) { console.error("usage: verify --profile <p> --azure --path \"<catalog path, e.g. shopify-library/00-index.md>\""); process.exit(2); }
-  const ROOM = `${PROFILE}-${CONTAINER}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
   const exactUrl = `https://${ACCT}.blob.core.windows.net/${CONTAINER}/_TEXT/${VERIFY_PATH}.txt`;
-  const fieldDefs = MS.fieldsForDomain(DOMAIN);
   const select = ["chunk_id", "parent_id", "title", "path", ...fieldDefs.map((f) => f.name)].join(",");
   const r = await fetch(`${AIS_EP}/indexes/${ROOM}/docs/search?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ search: "*", filter: `path eq '${exactUrl.replace(/'/g, "''")}'`, top: 3, select }) });
   const body = await r.json();
   if (!r.ok) { console.error("verify search failed", r.status, JSON.stringify(body).slice(0, 300)); process.exit(1); }
   console.log(JSON.stringify(body.value, null, 2));
-  console.log(`(${(body.value || []).length} chunk row(s) for ${VERIFY_PATH} in ${ROOM})`);
+  console.log(`(${(body.value || []).length} chunk row(s) for ${VERIFY_PATH} in ${ROOM}, Azure)`);
 }
 
 // ============================ dispatch ============================
@@ -589,7 +771,8 @@ try {
   else {
     console.error(`commands: run | ensure-schema | reindex-room [--full-reset] [--wait-minutes n] | verify --path "<catalog path>"
 flags: --profile finance|legal|commerce|commons --domain-pack <name> --azure-account a --container c --key-secret s
-       --limit n --concurrency n --max-minutes n --model gpt-4.1-mini --reindex`);
+       --limit n --concurrency n --max-minutes n --model gpt-4.1-mini --reindex
+       --search-backend azure|opensearch (default azure; opensearch supported by 'run' and 'verify' only)`);
     process.exit(2);
   }
 } catch (e) {
