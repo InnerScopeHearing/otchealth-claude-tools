@@ -328,6 +328,23 @@ export async function pushDocs(index, docs) {
   for (const d of docs) {
     const { id, ...fields } = d;
     ids.push(id);
+    // An EMPTY ts must be omitted, never sent as "".
+    //
+    // Found live during the 2026-08-16 frozen-room backfill: the clo-personal ring push failed with
+    // mapper_parsing_exception "cannot parse empty date" on three ledger rows whose ts was blank
+    // (20260630-054/055/056). All three of the fleet's memory writers build the field as
+    // `ts: entry.ts || ""`, and Azure AI Search accepted that; OpenSearch rejects it outright when
+    // the live index maps ts as `date` -- which legal-personal-memory does, even though this
+    // module's own header documents ts as `keyword`. That mapping mismatch is real and is why the
+    // fix belongs HERE, at the shared choke point every writer goes through, rather than in any one
+    // caller: it is correct under BOTH mappings.
+    //
+    // Omitting is the semantically right repair, not a workaround. "Unknown timestamp" is an ABSENT
+    // field, not an empty one, and under doc_as_upsert an omitted key simply is not set -- so this
+    // never clears a ts that a previous write already stored. Without it the whole bulk item is
+    // rejected and the row's text AND embedding are lost, which on the privileged ring is exactly
+    // the silent data loss this migration exists to prevent.
+    if (fields.ts === "") delete fields.ts;
     lines.push(JSON.stringify({ update: { _id: id } }));
     lines.push(JSON.stringify({ doc: fields, doc_as_upsert: true }));
   }
