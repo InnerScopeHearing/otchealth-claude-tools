@@ -55,6 +55,22 @@ globalThis.fetch = async (url, opts) => {
 
 const AZURE_HOST_RE = /\.(search\.windows\.net|openai\.azure\.com|cognitiveservices\.azure\.com|vault\.azure\.net)/i;
 
+/** Exact host comparison for the ASSERTIONS below, not just for the stub above.
+ *
+ *  The first version of this file used isHost() inside the injected stub but left plain
+ *  `url.includes(host)` in the assertions, and CodeQL flagged exactly those two lines
+ *  (js/incomplete-url-substring-sanitization) -- the fourth time this pattern has come up in this
+ *  repo. It is the assertions that most need it: they are what decides whether the port is proven,
+ *  and `u.includes("api.openai.com")` is satisfied by any URL that merely mentions that string in a
+ *  path or query. Comparing the parsed host component is both the fix and the stronger check. */
+function isHost(u, host) {
+  try {
+    return new URL(u).host === host;
+  } catch {
+    return false;
+  }
+}
+
 async function runIndexOne(entry) {
   const dir = mkdtempSync(join(tmpdir(), "index-one-test-"));
   const logPath = join(dir, "calls.log");
@@ -95,11 +111,11 @@ test("SEARCH_BACKEND=opensearch + EMBEDDINGS_PROVIDER=openai: a write-through em
     "the write-through must not reach any Azure host under the fully Azure-free configuration",
   );
   assert.ok(
-    calls.some((u) => u.includes("api.openai.com") && u.includes("/v1/embeddings")),
+    calls.some((u) => isHost(u, "api.openai.com") && u.includes("/v1/embeddings")),
     "must have embedded via the OpenAI-direct path",
   );
   assert.ok(
-    calls.some((u) => u.includes(OS_HOST) && u.includes("_bulk")),
+    calls.some((u) => isHost(u, OS_HOST) && u.includes("_bulk")),
     "must have upserted into the OpenSearch memory-exec index",
   );
 });
