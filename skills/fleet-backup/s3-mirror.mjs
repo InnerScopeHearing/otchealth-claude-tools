@@ -122,7 +122,17 @@ const MAX_MIRROR_BYTES = Number(process.env.S3_DR_MAX_MB || 500) * 1024 * 1024;
 // resolves each privileged blob to exactly one lane -- never-mirror wins over personal-legal, which
 // wins over finance-company-legal (the catch-all for anything else privileged).
 export const NEVER_MIRROR_SUBSTRINGS = ["medreview", "phi"];
-export const PERSONAL_LEGAL_SUBSTRINGS = ["legal-personal", "-personal"];
+// "-restricted" added 2026-08-16 alongside the backup.mjs ring-segregation fix. backup.mjs now emits
+// its Cosmos container dumps as a PAIR -- `<coll>-general-<date>.jsonl` and
+// `<coll>-restricted-<date>.jsonl` -- because the `memory` container mixes company and clo-personal
+// rows and the old single `memory-<date>.jsonl` matched NO substring here, so every personal row in
+// it was mirrored into the non-privileged bucket nightly (42 rows on 08-05, 75 on 08-10, 80 on
+// 08-15, measured directly in the live bucket, growing).
+//
+// This entry is what makes the new name mean something. Without it the fix would be cosmetic: the
+// file would be correctly SPLIT and then still land in the wrong bucket, which is a worse failure
+// than before because the split creates the appearance of segregation.
+export const PERSONAL_LEGAL_SUBSTRINGS = ["legal-personal", "-personal", "-restricted"];
 export const FINANCE_COMPANY_LEGAL_SUBSTRINGS = ["legal-company", "cfo", "finance-"];
 export const PRIVILEGED_SUBSTRINGS = [...PERSONAL_LEGAL_SUBSTRINGS, ...FINANCE_COMPANY_LEGAL_SUBSTRINGS, ...NEVER_MIRROR_SUBSTRINGS];
 

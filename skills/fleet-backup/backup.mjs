@@ -99,7 +99,7 @@
 import { readFileSync } from "node:fs";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { dumpContainer } from "./cosmos-export.mjs";
+import { dumpContainer, dumpContainerSegregated } from "./cosmos-export.mjs";
 
 // ---------- Key Vault (managed identity, mirrors skills/kb-memory/azure-secret.mjs) ----------
 let _tok = null, _exp = 0;
@@ -310,6 +310,30 @@ export async function exportCosmosContainer(container) {
   return dumpContainer(container);
 }
 
+/**
+ * Ring-SEGREGATED container export. Returns { general, restricted } so the caller writes TWO blobs
+ * and a personal-lane row can never ride along in a company-lane file.
+ *
+ * WHY THIS REPLACED THE UNSEGREGATED CALL (P0, 2026-08-16). The nightly job used
+ * exportCosmosContainer() above, which returns ONE undifferentiated array. The `memory` container
+ * holds both company and `clo-personal` rows, and s3-mirror.mjs classifies blobs by FILENAME, so a
+ * file called `memory-<date>.jsonl` matched no privileged substring and the whole thing -- personal
+ * rows included -- was mirrored into the NON-privileged DR bucket every night.
+ *
+ * Measured directly in the live bucket before the fix: 42 clo-personal rows on 08-05, 75 on 08-10,
+ * 80 on 08-15. Growing nightly. Attorney-privileged material in a bucket whose whole purpose is to
+ * be the non-privileged one.
+ *
+ * The segregating library was already merged and already correct (cosmos-export.mjs's
+ * dumpContainerSegregated + classifyLane, PR #433); that change's own commit message said wiring
+ * the nightly caller to it was "a separate follow-up, out of this change's scope". The follow-up
+ * was never done, so a correct library sat next to a caller that never used it -- which is exactly
+ * as leaky as not having written it.
+ */
+export async function exportCosmosContainerSegregated(container, opts = {}) {
+  return dumpContainerSegregated(container, opts);
+}
+
 /** Pure: append `additions` onto `existing` (never overwrite/clobber a prior value) -- the exact
  *  fix for a real bug class this file already hit once (see run()'s "Merge (never overwrite)"
  *  comments at both call sites): the AI-Search-index block and the GAP-8 Cosmos-container block
@@ -456,19 +480,36 @@ async function run({ ledgerOnly, brainOnly }) {
     ];
     const cosmosFailures = [];
     for (const { container: coll, blobPrefix, zeroRowsIsFailure } of GAP8_CONTAINERS) {
-      const collBlobName = `${blobPrefix}-${date}.jsonl`;
+      // TWO blobs, always, with the lane in the NAME. s3-mirror.mjs classifies by filename, so the
+      // name is the ring boundary as far as the mirror is concerned -- "-restricted" is what keeps a
+      // personal row out of the non-privileged bucket. Emitting both files unconditionally (even
+      // when one side is empty) is deliberate: a missing -restricted file is ambiguous between
+      // "no personal rows today" and "segregation silently stopped running", and this whole class of
+      // bug is exactly that ambiguity.
+      const generalBlobName = `${blobPrefix}-general-${date}.jsonl`;
+      const restrictedBlobName = `${blobPrefix}-restricted-${date}.jsonl`;
       try {
-        console.log(`[fleet-backup] exporting Cosmos ${coll} directly (GAP-8) -> ${container}/${collBlobName} ...`);
-        const rows = await exportCosmosContainer(coll);
-        const buf = Buffer.from(toNdjson(rows), "utf8");
-        await putBlockBlob(account, container, collBlobName, buf, "application/x-ndjson");
-        manifest[coll] = { blob: collBlobName, rows: rows.length, bytes: buf.length, sha256: sha256(buf) };
-        console.log(`[fleet-backup] ${coll} export OK: ${rows.length} rows, ${buf.length} bytes -> ${container}/${collBlobName}`);
+        console.log(`[fleet-backup] exporting Cosmos ${coll} ring-segregated (GAP-8) -> ${container}/{${generalBlobName},${restrictedBlobName}} ...`);
+        const { general, restricted } = await exportCosmosContainerSegregated(coll);
+        const rows = general; // row-count semantics below stay about the company-lane export
+
+        const genBuf = Buffer.from(toNdjson(general), "utf8");
+        await putBlockBlob(account, container, generalBlobName, genBuf, "application/x-ndjson");
+        const resBuf = Buffer.from(toNdjson(restricted), "utf8");
+        await putBlockBlob(account, container, restrictedBlobName, resBuf, "application/x-ndjson");
+
+        manifest[coll] = {
+          blob: generalBlobName, rows: general.length, bytes: genBuf.length, sha256: sha256(genBuf),
+          restricted_blob: restrictedBlobName, restricted_rows: restricted.length,
+          restricted_bytes: resBuf.length, restricted_sha256: sha256(resBuf),
+        };
+        console.log(`[fleet-backup] ${coll} export OK: ${general.length} general + ${restricted.length} restricted rows`);
         if (rows.length === 0) {
           console.warn(`::warning::[fleet-backup] Cosmos ${coll} dumped ZERO documents${zeroRowsIsFailure ? "" : " (not treated as a failure for this container -- an empty queue is a legitimate state)"}.`);
           if (zeroRowsIsFailure) cosmosFailures.push(`${coll}: 0 rows`);
         }
       } catch (e) {
+        const collBlobName = generalBlobName;
         console.error(`::error::[fleet-backup] Cosmos ${coll} export FAILED: ${e.message}`);
         manifest[coll] = { blob: collBlobName, error: e.message };
         cosmosFailures.push(`${coll}: ${e.message}`);

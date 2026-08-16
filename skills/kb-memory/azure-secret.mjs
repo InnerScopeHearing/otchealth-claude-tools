@@ -43,6 +43,7 @@
 // this one. Whenever the SP path is what actually worked, it logs a loud warning so RBAC drift on
 // the identity is visible in logs/alerts immediately, not discovered months later.
 
+import { ssmSecret, ssmSecretSet } from "./aws-secret.mjs";
 import { execFileSync } from "node:child_process";
 
 let _identityTok = null, _identityExp = 0;
@@ -54,6 +55,7 @@ let _azTok = null, _azExp = 0;
 // per direction, then stay silent -- the diagnostic value (which credential path worked) is fully
 // conveyed by the first line; repeating it on every fetch adds nothing but log spam.
 let _spFallbackNotedRead = false, _spFallbackNotedWrite = false;
+let _ssmFallbackNoted = false;
 
 /** Container Apps managed-identity token, via the platform-injected sidecar endpoint. Returns null
  *  (never throws) if the container has no identity attached (IDENTITY_ENDPOINT unset) or the call
@@ -149,6 +151,29 @@ export async function vaultToken() {
  *  (Xero/Gmail/OneDrive/QBO). Tries identity first, falls back to SP on an auth-shaped failure only
  *  — same policy as kvSecret() below, for the same reason. */
 export async function kvSecretSet(name, value) {
+  // DUAL-WRITE (2026-08-16). Nothing syncs Key Vault to SSM -- the mirror was a one-time bulk copy.
+  // If a rotation landed in only one store, the other would keep serving the OLD value, the read
+  // would SUCCEED, no fallback would fire, and the damage would surface later as an unexplained auth
+  // failure somewhere else entirely. Writing both here is what keeps the fallback above trustworthy.
+  // The SSM leg is attempted first and its result folded into the return value, so a half-written
+  // rotation is reported rather than silently accepted.
+  const ssmOk = await ssmSecretSet(name, value).catch(() => false);
+  const kvOk = await kvSecretSetAzure(name, value);
+  if (kvOk && !ssmOk) {
+    console.error(
+      `[kv-secret] PARTIAL ROTATION for "${name}": Key Vault updated, SSM mirror did NOT. The stores ` +
+        `have diverged -- the SSM fallback will serve a STALE value for this secret until it is reconciled.`,
+    );
+  }
+  if (!kvOk && ssmOk) {
+    console.error(`[kv-secret] PARTIAL ROTATION for "${name}": SSM updated, Key Vault did NOT.`);
+  }
+  // Success means the ACTIVE primary took the write; a mirror-only failure is loud but not fatal.
+  return (process.env.SECRET_BACKEND || "keyvault") === "ssm" ? ssmOk : kvOk;
+}
+
+/** The original Key-Vault-only writer, now one leg of the dual-write above. */
+async function kvSecretSetAzure(name, value) {
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
   const attempts = [];
   for (const mode of ["identity", "sp", "azcli"]) {
@@ -190,6 +215,17 @@ export async function kvSecretSet(name, value) {
  *  secret name) or 5xx (vault down) stops immediately without trying the other path, because
  *  silently retrying there would mask a genuinely different bug behind "it worked anyway via SP". */
 export async function kvSecret(name) {
+  // SECRET_BACKEND=ssm makes AWS SSM the PRIMARY store (the Azure-exit posture). Default 'keyvault'
+  // is byte-for-byte the previous behaviour. Either way the OTHER store is tried on failure, and
+  // that cross-fallback is the whole point: it is what lets a job keep its credentials when Azure is
+  // suspended. Without it, an Azure outage does not just degrade the brain, it takes away every
+  // job's ability to authenticate to anything, including whatever would have reported the outage.
+  if ((process.env.SECRET_BACKEND || "keyvault") === "ssm") {
+    const v = await ssmSecret(name);
+    if (v != null) return v;
+    // Fall through to Key Vault below rather than returning null: during the transition the mirror
+    // may not yet carry a newly-created secret.
+  }
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
   const attempts = [];
   for (const mode of ["identity", "sp", "azcli"]) {
@@ -219,6 +255,22 @@ export async function kvSecret(name) {
   }
   if (attempts.length) {
     console.error(`[kv-secret] READ failed for "${name}" via all auth paths: ${attempts.join(", ")}`);
+  }
+  // Key Vault could not serve it. If SSM was not already tried as primary, try it now -- this is the
+  // branch that actually runs during an Azure outage, when every attempt above fails on auth or
+  // network.
+  if ((process.env.SECRET_BACKEND || "keyvault") !== "ssm") {
+    const v = await ssmSecret(name);
+    if (v != null) {
+      if (!_ssmFallbackNoted) {
+        _ssmFallbackNoted = true;
+        console.warn(
+          `[kv-secret] note (once): serving secrets from the AWS SSM mirror because Key Vault did not answer. ` +
+            `This is the Azure-outage fallback working as designed, not a failure.`,
+        );
+      }
+      return v;
+    }
   }
   return null;
 }
