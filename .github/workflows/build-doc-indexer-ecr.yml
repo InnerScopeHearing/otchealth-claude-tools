@@ -1,0 +1,69 @@
+name: build-doc-indexer-ecr
+
+# Rebuild + push the shared doc-indexer image to AWS ECR, which is what the 15 scheduled Fargate
+# jobs (the librarians, brain-reindex, memory-librarian, ring-memory-index-daily, the deep passes,
+# daily-digest, decision-clock, signal-radar, growth-room-nightly, cfo-reconstruction-nightly)
+# actually pull.
+#
+# WHY THIS EXISTS ALONGSIDE build-doc-indexer.yml: that workflow pushes to AZURE ACR
+# (otchealthacr) and authenticates with Azure OIDC. Both halves die with the Azure account, and
+# neither ever updated the image the AWS jobs run -- so a toolkit change could be merged, appear
+# shipped, and never reach a single running job. Merged is not deployed.
+#
+# CREDENTIALS: a DEDICATED least-privilege IAM user (otchealth-ci-ecr-push) whose only permissions
+# are ecr:GetAuthorizationToken plus push/pull on the doc-indexer repository. Deliberately NOT the
+# broad aws-cto key, and deliberately NOT the AWS_DR_BREAKGLASS_* secrets -- break-glass credentials
+# exist for disaster recovery and stop meaning anything the moment they are used routinely.
+#
+# The task definitions reference doc-indexer:latest by TAG, not by digest, and Fargate pulls on
+# every task start, so a new :latest is picked up by the next scheduled run with no task-definition
+# change required.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to build and push'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.ECR_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.ECR_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ github.event.inputs.tag || 'latest' }}
+        run: |
+          set -euo pipefail
+          docker build -f skills/doc-indexer/job/Dockerfile -t "$REGISTRY/doc-indexer:$TAG" .
+          docker push "$REGISTRY/doc-indexer:$TAG"
+          echo "pushed $REGISTRY/doc-indexer:$TAG"
+
+      - name: Report the pushed digest
+        env:
+          TAG: ${{ github.event.inputs.tag || 'latest' }}
+        run: |
+          # Print the digest so a caller can prove WHICH image is now :latest rather than trusting
+          # that a push happened. Same discipline as everything else in this migration: assert on
+          # the observable result, not on the command exiting 0.
+          aws ecr describe-images --repository-name doc-indexer \
+            --image-ids imageTag="$TAG" \
+            --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt,sizeMB:imageSizeInBytes}' \
+            --output table
