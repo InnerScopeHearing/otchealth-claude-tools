@@ -264,3 +264,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-16T19:18:17.585Z
 - **Closed:** (open)
+
+### finding:FND-20260816-c789 severity:high status:open | 15 of 32 AWS job task definitions cannot authenticate: Azure managed identity + zero injected secrets; code fix in PR #443 but doc-indexer image NOT yet rebuilt
+
+- **Source audit doc:** session:2026-08-16 azure-retirement scheduled-jobs audit
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-16T20:33:37.126Z
+- **Closed:** (open)
