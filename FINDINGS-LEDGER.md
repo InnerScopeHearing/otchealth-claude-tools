@@ -272,3 +272,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-16T20:33:37.126Z
 - **Closed:** (open)
+
+### finding:FND-20260816-e81a severity:high status:open | PG_SSL_VERIFY defaults false: gateway->RDS is encrypted but UNVERIFIED, and became load-bearing today when STATE_BACKEND=postgres went live; RDS CA bundle already exists inline in task-definitions-jobs.json so the fix is available now
+
+- **Source audit doc:** session:2026-08-16 push security review
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-16T20:53:52.156Z
+- **Closed:** (open)
