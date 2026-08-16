@@ -239,16 +239,20 @@ async function ensureFleetIndex(AIS, AK) {
 // ============================ backend dispatch (SEARCH_BACKEND / EMBEDDINGS_PROVIDER) ============================
 // Thin wrappers so indexRing()/run()/reconcileFleetDupes() below read the same either way; BACKEND is a
 // module-level const (read once, like AGENT_FILTER/TYPE_FILTER in semantic.mjs), so no extra parameter
-// threading is needed at any call site beyond what already exists for the azure case.
-async function ensureIdx(azure, index) {
+// threading is needed at any call site beyond what already exists for the azure case. Exported (unlike
+// the Azure-only functions they wrap) so a test can exercise the dispatch decision in isolation, without
+// needing to mock the ring-ledger Key Vault/Blob reads indexRing() also does — those are a SEPARATE,
+// unrelated concern (the ledger's source-of-truth location, out of scope for this port; see this file's
+// header) and stay on Azure regardless of SEARCH_BACKEND.
+export async function ensureIdx(azure, index) {
   if (BACKEND === "opensearch") { await OS.ensureIndex(index); return; }
   await ensureIndex(azure.AIS, azure.AK, index);
 }
-async function ensureFleetIdx(azure) {
+export async function ensureFleetIdx(azure) {
   if (BACKEND === "opensearch") { await OS.ensureIndex(FLEET_INDEX); return; }
   await ensureFleetIndex(azure.AIS, azure.AK);
 }
-async function embedTexts(azure, texts) {
+export async function embedTexts(azure, texts) {
   if (EMBEDDINGS_PROVIDER === "openai") return OS.embedOpenAI(texts);
   return embed(azure.AOAI, azure.AOK, azure.DEP, texts);
 }
@@ -257,7 +261,7 @@ async function embedTexts(azure, texts) {
  *  every row indexRing() builds is a full doc (every field given), so this is a strict semantic match to
  *  Azure's mergeOrUpload for this file's own call sites (see opensearch-write.mjs's header for the
  *  general full-vs-partial reasoning, which applies uniformly regardless). */
-async function pushBatch(azure, index, value) {
+export async function pushBatch(azure, index, value) {
   if (!value.length) return;
   if (BACKEND === "opensearch") {
     const docs = value.map(({ "@search.action": _drop, ...rest }) => rest);

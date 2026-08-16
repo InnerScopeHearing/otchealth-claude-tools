@@ -100,7 +100,9 @@ async function ecsTaskRoleCreds() {
     return null;
   }
 }
-function envCreds() {
+// Exported (pure, no I/O) so the "prox" placeholder guard and the tier-2 credential shape are directly
+// unit-testable without mocking any network call.
+export function envCreds() {
   const ak = process.env.AWS_ACCESS_KEY_ID, sk = process.env.AWS_SECRET_ACCESS_KEY;
   if (!ak || !sk) return null;
   // The cloud-sandbox proxy injects a non-functional placeholder key (prefix "prox"); signing with it
@@ -449,6 +451,7 @@ export async function hybridSearch(index, { queryText, vector, top, agent, type 
 }
 
 export default {
+  envCreds,
   resolveAwsCredentials,
   resolveOpenSearchConfig,
   resolveOpenAIKey,
