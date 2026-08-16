@@ -23,7 +23,15 @@
 // development: SSL negotiation (both the 'S' TLS-upgrade path and the 'N' plaintext-continue path),
 // SCRAM-SHA-256 auth, MD5 auth, DDL, parameterized INSERT/SELECT/UPDATE, NULL round-tripping, the
 // ON CONFLICT upsert path, and every ErrorResponse-driven failure path (bad SQL, unique violation,
-// wrong password). See skills/kb-memory/tests/pg-wire.test.mjs.
+// wrong password).
+//
+// That live run was against a throwaway local server and its harness was never committed, so treat
+// the paragraph above as a development note rather than a reproducible check -- an earlier version
+// of this comment cited a tests/pg-wire.test.mjs that does not exist in this repo. What IS
+// reproducible is tests/pg-wire-auth.test.mjs, which pins the weak-mechanism gate below.
+//
+// WEAK AUTH: the server picks the mechanism, so md5 and unencrypted-cleartext refuse by default and
+// need PG_ALLOW_WEAK_AUTH=1. See authMechanismRefusal().
 //
 // PROTOCOL REFERENCE: https://www.postgresql.org/docs/current/protocol.html
 
@@ -190,6 +198,41 @@ class ScramClient {
   }
 }
 
+/**
+ * Decide whether a server-selected password mechanism may be used. Returns null to allow, or the
+ * refusal message to throw.
+ *
+ * This is a pure function on purpose. The mechanism is chosen by the SERVER, so the interesting
+ * behaviour is a branch deep inside the authentication loop that only runs when a particular kind
+ * of server is on the other end -- which is precisely the code that never gets tested and then
+ * turns out to do the wrong thing. Pulling the decision out means it can be proven at every
+ * combination of (mechanism, encrypted, override) with no server at all.
+ *
+ * @param {number} authType  Postgres AuthenticationRequest subtype (3 cleartext, 5 md5, 10 SASL)
+ * @param {{encrypted: boolean, allowWeakAuth: boolean}} ctx
+ * @returns {string|null}
+ */
+export function authMechanismRefusal(authType, { encrypted, allowWeakAuth }) {
+  if (allowWeakAuth) return null;
+  if (authType === 3 && !encrypted) {
+    return (
+      "pg-wire: server requested a cleartext password on an UNENCRYPTED connection; refusing to send " +
+      "the password in the clear. The server declined TLS (answered 'N' to SSLRequest). Fix the " +
+      "server's TLS, or set PG_ALLOW_WEAK_AUTH=1 / allowWeakAuth:true to override."
+    );
+  }
+  if (authType === 5) {
+    return (
+      "pg-wire: server requested MD5 password authentication, which is refused by default. MD5 is " +
+      "collision-broken and Postgres has defaulted to SCRAM-SHA-256 since 14. Prefer fixing the " +
+      "server (ALTER SYSTEM SET password_encryption='scram-sha-256', then reset the role's password " +
+      "so its verifier is re-derived). Set PG_ALLOW_WEAK_AUTH=1 / allowWeakAuth:true only if you " +
+      "have accepted that risk for this specific server."
+    );
+  }
+  return null;
+}
+
 function md5PasswordMessage(password, user, saltBuf) {
   const inner = crypto.createHash("md5").update(password + user, "utf8").digest("hex");
   const outer = crypto.createHash("md5").update(Buffer.concat([Buffer.from(inner, "ascii"), saltBuf])).digest("hex");
@@ -258,9 +301,14 @@ async function negotiateTls(plainSocket, { host, sslVerify }) {
  *   sslVerify mirrors otchealth-mcp-server's PG_SSL_VERIFY: verifying the RDS-issued cert needs the
  *   RDS CA bundle, which is not (yet) baked in anywhere this file runs, so the default is
  *   encrypt-without-verify -- strictly better than plaintext, and the traffic never leaves the VPC.
+ *
+ *   allowWeakAuth (default false, or env PG_ALLOW_WEAK_AUTH=1) permits the two legacy password
+ *   mechanisms this client can speak but will not use unprompted: md5, and cleartext over an
+ *   unencrypted socket. See the authentication loop for why the default is refuse-and-say-so.
  */
 export async function connect(opts) {
   const { host, port = 5432, database, user, password, ssl = true, sslVerify = false, connectTimeoutMs = 10000 } = opts;
+  const allowWeakAuth = opts.allowWeakAuth ?? process.env.PG_ALLOW_WEAK_AUTH === "1";
   if (!host || !user || !database) throw new Error("pg-wire: connect() requires host, user, and database");
 
   let plainSocket;
@@ -282,6 +330,11 @@ export async function connect(opts) {
   });
 
   const socket = ssl ? await negotiateTls(plainSocket, { host, sslVerify }) : plainSocket;
+  // Whether the bytes are actually encrypted, which is NOT the same as having asked for TLS:
+  // negotiateTls falls back to the plain socket when the server answers 'N'. The auth loop needs the
+  // real answer, because "I requested ssl" is exactly the kind of intent-not-effect signal that has
+  // produced false confidence in this fleet before.
+  const encrypted = socket !== plainSocket;
   socket.on("error", () => { /* surfaced to the caller via the in-flight read/write promise, if any */ });
 
   const reader = new ByteReader(socket);
@@ -310,11 +363,20 @@ export async function connect(opts) {
     if (type === "R") {
       const authType = payload.readInt32BE(0);
       if (authType === 0) continue; // AuthenticationOk
-      if (authType === 3) { // cleartext
+      // The SERVER picks the mechanism, so a client that implements the legacy ones will silently
+      // use them the moment a server asks. Both weak mechanisms below therefore refuse by default
+      // and say exactly why. This is deliberately not the same as deleting them: we have not proven
+      // that no Postgres we talk to demands md5 (the one that matters, RDS otchealth-pg, is
+      // VPC-private and could not be probed), and a loud refusal is safe whether or not it does --
+      // whereas a silent downgrade is unsafe precisely when we are wrong about the server.
+      const refusal = authMechanismRefusal(authType, { encrypted, allowWeakAuth });
+      if (refusal) throw new Error(refusal);
+
+      if (authType === 3) { // cleartext (reached only when encrypted, or explicitly overridden)
         await write(frame("p", [cstr(password)]));
         continue;
       }
-      if (authType === 5) { // md5, 4-byte salt follows the code
+      if (authType === 5) { // md5, 4-byte salt follows the code (reached only when overridden)
         const salt = payload.subarray(4, 8);
         await write(frame("p", [cstr(md5PasswordMessage(password, user, salt))]));
         continue;
