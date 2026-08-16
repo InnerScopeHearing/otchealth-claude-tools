@@ -139,8 +139,19 @@ itself no-ops when its `--agent` is empty by design). Two fixes:
 ## Semantic recall (vector) — `semantic.mjs`
 Keyword `recall` finds exact terms; **semantic recall** finds memories by MEANING, so a query
 like "how do we reconnect accounting software" surfaces the Xero re-consent pitfalls even with no
-shared keywords. Reuses the fleet's Azure AI Search + text-embedding-3-large (the data-room infra).
-Indexes ONLY the shared exec feed (`_MEMORY/_exec/*`), never a private or clo-personal lane.
+shared keywords. Backend is Azure AI Search + text-embedding-3-large by DEFAULT (the data-room
+infra), but is selectable — see "Backend" below. Indexes ONLY the shared exec feed
+(`_MEMORY/_exec/*`), never a private or clo-personal lane.
+
+**Backend (2026-08-16): `SEARCH_BACKEND=azure|opensearch`** (env, default `azure`) — the same env
+var name/values as `otchealth-mcp-server`'s dispatcher and doc-indexer's `enrich.mjs
+--search-backend`. `opensearch` routes every write/read below through `opensearch-write.mjs`
+instead of Azure AI Search — the fix for the defect where an Azure outage froze `memory-exec` and
+every ring-memory index outright (init() used to throw unconditionally on missing Azure Search
+creds). `EMBEDDINGS_PROVIDER=foundry|openai` (default `foundry`) is an independent switch — a real
+Azure outage takes Azure Foundry down too, so `EMBEDDINGS_PROVIDER=openai` is also needed for a
+genuinely Azure-free run. For a one-shot catch-up of every frozen room, see
+`skills/kb-memory/backfill-frozen-rooms.mjs`.
 
 - `node skills/kb-memory/semantic.mjs reindex` - (re)build the `memory-exec` index (resumable; skips already-indexed). Run after a batch of new entries (or wire into the daily-digest job).
 - `node skills/kb-memory/semantic.mjs recall "<query>" [--n 12] [--agent cto] [--type pitfall]` - vector + keyword (hybrid) recall across the whole exec team's memory.

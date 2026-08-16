@@ -23,6 +23,19 @@ node skills/ring-memory-index/index-ring-memory.mjs [clo-personal | cfo | coo | 
 ```
 Needs `GCP_CLAUDE_DRIVER_SA_JSON` (the claude-driver SA); everything else self-resolves from Secret Manager. Prints `RING <label>: indexed <n>/<total> -> <index>` per row.
 
+## Backend (2026-08-16): SEARCH_BACKEND=azure|opensearch
+`SEARCH_BACKEND` (env, default `azure`) selects the search destination — the SAME env var name/values as `kb-memory/semantic.mjs`, the gateway's `src/search/index.ts` dispatcher, and doc-indexer's `enrich.mjs --search-backend` flag, so it means the identical thing everywhere in the fleet. `azure` is byte-identical to every prior run. `opensearch` routes `ensureIndex`/`ensureFleetIndex`/every bulk push/`reconcileFleetDupes` through `kb-memory/opensearch-write.mjs` instead — the fix for the defect where an Azure outage (or a deliberate billing block) silently froze all 7 of these ring indexes (measured 2026-08-16: every one stuck at its 2026-08-13 doc count while the Azure-side equivalents kept growing).
+
+`EMBEDDINGS_PROVIDER=foundry|openai` (default `foundry`) is an **independent** switch (mirrors `kb-memory/semantic.mjs` and `otchealth-mcp-server/src/azure/foundry.ts`): a genuine Azure outage takes Azure Foundry down too, so `EMBEDDINGS_PROVIDER=openai` is also needed for a run with zero Azure dependency. Both flags are read once at module load.
+
+```
+SEARCH_BACKEND=opensearch EMBEDDINGS_PROVIDER=openai node skills/ring-memory-index/index-ring-memory.mjs all
+```
+
+`run()` skips resolving Azure Search/Foundry secrets entirely when both flags are set this way — avoids 7 pointless Key Vault round trips (each a potential timeout) during exactly the run where an outage makes each one costly.
+
+For a one-shot catch-up of `memory-exec` (kb-memory's own index) together with all 7 ring indexes, use `skills/kb-memory/backfill-frozen-rooms.mjs` instead of calling this file directly — see its own header for the exact command.
+
 ## Onboarding a new agent
 Add a row to the `RINGS` array: `{ label, storeAcctSecret, storeKeySecret, container, ledger, index, idPrefix }`. Give it a distinct `index` — never reuse another agent's index, even if it shares a store (e.g. commons). No other change needed.
 
