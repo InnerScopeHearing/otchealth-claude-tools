@@ -8,11 +8,11 @@
 // build step; this repo has neither, and adding one for a single dependency would break that
 // discipline fleet-wide for every other skill. So this file is the same "hand-rolled REST/wire client
 // over node: built-ins" pattern applied to Postgres instead of HTTP: real TCP (node:net), real TLS
-// (node:tls), real SCRAM-SHA-256 (RFC 5802/7677) and MD5 auth (node:crypto), and the Postgres Extended
+// (node:tls), real SCRAM-SHA-256 (RFC 5802/7677) auth (node:crypto), and the Postgres Extended
 // Query protocol for parameterized queries -- no query text is ever built by concatenating a value.
 //
 // SCOPE. Just enough of the protocol for skills/kb-memory/pg-state.mjs's needs: connect, authenticate
-// (cleartext / md5 / SCRAM-SHA-256 -- the three password mechanisms Postgres/RDS actually issue),
+// (cleartext-over-TLS / SCRAM-SHA-256; MD5 is deliberately NOT implemented, see below),
 // optionally negotiate TLS, and run parameterized statements that return zero or more rows of
 // TEXT-format columns. No COPY, no LISTEN/NOTIFY, no binary-format columns, no connection pooling
 // (each of the two callers is a short-lived CLI invocation issuing a handful of sequential queries,
@@ -21,7 +21,7 @@
 //
 // VERIFIED LIVE (not just reasoned about) against a real local PostgreSQL 16 server during
 // development: SSL negotiation (both the 'S' TLS-upgrade path and the 'N' plaintext-continue path),
-// SCRAM-SHA-256 auth, MD5 auth, DDL, parameterized INSERT/SELECT/UPDATE, NULL round-tripping, the
+// SCRAM-SHA-256 auth, DDL, parameterized INSERT/SELECT/UPDATE, NULL round-tripping, the
 // ON CONFLICT upsert path, and every ErrorResponse-driven failure path (bad SQL, unique violation,
 // wrong password).
 //
@@ -30,8 +30,11 @@
 // of this comment cited a tests/pg-wire.test.mjs that does not exist in this repo. What IS
 // reproducible is tests/pg-wire-auth.test.mjs, which pins the weak-mechanism gate below.
 //
-// WEAK AUTH: the server picks the mechanism, so md5 and unencrypted-cleartext refuse by default and
-// need PG_ALLOW_WEAK_AUTH=1. See authMechanismRefusal().
+// WEAK AUTH: the server picks the mechanism, so a client that implements a weak one will use it the
+// moment some server asks. MD5 is therefore NOT IMPLEMENTED AT ALL (collision-broken; the only
+// Postgres left after the Azure exit is RDS on postgres 18, which defaults to scram-sha-256).
+// Cleartext is refused on an UNENCRYPTED socket and allowed under TLS, overridable only with an
+// explicit PG_ALLOW_WEAK_AUTH=1. See authMechanismRefusal().
 //
 // PROTOCOL REFERENCE: https://www.postgresql.org/docs/current/protocol.html
 
@@ -213,6 +216,17 @@ class ScramClient {
  * @returns {string|null}
  */
 export function authMechanismRefusal(authType, { encrypted, allowWeakAuth }) {
+  // MD5 is checked BEFORE the override, because unlike cleartext it is not implemented at all --
+  // there is no code path the override could unlock, and a gate that claimed otherwise would be
+  // lying to its caller.
+  if (authType === 5) {
+    return (
+      "pg-wire: server requested MD5 password authentication, which is not implemented. MD5 is " +
+      "collision-broken and Postgres has defaulted to SCRAM-SHA-256 since 14. Fix the server: " +
+      "ALTER SYSTEM SET password_encryption='scram-sha-256', then reset the role's password so its " +
+      "verifier is re-derived as SCRAM."
+    );
+  }
   if (allowWeakAuth) return null;
   if (authType === 3 && !encrypted) {
     return (
@@ -221,22 +235,7 @@ export function authMechanismRefusal(authType, { encrypted, allowWeakAuth }) {
       "server's TLS, or set PG_ALLOW_WEAK_AUTH=1 / allowWeakAuth:true to override."
     );
   }
-  if (authType === 5) {
-    return (
-      "pg-wire: server requested MD5 password authentication, which is refused by default. MD5 is " +
-      "collision-broken and Postgres has defaulted to SCRAM-SHA-256 since 14. Prefer fixing the " +
-      "server (ALTER SYSTEM SET password_encryption='scram-sha-256', then reset the role's password " +
-      "so its verifier is re-derived). Set PG_ALLOW_WEAK_AUTH=1 / allowWeakAuth:true only if you " +
-      "have accepted that risk for this specific server."
-    );
-  }
   return null;
-}
-
-function md5PasswordMessage(password, user, saltBuf) {
-  const inner = crypto.createHash("md5").update(password + user, "utf8").digest("hex");
-  const outer = crypto.createHash("md5").update(Buffer.concat([Buffer.from(inner, "ascii"), saltBuf])).digest("hex");
-  return `md5${outer}`;
 }
 
 // ───────────────────────── ErrorResponse parsing ─────────────────────────
@@ -376,10 +375,18 @@ export async function connect(opts) {
         await write(frame("p", [cstr(password)]));
         continue;
       }
-      if (authType === 5) { // md5, 4-byte salt follows the code (reached only when overridden)
-        const salt = payload.subarray(4, 8);
-        await write(frame("p", [cstr(md5PasswordMessage(password, user, salt))]));
-        continue;
+      if (authType === 5) {
+        // MD5 is NOT IMPLEMENTED, deliberately. See authMechanismRefusal(): it was already refused
+        // by default, so this removes an opt-in escape hatch rather than working functionality, and
+        // it takes the last collision-broken hash out of the fleet. The only Postgres left after the
+        // Azure exit is RDS otchealth-pg (postgres 18.3, default.postgres18, password_encryption
+        // unset so it falls through to the engine default scram-sha-256). If that turns out wrong,
+        // this fails LOUDLY at connect time naming the exact server-side fix, never silently.
+        throw new Error(
+          "pg-wire: server requested MD5 password authentication, which is not implemented. " +
+            "Fix the server: ALTER SYSTEM SET password_encryption='scram-sha-256', then reset the " +
+            "role's password so its verifier is re-derived as SCRAM.",
+        );
       }
       if (authType === 10) { // SASL: null-terminated list of mechanism names, then a final empty string
         const mechanisms = payload.subarray(4).toString("utf8").split("\0").filter(Boolean);

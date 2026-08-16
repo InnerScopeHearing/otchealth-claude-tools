@@ -22,15 +22,17 @@ test("SCRAM-SHA-256 is always allowed, encrypted or not", () => {
   }
 });
 
-test("MD5 is refused by default, on an encrypted connection too", () => {
+test("MD5 is refused ALWAYS, encrypted or not, override or not", () => {
   // TLS does not rescue md5: the weakness is in the stored verifier and the challenge construction,
-  // not in the confidentiality of the wire.
+  // not in the confidentiality of the wire. And the override cannot unlock it, because there is no
+  // md5 implementation left to unlock -- a gate that returned null here would be lying.
   for (const encrypted of [true, false]) {
-    const refusal = authMechanismRefusal(MD5, { encrypted, allowWeakAuth: false });
-    assert.ok(refusal, `md5 should be refused when encrypted=${encrypted}`);
-    assert.match(refusal, /MD5/);
-    assert.match(refusal, /scram-sha-256/i, "the refusal must say how to fix the server");
-    assert.match(refusal, /PG_ALLOW_WEAK_AUTH/, "the refusal must name the override");
+    for (const allowWeakAuth of [true, false]) {
+      const refusal = authMechanismRefusal(MD5, { encrypted, allowWeakAuth });
+      assert.ok(refusal, `md5 must be refused (encrypted=${encrypted}, override=${allowWeakAuth})`);
+      assert.match(refusal, /MD5/);
+      assert.match(refusal, /scram-sha-256/i, "the refusal must say how to fix the server");
+    }
   }
 });
 
@@ -46,8 +48,8 @@ test("cleartext is refused ONLY when the connection is not actually encrypted", 
   assert.match(refusal, /UNENCRYPTED/);
 });
 
-test("the override unlocks both weak mechanisms, and nothing else changes", () => {
-  assert.equal(authMechanismRefusal(MD5, { encrypted: false, allowWeakAuth: true }), null);
+test("the override unlocks cleartext only, never md5", () => {
+  assert.ok(authMechanismRefusal(MD5, { encrypted: false, allowWeakAuth: true }), "md5 stays refused");
   assert.equal(authMechanismRefusal(CLEARTEXT, { encrypted: false, allowWeakAuth: true }), null);
   assert.equal(authMechanismRefusal(SCRAM, { encrypted: true, allowWeakAuth: true }), null);
 });
