@@ -36,6 +36,16 @@
 // fleet-learning coverage (semantic.mjs only ever sees the curated _exec feed, never the full private
 // ledger) is preserved -- no fact coverage is lost, only the duplicate rows are. See
 // `planFleetDupeCleanup` / `reconcileFleetDupes` below for cleaning the pre-fix `fleet__*` leftovers.
+//
+// SEARCH_BACKEND=azure|opensearch (env, default azure; SAME name/values as kb-memory/semantic.mjs, the
+// gateway's src/search/index.ts dispatcher, and doc-indexer's enrich.mjs --search-backend flag): 'azure'
+// is byte-identical to every prior run of this file. 'opensearch' routes ensureIndex/ensureFleetIndex/
+// the bulk pushes/reconcileFleetDupes through kb-memory/opensearch-write.mjs instead -- the fix for the
+// defect where an Azure outage silently froze every one of these 7 ring indexes (measured 2026-08-16:
+// all 7 stuck at their 2026-08-13 doc counts). EMBEDDINGS_PROVIDER=foundry|openai (default foundry) is
+// an INDEPENDENT switch (mirrors semantic.mjs/otchealth-mcp-server's foundry.ts) -- a real Azure outage
+// takes Azure Foundry down too, so EMBEDDINGS_PROVIDER=openai is also needed for a genuinely Azure-free
+// run. See opensearch-write.mjs's header for the full credential-resolution chain.
 import crypto from "node:crypto";
 import { mergeSchemaAdditive } from "../doc-indexer/schema-merge.mjs";
 import { readFileSync } from "node:fs";
@@ -43,11 +53,14 @@ import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { docId as sharedDocId } from "../kb-memory/semantic.mjs";
+import * as OS from "../kb-memory/opensearch-write.mjs";
 
 const SM = "otchealth-shared-prod";
 const API = "2023-11-01";
 const DIMS = 3072;
 const EMBED_BATCH = 16;
+const BACKEND = (process.env.SEARCH_BACKEND || "azure").toLowerCase(); // 'azure' | 'opensearch'
+const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "foundry").toLowerCase(); // 'foundry' | 'openai'
 const PUSH_BATCH = 48;
 
 // The ring registry. Add a row to onboard a new ring-isolated agent memory ledger. `storeAcctSecret`/
@@ -222,6 +235,43 @@ async function ensureFleetIndex(AIS, AK) {
   const r = await fetch(`${AIS}/indexes/${FLEET_INDEX}?api-version=${API}`, { method: "PUT", headers: { "api-key": AK, "Content-Type": "application/json" }, body: JSON.stringify(putSchema) });
   if (!r.ok && ![200, 201, 204].includes(r.status)) throw new Error(`ensureFleetIndex: ${r.status} ${(await r.text()).slice(0, 160)}`);
 }
+
+// ============================ backend dispatch (SEARCH_BACKEND / EMBEDDINGS_PROVIDER) ============================
+// Thin wrappers so indexRing()/run()/reconcileFleetDupes() below read the same either way; BACKEND is a
+// module-level const (read once, like AGENT_FILTER/TYPE_FILTER in semantic.mjs), so no extra parameter
+// threading is needed at any call site beyond what already exists for the azure case. Exported (unlike
+// the Azure-only functions they wrap) so a test can exercise the dispatch decision in isolation, without
+// needing to mock the ring-ledger Key Vault/Blob reads indexRing() also does — those are a SEPARATE,
+// unrelated concern (the ledger's source-of-truth location, out of scope for this port; see this file's
+// header) and stay on Azure regardless of SEARCH_BACKEND.
+export async function ensureIdx(azure, index) {
+  if (BACKEND === "opensearch") { await OS.ensureIndex(index); return; }
+  await ensureIndex(azure.AIS, azure.AK, index);
+}
+export async function ensureFleetIdx(azure) {
+  if (BACKEND === "opensearch") { await OS.ensureIndex(FLEET_INDEX); return; }
+  await ensureFleetIndex(azure.AIS, azure.AK);
+}
+export async function embedTexts(azure, texts) {
+  if (EMBEDDINGS_PROVIDER === "openai") return OS.embedOpenAI(texts);
+  return embed(azure.AOAI, azure.AOK, azure.DEP, texts);
+}
+/** Push a batch of full-doc `{"@search.action":"mergeOrUpload", ...fields}` rows. On OpenSearch this
+ *  strips the Azure action marker and routes through pushDocs()'s "update"+doc_as_upsert bulk write --
+ *  every row indexRing() builds is a full doc (every field given), so this is a strict semantic match to
+ *  Azure's mergeOrUpload for this file's own call sites (see opensearch-write.mjs's header for the
+ *  general full-vs-partial reasoning, which applies uniformly regardless). */
+export async function pushBatch(azure, index, value) {
+  if (!value.length) return;
+  if (BACKEND === "opensearch") {
+    const docs = value.map(({ "@search.action": _drop, ...rest }) => rest);
+    const res = await OS.pushDocs(index, docs);
+    if (!res.ok) throw new Error(`opensearch push(${index}) failed: ${JSON.stringify(res.errors.slice(0, 3))}`);
+    return;
+  }
+  await fetch(`${azure.AIS}/indexes/${index}/docs/index?api-version=${API}`, { method: "POST", headers: { "api-key": azure.AK, "Content-Type": "application/json" }, body: JSON.stringify({ value }) });
+}
+
 async function embed(AOAI, AOK, DEP, texts) {
   for (let a = 0; a < 6; a++) {
     const r = await fetch(`${AOAI}/openai/deployments/${DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOK, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) });
@@ -259,7 +309,7 @@ export async function indexRing(ring, azure, tok) {
     const rr = await fetch(`https://${acct}.blob.core.windows.net/${ring.container}/${ring.ledger.split("/").map(encodeURIComponent).join("/")}?${sas}`);
     if (!rr.ok) return { label: ring.label, error: `ledger read ${rr.status}` };
     const rows = (await rr.text()).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-    await ensureIndex(azure.AIS, azure.AK, ring.index);
+    await ensureIdx(azure, ring.index);
     const prep = rows.map((eR, k) => ({
       id: docId(fallbackRowId(ring, eR, k)),
       fleetId: fleetKeyFor(ring, eR, k),
@@ -274,20 +324,19 @@ export async function indexRing(ring, azure, tok) {
     // Non-privileged rings ALSO feed the shared fleet-learning index (agent-faceted). Privileged rings
     // (private:true) never do — their content stays walled to their own index.
     const toFleet = !ring.private;
-    const push = async (index, value) => { if (value.length) await fetch(`${azure.AIS}/indexes/${index}/docs/index?api-version=${API}`, { method: "POST", headers: { "api-key": azure.AK, "Content-Type": "application/json" }, body: JSON.stringify({ value }) }); };
     let indexed = 0, buf = [], fleetBuf = [];
     for (let i = 0; i < prep.length; i += EMBED_BATCH) {
       const chunk = prep.slice(i, i + EMBED_BATCH);
       let vecs;
-      try { vecs = await embed(azure.AOAI, azure.AOK, azure.DEP, chunk.map((c) => c.text)); } catch { continue; }
+      try { vecs = await embedTexts(azure, chunk.map((c) => c.text)); } catch { continue; }
       chunk.forEach((c, j) => {
         buf.push({ "@search.action": "mergeOrUpload", id: c.id, type: c.type, ts: c.ts, tags: c.tags, text: c.text.slice(0, 16000), contentVector: vecs[j] });
         if (toFleet) fleetBuf.push({ "@search.action": "mergeOrUpload", id: c.fleetId, agent: ring.label, type: c.type, ts: c.ts, tags: c.tags, text: c.rawText, contentVector: vecs[j] });
       });
-      if (buf.length >= PUSH_BATCH) { await push(ring.index, buf); indexed += buf.length; buf = []; if (toFleet) { await push(FLEET_INDEX, fleetBuf); fleetBuf = []; } }
+      if (buf.length >= PUSH_BATCH) { await pushBatch(azure, ring.index, buf); indexed += buf.length; buf = []; if (toFleet) { await pushBatch(azure, FLEET_INDEX, fleetBuf); fleetBuf = []; } }
     }
-    await push(ring.index, buf); indexed += buf.length;
-    if (toFleet) await push(FLEET_INDEX, fleetBuf);
+    await pushBatch(azure, ring.index, buf); indexed += buf.length;
+    if (toFleet) await pushBatch(azure, FLEET_INDEX, fleetBuf);
     return { label: ring.label, index: ring.index, indexed, total: rows.length, fleet: toFleet };
   } catch (e) {
     return { label: ring.label, error: String((e && e.message) || e) };
@@ -296,16 +345,26 @@ export async function indexRing(ring, azure, tok) {
 
 export async function run(filterLabel) {
   const tok = await gtoken();
-  const [ep, AK, aoaiA, aoaiB, keyA, keyB, dep] = await Promise.all([
-    sm("azure-search-endpoint", tok), sm("azure-search-admin-key", tok),
-    sm("azure-foundry-openai-endpoint", tok), sm("azure-openai-endpoint", tok),
-    sm("azure-foundry-key", tok), sm("azure-openai-key", tok),
-    sm("azure-openai-embedding-deployment", tok),
-  ]);
-  const azure = { AIS: (ep || "").replace(/\/$/, ""), AK, AOAI: ((aoaiA || aoaiB) || "").replace(/\/$/, ""), AOK: keyA || keyB, DEP: dep || "text-embedding-3-large" };
+  // Skip resolving Azure Search/Foundry secrets entirely when BOTH the index destination and the
+  // embeddings provider are already off Azure -- the genuine emergency case (Azure billing-blocked)
+  // this dispatch exists for. Harmless either way (indexRing()'s dispatch helpers never reference
+  // `azure.*` in that combination), but skipping avoids 7 pointless Key Vault round trips (each a
+  // potential timeout) during exactly the run where speed matters most. `azure` stays a well-formed
+  // placeholder object so nothing downstream needs an extra null check.
+  const azureNeeded = BACKEND !== "opensearch" || EMBEDDINGS_PROVIDER !== "openai";
+  let azure = { AIS: "", AK: undefined, AOAI: "", AOK: undefined, DEP: "text-embedding-3-large" };
+  if (azureNeeded) {
+    const [ep, AK, aoaiA, aoaiB, keyA, keyB, dep] = await Promise.all([
+      sm("azure-search-endpoint", tok), sm("azure-search-admin-key", tok),
+      sm("azure-foundry-openai-endpoint", tok), sm("azure-openai-endpoint", tok),
+      sm("azure-foundry-key", tok), sm("azure-openai-key", tok),
+      sm("azure-openai-embedding-deployment", tok),
+    ]);
+    azure = { AIS: (ep || "").replace(/\/$/, ""), AK, AOAI: ((aoaiA || aoaiB) || "").replace(/\/$/, ""), AOK: keyA || keyB, DEP: dep || "text-embedding-3-large" };
+  }
   const rings = RINGS.filter((r) => !filterLabel || filterLabel === "all" || r.label === filterLabel);
   // Ensure the shared fleet-learning index exists if any non-privileged ring is in scope.
-  if (FLEET_INDEX !== "memory-exec" && rings.some((r) => !r.private)) { try { await ensureFleetIndex(azure.AIS, azure.AK); } catch (e) { console.error("fleet index ensure failed (per-agent indexing continues):", e.message); } }
+  if (FLEET_INDEX !== "memory-exec" && rings.some((r) => !r.private)) { try { await ensureFleetIdx(azure); } catch (e) { console.error("fleet index ensure failed (per-agent indexing continues):", e.message); } }
   const out = [];
   for (const ring of rings) out.push(await indexRing(ring, azure, tok)); // sequential: fail-safe, bounded quota
   return out;
@@ -363,19 +422,29 @@ async function listMemoryExecDocs(AIS, AK) {
  * fact regardless of ordering (see that function's doc comment).
  */
 export async function reconcileFleetDupes({ apply = false } = {}) {
-  const tok = await gtoken();
-  const [ep, AK] = await Promise.all([sm("azure-search-endpoint", tok), sm("azure-search-admin-key", tok)]);
-  const AIS = (ep || "").replace(/\/$/, "");
-  if (!AIS || !AK) throw new Error("missing azure-search-endpoint/admin-key");
-  const docs = await listMemoryExecDocs(AIS, AK);
-  const { toDelete, kept } = planFleetDupeCleanup(docs);
-  if (apply && toDelete.length) {
-    for (let i = 0; i < toDelete.length; i += 1000) {
-      const batch = toDelete.slice(i, i + 1000).map((id) => ({ "@search.action": "delete", id }));
-      const r = await fetch(`${AIS}/indexes/${FLEET_INDEX}/docs/index?api-version=${API}`, { method: "POST", headers: { "api-key": AK, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
-      if (!r.ok) throw new Error("delete " + r.status + " " + (await r.text()).slice(0, 200));
-    }
+  let docs, doDelete;
+  if (BACKEND === "opensearch") {
+    docs = await OS.scrollAll(FLEET_INDEX, { source: ["agent", "ts"] });
+    doDelete = async (ids) => {
+      const res = await OS.deleteDocs(FLEET_INDEX, ids);
+      if (!res.ok) throw new Error("delete(opensearch) " + JSON.stringify(res.errors.slice(0, 3)));
+    };
+  } else {
+    const tok = await gtoken();
+    const [ep, AK] = await Promise.all([sm("azure-search-endpoint", tok), sm("azure-search-admin-key", tok)]);
+    const AIS = (ep || "").replace(/\/$/, "");
+    if (!AIS || !AK) throw new Error("missing azure-search-endpoint/admin-key");
+    docs = await listMemoryExecDocs(AIS, AK);
+    doDelete = async (ids) => {
+      for (let i = 0; i < ids.length; i += 1000) {
+        const batch = ids.slice(i, i + 1000).map((id) => ({ "@search.action": "delete", id }));
+        const r = await fetch(`${AIS}/indexes/${FLEET_INDEX}/docs/index?api-version=${API}`, { method: "POST", headers: { "api-key": AK, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
+        if (!r.ok) throw new Error("delete " + r.status + " " + (await r.text()).slice(0, 200));
+      }
+    };
   }
+  const { toDelete, kept } = planFleetDupeCleanup(docs);
+  if (apply && toDelete.length) await doDelete(toDelete);
   return { total: docs.length, toDelete: toDelete.length, kept: kept.length, apply: !!apply };
 }
 
