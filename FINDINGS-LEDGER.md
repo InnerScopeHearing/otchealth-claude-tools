@@ -240,3 +240,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** redacted + commit amended b21a320->86abd33 (force-push, unmerged no-PR machine-authored branch); src/safety/committed-credential-guard.test.ts scans git ls-files anywhere-in-file, counterfactual fail-on-old-code proven (4 occurrences named), 1427/1427 tests, repo-wide scan 1268 files 0 hits; URLs expired 20260814T074336Z so inert, only key ID disclosed, SigV4 sig is HMAC over scoped signing key so secret never derivable
 - **Opened:** 2026-08-16T04:17:51.024Z
 - **Closed:** 2026-08-16T04:17:51.024Z
+
+### finding:FND-20260816-5539 severity:medium status:open | xero-run's AWS EventBridge twin carries a real daily cron (0 7 UTC) while its Azure original is a de-facto-disabled cron (Feb 30, never fires) -- enabling the AWS schedule as-is is new financial automation going live, not a like-for-like cutover, and xero-run posts to a real accounting ledger
+
+- **Source audit doc:** runbooks/AWS-JOBS-MIGRATION-WAVE-B.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-16T18:29:57.947Z
+- **Closed:** (open)
