@@ -466,3 +466,46 @@ test("embedOpenAI: throws with no OPENAI_API_KEY resolvable", async () => {
     }),
   );
 });
+
+// ---------------------------------------------------------------------------------------------
+// Regression: an EMPTY ts must be OMITTED from the bulk doc, never sent as "".
+//
+// Live failure, 2026-08-16 frozen-room backfill: the clo-personal ring push returned
+// mapper_parsing_exception "cannot parse empty date" for three ledger rows with a blank ts
+// (20260630-054/055/056), losing their text AND embedding on the privileged ring. All three fleet
+// memory writers build the field as `ts: entry.ts || ""`; Azure accepted it, OpenSearch does not
+// when the index maps ts as `date`.
+// ---------------------------------------------------------------------------------------------
+test("pushDocs omits an empty ts entirely (cannot parse empty date), but preserves a real one", async () => {
+  const original = globalThis.fetch;
+  let sentBody = null;
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes("_bulk")) {
+      sentBody = opts.body;
+      return new Response(JSON.stringify({ errors: false, items: [{ update: { _id: "a", status: 200 } }, { update: { _id: "b", status: 200 } }] }), { status: 200 });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  try {
+    const OS = await import("../opensearch-write.mjs");
+    OS._resetCachesForTests?.();
+    process.env.OPENSEARCH_ENDPOINT = "unit-test-cluster.us-east-1.es.amazonaws.com";
+    process.env.OPENSEARCH_REGION = "us-east-1";
+    process.env.AWS_ACCESS_KEY_ID = "AKIAUNITTESTFAKE0000";
+    process.env.AWS_SECRET_ACCESS_KEY = "unit-test-fake-secret-access-key-not-real";
+    await OS.pushDocs("legal-personal-memory", [
+      { id: "a", type: "fact", ts: "", text: "a row whose ledger ts was blank" },
+      { id: "b", type: "fact", ts: "2026-08-16T00:00:00.000Z", text: "a row with a real ts" },
+    ]);
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.ok(sentBody, "the bulk request must have been sent");
+  const lines = sentBody.trim().split("\n").map((l) => JSON.parse(l));
+  const docA = lines[1].doc;
+  const docB = lines[3].doc;
+  assert.equal("ts" in docA, false, "an empty ts must be OMITTED, not sent as an empty string");
+  assert.equal(docA.text, "a row whose ledger ts was blank", "the rest of the row must still be written");
+  assert.equal(docB.ts, "2026-08-16T00:00:00.000Z", "a real ts must be preserved untouched");
+});
