@@ -128,3 +128,68 @@ test("applyContextualPrefix is idempotent (never double-prepends on a re-run)", 
   const twice = MS.applyContextualPrefix(once, "A different prefix that must NOT be applied again.");
   assert.equal(twice, once);
 });
+
+// ============================ openSearchDocFields ============================
+// The OpenSearch-backed counterpart to enrich.mjs's Azure metaPairs loop: same omit-empty rules,
+// but native JS types (real arrays/booleans), never the Azure blob-metadata string encoding.
+
+test("openSearchDocFields: list fields become real arrays, never a JSON-stringified string", () => {
+  const doc = MS.openSearchDocFields({ keywords: ["shopify", "theme"], entities: [] }, "commerce");
+  assert.deepEqual(doc.keywords, ["shopify", "theme"]);
+  assert.equal("entities" in doc, false, "an empty list must be omitted, not written as []");
+});
+
+test("openSearchDocFields: boolean fields are ALWAYS included, even when false (mirrors Azure's metaPairs asymmetry)", () => {
+  const doc = MS.openSearchDocFields({ mnpi_flag: false, signed: true }, "commerce");
+  assert.equal(doc.mnpi_flag, false);
+  assert.equal(typeof doc.mnpi_flag, "boolean", "must be a real boolean, not the string \"false\"");
+  assert.equal(doc.signed, true);
+});
+
+test("openSearchDocFields: numeric fields are omitted when not finite, included (even 0) when they are", () => {
+  const doc = MS.openSearchDocFields({ price_amount: 0, word_count: NaN }, "commerce");
+  assert.equal(doc.price_amount, 0);
+  assert.equal("word_count" in doc, false);
+});
+
+test("openSearchDocFields: date fields pass through the ISO string unchanged, empty string omitted", () => {
+  const doc = MS.openSearchDocFields({ doc_date: "2026-07-21T00:00:00.000Z", last_verified_date: "" }, "commerce");
+  assert.equal(doc.doc_date, "2026-07-21T00:00:00.000Z");
+  assert.equal("last_verified_date" in doc, false);
+});
+
+test("openSearchDocFields: scalar strings included when non-empty, omitted when empty/missing", () => {
+  const doc = MS.openSearchDocFields({ doc_title: "Index", summary: "" }, "commerce");
+  assert.equal(doc.doc_title, "Index");
+  assert.equal("summary" in doc, false);
+});
+
+test("openSearchDocFields: only projects fields that belong to the given domain (commerce-only fields absent for a domain without that pack)", () => {
+  const doc = MS.openSearchDocFields({ doc_title: "X", channel: "shopify" }, "commons");
+  assert.equal(doc.doc_title, "X");
+  assert.equal("channel" in doc, false, "commons has no commerce pack, so 'channel' is not a field of that domain");
+});
+
+test("openSearchDocFields: a null/undefined fields object yields an empty doc rather than throwing", () => {
+  assert.deepEqual(MS.openSearchDocFields(null, "commerce"), {});
+  assert.deepEqual(MS.openSearchDocFields(undefined, "commerce"), {});
+});
+
+test("openSearchDocFields: round-trips a realistic full commerce fields object with every kind represented", () => {
+  const fields = {
+    doc_title: "Master Shopify Library - Index", doc_type: "other", summary: "An index.",
+    keywords: ["shopify", "theme"], entity: "Company", entities: ["OTCHealthMart"],
+    doc_date: "2026-07-13T00:00:00.000Z", mnpi_flag: false, signed: false,
+    word_count: 486, price_amount: null, currency: "", channel: "shopify", brand: "n_a",
+  };
+  const doc = MS.openSearchDocFields(fields, "commerce");
+  assert.equal(doc.doc_title, "Master Shopify Library - Index");
+  assert.deepEqual(doc.keywords, ["shopify", "theme"]);
+  assert.equal(doc.mnpi_flag, false);
+  assert.equal(doc.signed, false);
+  assert.equal(doc.word_count, 486);
+  assert.equal("price_amount" in doc, false);
+  assert.equal("currency" in doc, false);
+  assert.equal(doc.channel, "shopify");
+  assert.equal(doc.brand, "n_a");
+});

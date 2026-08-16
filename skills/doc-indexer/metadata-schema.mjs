@@ -427,6 +427,59 @@ export function applyContextualPrefix(existingText, prefix) {
   return `${CTX_PREFIX_MARKER}\n${prefix}\n\n${text}`;
 }
 
+// ============================ OpenSearch partial-update doc builder ============================
+// The OpenSearch-backed counterpart to the metaPairs loop in enrich.mjs's enrichOne(): given the SAME
+// `fields` object enrichOne() already computed (or, for a doc that was already enriched on a PRIOR
+// run, the same field values read back off its catalog row -- see enrich.mjs's cmdRun, which skips a
+// redundant LLM call in exactly that case), produce the plain-object body for an OpenSearch bulk
+// "update" action's `doc`.
+//
+// Deliberately NOT a reuse of the Azure metaPairs encoding: Azure Blob custom metadata values must be
+// single ASCII strings (8KB total budget), so lists are JSON-stringified (toJsonArrayMeta) and
+// booleans become "true"/"false" strings, decoded back into real types only later by the indexer's
+// jsonArrayToStringCollection field mapping. OpenSearch has no such constraint -- a partial-update
+// `doc` is just JSON, so a list field belongs in the document as a REAL array and a bool field as a
+// REAL boolean; running them through the Azure string-encoding here would be wrong, not just
+// redundant (a `keyword`-mapped array field sent as one JSON-stringified string indexes as a single
+// unsearchable token, not the list it looks like).
+//
+// Omit-empty semantics mirror the Azure metaPairs loop's per-kind rules exactly (list: skip if empty;
+// int/double: skip if not finite; date: skip if falsy; scalar: skip if empty string) with ONE
+// deliberate asymmetry carried over unchanged from Azure: boolean fields are ALWAYS included (a
+// `false` mnpi_flag is a meaningful, already-computed fact, not "nothing to say" -- the metaPairs loop
+// makes the identical choice). Because this is a PARTIAL update (see opensearch-client.mjs's
+// osBulkUpdate doc comment), an omitted field is simply left untouched on the existing document, never
+// cleared -- so under-including here can only mean "stale", never "wrong", and the function is safe to
+// call repeatedly across enrichment re-runs.
+//
+// A missing `fields` object short-circuits to {} BEFORE the per-field loop, deliberately: the loop's
+// own "always include booleans" rule would otherwise write mnpi_flag/signed/medical_claims_present as
+// false from a caller that supplied no data at all -- that is "we affirmatively know this is false",
+// not "we know nothing", and this function must never manufacture the former from the latter.
+export function openSearchDocFields(fields, domain) {
+  if (!fields) return {};
+  const doc = {};
+  for (const f of fieldsForDomain(domain)) {
+    const v = fields[f.name];
+    if (f.kind === "list") {
+      if (!Array.isArray(v) || !v.length) continue;
+      doc[f.name] = v.slice(0, f.maxItems || v.length);
+    } else if (f.kind === "bool") {
+      doc[f.name] = !!v;
+    } else if (f.kind === "int" || f.kind === "double") {
+      if (!Number.isFinite(v)) continue;
+      doc[f.name] = v;
+    } else if (f.kind === "date") {
+      if (!v) continue;
+      doc[f.name] = v;
+    } else {
+      if (v == null || v === "") continue;
+      doc[f.name] = String(v);
+    }
+  }
+  return doc;
+}
+
 /** Recursively replace any string value exactly equal to "<redacted>" with the real secret. Azure AI
  *  Search GET responses redact embedded API keys (skillset AzureOpenAIEmbeddingSkill.apiKey, an
  *  index's vectorSearch.vectorizers[].azureOpenAIParameters.apiKey) to "<redacted>"; PUTting that
