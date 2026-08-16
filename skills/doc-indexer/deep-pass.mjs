@@ -32,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { join, basename, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { kvSecret, requireSecrets } from "../kb-memory/azure-secret.mjs";
+import { fleetSecret } from "./fleet-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 const argv = process.argv.slice(2);
@@ -65,7 +66,8 @@ const csv = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""').replace(
 // weight. kvSecret() already tries managed identity, then AZURE_SP_* client_credentials, then
 // az-CLI/OIDC, in that order, and fails closed (returns null) if none work -- see
 // skills/kb-memory/azure-secret.mjs for the full auth-path documentation.
-async function sm(id) { return kvSecret(id); }
+// AWS SSM first, then Key Vault -- see doc-indexer/fleet-secret.mjs.
+async function sm(id) { return fleetSecret(id); }
 
 // ---------- Azure Blob (account SAS) ----------
 let AKEY, SAS;

@@ -38,7 +38,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, readFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, extname } from "node:path";
-import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
 
 const argv = process.argv.slice(2);
@@ -163,7 +163,11 @@ async function gToken(scope) {
   if (!r.ok) throw new Error("SA auth " + r.status);
   return (await r.json()).access_token;
 }
-async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
+// AWS SSM first, then Key Vault, then this file's GCP tier -- see doc-indexer/fleet-secret.mjs for
+// why (the jobs' Azure managed identity cannot authenticate from Fargate, so the pre-AWS chain
+// resolved NOTHING on AWS and surfaced as a misleading "Missing storage key").
+async function sm(id) { return fleetSecret(id, gcpSecret); }
+async function gcpSecret(id) {
   if (!id) return null;
   try { const t = await gToken("https://www.googleapis.com/auth/cloud-platform"); const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); } catch { return null; }
 }

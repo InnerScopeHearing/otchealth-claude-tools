@@ -71,7 +71,7 @@
 // chunk even when the room is otherwise readable. See metadata-schema.mjs for the full design note and
 // the pure, unit-tested merge logic (sanitizeSegments/encodeSegments/buildSegmentFields).
 //
-// Credentials: Azure Key Vault only (managed identity -> AZURE_SP_* -> az-CLI/OIDC via kvSecret()).
+// Credentials: Azure Key Vault only (managed identity -> AZURE_SP_* -> az-CLI/OIDC via fleetSecret()).
 // Non-PHI ring; INND content is MNPI (confidentiality/mnpi_flag exist precisely so a room that carries
 // MNPI can be gated on it); the legal `personal` container is privileged/confidential.
 //
@@ -103,7 +103,9 @@
 // domain's known host (see OS_DEFAULT_HOST below).
 
 import crypto from "node:crypto";
-import { kvSecret } from "../kb-memory/azure-secret.mjs";
+// fleetSecret = AWS SSM -> Key Vault. enrich.mjs called fleetSecret() directly, so on Fargate
+// (no Azure managed identity) every one of these resolved null. See fleet-secret.mjs.
+import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
 import * as MS from "./metadata-schema.mjs";
 import { osSearch, osBulkUpdate, osRefresh } from "./opensearch-client.mjs";
@@ -149,9 +151,9 @@ const STORAGE_PROFILES = {
 let ACCT, CONTAINER, AKEY, SAS;
 async function resolveStorage() {
   const P = STORAGE_PROFILES[PROFILE] || STORAGE_PROFILES.commerce;
-  ACCT = ACCT_OV || process.env.AZURE_STORAGE_ACCOUNT || P.azAccount || (await kvSecret(P.azAccountSecret));
+  ACCT = ACCT_OV || process.env.AZURE_STORAGE_ACCOUNT || P.azAccount || (await fleetSecret(P.azAccountSecret));
   CONTAINER = containerOverride || P.azContainer;
-  AKEY = (KEYSECRET_OV ? await kvSecret(KEYSECRET_OV) : null) || process.env.AZURE_STORAGE_KEY || (await kvSecret(P.azKeySecret));
+  AKEY = (KEYSECRET_OV ? await fleetSecret(KEYSECRET_OV) : null) || process.env.AZURE_STORAGE_KEY || (await fleetSecret(P.azKeySecret));
   if (!AKEY) { console.error(`Missing storage key for profile ${PROFILE} (secret ${KEYSECRET_OV || P.azKeySecret}).`); process.exit(2); }
   SAS = buildSas();
 }
@@ -208,8 +210,8 @@ async function releaseLock() { try { await fetch(`https://${ACCT}.blob.core.wind
 // ============================ Azure OpenAI (Foundry) chat, gpt-4.1-mini only ============================
 let FEP, FKEY;
 async function resolveFoundry() {
-  FEP = (process.env.AZURE_FOUNDRY_OPENAI_ENDPOINT || (await kvSecret("azure-foundry-openai-endpoint")) || "").replace(/\/$/, "");
-  FKEY = process.env.AZURE_FOUNDRY_KEY || (await kvSecret("azure-foundry-key"));
+  FEP = (process.env.AZURE_FOUNDRY_OPENAI_ENDPOINT || (await fleetSecret("azure-foundry-openai-endpoint")) || "").replace(/\/$/, "");
+  FKEY = process.env.AZURE_FOUNDRY_KEY || (await fleetSecret("azure-foundry-key"));
   if (!FKEY) { console.error("Missing azure-foundry-key"); process.exit(2); }
 }
 async function chatJson(messages, max_tokens) {
@@ -259,11 +261,11 @@ function roomName() {
 const OS_DEFAULT_HOST = "search-otchealth-brain-uqmq2jw23cv4yjnnxblxzb7nny.us-east-1.es.amazonaws.com";
 let OS_CFG = null;
 async function resolveOpenSearch() {
-  const host = (process.env.OPENSEARCH_ENDPOINT || (await kvSecret("opensearch-endpoint")) || OS_DEFAULT_HOST)
+  const host = (process.env.OPENSEARCH_ENDPOINT || (await fleetSecret("opensearch-endpoint")) || OS_DEFAULT_HOST)
     .replace(/^https?:\/\//, "").replace(/\/+$/, "");
-  const region = process.env.OPENSEARCH_REGION || (await kvSecret("opensearch-region")) || "us-east-1";
-  const accessKeyId = process.env.AWS_ACCESS_KEY_ID || (await kvSecret("aws-cto-access-key-id"));
-  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY || (await kvSecret("aws-cto-secret-access-key"));
+  const region = process.env.OPENSEARCH_REGION || (await fleetSecret("opensearch-region")) || "us-east-1";
+  const accessKeyId = process.env.AWS_ACCESS_KEY_ID || (await fleetSecret("aws-cto-access-key-id"));
+  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY || (await fleetSecret("aws-cto-secret-access-key"));
   if (!accessKeyId || !secretAccessKey) {
     console.error("Missing AWS credentials for OpenSearch (env AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, or Key Vault aws-cto-access-key-id/aws-cto-secret-access-key).");
     process.exit(2);
@@ -644,9 +646,9 @@ async function aisPut(ep, key, path, body) { const r = await fetch(`${ep}${path}
 
 async function cmdEnsureSchema() {
   await resolveStorage();
-  const AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await kvSecret("azure-search-endpoint")) || "").replace(/\/$/, "");
-  const AIS_KEY = process.env.AZURE_SEARCH_KEY || (await kvSecret("azure-search-admin-key"));
-  const FOUNDRY_KEY = process.env.AZURE_FOUNDRY_KEY || (await kvSecret("azure-foundry-key"));
+  const AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await fleetSecret("azure-search-endpoint")) || "").replace(/\/$/, "");
+  const AIS_KEY = process.env.AZURE_SEARCH_KEY || (await fleetSecret("azure-search-admin-key"));
+  const FOUNDRY_KEY = process.env.AZURE_FOUNDRY_KEY || (await fleetSecret("azure-foundry-key"));
   if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key."); process.exit(2); }
   if (!FOUNDRY_KEY) { console.error("Missing azure-foundry-key (needed to re-supply the redacted vectorizer/skill key on PUT)."); process.exit(2); }
   const ROOM = roomName();
@@ -703,8 +705,8 @@ async function cmdEnsureSchema() {
 // ============================ reindex-room command ============================
 async function cmdReindexRoom() {
   await resolveStorage();
-  const AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await kvSecret("azure-search-endpoint")) || "").replace(/\/$/, "");
-  const AIS_KEY = process.env.AZURE_SEARCH_KEY || (await kvSecret("azure-search-admin-key"));
+  const AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await fleetSecret("azure-search-endpoint")) || "").replace(/\/$/, "");
+  const AIS_KEY = process.env.AZURE_SEARCH_KEY || (await fleetSecret("azure-search-admin-key"));
   if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key."); process.exit(2); }
   const ROOM = roomName();
   const ixrName = `ixr-${ROOM}`;
@@ -750,8 +752,8 @@ async function cmdVerify() {
     return;
   }
 
-  const AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await kvSecret("azure-search-endpoint")) || "").replace(/\/$/, "");
-  const AIS_KEY = process.env.AZURE_SEARCH_KEY || (await kvSecret("azure-search-admin-key"));
+  const AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await fleetSecret("azure-search-endpoint")) || "").replace(/\/$/, "");
+  const AIS_KEY = process.env.AZURE_SEARCH_KEY || (await fleetSecret("azure-search-admin-key"));
   if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key."); process.exit(2); }
   const exactUrl = `https://${ACCT}.blob.core.windows.net/${CONTAINER}/_TEXT/${VERIFY_PATH}.txt`;
   const select = ["chunk_id", "parent_id", "title", "path", ...fieldDefs.map((f) => f.name)].join(",");
