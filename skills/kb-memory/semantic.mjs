@@ -2,12 +2,26 @@
 // kb-memory SEMANTIC layer: vector recall over the shared exec feed. Complements mem.mjs's
 // keyword recall so agents find memories by MEANING (e.g. "how do we reconnect accounting"
 // surfaces the Xero re-consent pitfalls even without the word "Xero"). Dependency-free; self-
-// resolves creds from Secret Manager via the claude-driver SA. Reuses the fleet's Azure AI Search
-// + Azure OpenAI embeddings (text-embedding-3-large), the exact infra the data-room librarians use.
+// resolves creds from Secret Manager via the claude-driver SA. Backend is Azure AI Search + Azure
+// OpenAI embeddings by DEFAULT (the exact infra the data-room librarians use), but is selectable —
+// see SEARCH_BACKEND below.
 //
 // Ring safety: indexes ONLY the shared exec feed (otchealthcommons/company-journal/_MEMORY/_exec/*),
 // which already contains only what agents chose to `status`/`--share`. It NEVER touches a private
-// lane or the clo-personal lane. Index lives in the same AI Search service as the data rooms.
+// lane or the clo-personal lane. Index lives in the same search service as the data rooms.
+//
+// SEARCH_BACKEND=azure|opensearch (env, default azure) — the SAME env var name/values as
+// otchealth-mcp-server's src/search/index.ts dispatcher and doc-indexer's enrich.mjs --search-backend
+// flag, so it means the identical thing everywhere in the fleet. 'azure' is byte-identical to every
+// prior deploy of this file. 'opensearch' routes every write/read below through opensearch-write.mjs
+// instead — this is the fix for the defect where an Azure outage (or a deliberate billing block)
+// silently froze memory-exec and every ring-memory index, since init() used to throw unconditionally
+// on missing Azure Search creds regardless of what the caller actually wanted.
+// EMBEDDINGS_PROVIDER=foundry|openai (env, default foundry) — INDEPENDENT of SEARCH_BACKEND (mirrors
+// otchealth-mcp-server/src/azure/foundry.ts exactly). A genuine Azure outage takes Azure Foundry down
+// too, so SEARCH_BACKEND=opensearch alone is not sufficient for an Azure-free run —
+// EMBEDDINGS_PROVIDER=openai is also required, or every embed() call still reaches Azure. See
+// opensearch-write.mjs's header for the full reasoning and the credential-resolution chain.
 //
 // Verbs:
 //   node semantic.mjs reindex                 # (re)build the memory-exec index from the exec feed (resumable: skips already-indexed)
@@ -23,10 +37,15 @@ import { pathToFileURL } from "node:url";
 // recall hits across agents for trust scoring (see rankHitsByTrust). Always present alongside this file.
 import { tokenize, jaccard } from "./dedupe.mjs";
 import { kvSecret } from "./azure-secret.mjs";
+import * as OS from "./opensearch-write.mjs";
 const SM = "otchealth-shared-prod";
-const IDX = "memory-exec";
+export const IDX = "memory-exec";
 const AIS_API = "2023-11-01";
 const EMB_DIMS = 3072;
+// Read ONCE at module load (matches this file's existing AGENT_FILTER/TYPE_FILTER/N convention, and
+// otchealth-mcp-server's own dispatcher, which reads SEARCH_BACKEND once via loadEnv()).
+const SEARCH_BACKEND = (process.env.SEARCH_BACKEND || "azure").toLowerCase(); // 'azure' | 'opensearch'
+const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "foundry").toLowerCase(); // 'foundry' | 'openai'
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -62,16 +81,29 @@ function buildSas(acct, key) {
 }
 
 let AIS_EP, AIS_KEY, AOAI_EP, AOAI_KEY, AOAI_DEP;
-async function init() {
-  AIS_EP = (await sm("azure-search-endpoint") || "").replace(/\/$/, "");
-  AIS_KEY = await sm("azure-search-admin-key");
-  AOAI_EP = ((await sm("azure-foundry-openai-endpoint")) || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
-  AOAI_KEY = (await sm("azure-foundry-key")) || (await sm("azure-openai-key"));
-  AOAI_DEP = (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
-  if (!AIS_EP || !AIS_KEY) throw new Error("missing azure-search-endpoint/admin-key");
-  if (!AOAI_EP || !AOAI_KEY) throw new Error("missing azure-openai endpoint/key");
+// Exported so a test (and backfill-frozen-rooms.mjs) can call init() directly without going through the
+// heavier reindex()/recall() verbs, which also touch Azure Blob storage for the source feed (a separate,
+// out-of-scope concern -- this port is specifically about the SEARCH-INDEX destination, not the ledger's
+// source of truth).
+export async function init() {
+  if (SEARCH_BACKEND === "opensearch") {
+    await OS.resolveOpenSearchConfig(); // throws a clear message if truly unresolvable; never touches azure-search-*
+  } else {
+    AIS_EP = (await sm("azure-search-endpoint") || "").replace(/\/$/, "");
+    AIS_KEY = await sm("azure-search-admin-key");
+    if (!AIS_EP || !AIS_KEY) throw new Error("missing azure-search-endpoint/admin-key");
+  }
+  if (EMBEDDINGS_PROVIDER === "openai") {
+    await OS.resolveOpenAIKey(); // throws a clear message if truly unresolvable; never touches azure-openai-*
+  } else {
+    AOAI_EP = ((await sm("azure-foundry-openai-endpoint")) || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
+    AOAI_KEY = (await sm("azure-foundry-key")) || (await sm("azure-openai-key"));
+    AOAI_DEP = (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
+    if (!AOAI_EP || !AOAI_KEY) throw new Error("missing azure-openai endpoint/key");
+  }
 }
 async function embed(texts) {
+  if (EMBEDDINGS_PROVIDER === "openai") return OS.embedOpenAI(texts);
   for (let a = 0; a < 6; a++) {
     const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: texts }) });
     if (r.status === 429) { await new Promise(s => setTimeout(s, 1500 * (a + 1))); continue; }
@@ -81,6 +113,7 @@ async function embed(texts) {
   throw new Error("embed 429 exhausted");
 }
 async function ensureIndex() {
+  if (SEARCH_BACKEND === "opensearch") { await OS.ensureIndex(IDX); return; }
   const schema = {
     name: IDX,
     fields: [
@@ -118,6 +151,7 @@ async function ensureIndex() {
   if (!r.ok) throw new Error("create index " + r.status + " " + (await r.text()).slice(0, 220));
 }
 async function existingIds() {
+  if (SEARCH_BACKEND === "opensearch") return OS.existingIds(IDX);
   const ids = new Set();
   for (let skip = 0; skip < 100000; skip += 1000) {
     const r = await fetch(`${AIS_EP}/indexes/${IDX}/docs?api-version=${AIS_API}&$select=id&$top=1000&$skip=${skip}`, { headers: { "api-key": AIS_KEY } });
@@ -126,11 +160,32 @@ async function existingIds() {
   }
   return ids;
 }
+// Strips Azure's `@search.action` directive before handing a doc to OpenSearch, whose bulk protocol
+// expresses the action via the request line rather than a field on the doc itself. Pure; every field
+// that remains (full doc or the partial {id, retracted} case alike) is merged via pushDocs' "update"+
+// doc_as_upsert semantics -- see opensearch-write.mjs's header for why that is the correct universal
+// choice for both shapes, not just the full-doc case.
+function stripSearchAction(doc) {
+  const { "@search.action": _drop, ...rest } = doc;
+  return rest;
+}
 async function aisPush(batch) {
+  if (SEARCH_BACKEND === "opensearch") {
+    const res = await OS.pushDocs(IDX, batch.map(stripSearchAction));
+    if (!res.ok) throw new Error("push(opensearch) " + JSON.stringify(res.errors.slice(0, 3)));
+    return;
+  }
   const r = await fetch(`${AIS_EP}/indexes/${IDX}/docs/index?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
   if (!r.ok) throw new Error("push " + r.status + " " + (await r.text()).slice(0, 200));
 }
 async function aisDelete(ids) {
+  if (SEARCH_BACKEND === "opensearch") {
+    for (let i = 0; i < (ids || []).length; i += 1000) {
+      const res = await OS.deleteDocs(IDX, ids.slice(i, i + 1000));
+      if (!res.ok) throw new Error("delete(opensearch) " + JSON.stringify(res.errors.slice(0, 3)));
+    }
+    return;
+  }
   for (let i = 0; i < (ids || []).length; i += 1000) {
     const batch = ids.slice(i, i + 1000).map((id) => ({ "@search.action": "delete", id }));
     const r = await fetch(`${AIS_EP}/indexes/${IDX}/docs/index?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ value: batch }) });
@@ -285,7 +340,9 @@ export function computeRetractedIds(entries) {
   return new Set((entries || []).filter((e) => e && e.supersedes).map((e) => e.supersedes));
 }
 
-async function reindex() {
+// Exported so backfill-frozen-rooms.mjs (and a test) can drive a reindex programmatically without
+// shelling out to this file as a subprocess.
+export async function reindex() {
   await init(); await ensureIndex();
   const entries = await readExecFeed();
   const have = await existingIds();
@@ -345,42 +402,50 @@ async function recall() {
   if (!QUERY) { console.error('need a query: semantic.mjs recall "<query>" [--n 12] [--agent x] [--type pitfall] [--include-ops]'); process.exit(2); }
   await init();
   const vec = (await embed([QUERY]))[0];
-  const filters = [];
-  if (AGENT_FILTER) filters.push(`agent eq '${AGENT_FILTER.replace(/'/g, "''")}'`);
-  if (TYPE_FILTER) filters.push(`type eq '${TYPE_FILTER.replace(/'/g, "''")}'`);
-  const SELECT_FULL = "agent,type,ts,text,tags,retracted";
-  const SELECT_LEGACY = "agent,type,ts,text,tags"; // fallback: index not yet reindexed since `retracted` shipped
-  let baseBody = { search: QUERY, top: N, select: SELECT_FULL, vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: N }] };
-  if (filters.length) baseBody.filter = filters.join(" and ");
-  // Invoke the Azure AI Search L2 SEMANTIC RERANKER. The memory-exec index provisions a "sem" semantic
-  // config (see ensureIndex above) but this recall path never used it -- it returned pure hybrid
-  // BM25+vector. queryType:"semantic" reorders the fused top-k by a cross-encoder relevance model:
-  // materially better recall at $0 (the S1 service already bills for semantic capacity). Mirrors the
-  // gateway's own hybridSearch (otchealth-mcp-server src/azure/search.ts). FAIL-OPEN, exactly like the
-  // gateway: a semantic-ranker 400 (config/capacity/tier) must never take recall down, so retry once as
-  // plain hybrid and carry on.
-  const doSearch = (semantic) => fetch(`${AIS_EP}/indexes/${IDX}/docs/search?api-version=${AIS_API}`, {
-    method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify(semantic ? { ...baseBody, queryType: "semantic", semanticConfiguration: "sem" } : baseBody),
-  });
-  let r = await doSearch(true);
-  // FAIL-OPEN on ANY semantic failure, not just 400: the semantic ranker can also return 402 (monthly
-  // free-tier quota exhausted before semantic billing is enabled) or 403, and recall must NEVER break
-  // just because the reranker is unavailable -- fall straight back to the plain hybrid query that has
-  // always worked.
-  if (!r.ok) { console.error(`[recall] semantic ranker unavailable (${r.status}); falling back to plain hybrid`); r = await doSearch(false); }
-  // FAIL-OPEN on the `retracted` field not existing yet (an index that has not been reindexed since this
-  // shipped): Azure 400s a $select naming an unknown field. Drop it and retry the same semantic/non-
-  // semantic dance once more, so recall NEVER breaks on a stale schema; it just runs one cycle without
-  // the extra safeguard field until the next reindex backfills it.
-  if (!r.ok && r.status === 400) {
-    console.error("[recall] 'retracted' field not yet in the live schema (run reindex to backfill); retrying without it");
-    baseBody = { ...baseBody, select: SELECT_LEGACY };
-    r = await doSearch(true);
-    if (!r.ok) r = await doSearch(false);
+  let hits;
+  if (SEARCH_BACKEND === "opensearch") {
+    // BM25+kNN hybrid, RRF-merged (opensearch-write.mjs's hybridSearch) -- OpenSearch has no built-in
+    // equivalent of Azure's queryType:'semantic' L2 reranker, so there is no semantic-ranker retry dance
+    // to mirror here; hits are already shaped to match the Azure branch's contract below.
+    hits = await OS.hybridSearch(IDX, { queryText: QUERY, vector: vec, top: N, agent: AGENT_FILTER || undefined, type: TYPE_FILTER || undefined });
+  } else {
+    const filters = [];
+    if (AGENT_FILTER) filters.push(`agent eq '${AGENT_FILTER.replace(/'/g, "''")}'`);
+    if (TYPE_FILTER) filters.push(`type eq '${TYPE_FILTER.replace(/'/g, "''")}'`);
+    const SELECT_FULL = "agent,type,ts,text,tags,retracted";
+    const SELECT_LEGACY = "agent,type,ts,text,tags"; // fallback: index not yet reindexed since `retracted` shipped
+    let baseBody = { search: QUERY, top: N, select: SELECT_FULL, vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: N }] };
+    if (filters.length) baseBody.filter = filters.join(" and ");
+    // Invoke the Azure AI Search L2 SEMANTIC RERANKER. The memory-exec index provisions a "sem" semantic
+    // config (see ensureIndex above) but this recall path never used it -- it returned pure hybrid
+    // BM25+vector. queryType:"semantic" reorders the fused top-k by a cross-encoder relevance model:
+    // materially better recall at $0 (the S1 service already bills for semantic capacity). Mirrors the
+    // gateway's own hybridSearch (otchealth-mcp-server src/azure/search.ts). FAIL-OPEN, exactly like the
+    // gateway: a semantic-ranker 400 (config/capacity/tier) must never take recall down, so retry once as
+    // plain hybrid and carry on.
+    const doSearch = (semantic) => fetch(`${AIS_EP}/indexes/${IDX}/docs/search?api-version=${AIS_API}`, {
+      method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify(semantic ? { ...baseBody, queryType: "semantic", semanticConfiguration: "sem" } : baseBody),
+    });
+    let r = await doSearch(true);
+    // FAIL-OPEN on ANY semantic failure, not just 400: the semantic ranker can also return 402 (monthly
+    // free-tier quota exhausted before semantic billing is enabled) or 403, and recall must NEVER break
+    // just because the reranker is unavailable -- fall straight back to the plain hybrid query that has
+    // always worked.
+    if (!r.ok) { console.error(`[recall] semantic ranker unavailable (${r.status}); falling back to plain hybrid`); r = await doSearch(false); }
+    // FAIL-OPEN on the `retracted` field not existing yet (an index that has not been reindexed since this
+    // shipped): Azure 400s a $select naming an unknown field. Drop it and retry the same semantic/non-
+    // semantic dance once more, so recall NEVER breaks on a stale schema; it just runs one cycle without
+    // the extra safeguard field until the next reindex backfills it.
+    if (!r.ok && r.status === 400) {
+      console.error("[recall] 'retracted' field not yet in the live schema (run reindex to backfill); retrying without it");
+      baseBody = { ...baseBody, select: SELECT_LEGACY };
+      r = await doSearch(true);
+      if (!r.ok) r = await doSearch(false);
+    }
+    if (!r.ok) { console.error("search " + r.status + " " + (await r.text()).slice(0, 200)); process.exit(1); }
+    hits = (await r.json()).value || [];
   }
-  if (!r.ok) { console.error("search " + r.status + " " + (await r.text()).slice(0, 200)); process.exit(1); }
-  let hits = (await r.json()).value || [];
 
   // Room-hygiene + retraction filter (defect-2 parity fix): see filterHygiene() above. Fail-open by
   // construction (filterHygiene never throws); `hits` is only ever reassigned to its own filtered output.
