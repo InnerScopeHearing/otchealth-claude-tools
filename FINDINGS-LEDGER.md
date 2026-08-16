@@ -248,3 +248,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-16T18:29:57.947Z
 - **Closed:** (open)
+
+### finding:FND-20260816-1aa3 severity:low status:open | sentinel-os-eval has failed 4 of its last 5 Azure runs (08-12,08-13,08-14 Failed, 08-15 Succeeded but took 1h28m, 08-16 Failed) -- pre-existing, unrelated to the AWS migration, surfaced while cross-checking the jobs matrix
+
+- **Source audit doc:** runbooks/AWS-JOBS-MIGRATION-WAVE-B.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-16T18:30:02.634Z
+- **Closed:** (open)
