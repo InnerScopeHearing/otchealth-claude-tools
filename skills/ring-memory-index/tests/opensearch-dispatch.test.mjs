@@ -15,6 +15,24 @@ import assert from "node:assert/strict";
 
 const AZURE_HOST_RE = /\.(search\.windows\.net|openai\.azure\.com|cognitiveservices\.azure\.com)/i;
 
+/** The exact OpenSearch cluster host this file configures (see ENV below, which is derived from it, so
+ *  the stub's routing and the env the code under test actually reads cannot drift apart). */
+const OS_HOST = "unit-test-cluster.us-east-1.es.amazonaws.com";
+
+/** Compare the URL's HOST COMPONENT exactly rather than substring-testing the whole URL. Two reasons,
+ *  in this order:
+ *   1. `u.includes(".es.amazonaws.com")` is CodeQL js/incomplete-url-substring-sanitization: a URL that
+ *      merely MENTIONS that string in a path or query satisfies it.
+ *   2. It is the weaker assertion. This file exists to prove WHICH backend each dispatch reached, so a
+ *      check the wrong backend can satisfy defeats its entire purpose. */
+function isHost(u, host) {
+  try {
+    return new URL(u).host === host;
+  } catch {
+    return false;
+  }
+}
+
 function installFetchStub() {
   const calls = [];
   const original = globalThis.fetch;
@@ -22,8 +40,8 @@ function installFetchStub() {
     const u = String(typeof url === "string" ? url : url?.url || url);
     calls.push(u);
     if (AZURE_HOST_RE.test(u)) throw new Error(`TEST-FAIL: fetch reached an Azure Search/Foundry host: ${u}`);
-    if (u.includes("api.openai.com/v1/embeddings")) return new Response(JSON.stringify({ data: [{ index: 0, embedding: new Array(3072).fill(0.001) }] }), { status: 200 });
-    if (u.includes(".es.amazonaws.com")) {
+    if (isHost(u, "api.openai.com") && u.includes("/v1/embeddings")) return new Response(JSON.stringify({ data: [{ index: 0, embedding: new Array(3072).fill(0.001) }] }), { status: 200 });
+    if (isHost(u, OS_HOST)) {
       if (u.includes("_mapping")) return new Response("not found", { status: 404 });
       if (u.includes("_bulk")) return new Response(JSON.stringify({ errors: false, items: [] }), { status: 200 });
       if (u.includes("_search/scroll") || opts?.method === "DELETE") return new Response(JSON.stringify({ hits: { hits: [] } }), { status: 200 });
@@ -40,7 +58,7 @@ function installFetchStub() {
 const ENV = {
   SEARCH_BACKEND: "opensearch",
   EMBEDDINGS_PROVIDER: "openai",
-  OPENSEARCH_ENDPOINT: "unit-test-cluster.us-east-1.es.amazonaws.com",
+  OPENSEARCH_ENDPOINT: OS_HOST,
   OPENSEARCH_REGION: "us-east-1",
   AWS_ACCESS_KEY_ID: "AKIAUNITTESTFAKE0000",
   AWS_SECRET_ACCESS_KEY: "unit-test-fake-secret-access-key-not-real",
@@ -61,7 +79,7 @@ test("ensureIdx: SEARCH_BACKEND=opensearch routes to OS.ensureIndex, never touch
   } finally {
     restore();
   }
-  assert.ok(calls.some((u) => u.includes(".es.amazonaws.com") && u.includes("commons-developer-memory")), "must have called the opensearch cluster for this index");
+  assert.ok(calls.some((u) => isHost(u, OS_HOST) && u.includes("commons-developer-memory")), "must have called the opensearch cluster for this index");
   assert.deepEqual(calls.filter((u) => AZURE_HOST_RE.test(u)), []);
 });
 
@@ -76,7 +94,7 @@ test("embedTexts: EMBEDDINGS_PROVIDER=openai routes to OS.embedOpenAI, ignores t
     restore();
   }
   assert.equal(vecs[0].length, 3072);
-  assert.ok(calls.some((u) => u.includes("api.openai.com/v1/embeddings")));
+  assert.ok(calls.some((u) => isHost(u, "api.openai.com") && u.includes("/v1/embeddings")));
   assert.deepEqual(calls.filter((u) => AZURE_HOST_RE.test(u)), []);
 });
 

@@ -26,6 +26,26 @@ import assert from "node:assert/strict";
 
 const AZURE_HOST_RE = /\.(search\.windows\.net|openai\.azure\.com|cognitiveservices\.azure\.com|vault\.azure\.net)/i;
 
+/** The exact OpenSearch cluster host this file configures. Declared once so the stub's routing and the
+ *  env block below cannot drift apart: the stub answers the cluster the test actually pointed at, or it
+ *  answers nothing. */
+const OS_HOST = "unit-test-cluster.us-east-1.es.amazonaws.com";
+
+/** Compare the URL's HOST COMPONENT exactly, rather than substring-testing the whole URL. Two reasons,
+ *  in this order:
+ *   1. `u.includes(".es.amazonaws.com")` is CodeQL js/incomplete-url-substring-sanitization: a URL that
+ *      merely MENTIONS that string in a path or query satisfies it.
+ *   2. It is the weaker assertion. This file exists to prove WHICH backend a call reached, so a check
+ *      the wrong backend can satisfy defeats its entire purpose. (Third occurrence of this pattern in
+ *      the fleet; the same fix cleared it on src/search/dual-write.test.ts and the mcp-server stubs.) */
+function isHost(u, host) {
+  try {
+    return new URL(u).host === host;
+  } catch {
+    return false;
+  }
+}
+
 /** A fetch stub that THROWS on any Azure host (proving Azure is never reached) and answers the
  *  AWS OpenSearch / api.openai.com calls this test's fully-env-supplied configuration legitimately
  *  needs. Every credential/config value this test needs is supplied via env vars (see each test's env
@@ -41,10 +61,10 @@ function installFetchStub() {
     if (AZURE_HOST_RE.test(u)) {
       throw new Error(`TEST-FAIL: fetch reached an Azure host with SEARCH_BACKEND=opensearch + EMBEDDINGS_PROVIDER=openai: ${u}`);
     }
-    if (u.includes("api.openai.com/v1/embeddings")) {
+    if (isHost(u, "api.openai.com") && u.includes("/v1/embeddings")) {
       return new Response(JSON.stringify({ data: [{ index: 0, embedding: new Array(3072).fill(0.001) }] }), { status: 200 });
     }
-    if (u.includes(".es.amazonaws.com")) {
+    if (isHost(u, OS_HOST)) {
       if (u.includes("_mapping")) return new Response("not found", { status: 404 }); // ensureIndex: index absent -> create path
       if (u.includes("_bulk")) return new Response(JSON.stringify({ errors: false, items: [] }), { status: 200 });
       return new Response(JSON.stringify({}), { status: 200 });
@@ -57,7 +77,7 @@ function installFetchStub() {
 test("SEARCH_BACKEND=opensearch + EMBEDDINGS_PROVIDER=openai: init() succeeds with ZERO Azure fetch calls (before this fix, init() unconditionally threw 'missing azure-search-endpoint/admin-key')", async () => {
   process.env.SEARCH_BACKEND = "opensearch";
   process.env.EMBEDDINGS_PROVIDER = "openai";
-  process.env.OPENSEARCH_ENDPOINT = "unit-test-cluster.us-east-1.es.amazonaws.com";
+  process.env.OPENSEARCH_ENDPOINT = OS_HOST;
   process.env.OPENSEARCH_REGION = "us-east-1";
   process.env.AWS_ACCESS_KEY_ID = "AKIAUNITTESTFAKE0000";
   process.env.AWS_SECRET_ACCESS_KEY = "unit-test-fake-secret-access-key-not-real";
@@ -80,7 +100,7 @@ test("SEARCH_BACKEND=opensearch + EMBEDDINGS_PROVIDER=openai: a full reindex-sha
   // anyway so this test is legible and correct standing alone.
   process.env.SEARCH_BACKEND = "opensearch";
   process.env.EMBEDDINGS_PROVIDER = "openai";
-  process.env.OPENSEARCH_ENDPOINT = "unit-test-cluster.us-east-1.es.amazonaws.com";
+  process.env.OPENSEARCH_ENDPOINT = OS_HOST;
   process.env.OPENSEARCH_REGION = "us-east-1";
   process.env.AWS_ACCESS_KEY_ID = "AKIAUNITTESTFAKE0000";
   process.env.AWS_SECRET_ACCESS_KEY = "unit-test-fake-secret-access-key-not-real";
