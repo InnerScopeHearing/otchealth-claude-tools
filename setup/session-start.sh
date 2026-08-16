@@ -482,6 +482,27 @@ if command -v claude >/dev/null 2>&1; then
       && echo "[octools] MCP added: courtlistener (OAuth — one-time consent on first use)" \
       || echo "[octools] WARN: courtlistener MCP add failed."
   fi
+  #  - tavily = live web search / extract / crawl / map. This is the EXTERNAL, public-world lane and
+  #    it sits OUTSIDE the compliance boundary: never send company-confidential, personal, legal,
+  #    customer, or PHI content to it (same rule the One Brain ground-first protocol states for
+  #    web_search). Company questions go to brain_search; only public-world questions go here.
+  #    AWS SSM is tried FIRST and Key Vault second: SSM is the store that survives the Azure
+  #    retirement, and the Key Vault read is a transition fallback, not the source of truth.
+  if ! printf '%s' "$MCP_LIST" | grep -q "tavily"; then
+    TVTMP="$(mktemp)"
+    if { node "${TOOLS_DIR}/setup/get-secret-aws.mjs" tavily-api-key "$TVTMP" >/dev/null 2>&1 \
+         || AZURE_KEYVAULT_NAME="$KEYVAULT" node "${TOOLS_DIR}/setup/get-secret-azure.mjs" tavily-api-key "$TVTMP" >/dev/null 2>&1; } && [ -s "$TVTMP" ]; then
+      # Tavily keys the remote MCP by query string, so the URL itself carries the credential. It
+      # lands only in the ephemeral ~/.claude.json, never in a repo -- and is redacted from output.
+      claude mcp add --transport http --scope user tavily \
+        "https://mcp.tavily.com/mcp/?tavilyApiKey=$(cat "$TVTMP")" >/dev/null 2>&1 \
+        && echo "[octools] MCP added: tavily (live web search — EXTERNAL lane, never send confidential content)" \
+        || echo "[octools] WARN: tavily MCP add failed."
+    else
+      echo "[octools] tavily: no API key resolvable (create SSM /otchealth/tavily-api-key) — skipping."
+    fi
+    shred -u "$TVTMP" 2>/dev/null || rm -f "$TVTMP"
+  fi
 fi
 
 [ -n "$OPENAI_KEY" ] && echo "[octools] OPENAI_API_KEY: loaded" || echo "[octools] WARN: OPENAI_API_KEY missing (create 'openai-api-key' secret)."
