@@ -170,13 +170,33 @@ export async function ssmSecretSet(name, value) {
 export async function ssmListDetailed() {
   const out = [];
   let token = null;
+  let page = 0;
   do {
     const res = await ssmCall("DescribeParameters", {
       MaxResults: 50,
       ParameterFilters: [{ Key: "Name", Option: "BeginsWith", Values: [`${PREFIX}/`] }],
       ...(token ? { NextToken: token } : {}),
     });
-    if (res.status !== 200) break;
+    // A PARTIAL LIST MUST NEVER BE RETURNED AS A COMPLETE ONE.
+    //
+    // The obvious `if (res.status !== 200) break;` looks defensive and is the opposite: it converts
+    // "I could not finish enumerating" into "here is the complete answer". With ~450 parameters at
+    // MaxResults 50 there are ~9 pages, so one transient failure on page 2 would return 50 of 450 --
+    // and vault-registry's caller treats any non-empty array as success, so it would publish a
+    // credential registry claiming 50 credentials exist. Downstream readers (and the brain that
+    // indexes it) would then treat the other 400 as NONEXISTENT. Silently under-reporting a
+    // credential inventory is strictly worse than failing to produce one.
+    //
+    // Throwing instead lets listSecretsSsm() catch and fall back to Key Vault, which is the correct
+    // outcome: incomplete means do not publish. A FIRST-page failure (no AWS creds resolvable, the
+    // ordinary case on a seat without them) is not an error condition -- it is "this store is not
+    // reachable here" -- so it returns empty and lets the caller fall through, preserving the
+    // existing contract. Only a genuine mid-pagination truncation throws.
+    if (res.status !== 200) {
+      if (page === 0) return [];
+      throw new Error(`ssmListDetailed: pagination failed on page ${page + 1} after ${out.length} parameters (HTTP ${res.status}) -- refusing to return a partial inventory`);
+    }
+    page += 1;
     for (const p of res.json?.Parameters || []) {
       out.push({
         id: p.Name.slice(PREFIX.length + 1),
@@ -192,13 +212,22 @@ export async function ssmListDetailed() {
 export async function ssmList() {
   const names = [];
   let token = null;
+  let page = 0;
   do {
     const res = await ssmCall("DescribeParameters", {
       MaxResults: 50,
       ParameterFilters: [{ Key: "Name", Option: "BeginsWith", Values: [`${PREFIX}/`] }],
       ...(token ? { NextToken: token } : {}),
     });
-    if (res.status !== 200) break;
+    // Same partial-list hazard as ssmListDetailed() above -- this function had the original `break`
+    // and the detailed variant inherited it by copy. Its caller (skills/kb-memory/secret-drift.mjs)
+    // uses the result to decide WHICH secrets to drift-check, so a silently truncated list means the
+    // missing ones are never checked and the drift report reads clean. See the full reasoning above.
+    if (res.status !== 200) {
+      if (page === 0) return [];
+      throw new Error(`ssmList: pagination failed on page ${page + 1} after ${names.length} names (HTTP ${res.status}) -- refusing to return a partial list`);
+    }
+    page += 1;
     for (const p of res.json?.Parameters || []) names.push(p.Name.slice(PREFIX.length + 1));
     token = res.json?.NextToken || null;
   } while (token);
