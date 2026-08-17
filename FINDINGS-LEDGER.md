@@ -304,3 +304,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-17T20:00:46.587Z
 - **Closed:** (open)
+
+### finding:FND-20260817-e462 severity:medium status:open | cro lane advertises full 1008-tool catalog incl kb_search_privileged (coo advertises 11); TOOL_CATALOG_CURATION_MODE=report so LANE_TOOLSETS does not narrow internal lanes. Ring gate PROVEN holding, so not a data exposure -- a catalog-honesty/least-privilege gap.
+
+- **Source audit doc:** live lane probe 2026-08-17 (otchealth-gateway:10)
+- **Fix commit:** (none yet)
+- **Verified by:** tools/list per lane via client_credentials; cro=1008, coo=11
+- **Opened:** 2026-08-17T20:13:00.425Z
+- **Closed:** (open)
