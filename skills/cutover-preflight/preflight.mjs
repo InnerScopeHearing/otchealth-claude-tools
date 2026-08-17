@@ -204,10 +204,31 @@ async function runningTask() {
     // Dual-write to Azure ALSO needs a direct admin key: from ECS the Azure writer cannot reach ARM
     // (managed identity only), so without this the Azure leg silently no-ops and rollback is one-way.
     const canWriteAzure = secrets.has('AZURE_SEARCH_ADMIN_KEY') || Boolean(env.AZURE_SEARCH_ADMIN_KEY);
+
+    // THIS CHECK'S MEANING INVERTS ACROSS THE CUTOVER, and reading it with the wrong sign is how a
+    // finished migration gets reported as broken (observed 2026-08-16: a NO-GO on a gateway that had
+    // already been fully flipped and verified).
+    //
+    // BEFORE the flip (reads still on Azure), dual-write is a SAFETY NET: it keeps the OpenSearch
+    // copy current so the flip is not a leap, and keeps Azure current so rollback stays possible.
+    // Its absence is a genuine blocker.
+    //
+    // AFTER the flip (reads on OpenSearch), the SAME setting is an AZURE DEPENDENCY: every memory
+    // write additionally calls Azure Search, so the gateway cannot outlive an Azure suspension --
+    // which is the entire point of retiring it. Demanding it here would block the finish line.
+    //
+    // So the sign is chosen from what SEARCH_BACKEND actually says, never assumed.
+    const preFlip = env.SEARCH_BACKEND !== 'opensearch';
+    if (!preFlip) {
+      if (dual) {
+        return { status: 'WARN', evidence: `reads are on OpenSearch but SEARCH_DUAL_WRITE=true, so every write still calls Azure -- turn it OFF to finish the retirement (${td.split('/').pop()})` };
+      }
+      return { status: 'PASS', evidence: `post-flip: reads on OpenSearch and dual-write off, so no write path reaches Azure (${td.split('/').pop()})` };
+    }
     if (!dual) return { status: 'FAIL', evidence: `SEARCH_DUAL_WRITE=${env.SEARCH_DUAL_WRITE ?? '(unset)'} on ${td.split('/').pop()}` };
     if (!canWriteAzure) return { status: 'FAIL', evidence: 'dual-write is on but AZURE_SEARCH_ADMIN_KEY is absent: the Azure leg cannot authenticate from ECS, so rollback would be one-way' };
     return { status: 'PASS', evidence: `dual-write on, Azure leg authenticated (${td.split('/').pop()})` };
-  }, 'Set SEARCH_DUAL_WRITE=true and provide AZURE_SEARCH_ADMIN_KEY, then redeploy, BEFORE flipping reads.');
+  }, 'BEFORE the flip: set SEARCH_DUAL_WRITE=true + AZURE_SEARCH_ADMIN_KEY and redeploy. AFTER the flip: turn it off, it is an Azure dependency.');
 
   // ── 6. Remaining Azure dependencies ──────────────────────────────────────────────────────────
   await check('AZURE-DEPS', 'no runtime dependency on Azure remains', async () => {
@@ -217,9 +238,24 @@ async function runningTask() {
     if (env.SEARCH_BACKEND !== 'opensearch') remaining.push('search still on Azure');
     if (env.BLOB_BACKEND !== 's3') remaining.push('documents still on Azure Blob');
     if (env.EMBEDDINGS_PROVIDER !== 'openai') remaining.push('embeddings still on Azure Foundry');
-    if (env.COSMOS_ENDPOINT) remaining.push('agent state still on Azure Cosmos');
+    if (env.LLM_PROVIDER !== 'openai') remaining.push('chat completions still on Azure Foundry');
+    // CORRECTED 2026-08-16. This line used to read `if (env.COSMOS_ENDPOINT)`, which tested whether a
+    // CREDENTIAL WAS PRESENT rather than whether the backend was SELECTED -- so it reported "agent
+    // state still on Azure Cosmos" on a task definition that had STATE_BACKEND=postgres and was
+    // provably serving every read from RDS. That is exactly the "configuration presence is not
+    // selected behaviour" error this whole gate exists to catch, sitting inside the gate itself, and
+    // it made the one check that answers "are we done with Azure?" permanently unpassable: the
+    // COSMOS_* vars are deliberately RETAINED as the rollback path, so the old test could never go
+    // green no matter how complete the migration was. A check that cannot pass is a check nobody can
+    // act on. Every sibling line above tests the selector; this one now does too.
+    if (env.STATE_BACKEND !== 'postgres') remaining.push('agent state still on Azure Cosmos');
+    // web_search was Azure-only BY CONSTRUCTION until mcp-server #230 added WEB_SEARCH_PROVIDER, and
+    // its default is 'azure' -- so an UNSET value is a live call to Azure Foundry Grounding-with-Bing
+    // on every external-world query the fleet's ground-first protocol makes. It was absent from this
+    // list entirely, which is worse than a wrong check: a dependency nothing was even looking for.
+    if ((env.WEB_SEARCH_PROVIDER ?? 'azure') === 'azure') remaining.push('web_search still on Azure Foundry (WEB_SEARCH_PROVIDER unset defaults to azure)');
     if (remaining.length) return { status: 'FAIL', evidence: remaining.join('; ') };
-    return { status: 'PASS', evidence: 'search, documents, embeddings and agent state are all non-Azure' };
+    return { status: 'PASS', evidence: 'search, documents, embeddings, chat, agent state and web search are all non-Azure' };
   }, 'Each remaining item keeps the brain dependent on Azure surviving. Cutting over now does not protect against suspension.');
 
   // ── 7. Freshness after the flip ──────────────────────────────────────────────────────────────
