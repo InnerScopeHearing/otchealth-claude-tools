@@ -296,3 +296,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-17T13:45:29.903Z
 - **Closed:** (open)
+
+### finding:FND-20260817-cc3e severity:high status:open | finance-cfo-source-docs index returns paths whose blobs are unreachable: 11 of 20 sampled failed AFTER the path fix, and every failure is under the INND/ subtree (source AND _TEXT sidecar both absent) -- a data-coverage gap, root cause not yet established
+
+- **Source audit doc:** session:2026-08-17 CFO kb_get_document verification
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-17T20:00:46.587Z
+- **Closed:** (open)
