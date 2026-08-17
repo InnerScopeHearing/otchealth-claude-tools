@@ -320,3 +320,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** counts-only comparison across 3 queries x 2 privileged indexes; content never read or routed
 - **Opened:** 2026-08-17T20:13:03.035Z
 - **Closed:** (open)
+
+### finding:FND-20260817-a73a severity:high status:fixed | listShared() swallowed every non-2xx and returned an empty shared feed as SUCCESS, silently emptying the retraction filter for its full 120s TTL -- a corrected belief could resurface via brain_search as current truth. FIXED 9f069ff: throw on non-404, union-never-replace the retraction cache, 20s degraded TTL.
+
+- **Source audit doc:** error-masking sweep 2026-08-17 (subagent finding, CTO-verified by reading src/memory/store.ts + retractions.ts)
+- **Fix commit:** 9f069ff
+- **Verified by:** counterfactual: restoring the old bare break turns 3 of the 4 new tests red; 1565/1565 suite green
+- **Opened:** 2026-08-17T21:44:52.749Z
+- **Closed:** 2026-08-17T21:44:52.749Z
