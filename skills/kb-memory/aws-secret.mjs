@@ -161,8 +161,8 @@ export async function ssmSecretSet(name, value) {
  *  `string[]` and silently changing that shape is the kind of change that type-checks fine and
  *  breaks a consumer at runtime.
  *
- *  NOTE ON `created`: SSM's DescribeParameters exposes LastModifiedDate, NOT a creation date -- the
- *  API does not return one. The field is named `created` to match what Key Vault's enumeration
+ *  NOTE ON `created`: SSM exposes LastModifiedDate, NOT a creation date -- the API does not return
+ *  one on any enumeration verb. The field is named `created` to match what Key Vault's enumeration
  *  returns so the registry's downstream shape is identical across both stores, but for an SSM-sourced
  *  row it means LAST MODIFIED. For a credential registry that is arguably the more useful date (it
  *  is when the secret was last rotated), and calling it out here is better than a reader assuming a
@@ -172,9 +172,27 @@ export async function ssmListDetailed() {
   let token = null;
   let page = 0;
   do {
-    const res = await ssmCall("DescribeParameters", {
-      MaxResults: 50,
-      ParameterFilters: [{ Key: "Name", Option: "BeginsWith", Values: [`${PREFIX}/`] }],
+    // GetParametersByPath, NOT DescribeParameters.
+    //
+    // These are DIFFERENT IAM ACTIONS, and "can read secrets" does not imply "can list them".
+    // otchealthTaskRole (which every Fargate job runs as) holds ssm:GetParameter, ssm:GetParameters
+    // and ssm:GetParametersByPath -- and NOT ssm:DescribeParameters. So the Describe form returned
+    // AccessDenied inside the job while working fine from an operator seat using the broad aws-cto
+    // key: the most misleading possible split, verified locally and dead in production. Observed
+    // live 2026-08-16 as daily-digest exiting 3 with "AWS SSM returned nothing" even after the
+    // SSM-first fix shipped and the image was rebuilt.
+    //
+    // GetParametersByPath enumerates the same set with a verb the role actually has, so this needs
+    // no new privilege. WithDecryption is FALSE, which matters for more than cost: a SecureString
+    // then comes back ENCRYPTED, so listing names never materialises a plaintext secret in the
+    // job's memory. Only Name and LastModifiedDate are read; Value is ignored and never logged.
+    // MaxResults caps at 10 here (vs DescribeParameters' 50), so ~450 parameters is ~45 pages --
+    // which makes the partial-page handling below matter MORE, not less.
+    const res = await ssmCall("GetParametersByPath", {
+      Path: `${PREFIX}/`,
+      MaxResults: 10,
+      Recursive: true,
+      WithDecryption: false,
       ...(token ? { NextToken: token } : {}),
     });
     // A PARTIAL LIST MUST NEVER BE RETURNED AS A COMPLETE ONE.
@@ -214,9 +232,14 @@ export async function ssmList() {
   let token = null;
   let page = 0;
   do {
-    const res = await ssmCall("DescribeParameters", {
-      MaxResults: 50,
-      ParameterFilters: [{ Key: "Name", Option: "BeginsWith", Values: [`${PREFIX}/`] }],
+    // GetParametersByPath, for the same IAM reason documented on ssmListDetailed() above: the
+    // Fargate task role has ssm:GetParametersByPath but NOT ssm:DescribeParameters, so the Describe
+    // form is AccessDenied in every job while succeeding from an operator seat.
+    const res = await ssmCall("GetParametersByPath", {
+      Path: `${PREFIX}/`,
+      MaxResults: 10,
+      Recursive: true,
+      WithDecryption: false,
       ...(token ? { NextToken: token } : {}),
     });
     // Same partial-list hazard as ssmListDetailed() above -- this function had the original `break`
