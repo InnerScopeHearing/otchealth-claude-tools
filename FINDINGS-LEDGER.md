@@ -297,13 +297,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-17T13:45:29.903Z
 - **Closed:** (open)
 
-### finding:FND-20260817-cc3e severity:high status:open | finance-cfo-source-docs index returns paths whose blobs are unreachable: 11 of 20 sampled failed AFTER the path fix, and every failure is under the INND/ subtree (source AND _TEXT sidecar both absent) -- a data-coverage gap, root cause not yet established
+### finding:FND-20260817-cc3e severity:high status:fixed | finance-cfo-source-docs index returns paths whose blobs are unreachable: 11 of 20 sampled failed AFTER the path fix, and every failure is under the INND/ subtree (source AND _TEXT sidecar both absent) -- a data-coverage gap, root cause not yet established
 
 - **Source audit doc:** session:2026-08-17 CFO kb_get_document verification
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 5a59fe1
+- **Verified by:** ROOT CAUSE WAS NOT A COVERAGE GAP. s3-blob-store double-encoded the object key (pre-encoded with encodeURIComponent, then signRequest canonicalised again) so any key containing a space signed as %2520 but travelled as %20 -> signature mismatch -> S3 403 -> the 403 branch reported found:false. All 5 documents the FY2022 close depends on verified present in S3 via ListObjectsV2 and now READ through the fixed path (476447B, 946769B, 956593B, 94032B, 84573B). My original 'index holds rows for documents the store does not contain' characterisation was WRONG.
 - **Opened:** 2026-08-17T20:00:46.587Z
-- **Closed:** (open)
+- **Closed:** 2026-08-17T21:30:31.442Z
 
 ### finding:FND-20260817-e462 severity:medium status:open | cro lane advertises full 1008-tool catalog incl kb_search_privileged (coo advertises 11); TOOL_CATALOG_CURATION_MODE=report so LANE_TOOLSETS does not narrow internal lanes. Ring gate PROVEN holding, so not a data exposure -- a catalog-honesty/least-privilege gap.
 
