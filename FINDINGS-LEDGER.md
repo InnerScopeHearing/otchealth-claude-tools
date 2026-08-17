@@ -313,13 +313,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-17T20:13:00.425Z
 - **Closed:** (open)
 
-### finding:FND-20260817-9f1c severity:high status:open | kb_search_privileged returns count:0 (silent empty) instead of an explicit denial for an out-of-ring lane -- a false 'no evidence' is indistinguishable from 'not allowed', the exact failure class that produced the CFO's unproven-finding incident. Proven: identical queries on legal-company and finance-cfo-source-docs return clo=3 matches, cro=0, with no error and no denial text.
+### finding:FND-20260817-9f1c severity:high status:wontfix | kb_search_privileged returns count:0 (silent empty) instead of an explicit denial for an out-of-ring lane -- a false 'no evidence' is indistinguishable from 'not allowed', the exact failure class that produced the CFO's unproven-finding incident. Proven: identical queries on legal-company and finance-cfo-source-docs return clo=3 matches, cro=0, with no error and no denial text.
 
 - **Source audit doc:** live ring probe 2026-08-17 (otchealth-gateway:10)
 - **Fix commit:** (none yet)
-- **Verified by:** counts-only comparison across 3 queries x 2 privileged indexes; content never read or routed
+- **Verified by:** RETRACTED - THE FINDING WAS WRONG, and it was my own test that was wrong. kb_search_privileged DOES return an explicit denial: mode='ring-forbidden', error='forbidden_ring', plus prose naming the required lanes ('legal-company requires one of the cfo/clo/clo-personal/cpo/cco/exec trusted lanes. Your identity: cro'). My probe extracted ONLY the count field, and a correct denial also carries count:0, so my test could not distinguish denial from empty. Verified live on otchealth-gateway:11 by reading the RAW response for lane=cro vs lane=clo. A subagent flagged this as already-correct and I initially dismissed it; the subagent was right.
 - **Opened:** 2026-08-17T20:13:03.035Z
-- **Closed:** (open)
+- **Closed:** 2026-08-17T22:18:40.362Z
 
 ### finding:FND-20260817-a73a severity:high status:fixed | listShared() swallowed every non-2xx and returned an empty shared feed as SUCCESS, silently emptying the retraction filter for its full 120s TTL -- a corrected belief could resurface via brain_search as current truth. FIXED 9f069ff: throw on non-404, union-never-replace the retraction cache, 20s degraded TTL.
 
