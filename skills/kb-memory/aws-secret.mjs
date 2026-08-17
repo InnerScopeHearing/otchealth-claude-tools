@@ -155,6 +155,39 @@ export async function ssmSecretSet(name, value) {
   return false;
 }
 
+/** List every mirrored secret with its metadata: `[{ id, created }]`, id WITHOUT the prefix.
+ *
+ *  A sibling of ssmList() rather than an option on it, because ssmList()'s callers expect a
+ *  `string[]` and silently changing that shape is the kind of change that type-checks fine and
+ *  breaks a consumer at runtime.
+ *
+ *  NOTE ON `created`: SSM's DescribeParameters exposes LastModifiedDate, NOT a creation date -- the
+ *  API does not return one. The field is named `created` to match what Key Vault's enumeration
+ *  returns so the registry's downstream shape is identical across both stores, but for an SSM-sourced
+ *  row it means LAST MODIFIED. For a credential registry that is arguably the more useful date (it
+ *  is when the secret was last rotated), and calling it out here is better than a reader assuming a
+ *  first-written date it is not. Values are NEVER read: DescribeParameters returns metadata only. */
+export async function ssmListDetailed() {
+  const out = [];
+  let token = null;
+  do {
+    const res = await ssmCall("DescribeParameters", {
+      MaxResults: 50,
+      ParameterFilters: [{ Key: "Name", Option: "BeginsWith", Values: [`${PREFIX}/`] }],
+      ...(token ? { NextToken: token } : {}),
+    });
+    if (res.status !== 200) break;
+    for (const p of res.json?.Parameters || []) {
+      out.push({
+        id: p.Name.slice(PREFIX.length + 1),
+        created: p.LastModifiedDate ? new Date(p.LastModifiedDate * 1000).toISOString().slice(0, 10) : "",
+      });
+    }
+    token = res.json?.NextToken || null;
+  } while (token);
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
 /** List every mirrored secret name (without the prefix). Used by the drift check. */
 export async function ssmList() {
   const names = [];
