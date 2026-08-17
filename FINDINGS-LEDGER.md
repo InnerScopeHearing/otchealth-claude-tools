@@ -312,3 +312,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** tools/list per lane via client_credentials; cro=1008, coo=11
 - **Opened:** 2026-08-17T20:13:00.425Z
 - **Closed:** (open)
+
+### finding:FND-20260817-9f1c severity:high status:open | kb_search_privileged returns count:0 (silent empty) instead of an explicit denial for an out-of-ring lane -- a false 'no evidence' is indistinguishable from 'not allowed', the exact failure class that produced the CFO's unproven-finding incident. Proven: identical queries on legal-company and finance-cfo-source-docs return clo=3 matches, cro=0, with no error and no denial text.
+
+- **Source audit doc:** live ring probe 2026-08-17 (otchealth-gateway:10)
+- **Fix commit:** (none yet)
+- **Verified by:** counts-only comparison across 3 queries x 2 privileged indexes; content never read or routed
+- **Opened:** 2026-08-17T20:13:03.035Z
+- **Closed:** (open)
