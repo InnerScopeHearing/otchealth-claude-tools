@@ -155,17 +155,79 @@ export async function ssmSecretSet(name, value) {
   return false;
 }
 
-/** List every mirrored secret name (without the prefix). Used by the drift check. */
-export async function ssmList() {
-  const names = [];
+/** List every mirrored secret with its metadata: `[{ id, created }]`, id WITHOUT the prefix.
+ *
+ *  A sibling of ssmList() rather than an option on it, because ssmList()'s callers expect a
+ *  `string[]` and silently changing that shape is the kind of change that type-checks fine and
+ *  breaks a consumer at runtime.
+ *
+ *  NOTE ON `created`: SSM's DescribeParameters exposes LastModifiedDate, NOT a creation date -- the
+ *  API does not return one. The field is named `created` to match what Key Vault's enumeration
+ *  returns so the registry's downstream shape is identical across both stores, but for an SSM-sourced
+ *  row it means LAST MODIFIED. For a credential registry that is arguably the more useful date (it
+ *  is when the secret was last rotated), and calling it out here is better than a reader assuming a
+ *  first-written date it is not. Values are NEVER read: DescribeParameters returns metadata only. */
+export async function ssmListDetailed() {
+  const out = [];
   let token = null;
+  let page = 0;
   do {
     const res = await ssmCall("DescribeParameters", {
       MaxResults: 50,
       ParameterFilters: [{ Key: "Name", Option: "BeginsWith", Values: [`${PREFIX}/`] }],
       ...(token ? { NextToken: token } : {}),
     });
-    if (res.status !== 200) break;
+    // A PARTIAL LIST MUST NEVER BE RETURNED AS A COMPLETE ONE.
+    //
+    // The obvious `if (res.status !== 200) break;` looks defensive and is the opposite: it converts
+    // "I could not finish enumerating" into "here is the complete answer". With ~450 parameters at
+    // MaxResults 50 there are ~9 pages, so one transient failure on page 2 would return 50 of 450 --
+    // and vault-registry's caller treats any non-empty array as success, so it would publish a
+    // credential registry claiming 50 credentials exist. Downstream readers (and the brain that
+    // indexes it) would then treat the other 400 as NONEXISTENT. Silently under-reporting a
+    // credential inventory is strictly worse than failing to produce one.
+    //
+    // Throwing instead lets listSecretsSsm() catch and fall back to Key Vault, which is the correct
+    // outcome: incomplete means do not publish. A FIRST-page failure (no AWS creds resolvable, the
+    // ordinary case on a seat without them) is not an error condition -- it is "this store is not
+    // reachable here" -- so it returns empty and lets the caller fall through, preserving the
+    // existing contract. Only a genuine mid-pagination truncation throws.
+    if (res.status !== 200) {
+      if (page === 0) return [];
+      throw new Error(`ssmListDetailed: pagination failed on page ${page + 1} after ${out.length} parameters (HTTP ${res.status}) -- refusing to return a partial inventory`);
+    }
+    page += 1;
+    for (const p of res.json?.Parameters || []) {
+      out.push({
+        id: p.Name.slice(PREFIX.length + 1),
+        created: p.LastModifiedDate ? new Date(p.LastModifiedDate * 1000).toISOString().slice(0, 10) : "",
+      });
+    }
+    token = res.json?.NextToken || null;
+  } while (token);
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** List every mirrored secret name (without the prefix). Used by the drift check. */
+export async function ssmList() {
+  const names = [];
+  let token = null;
+  let page = 0;
+  do {
+    const res = await ssmCall("DescribeParameters", {
+      MaxResults: 50,
+      ParameterFilters: [{ Key: "Name", Option: "BeginsWith", Values: [`${PREFIX}/`] }],
+      ...(token ? { NextToken: token } : {}),
+    });
+    // Same partial-list hazard as ssmListDetailed() above -- this function had the original `break`
+    // and the detailed variant inherited it by copy. Its caller (skills/kb-memory/secret-drift.mjs)
+    // uses the result to decide WHICH secrets to drift-check, so a silently truncated list means the
+    // missing ones are never checked and the drift report reads clean. See the full reasoning above.
+    if (res.status !== 200) {
+      if (page === 0) return [];
+      throw new Error(`ssmList: pagination failed on page ${page + 1} after ${names.length} names (HTTP ${res.status}) -- refusing to return a partial list`);
+    }
+    page += 1;
     for (const p of res.json?.Parameters || []) names.push(p.Name.slice(PREFIX.length + 1));
     token = res.json?.NextToken || null;
   } while (token);

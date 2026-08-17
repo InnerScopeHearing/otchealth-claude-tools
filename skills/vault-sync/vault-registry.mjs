@@ -17,15 +17,43 @@
 //        node skills/vault-sync/vault-registry.mjs --dry      # build but do not upload
 import crypto from "node:crypto";
 import { kvSecret, vaultToken } from "../kb-memory/azure-secret.mjs";
+import { ssmListDetailed } from "../kb-memory/aws-secret.mjs";
 
 const VAULT = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
 const DRY = process.argv.includes("--dry");
 const PRINT = process.argv.includes("--print");
 
-// ---- Key Vault secret enumeration (NAMES + created date only; values never read) ----
+// ---- secret enumeration (NAMES + date only; values never read) ----
+//
+// AWS SSM FIRST, Key Vault second. This step's PURPOSE is to inventory the live secret store, so
+// unlike the librarians -- which merely needed a credential to do non-Azure work -- it cannot be
+// fixed by changing where credentials come from. It was doing the right thing against the wrong
+// system: SSM (/otchealth/*) is where fleet secrets now live, and Key Vault is being retired.
+//
+// This is the exact failure that made daily-digest exit 3 on Fargate (observed 2026-08-16): the job
+// generated its digest and staged it successfully, then died on the tail vault-registry step with
+// "no Key Vault token ... (no managed identity)" -- because a Container Apps managed identity cannot
+// exist on ECS. The registry had therefore never regenerated on AWS.
+//
+// Key Vault is retained as the fallback so this is byte-identical while Azure is still up, and so a
+// seat that genuinely has Key Vault auth (a local az login) keeps working.
+async function listSecretsSsm() {
+  try {
+    const rows = await ssmListDetailed();
+    return rows.length ? rows : null;
+  } catch {
+    return null; // no AWS creds resolvable -> fall through to Key Vault
+  }
+}
+
+let SOURCE = "";
 async function listSecrets() {
+  const fromSsm = await listSecretsSsm();
+  if (fromSsm) { SOURCE = "AWS SSM Parameter Store (/otchealth)"; console.error(`vault-registry: source = ${SOURCE} (${fromSsm.length} parameters)`); return fromSsm; }
   const tok = await vaultToken();
-  if (!tok) { console.error(`vault-registry: no Key Vault token for ${VAULT} (no managed identity / AZURE_SP_* / az login)`); process.exit(3); }
+  if (!tok) { console.error(`vault-registry: no secret store reachable -- AWS SSM returned nothing and there is no Key Vault token for ${VAULT} (no managed identity / AZURE_SP_* / az login)`); process.exit(3); }
+  SOURCE = `Azure Key Vault ${VAULT}`;
+  console.error(`vault-registry: source = ${SOURCE} (SSM unavailable; transition fallback)`);
   const out = [];
   let url = `https://${VAULT}.vault.azure.net/secrets?api-version=7.4&maxresults=25`;
   while (url) {
@@ -76,17 +104,21 @@ function buildSas(acct, key) {
 }
 
 // ---- the registry markdown/jsonl builder (pure; exported for tests) ----
-export function buildRegistry(secrets) {
+export function buildRegistry(secrets, source) {
+  // Name the store the rows ACTUALLY came from. Passed in by main() from the same branch that
+  // selected it, so the header can never drift from the enumeration that produced the rows.
+  const STORE = source || `Azure Key Vault ${VAULT}`;
+  const NAMECOL = /SSM/.test(STORE) ? "SSM parameter name" : "Key Vault secret name";
   const rows = secrets.map((s) => ({ id: s.id, ...infer(s.id), created: s.created }));
   const byService = {};
   for (const r of rows) (byService[r.service] = byService[r.service] || []).push(r);
   const services = Object.keys(byService).sort();
   const phi = rows.filter((r) => r.ring === "PHI-BAA").length;
-  let md = `# Credential Registry (regenerated from the live secret store, Azure Key Vault ${VAULT})\n\n`;
-  md += `_Source of truth = Azure Key Vault \`${VAULT}\`. This is the names + metadata VIEW only; secret VALUES never leave Key Vault (fetch by id via setup/get-secret.mjs). Replaces the Notion "API Tokens & Credentials (Registry)" DB. Rotation flags are tracked in the ROTATE-BEFORE-LAUNCH lists (otchealth-cto/CLAUDE.md)._\n\n`;
+  let md = `# Credential Registry (regenerated from the live secret store, ${STORE})\n\n`;
+  md += `_Source of truth = ${STORE}. This is the names + metadata VIEW only; secret VALUES never leave the store (fetch by id via setup/get-secret-aws.mjs for SSM, setup/get-secret-azure.mjs for Key Vault). Replaces the Notion "API Tokens & Credentials (Registry)" DB. Rotation flags are tracked in the ROTATE-BEFORE-LAUNCH lists (otchealth-cto/CLAUDE.md)._\n\n`;
   md += `Generated ${new Date().toISOString()} | ${rows.length} credentials across ${services.length} services | ${phi} PHI-BAA, ${rows.length - phi} non-PHI.\n\n`;
   for (const svc of services) {
-    md += `## ${svc} (${byService[svc].length})\n\n| Key Vault secret name | Type | Ring | Env | Added |\n|---|---|---|---|---|\n`;
+    md += `## ${svc} (${byService[svc].length})\n\n| ${NAMECOL} | Type | Ring | Env | Added |\n|---|---|---|---|---|\n`;
     for (const r of byService[svc].sort((a, b) => a.id.localeCompare(b.id))) md += `| \`${r.id}\` | ${r.type} | ${r.ring} | ${r.env} | ${r.created || "?"} |\n`;
     md += `\n`;
   }
@@ -96,7 +128,7 @@ export function buildRegistry(secrets) {
 
 async function main() {
   const secrets = await listSecrets();
-  const { md, jsonl, rows, services, phi } = buildRegistry(secrets);
+  const { md, jsonl, rows, services, phi } = buildRegistry(secrets, SOURCE);
   if (PRINT) console.log(md);
   console.log(`[vault-registry] ${rows.length} credentials, ${services.length} services (${phi} PHI-BAA).`);
   if (DRY) { console.log("(dry: not uploaded)"); return; }
