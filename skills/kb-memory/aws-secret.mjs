@@ -110,6 +110,27 @@ export async function awsCreds() {
   return null;
 }
 
+/**
+ * Cheap, SYNCHRONOUS, no-network presence check mirroring awsCreds()'s exact resolution order and
+ * "prox"-placeholder guards, without actually calling it (no ECS metadata round trip). For a
+ * DIAGNOSTIC message this matters: a caller building a "here is what's missing" banner must not
+ * itself block on a network call to a metadata endpoint that may not exist in this environment.
+ *
+ * Exported (2026-08-18) so every caller that needs to REPORT credential state (not resolve one) shares
+ * ONE implementation of these guards. Before this, mem.mjs's own s3CredsPresent() carried an
+ * independent copy of the identical logic (see its own comment: "mirrors aws-secret.mjs's awsCreds()
+ * resolution order ... without actually calling it") -- exactly the kind of duplicate reimplementation
+ * this file's own header already calls out as a recurring bug class ("a fourth reimplementation of
+ * how does this seat get AWS credentials"). mem.mjs now delegates to this function instead of keeping
+ * its own copy; keep it that way rather than re-forking the guard logic a fifth time.
+ */
+export function awsCredsPresent() {
+  const ecs = Boolean(process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI);
+  const env = Boolean(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && !/^prox/i.test(process.env.AWS_ACCESS_KEY_ID));
+  const otc = Boolean(process.env.OTC_AWS_ACCESS_KEY_ID && process.env.OTC_AWS_SECRET_ACCESS_KEY && !/^prox/i.test(process.env.OTC_AWS_ACCESS_KEY_ID));
+  return { ecs, env, otc, any: ecs || env || otc };
+}
+
 /** Signed SSM JSON-1.1 call. Returns { status, json } and never throws. */
 async function ssmCall(target, body) {
   const creds = await awsCreds();

@@ -1,32 +1,54 @@
 #!/usr/bin/env node
 // CFO source-doc store: durable, access-controlled object storage for financial exports and
-// source documents. TWO backends, same put/put-dir/list/get verbs:
-//   - gcs   (default, legacy)  : private GCS bucket otchealth-cfo-source-docs, claude-driver SA.
-//   - azure (the funded lane)  : Azure Blob account otchealthcfodata (off Google, per the Azure
-//                                directive). SharedKey auth, mirrors the legal-store pattern.
-// Pick the backend with --azure / --gcs or STORAGE_BACKEND=azure|gcs (default gcs while the
-// books are reconstructed on GCS; flip to azure for the migrated data room).
+// source documents. THREE backends, same put/put-dir/list/get(/rm) verbs:
+//   - s3    (DEFAULT, 2026-08-18) : AWS S3, via the shared skills/kb-memory/s3-blob.mjs client
+//                                (SigV4, the (account,container)->(bucket,keyPrefix) MIRROR
+//                                table). This is the working lane: every Azure Blob storage
+//                                account this store could target (otchealthcommons,
+//                                otchealthcfodata, otchealthlegalstore) was placed into a
+//                                WRITE-BLOCKED state on 2026-08-18 (every PUT -> 403
+//                                AuthorizationPermissionMismatch; GET/LIST still work) as part of
+//                                the fleet's Azure-exit. See s3-blob.mjs's header for the full
+//                                account-wide-lock evidence. Do NOT "fix" a write failure here by
+//                                reaching for --azure; that backend is not coming back.
+//   - azure (LEGACY, WRITE-BLOCKED) : Azure Blob (SharedKey/account-SAS). Reads (get/list) still
+//                                work; every write (put/put-dir/rm/create-container) will fail
+//                                loud with a 403. Kept only for read-only inspection of pre-lock
+//                                history and as an explicit, auditable escape hatch -- never the
+//                                default, never silently retried onto.
+//   - gcs   (LEGACY, pre-Azure)  : private GCS bucket otchealth-cfo-source-docs, claude-driver SA.
+// Pick the backend with --s3 / --azure / --gcs or STORAGE_BACKEND=s3|azure|gcs (default s3).
 //
 // WHY: the session sandbox is ephemeral, and raw multi-entity financials (incl. INND, a public
 // company => material non-public info, and personal data) must NOT sit in a git repo. This is
 // the proper internal, access-controlled home. Internal handling only, never disclosure.
 //
 // Creds (hydrated, else self-resolved from Secret Manager via the claude-driver SA):
+//   S3:    resolved by s3-blob.mjs's awsCreds() (ECS task role -> AWS_ACCESS_KEY_ID/SECRET ->
+//          OTC_AWS_ACCESS_KEY_ID/SECRET). No new credential path added here.
 //   GCS:   GCP_CLAUDE_DRIVER_SA_JSON; bucket from CFO_SOURCE_BUCKET (cfo-source-bucket).
 //   Azure: AZURE_STORAGE_ACCOUNT / AZURE_STORAGE_CONTAINER / AZURE_STORAGE_KEY
 //          (secrets azure-cfo-storage-account / -container / -key). Account defaults to
 //          otchealthcfodata, container defaults to cfo-source-docs (auto-created on first put).
 //
 // Usage:
-//   node store.mjs [--azure|--gcs] put <localFile> <objectName>
-//   node store.mjs [--azure|--gcs] put-dir <localDir> <objectPrefix>     # recursive upload
-//   node store.mjs [--azure|--gcs] list [prefix]
-//   node store.mjs [--azure|--gcs] get <objectName> <localFile>
-//   node store.mjs --azure create-container                              # idempotent
+//   node store.mjs [--s3|--azure|--gcs] put <localFile> <objectName>
+//   node store.mjs [--s3|--azure|--gcs] put-dir <localDir> <objectPrefix>     # recursive upload
+//   node store.mjs [--s3|--azure|--gcs] list [prefix]
+//   node store.mjs [--s3|--azure|--gcs] get <objectName> <localFile>
+//   node store.mjs --s3|--azure rm <objectName>
+//   node store.mjs --azure create-container                              # idempotent; S3 buckets
+//                                                                         # are pre-provisioned via
+//                                                                         # IAM (a "container" is a
+//                                                                         # key prefix, not a real
+//                                                                         # bucket) -- --s3
+//                                                                         # create-container is a
+//                                                                         # documented no-op.
 import crypto from "node:crypto";
 import { readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, relative, dirname, extname } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { getBufferFromS3, putObjectToS3, listBlobsMetaFromS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
 
 const argv = process.argv.slice(2);
 function takeVal(name) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return null; }
@@ -35,7 +57,10 @@ const accountOverride = takeVal("--account");      // override the Azure storage
 const keySecretOverride = takeVal("--key-secret"); // override which SM secret holds the account key
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
-const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "azure").toLowerCase(); // default azure (GCS/GCP retired)
+// DEFAULT IS s3 (2026-08-18). --azure remains selectable (reads still work; writes will throw
+// loud, not silently succeed-into-nothing) but is never the default -- an invocation that forgets
+// to pick a backend must land on the one that actually works today.
+const BACKEND = flags.has("--s3") ? "s3" : flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "s3").toLowerCase();
 const [cmd, a1, a2] = pos;
 
 const SM = "otchealth-shared-prod";
@@ -222,8 +247,64 @@ async function runAzure() {
   } else { console.error("commands: put | put-dir | list | get | rm | create-container"); process.exit(2); }
 }
 
+// ============================ S3 backend (2026-08-18, the working lane) ============================
+// Resolves (S3ACCT, S3CONTAINER) the same way azCred() resolves (ACCT, CONTAINER) -- same
+// --account/--container overrides, same "otchealthcfodata"/"cfo-source-docs" CFO defaults -- so a
+// caller flipping from --azure to --s3 targets the SAME logical room. No storage key needed; AWS
+// credentials resolve inside s3-blob.mjs. Fails loud, before any network call, if the room has no
+// row in the MIRROR table (s3LocationFor) -- refusing to guess a bucket for an unaudited container
+// (e.g. otchealthcommerce/commerce-source-docs, out of scope of the 2026-08-18 completeness audit)
+// is the correct behavior, not a bug: an unmapped room must be reported and audited, never silently
+// written into whatever bucket happens to be handy.
+let S3ACCT, S3CONTAINER;
+function s3Cred() {
+  S3ACCT = accountOverride || process.env.AZURE_STORAGE_ACCOUNT || "otchealthcfodata";
+  S3CONTAINER = containerOverride || process.env.CFO_AZURE_CONTAINER || "cfo-source-docs";
+  if (!s3LocationFor(S3ACCT, S3CONTAINER)) {
+    console.error(`no S3 mirror mapping for ${S3ACCT}/${S3CONTAINER} (refusing to guess a bucket). ` +
+      `Add a verified row to skills/kb-memory/s3-blob.mjs's MIRROR table (bucket chosen from an ` +
+      `OBSERVED S3 listing, never inferred from IAM) before targeting this room on S3.`);
+    process.exit(2);
+  }
+}
+async function runS3() {
+  s3Cred();
+  if (cmd === "create-container") {
+    console.log(`container ${S3CONTAINER} on ${S3ACCT}: n/a (S3 buckets are pre-provisioned via IAM; a "container" is a key prefix, not a bucket -- nothing to create)`);
+  } else if (cmd === "rm") {
+    if (!a1) { console.error("usage: store.mjs --s3 rm <objectName>"); process.exit(2); }
+    console.log((await deleteObjectFromS3(S3ACCT, S3CONTAINER, a1)) ? `deleted s3://${S3ACCT}/${S3CONTAINER}/${a1}` : `not found ${a1}`);
+  } else if (cmd === "put") {
+    if (!a1 || !a2) { console.error("usage: store.mjs --s3 put <localFile> <objectName>"); process.exit(2); }
+    const buf = readFileSync(a1); await putObjectToS3(S3ACCT, S3CONTAINER, a2, buf, ctOf(a2));
+    console.log(`put s3://${S3ACCT}/${S3CONTAINER}/${a2} (${buf.length}b)`);
+  } else if (cmd === "put-dir") {
+    if (!a1) { console.error("usage: store.mjs --s3 put-dir <localDir> <objectPrefix>"); process.exit(2); }
+    const prefix = a2 || ""; const files = walk(a1); let ok = 0, bytes = 0;
+    for (const f of files) {
+      const name = (prefix ? prefix.replace(/\/+$/, "") + "/" : "") + relative(a1, f).split(/[\\/]/).join("/");
+      const buf = readFileSync(f);
+      try { await putObjectToS3(S3ACCT, S3CONTAINER, name, buf, ctOf(name)); ok++; bytes += buf.length; if (ok % 25 === 0 || files.length < 25) console.log(`ok  ${name} (${buf.length}b)`); }
+      catch (e) { console.error(`FAIL ${name}: ${e.message}`); }
+    }
+    console.log(`\n${ok}/${files.length} files, ${(bytes / 1048576).toFixed(1)} MB -> s3://${S3ACCT}/${S3CONTAINER}/`);
+    if (ok < files.length) process.exit(1); // at least one file failed to write -- never report a partial upload as clean
+  } else if (cmd === "list") {
+    const rows = await listBlobsMetaFromS3(S3ACCT, S3CONTAINER, a1 || ""); let n = 0;
+    for (const o of rows) { console.log(`${(o.size + "").padStart(10)}  ${o.lastModified ? o.lastModified.slice(0, 10) : "          "}  ${o.name}`); n++; }
+    console.log(`(${n} objects)`);
+  } else if (cmd === "get") {
+    if (!a1 || !a2) { console.error("usage: store.mjs --s3 get <objectName> <localFile>"); process.exit(2); }
+    const buf = await getBufferFromS3(S3ACCT, S3CONTAINER, a1);
+    if (buf === null) { console.error(`get: not found ${a1}`); process.exit(1); }
+    mkdirSync(dirname(a2), { recursive: true }); writeFileSync(a2, buf);
+    console.log(`got s3://${S3ACCT}/${S3CONTAINER}/${a1} -> ${a2} (${buf.length}b)`);
+  } else { console.error("commands: put | put-dir | list | get | rm | create-container"); process.exit(2); }
+}
+
 // ---- dispatch ----
 try {
-  if (BACKEND === "azure") await runAzure();
+  if (BACKEND === "s3") await runS3();
+  else if (BACKEND === "azure") await runAzure();
   else await runGcs();
 } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }

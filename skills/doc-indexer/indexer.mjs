@@ -21,14 +21,31 @@
 // PROFILES (--profile): finance (CFO audit room) | legal (CLO legal store) | generic.
 //   Each profile sets default storage (account/container/bucket + which key secret) AND the
 //   classification taxonomy. Override storage with --azure-account / --container / --bucket /
-//   --key-secret. Override backend with --azure / --gcs (or STORAGE_BACKEND).
+//   --key-secret. Override backend with --s3 / --azure / --gcs (or STORAGE_BACKEND); DEFAULT is
+//   s3 (2026-08-18) -- see the S3-backend note below.
+//
+// STORAGE BACKEND (2026-08-18): every Azure Blob storage account this file can target
+// (otchealthcommons, otchealthcfodata, otchealthlegalstore) was placed into a WRITE-BLOCKED state
+// as part of the fleet's Azure-exit -- every PUT returns 403 AuthorizationPermissionMismatch, GET/
+// LIST still work (see skills/kb-memory/s3-blob.mjs's header for the full evidence). The S3
+// backend (reusing that same shared, dependency-free SigV4 client, not a second implementation) is
+// therefore the DEFAULT. --azure remains selectable for read-only inspection of pre-lock history;
+// a write attempted on --azure still throws loud (never silently swallowed), it just cannot
+// succeed anymore. S3 writes are only possible for a room with a verified row in s3-blob.mjs's
+// (account,container)->(bucket,keyPrefix) MIRROR table -- an unmapped room (e.g. the commerce
+// profile's otchealthcommerce/commerce-source-docs, out of scope of the 2026-08-18 completeness
+// audit) fails loud with "no S3 mirror mapping" rather than guessing a bucket; that room stays on
+// --azure (still broken) until it gets its own audited row. See job/librarian.sh for the per-
+// profile backend selection this drives.
 //
 // Creds (env, else self-resolved from Secret Manager via the claude-driver SA):
 //   GCP_CLAUDE_DRIVER_SA_JSON (always); per-profile storage account + key secret (below);
+//   S3: resolved by s3-blob.mjs's awsCreds() (ECS task role -> AWS_ACCESS_KEY_ID/SECRET ->
+//       OTC_AWS_ACCESS_KEY_ID/SECRET). No new credential path added here.
 //   OCR: AZURE_DOCINTEL_ENDPOINT / AZURE_DOCINTEL_KEY (azure-docintel-endpoint / -key).
 //
 // Commands: index | search "<q>" | build-index | status | build-csv | propose-mapping
-// index flags: --profile p --azure|--gcs --container c --azure-account a --bucket b --key-secret s
+// index flags: --profile p --s3|--azure|--gcs --container c --azure-account a --bucket b --key-secret s
 //              --prefix p --limit n --reindex --no-ocr --no-text --ocr-model prebuilt-read|prebuilt-layout --flush n
 //
 // Non-PHI ring only. INND content is MNPI. Legal `personal` container is privileged/confidential.
@@ -40,6 +57,7 @@ import { tmpdir } from "node:os";
 import { join, basename, extname } from "node:path";
 import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
+import { getBufferFromS3, putObjectToS3, listBlobsMetaFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
 
 const argv = process.argv.slice(2);
 function takeVal(name, def = null) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return def; }
@@ -59,7 +77,10 @@ const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.CU_MAX_MINUTES || 
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help"; // require an explicit command; no-arg must NOT silently start a run
-const BACKEND = flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "azure").toLowerCase(); // default azure (GCS/GCP retired); every current job invocation already passes --azure explicitly
+// DEFAULT IS s3 (2026-08-18, see the header note above). --azure remains selectable but is never
+// the default -- an invocation that forgets to pick a backend must land on the one that actually
+// works today, not the write-blocked one.
+const BACKEND = flags.has("--s3") ? "s3" : flags.has("--azure") ? "azure" : flags.has("--gcs") ? "gcs" : (process.env.STORAGE_BACKEND || "s3").toLowerCase();
 const REINDEX = flags.has("--reindex");
 const NO_OCR = flags.has("--no-ocr");
 const NO_TEXT = flags.has("--no-text");
@@ -191,9 +212,30 @@ function buildAzSas() {
   const sig = crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64");
   return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
 }
+// S3ACCT/S3CONTAINER resolve the SAME way ACCT/CONTAINER do for Azure (same profile defaults +
+// overrides), so a room targeted with --azure and the same room targeted with --s3 (or the
+// default) are the SAME logical room. No storage key needed for S3 -- credentials resolve inside
+// s3-blob.mjs. Fails loud, before any network call, when the resolved room has no row in
+// s3-blob.mjs's MIRROR table: an unmapped room (e.g. the commerce profile's
+// otchealthcommerce/commerce-source-docs -- out of scope of the 2026-08-18 completeness audit)
+// must be reported and audited, never silently written into a guessed bucket.
+let S3ACCT, S3CONTAINER;
+function resolveS3Room() {
+  S3ACCT = ACCT_OV || process.env[P.azAccountEnv] || P.azAccount || "otchealthcfodata";
+  S3CONTAINER = containerOverride || process.env.CFO_AZURE_CONTAINER || P.azContainer || "data-room";
+  if (!s3LocationFor(S3ACCT, S3CONTAINER)) {
+    console.error(`no S3 mirror mapping for ${S3ACCT}/${S3CONTAINER} (refusing to guess a bucket). ` +
+      `Add a verified row to skills/kb-memory/s3-blob.mjs's MIRROR table (bucket chosen from an ` +
+      `OBSERVED S3 listing, never inferred from IAM) before targeting this room on S3, or run with ` +
+      `--azure for read-only inspection in the meantime.`);
+    process.exit(2);
+  }
+}
 async function initStorage() {
   if (BACKEND === "gcs") {
     GBUCKET = BUCKET_OV || process.env.CFO_SOURCE_BUCKET || P.gcsBucket || (await sm("cfo-source-bucket")) || "otchealth-cfo-source-docs"; await gAuth();
+  } else if (BACKEND === "s3") {
+    resolveS3Room();
   } else {
     ACCT = ACCT_OV || process.env[P.azAccountEnv] || P.azAccount || (await sm(P.azAccountSecret)) || "otchealthcfodata";
     CONTAINER = containerOverride || process.env.CFO_AZURE_CONTAINER || P.azContainer || "data-room";
@@ -207,6 +249,9 @@ async function listAll(prefix) {
   if (BACKEND === "gcs") {
     let url = `https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o?maxResults=1000${prefix ? `&prefix=${encodeURIComponent(prefix)}` : ""}`;
     while (url) { const r = await fetch(url, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (!r.ok) throw new Error("list " + r.status); const j = await r.json(); for (const o of j.items || []) out.push({ name: o.name, size: +o.size, mtime: o.updated }); url = j.nextPageToken ? `https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o?maxResults=1000&pageToken=${j.nextPageToken}${prefix ? `&prefix=${encodeURIComponent(prefix)}` : ""}` : null; }
+  } else if (BACKEND === "s3") {
+    const rows = await listBlobsMetaFromS3(S3ACCT, S3CONTAINER, prefix);
+    for (const o of rows) out.push({ name: o.name, size: o.size, mtime: o.lastModified });
   } else {
     let marker = "";
     do { let url = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list&${AZ_SAS}`; if (prefix) url += `&prefix=${encodeURIComponent(prefix)}`; if (marker) url += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(url); if (!r.ok) throw new Error("list " + r.status); const xml = await r.text(); for (const m of xml.matchAll(/<Blob>([\s\S]*?)<\/Blob>/g)) { const b = m[1]; const name = xmlDec((b.match(/<Name>([^<]+)<\/Name>/) || [])[1] || ""); const size = +((b.match(/<Content-Length>([^<]+)<\/Content-Length>/) || [])[1] || 0); const mtime = (b.match(/<Last-Modified>([^<]+)<\/Last-Modified>/) || [])[1] || ""; if (name) out.push({ name, size, mtime }); } marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker);
@@ -218,12 +263,18 @@ async function listAll(prefix) {
 const htmlEnt = (s) => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'");
 async function getBuf(name) {
   if (BACKEND === "gcs") { let r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(name)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(name)) { const d = htmlEnt(name); if (d !== name) r = await fetch(`https://storage.googleapis.com/storage/v1/b/${GBUCKET}/o/${encodeURIComponent(d)}?alt=media`, { headers: { Authorization: `Bearer ${await gAuth()}` } }); } if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer()); }
+  if (BACKEND === "s3") return getBufferFromS3(S3ACCT, S3CONTAINER, name);
   let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`); if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(name)) { const d = htmlEnt(name); if (d !== name) r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(d)}?${AZ_SAS}`); } if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer());
 }
 async function putBuf(name, buf, ct) {
   if (BACKEND === "gcs") { const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${GBUCKET}/o?uploadType=media&name=${encodeURIComponent(name)}`, { method: "POST", headers: { Authorization: `Bearer ${await gAuth()}`, "Content-Type": ct || "application/octet-stream" }, body: buf }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 120)); return; }
+  if (BACKEND === "s3") { await putObjectToS3(S3ACCT, S3CONTAINER, name, buf, ct); return; }
   const c = ct || "application/octet-stream"; const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${encPath(name)}?${AZ_SAS}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": c }, body: buf }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 120));
 }
+// Human-readable "where is this" label for status/log lines, one place for all three backends so a
+// new one (or a renamed variable) can't leave a stale `ACCT === "gcs" ? ... : ACCT` ternary behind.
+const targetRoom = () => BACKEND === "gcs" ? GBUCKET : BACKEND === "s3" ? `${S3ACCT}/${S3CONTAINER}` : `${ACCT}/${CONTAINER}`;
+const targetContainer = () => BACKEND === "gcs" ? GBUCKET : BACKEND === "s3" ? S3CONTAINER : CONTAINER;
 
 // ---- single-writer lease on the catalog (Azure) -------------------------------------------
 // `understand` rewrites the whole catalog.jsonl, so two concurrent passes (cron overlap, a manual
@@ -359,9 +410,9 @@ async function runIndex() {
   const done = new Set(rows.map((r) => r.path));
   const objs = (await listAll(PREFIX)).filter((o) => !SKIP_PREFIXES.some((p) => o.name.startsWith(p)) && !o.name.endsWith("/"));
   const todo = objs.filter((o) => REINDEX || !done.has(o.name));
-  console.error(`[index] profile=${PROFILE} backend=${BACKEND} target=${BACKEND === "gcs" ? GBUCKET : ACCT + "/" + CONTAINER} room=${objs.length}; ${done.size} cataloged; ${todo.length} to do${LIMIT ? ` (limit ${LIMIT})` : ""}.`);
+  console.error(`[index] profile=${PROFILE} backend=${BACKEND} target=${targetRoom()} room=${objs.length}; ${done.size} cataloged; ${todo.length} to do${LIMIT ? ` (limit ${LIMIT})` : ""}.`);
   const haveIndex = await openIndex();
-  let n = 0, since = 0;
+  let n = 0, since = 0, sidecarFailures = 0;
   for (const o of todo) {
     if (LIMIT && n >= LIMIT) break;
     const ext = extname(o.name).toLowerCase();
@@ -383,7 +434,18 @@ async function runIndex() {
         row.text_chars = alnum(ex.text); row.ocr = ex.ocr; row.engine = ex.engine; if (ex.err) row.err = ex.err;
         const c = classify(o.name, ex.text); row.category = c.category; row.material = c.material;
         row.title = basename(o.name); row.desc = describe(o.name, ex.text);
-        if (!NO_TEXT && ex.text && row.text_chars >= 3) { try { await putBuf(TEXT_PREFIX + o.name + ".txt", Buffer.from(ex.text, "utf8"), "text/plain; charset=utf-8"); row.sidecar = true; } catch {} }
+        // FAIL LOUD, NOT SILENT (2026-08-18): this used to be `catch {}` -- an empty catch, so a
+        // sidecar PUT failure (e.g. a real storage-backend outage, exactly the class of failure
+        // that motivated this whole fix) vanished with no trace: no row.err, no failure count, no
+        // non-zero exit. The document's catalog row would look completely normal (sidecar: falsy is
+        // the only tell, and nothing reads that as a failure signal) while the actual text sidecar
+        // silently never got written. Now it is recorded on the row AND counted, so the run-level
+        // exit code below reflects reality even though one bad document does not abort the other
+        // 268 in the same batch.
+        if (!NO_TEXT && ex.text && row.text_chars >= 3) {
+          try { await putBuf(TEXT_PREFIX + o.name + ".txt", Buffer.from(ex.text, "utf8"), "text/plain; charset=utf-8"); row.sidecar = true; }
+          catch (se) { row.err = (row.err ? row.err + "; " : "") + "sidecar put failed: " + se.message.slice(0, 120); sidecarFailures++; }
+        }
         if (haveIndex) indexUpsert(row, ex.text);
       }
     } catch (e) { row.err = (row.err ? row.err + "; " : "") + e.message.slice(0, 120); }
@@ -393,6 +455,10 @@ async function runIndex() {
   await flushCatalog(rows);
   if (haveIndex) await uploadIndex();
   console.error(`[index] done: +${n} rows, ${rows.length} total. catalog=${CATALOG_KEY} index=${haveIndex ? INDEX_KEY : "(skipped)"} sidecars=${NO_TEXT ? "off" : TEXT_PREFIX}`);
+  if (sidecarFailures > 0) {
+    console.error(`[index] ERROR: ${sidecarFailures} sidecar write(s) failed this run (see per-row "sidecar put failed" errors in the catalog) -- exiting non-zero so this is never mistaken for a clean run.`);
+    process.exit(1);
+  }
 }
 
 async function runSearch(q) {
@@ -424,7 +490,7 @@ async function runStatus() {
   const objs = (await listAll(PREFIX)).filter((o) => !SKIP_PREFIXES.some((p) => o.name.startsWith(p)) && !o.name.endsWith("/"));
   const byCat = {}, byEnt = {}, byEng = {}; let ocrN = 0, errN = 0, material = 0, side = 0;
   for (const r of rows) { byCat[r.category] = (byCat[r.category] || 0) + 1; byEnt[r.entity] = (byEnt[r.entity] || 0) + 1; byEng[r.engine || "?"] = (byEng[r.engine || "?"] || 0) + 1; if (r.ocr) ocrN++; if (r.err) errN++; if (r.material) material++; if (r.sidecar) side++; }
-  console.log(`profile=${PROFILE} target=${BACKEND === "gcs" ? GBUCKET : ACCT + "/" + CONTAINER}`);
+  console.log(`profile=${PROFILE} target=${targetRoom()}`);
   console.log(`catalog: ${rows.length} rows | room: ${objs.length} objects | remaining: ${Math.max(0, objs.length - rows.length)}`);
   console.log(`text sidecars: ${side} | ocr'd: ${ocrN} | material: ${material} | errors: ${errN}`);
   const show = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `   ${String(v).padStart(6)}  ${k}`).join("\n");
@@ -473,7 +539,7 @@ async function aisInit() {
   AOAI_KEY = process.env.AZURE_FOUNDRY_KEY || (await sm("azure-foundry-key")) || process.env.AZURE_OPENAI_API_KEY || (await sm("azure-openai-key"));
   AOAI_DEP = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
   AOAI_MODEL = process.env.AZURE_OPENAI_EMBEDDING_MODEL || AOAI_DEP;
-  IDXNAME = (idxOverride || `${PROFILE}-${BACKEND === "gcs" ? GBUCKET : CONTAINER}`).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
+  IDXNAME = (idxOverride || `${PROFILE}-${targetContainer()}`).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
   if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key (provision the Azure AI Search resource)."); process.exit(2); }
   if (!AOAI_EP || !AOAI_KEY) { console.error("Missing azure-openai-endpoint / azure-openai-key (needed for embeddings)."); process.exit(2); }
 }
@@ -786,6 +852,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     else if (cmd === "cu-init") { await cuInit(); await cuEnsureAnalyzer(); console.log("CU analyzer ready: " + CU_ANALYZER); }
     else if (cmd === "understand") await runUnderstand();
     else if (cmd === "cu-calibrate") await runCuCalibrate();
-    else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
+    else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --s3|--azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
   } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
 }

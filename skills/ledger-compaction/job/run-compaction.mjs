@@ -28,6 +28,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compactLedger, parseLedgerText, renderMarkdown } from "../compact.mjs";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
+import { awsCredsPresent } from "../../kb-memory/aws-secret.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -128,8 +129,31 @@ async function compactOneAgent(sa, agent, cfg) {
 async function main() {
   const raw = resolveSaJson();
   const azureOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
-  if (!raw && !azureOk) {
-    console.error("[ledger-compaction] no credentials (neither Azure SP nor GCP SA). Fail-open: exiting 0, nothing compacted this run.");
+  // AWS ADDED 2026-08-18. This gate tested ONLY the two credential paths that are now dead -- the
+  // retired GCP SA and the Azure SP -- and then returned, so the job printed "Fail-open: exiting 0"
+  // and did nothing on every run while a perfectly good credential sat unused. Proven, not inferred:
+  // on 2026-08-18 the job was run on a freshly rebuilt image (ECR digest c62680f5, pushed 19:49:32Z)
+  // as ECS task 9306de30f4e64556b6ff3a0ebf484296, and its CloudWatch log still read
+  // "no credentials (neither Azure SP nor GCP SA). Fail-open: exiting 0, nothing compacted this run."
+  //
+  // The credential it was ignoring is the ECS task role. `otchealthTaskRole` carries an inline
+  // `runtime-access` policy granting ssm:GetParameter/GetParameters/GetParametersByPath on
+  // arn:aws:ssm:us-east-1:900915535335:parameter/otchealth/*, which is exactly what kvSecret()'s SSM
+  // fallback needs -- so on Fargate this path resolves and the job can actually run.
+  //
+  // This is the SAME defect PR #453 fixed in setup/session-start.sh and gateway-connect's
+  // session-connect.sh: an OUTER gate that names only dead paths and short-circuits before the inner
+  // resolver (which already supports AWS) is ever called. skills/fleet-medic/medic.mjs:212 and :268
+  // are two further instances, deliberately NOT fixed here -- see this file's PR for why (medic runs
+  // every 30 minutes and its downstream still writes to write-blocked Azure Blob, so unblocking its
+  // gate before the S3 repoint would turn one silent failure into 48 pages a day).
+  const aws = awsCredsPresent();
+  if (!raw && !azureOk && !aws.any) {
+    console.error(
+      "[ledger-compaction] no credentials on ANY path: GCP SA absent, AZURE_SP_* absent, and no AWS " +
+      "credential (no ECS task role, no AWS_ACCESS_KEY_ID/SECRET, no OTC_AWS_ACCESS_KEY_ID/SECRET). " +
+      "Fail-open: exiting 0, nothing compacted this run.",
+    );
     return;
   }
   let sa = null;

@@ -8,37 +8,20 @@
 // Usage (Stop hook passes {transcript_path} JSON on stdin):
 //   echo '{"transcript_path":"x.jsonl"}' | KB_AGENT=cto node reflect.mjs [--commit] [--min-tools 12]
 import crypto from "node:crypto";
-import { readFileSync, mkdirSync, appendFileSync, chmodSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
 import { kvSecret } from "./azure-secret.mjs";
+import { FAILED_WRITE_FILE, appendFailedWriteFallback } from "./local-fallback.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 // Durable local fallback for a lesson that failed to persist to the real ledger (2026-08-18).
-// Same directory mem.mjs's own local write-through cache already uses (~/.claude/kb-cache), so a
-// human or a recovery script has one place to look, not a new ad hoc path per failure class. One
-// file per agent so a recovery pass can be run per-agent without cross-agent interference.
-// Exported (not just used internally) so a test can exercise the fallback-write behavior directly
-// without needing a real mem.mjs failure to trigger it, and so a future recovery script can import
-// the SAME path-naming convention instead of re-deriving it.
-export const FAILED_WRITE_FILE = (agent) => `${homedir()}/.claude/kb-cache/_failed_writes-${agent || "unknown"}.jsonl`;
-export function appendFailedWriteFallback(agent, item, error) {
-  try {
-    const dir = `${homedir()}/.claude/kb-cache`;
-    mkdirSync(dir, { recursive: true });
-    const file = FAILED_WRITE_FILE(agent);
-    const row = { ts: new Date().toISOString(), agent, type: item.type, text: item.text, share: !!item.share, tags: item._fallback ? ["auto-extract-fallback"] : ["auto-reflect"], error, source: "reflect.mjs" };
-    appendFileSync(file, JSON.stringify(row) + "\n");
-    try { chmodSync(file, 0o600); } catch {} // cheap + idempotent; matches the 0600 posture the rest of kb-cache uses for anything sensitive
-  } catch (e) {
-    // Last resort: if even the local fallback file cannot be written (e.g. a read-only home dir),
-    // say so explicitly rather than swallowing it a second time -- this is the actual bottom of the
-    // stack, there is nowhere further to degrade to.
-    console.error(`[reflect] FALLBACK WRITE ALSO FAILED for agent '${agent}': ${e.message}. The lesson above is genuinely unrecoverable from this run.`);
-  }
-}
+// MOVED to local-fallback.mjs (same day, the agent-seat credential bootstrap fix) so mem.mjs's own
+// DIRECT CLI writes get the identical safety net, not just content that happens to route through this
+// file's LLM-distillation loop. Re-exported here UNCHANGED so this file stays the stable import site
+// existing callers/tests already use (`from "../reflect.mjs"`) -- nothing downstream needs to change.
+export { FAILED_WRITE_FILE, appendFailedWriteFallback };
 const argv = process.argv.slice(2);
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const COMMIT = argv.includes("--commit");

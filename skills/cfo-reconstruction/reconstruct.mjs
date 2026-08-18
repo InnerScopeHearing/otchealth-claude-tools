@@ -171,7 +171,7 @@ function cleanup(f) { try { rmSync(dirname(f), { recursive: true, force: true })
 async function defaultGetState() {
   const f = tmpFile("cursor.json");
   try {
-    execFileSync("node", [STORE_MJS, "--azure", "get", STATE_OBJECT, f], { stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("node", [STORE_MJS, "--s3", "get", STATE_OBJECT, f], { stdio: ["ignore", "pipe", "pipe"] });
     return JSON.parse(readFileSync(f, "utf8"));
   } catch {
     // Not found yet (first run ever) or the store is unreachable in this environment -- either way
@@ -184,14 +184,14 @@ async function defaultGetState() {
 async function defaultPutState(state) {
   const f = tmpFile("cursor.json");
   writeFileSync(f, JSON.stringify(state, null, 2));
-  try { execFileSync("node", [STORE_MJS, "--azure", "put", f, STATE_OBJECT], { stdio: ["ignore", "pipe", "pipe"] }); }
+  try { execFileSync("node", [STORE_MJS, "--s3", "put", f, STATE_OBJECT], { stdio: ["ignore", "pipe", "pipe"] }); }
   finally { cleanup(f); }
 }
 
 async function defaultGetManifest(org) {
   const f = tmpFile(`${org}.jsonl`);
   try {
-    execFileSync("node", [STORE_MJS, "--azure", "get", `${MANIFEST_PREFIX}/${org}.jsonl`, f], { stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("node", [STORE_MJS, "--s3", "get", `${MANIFEST_PREFIX}/${org}.jsonl`, f], { stdio: ["ignore", "pipe", "pipe"] });
     return readFileSync(f, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
   } catch {
     return []; // no manifest staged for this org yet -- that is a normal, expected state, not an error
@@ -201,7 +201,7 @@ async function defaultGetManifest(org) {
 async function defaultPutManifest(org, items) {
   const f = tmpFile(`${org}.jsonl`);
   writeFileSync(f, items.map((it) => JSON.stringify(it)).join("\n") + (items.length ? "\n" : ""));
-  try { execFileSync("node", [STORE_MJS, "--azure", "put", f, `${MANIFEST_PREFIX}/${org}.jsonl`], { stdio: ["ignore", "pipe", "pipe"] }); }
+  try { execFileSync("node", [STORE_MJS, "--s3", "put", f, `${MANIFEST_PREFIX}/${org}.jsonl`], { stdio: ["ignore", "pipe", "pipe"] }); }
   finally { cleanup(f); }
 }
 
@@ -210,7 +210,7 @@ async function defaultPutManifest(org, items) {
 async function defaultSourceDocExists(objectName) {
   const f = tmpFile("probe");
   try {
-    execFileSync("node", [STORE_MJS, "--azure", "get", objectName, f], { stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("node", [STORE_MJS, "--s3", "get", objectName, f], { stdio: ["ignore", "pipe", "pipe"] });
     return true;
   } catch {
     return false;
@@ -222,8 +222,8 @@ async function defaultPutStagedBatch(batchId, batch) {
   const f = tmpFile(`${batchId}.json`);
   writeFileSync(f, JSON.stringify(batch, null, 2));
   try {
-    execFileSync("node", [STORE_MJS, "--azure", "put", f, objectName], { stdio: ["ignore", "pipe", "pipe"] });
-    return { ok: true, path: `azure://otchealthcfodata/cfo-source-docs/${objectName}` };
+    execFileSync("node", [STORE_MJS, "--s3", "put", f, objectName], { stdio: ["ignore", "pipe", "pipe"] });
+    return { ok: true, path: `s3://otchealthcfodata/cfo-source-docs/${objectName}` };
   } finally { cleanup(f); }
 }
 

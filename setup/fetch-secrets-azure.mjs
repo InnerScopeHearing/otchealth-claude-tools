@@ -1,23 +1,37 @@
 #!/usr/bin/env node
-// fetch-secrets-azure.mjs — Azure Key Vault mirror of fetch-secrets.mjs.
+// fetch-secrets-azure.mjs — session-start.sh's primary secret hydration, for the FULL fleet secret
+// bundle (not just kb-memory's ledger).
 //
-// GCP Secret Manager is retired (billing off). This is the primary secret source.
-// Auth: OAuth2 client_credentials against Entra ID, scope https://vault.azure.net/.default,
-// using a service principal — no az CLI required in the container.
+// REFACTORED 2026-08-18 (the agent-seat credential bootstrap fix) to fetch every MAP entry through
+// kb-memory's shared kvSecret() resolver instead of a hand-rolled, SP-client-credentials-ONLY
+// getAccessToken()/accessSecret() pair. That hand-rolled pair was a SECOND, independent
+// reimplementation of "how does this seat read a Key Vault secret" that had silently drifted out of
+// sync with the real one: it never got the managed-identity or az-CLI/OIDC auth paths, and -- the
+// concrete bug this refactor closes -- it never got the AWS SSM fallback kvSecret() gained on
+// 2026-08-18 when Azure Key Vault became permanently unreachable (see azure-secret.mjs's and
+// aws-secret.mjs's own headers). A seat with ONLY OTC_AWS_ACCESS_KEY_ID/SECRET set (no Azure creds at
+// all -- the documented single-bootstrap-credential posture for a non-ECS seat) used to get NOTHING
+// from this script: `if (!TENANT || !CID || !CSEC) process.exit(1)` fired before a single secret was
+// even attempted, even though every one of these secrets was reachable via SSM the whole time. Now
+// this script tries every auth path kvSecret() supports (managed identity -> AZURE_SP_* -> az-CLI/OIDC
+// -> AWS SSM mirror) per secret, and the only behavior change a caller can observe is that MORE
+// secrets resolve on MORE seats. Output format, env-var names, and exit codes are unchanged, so
+// session-start.sh's `get_key()` parsing needs no changes.
 //
 // The Key Vault secret NAMES are identical to the old GCP Secret Manager ids
 // (1:1 mirror), so the MAP below is lifted verbatim from fetch-secrets.mjs.
 //
-// Env:
-//   AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID  (required)
-//   AZURE_KEYVAULT_NAME    vault name (default kv-otc-55c84f6bef)
+// Env (any ONE of these is now sufficient; see skills/kb-memory/SKILL.md "Credential bootstrap"):
+//   AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID   Azure service principal
+//   IDENTITY_ENDPOINT / IDENTITY_HEADER                                Azure Container Apps managed identity
+//   OTC_AWS_ACCESS_KEY_ID / OTC_AWS_SECRET_ACCESS_KEY                  AWS SSM mirror (Azure-independent)
+//   AZURE_KEYVAULT_NAME    vault name (default kv-otc-55c84f6bef), used only for diagnostic messages
 //
 // Output: KEY=value lines on stdout for session-start.sh to fold into credentials.env.
+import { kvSecret } from '../skills/kb-memory/azure-secret.mjs';
+import { awsCredsPresent } from '../skills/kb-memory/aws-secret.mjs';
 
-const VAULT  = process.env.AZURE_KEYVAULT_NAME || 'kv-otc-55c84f6bef';
-const TENANT = process.env.AZURE_SP_TENANT_ID;
-const CID    = process.env.AZURE_SP_CLIENT_ID;
-const CSEC   = process.env.AZURE_SP_CLIENT_SECRET;
+const VAULT = process.env.AZURE_KEYVAULT_NAME || 'kv-otc-55c84f6bef';
 
 // secret name in Key Vault  ->  env var name  ->  required?  (1:1 with GCP SM ids)
 const MAP = [
@@ -193,50 +207,35 @@ const MAP = [
   // credentials.env). Use setup/get-secret.mjs <id> <outfile> to materialize one.
 ];
 
-if (!TENANT || !CID || !CSEC) {
-  console.error('[fetch-secrets-azure] AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID not all set — cannot fetch.');
-  process.exit(1);
+// Fast, informational-only upfront check (2026-08-18). Deliberately NOT a hard exit -- kvSecret()
+// itself supports FOUR paths (managed identity, AZURE_SP_*, az-CLI/OIDC, AWS SSM) and a seat with
+// ONLY az-CLI logged in (no env markers for any of the other three) would be wrongly turned away by a
+// hard require here, same as the OLD SP-only hard exit wrongly turned away every AWS-only seat. This
+// is a heads-up for a human reading the log, not a gate.
+{
+  const identityOk = Boolean(process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER);
+  const spOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
+  const aws = awsCredsPresent();
+  if (!identityOk && !spOk && !aws.any) {
+    console.error(
+      '[fetch-secrets-azure] heads up: no managed identity, no AZURE_SP_*, and no AWS creds ' +
+      '(OTC_AWS_ACCESS_KEY_ID/SECRET) are set -- only az-CLI/OIDC login (if present) can supply secrets ' +
+      'this run. See skills/kb-memory/SKILL.md "Credential bootstrap" for what to set per seat type.',
+    );
+  }
 }
 
-async function getAccessToken() {
-  const res = await fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: CID,
-      client_secret: CSEC,
-      scope: 'https://vault.azure.net/.default',
-    }),
-  });
-  const j = await res.json().catch(() => ({}));
-  if (!j.access_token) throw new Error(`token exchange ${j.error || res.status}: ${(j.error_description || '').slice(0, 160)}`);
-  return j.access_token;
-}
-
-async function accessSecret(token, name) {
-  const url = `https://${VAULT}.vault.azure.net/secrets/${name}?api-version=7.4`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (res.status === 404) return null; // secret not created yet
-  if (!res.ok) throw new Error(`get ${name} ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const j = await res.json();
-  return (j.value || '').trim();
-}
-
-let token;
-try { token = await getAccessToken(); }
-catch (e) { console.error(`[fetch-secrets-azure] auth failed: ${e.message}`); process.exit(1); }
-
+// kvSecret() never throws (it is fail-open by design: every internal auth-path failure is caught and
+// logged as its own `[kv-secret] ...` line, and the function itself just returns null) -- so no
+// try/catch is needed around the loop below the way the old accessSecret() call required one.
 let hadRequiredMiss = false;
 for (const { id, env, required } of MAP) {
-  let val = null;
-  try { val = await accessSecret(token, id); }
-  catch (e) { console.error(`[fetch-secrets-azure] ${id}: ${e.message}`); }
+  const val = await kvSecret(id);
   if (val) {
     const safe = `'${val.replace(/'/g, "'\\''")}'`;
     process.stdout.write(`${env}=${safe}\n`);
   } else if (required) {
-    console.error(`[fetch-secrets-azure] MISSING required secret '${id}' in vault ${VAULT}.`);
+    console.error(`[fetch-secrets-azure] MISSING required secret '${id}' (checked Key Vault ${VAULT} and its AWS SSM fallback).`);
     hadRequiredMiss = true;
   }
 }

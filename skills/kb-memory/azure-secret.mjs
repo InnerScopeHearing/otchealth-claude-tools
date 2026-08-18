@@ -43,7 +43,7 @@
 // this one. Whenever the SP path is what actually worked, it logs a loud warning so RBAC drift on
 // the identity is visible in logs/alerts immediately, not discovered months later.
 
-import { ssmSecret, ssmSecretSet } from "./aws-secret.mjs";
+import { ssmSecret, ssmSecretSet, awsCredsPresent } from "./aws-secret.mjs";
 import { execFileSync } from "node:child_process";
 
 let _identityTok = null, _identityExp = 0;
@@ -295,11 +295,22 @@ export async function requireSecrets(names) {
     const spOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
     const identityOk = Boolean(process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER);
     const azOk = Boolean(await azCliToken());
+    // AWS/SSM state (2026-08-18): by the time this FATAL fires, kvSecret() has ALREADY tried the SSM
+    // mirror as a fallback for every one of the `missing` names (see kvSecret()'s own tail) and that
+    // ALSO failed -- so this banner was previously silent about a whole auth family it had, in fact,
+    // already exhausted. A reader seeing only "Azure paths failed" has no way to know AWS was ever
+    // tried at all, let alone what to set to fix it. Report it explicitly instead of letting the
+    // absence of a mention read as "SSM was never a factor here".
+    const aws = awsCredsPresent();
     console.error("==================================================================================");
-    console.error(`[FATAL] Required secret(s) UNAVAILABLE from Key Vault (${vault}): ${missing.join(", ")}`);
-    console.error(`        Managed identity attached: ${identityOk ? "yes" : "no"}. AZURE_SP_* creds present: ${spOk ? "yes" : "NO"}. az-CLI/OIDC login: ${azOk ? "yes" : "no — run azure/login@v2 (OIDC) or 'az login'"}.`);
-    console.error("        All three auth paths were tried per secret (see [kv-secret] WARN/ERROR lines above for which");
-    console.error("        path failed and how — a 401/403 means an RBAC grant is likely missing on the identity).");
+    console.error(`[FATAL] Required secret(s) UNAVAILABLE from Key Vault (${vault}) OR its SSM fallback: ${missing.join(", ")}`);
+    console.error(`        Azure: managed identity attached: ${identityOk ? "yes" : "no"}. AZURE_SP_* creds present: ${spOk ? "yes" : "NO"}. az-CLI/OIDC login: ${azOk ? "yes" : "no — run azure/login@v2 (OIDC) or 'az login'"}.`);
+    console.error(`        AWS (SSM fallback, /otchealth/* mirror): ECS task role: ${aws.ecs ? "yes" : "no"}. AWS_ACCESS_KEY_ID/SECRET present: ${aws.env ? "yes" : "no"}. OTC_AWS_ACCESS_KEY_ID/SECRET present: ${aws.otc ? "yes" : "NO"}.`);
+    console.error("        All four auth paths (Azure identity/SP/az-CLI, then AWS SSM) were tried per secret (see [kv-secret]");
+    console.error("        WARN/ERROR lines above for which path failed and how -- a 401/403 means an RBAC grant is likely");
+    console.error("        missing on the identity; SSM failing with no AWS creds present means set OTC_AWS_ACCESS_KEY_ID +");
+    console.error("        OTC_AWS_SECRET_ACCESS_KEY (NOT the plain AWS_ names -- this sandbox's proxy injects a non-functional");
+    console.error("        placeholder into those; see skills/kb-memory/SKILL.md 'Credential bootstrap' for the full per-seat guide).");
     console.error("        Refusing to run with missing credentials (fail-loud, not silent). GCP Secret Manager is retired.");
     console.error("==================================================================================");
     process.exit(78);
@@ -310,6 +321,13 @@ export async function requireSecrets(names) {
 // Non-exiting variant: throw (for callers that want to catch). Never returns null.
 export async function kvSecretOrThrow(name) {
   const v = await kvSecret(name);
-  if (v == null) throw new Error(`required secret '${name}' unavailable from Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"}) — see [kv-secret] log lines above for which auth path(s) failed`);
+  if (v == null) {
+    const aws = awsCredsPresent();
+    throw new Error(
+      `required secret '${name}' unavailable from Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"}) or its SSM fallback ` +
+      `(AWS creds resolvable: ${aws.any ? "yes, but the secret itself was not found there either" : "NO -- set OTC_AWS_ACCESS_KEY_ID + OTC_AWS_SECRET_ACCESS_KEY"}) ` +
+      `-- see [kv-secret] log lines above for which auth path(s) failed`,
+    );
+  }
   return v;
 }
