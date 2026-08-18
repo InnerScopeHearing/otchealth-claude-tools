@@ -242,9 +242,21 @@ async function azureGetBestEffort(name) {
 // without needing to trust either source's own on-disk ordering.
 function mergeJsonlText(s3Text, azureText) {
   if (!azureText) return s3Text; // the overwhelmingly common case once a ledger has been consolidated
-  if (!s3Text) return azureText;
+
+  // Azure is a retired, best-effort history source. Some legacy objects are wrapped/encoded rather
+  // than plain NDJSON (observed live as a base64-looking `CiAgInR5cG...` payload). A malformed Azure
+  // history object must never poison an otherwise healthy authoritative S3 read or block a write.
+  // S3 stays strict: malformed authoritative data still throws loudly instead of being hidden.
+  let azureRows;
+  try { azureRows = parseNdjson(azureText); }
+  catch (e) {
+    console.error(`[kb-memory] note: ignoring malformed Azure history for '${ON}' (${String(e?.message || e).slice(0, 120)}); continuing from authoritative S3.`);
+    return s3Text;
+  }
+
+  if (!s3Text) return serializeNdjson(azureRows);
   const byId = new Map();
-  for (const r of parseNdjson(azureText)) if (r && r.id) byId.set(r.id, r);
+  for (const r of azureRows) if (r && r.id) byId.set(r.id, r);
   for (const r of parseNdjson(s3Text)) if (r && r.id) byId.set(r.id, r); // S3 overwrites Azure on collision
   const rows = [...byId.values()].sort((a, b) => (a.id || "").localeCompare(b.id || ""));
   return serializeNdjson(rows);
