@@ -328,3 +328,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** counterfactual: restoring the old bare break turns 3 of the 4 new tests red; 1565/1565 suite green
 - **Opened:** 2026-08-17T21:44:52.749Z
 - **Closed:** 2026-08-17T21:44:52.749Z
+
+### finding:FND-20260818-r1ng severity:low status:wontfix | RETRACTION of FND-20260817-9f1c: kb_search_privileged DOES return an explicit denial (data.mode=ring-forbidden, data.error=forbidden_ring, plus prose naming required lanes and caller). No code path gives an out-of-ring lane a bare count:0. 9f1c came from a probe that read only the count field, which a correct denial also sets to 0. The 9f1c rationale text on main is STALE; do not cite it.
+
+- **Source audit doc:** src/tools/kb/search-privileged.ts:194-199 (otchealth-mcp-server main)
+- **Fix commit:** (none yet)
+- **Verified by:** direct code read of the disallowed-lane branch
+- **Opened:** 2026-08-18T00:43:05.379Z
+- **Closed:** 2026-08-18T00:43:05.379Z
