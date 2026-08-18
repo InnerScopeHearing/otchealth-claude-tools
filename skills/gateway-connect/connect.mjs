@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { kvSecret } from '../kb-memory/azure-secret.mjs';
+import { awsCredsPresent } from '../kb-memory/aws-secret.mjs';
 
 const SM = 'otchealth-shared-prod';
 const KV_NAME = process.env.AZURE_KEYVAULT_NAME || 'kv-otc-55c84f6bef';
@@ -101,15 +102,30 @@ async function laneCreds(cfg) {
   // not the old AZURE_SP-only local kv() gated on azureEnvPresent(). That gate fell through to the
   // now-dead GCP path whenever AZURE_SP_* env was absent (managed-identity / az-login runtimes),
   // which is what threw the octools-sync "oauth-lane-*-id 404" ambient errors. Secret names identical.
+  // kvSecret() (imported above) is the SAME shared resolver mem.mjs/reflect.mjs use: Key Vault
+  // (identity -> AZURE_SP_* -> az-CLI/OIDC) THEN, on failure, the AWS SSM mirror -- see its own header
+  // in kb-memory/azure-secret.mjs. So by the time this call returns null, BOTH Azure and SSM have
+  // already been tried for this lane's creds; there is no separate "gateway bearer" bootstrap path
+  // independent of the same AWS-credential requirement everything else in the fleet now has.
   const [kvId, kvSec] = await Promise.all([kvSecret(cfg.idSecret), kvSecret(cfg.secretSecret)]);
   if (kvId && kvSec) return [kvId, kvSec];
   // Legacy GCP Secret Manager fallback, ONLY if a claude-driver SA is actually present (else
-  // smToken/saRaw() throws). Non-fatal: a clear error if neither store can supply the lane creds.
+  // smToken/saRaw() throws). GCP Secret Manager is fully retired -- this path is expected to fail on
+  // every current seat and is kept only for a stray Desktop that still carries the old SA file.
   try {
     const tok = await smToken();
     return await Promise.all([sm(cfg.idSecret, tok), sm(cfg.secretSecret, tok)]);
   } catch (e) {
-    throw new Error(`lane creds ${cfg.idSecret}/${cfg.secretSecret} unavailable from Key Vault (${KV_NAME}) and GCP fallback failed: ${String((e && e.message) || e)}`);
+    // 2026-08-18: name the REAL fix instead of blaming "GCP fallback failed" as if GCP were still a
+    // live option -- it is retired fleet-wide and this branch is expected to always throw. The
+    // actionable question is whether AWS creds (the SSM mirror kvSecret() already tried above) are
+    // present at all; if not, that -- not GCP -- is what to fix.
+    const aws = awsCredsPresent();
+    throw new Error(
+      `lane creds ${cfg.idSecret}/${cfg.secretSecret} unavailable from Key Vault (${KV_NAME}) or its AWS SSM fallback ` +
+      `(AWS creds resolvable: ${aws.any ? "yes, but this lane's secret was not found there either" : "NO -- set OTC_AWS_ACCESS_KEY_ID + OTC_AWS_SECRET_ACCESS_KEY, see skills/kb-memory/SKILL.md 'Credential bootstrap'"}); ` +
+      `GCP Secret Manager is retired and its fallback failed as expected: ${String((e && e.message) || e)}`,
+    );
   }
 }
 

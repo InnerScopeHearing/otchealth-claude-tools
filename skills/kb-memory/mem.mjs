@@ -44,6 +44,9 @@ import { parseNdjson, serializeNdjson, nextId, isConflict, condHeaders } from ".
 import { kvSecret } from "./azure-secret.mjs";
 import { linkFields, walkGraph, formatEdge } from "./entity-graph.mjs";
 import { getTextFromS3, getTextMetaFromS3, putObjectToS3, listBlobsFromS3, s3Configured } from "./s3-blob.mjs";
+import { awsCredsPresent } from "./aws-secret.mjs";
+import { FAILED_WRITE_FILE, appendFailedWriteFallback } from "./local-fallback.mjs";
+import { redactSecrets } from "./redact.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
 
 const SM = "otchealth-shared-prod";
@@ -143,19 +146,12 @@ function azureCredsPresent() {
     (process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER) // Container Apps managed identity
   );
 }
-// Cheap, SYNCHRONOUS presence check for AWS creds (no network) — mirrors aws-secret.mjs's awsCreds()
-// resolution ORDER (ECS task role env markers, then AWS_ACCESS_KEY_ID/SECRET, then the OTC_AWS_*
-// fallback) without actually calling it, so this stays as fast as the Azure check it sits beside.
-// Kept in sync deliberately with awsCreds()'s own "prox" placeholder guard (the cloud sandbox injects
-// a non-functional prefix="prox" credential into AWS_ACCESS_KEY_ID) so this never reports "present"
-// for a key that would actually fail to sign anything.
-function s3CredsPresent() {
-  return !!(
-    process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI ||
-    (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && !/^prox/i.test(process.env.AWS_ACCESS_KEY_ID)) ||
-    (process.env.OTC_AWS_ACCESS_KEY_ID && process.env.OTC_AWS_SECRET_ACCESS_KEY && !/^prox/i.test(process.env.OTC_AWS_ACCESS_KEY_ID))
-  );
-}
+// Cheap, SYNCHRONOUS presence check for AWS creds (no network). DELEGATES to aws-secret.mjs's own
+// awsCredsPresent() (2026-08-18) rather than keeping a second copy of its resolution-order + "prox"
+// placeholder guards here: this file's own comment used to say this mirrors that logic, which is
+// exactly the kind of drift risk aws-secret.mjs's header separately warns about ("a fourth
+// reimplementation of how does this seat get AWS credentials") -- now there is one implementation.
+function s3CredsPresent() { return awsCredsPresent().any; }
 // True when SOME credential can reach the ACTIVE memory backend. Once BLOB_BACKEND=s3 (the default,
 // see above), that means AWS creds primarily, since S3 is what writes/authoritative-reads target now;
 // Azure/GCP are accepted too since they still back the best-effort history-merge leg on reads. This
@@ -1008,4 +1004,32 @@ async function runPack() {
   }
   console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | inbound | reconcile | render | whoami | use | list-agents | state | state-sync\n  cross-lane: add --on <lane> to write on ANOTHER agent's ledger (append-only, attributed by=<--agent>); the owner sees it via 'inbound' / 'tail' on wake and 'reconcile' to ack.\n  state --get [--json] | state --set [--goal \"...\"] [--constraints \"a;b;c\"] [--decisions \"a;b;c\"] [--last \"...\"]  (typed current-state handoff doc)\n  state-sync --agent <a> --facts '[\"...\"]' [--source precompact|stop|periodic] [--session-id <id>]  (CBP-1: additive session_facts + checkpoint, never touches goal/constraints/open_decisions)");
   process.exit(2);
-})().catch((e) => { console.error("ERROR: " + e.message); process.exit(1); });
+})().catch((e) => {
+  // redactSecrets, not raw e.message: this string is both PRINTED here and PERSISTED into the
+  // fallback file below, and a recovery pass replays those rows into the ledger where a row can be
+  // share:true. The errors that reach this catch come from the credential chain itself, so a token,
+  // a signed URL or a DSN is plausibly in scope at throw time. Redaction keeps every key and drops
+  // only values, so the fail-loud diagnosis this path exists to deliver survives intact.
+  const safeMessage = redactSecrets(e.message);
+  console.error("ERROR: " + safeMessage);
+  // DURABLE LOCAL FALLBACK for a DIRECT CLI write (2026-08-18, the agent-seat credential bootstrap
+  // fix). Before this, only content that happened to route through reflect.mjs's spawn-and-catch
+  // --commit loop got saved when its write failed; a human/agent typing `mem.mjs status "..." --agent
+  // cro` straight into a shell and hitting exactly the same failure (no AWS creds resolvable, Azure
+  // Key Vault permanently gone -- see aws-secret.mjs's header) got NOTHING: the text was gone the
+  // instant this process exited, unless someone happened to be watching the terminal and retyped it
+  // by hand. This mirrors reflect.mjs's own fallback (same file, same per-agent path, same shape) for
+  // the verbs that actually carry recoverable free text. Read-only verbs (recall/tail/whoami/...) and
+  // structural writes without a `--was`-shaped WAS/`entity` free-text pair are intentionally NOT
+  // covered here -- this is an HONEST, named safety net for the common case (remember/decision/
+  // pitfall/status/correct), not a claim that every possible write path is now loss-proof.
+  const WRITE_VERBS = new Set(["remember", "fact", "decision", "pitfall", "status", "correct"]);
+  if (AGENT && TEXT && WRITE_VERBS.has(cmd)) {
+    const item = { type: cmd, text: TEXT, share: SHARE || cmd === "status", tags: ["mem-direct-fallback"] };
+    if (cmd === "correct" && WAS) item.was = WAS;
+    if (CROSS) item.on = ON;
+    appendFailedWriteFallback(AGENT, item, safeMessage, "mem.mjs");
+    console.error(`[kb-memory] NOT LOST: saved to the local fallback (${FAILED_WRITE_FILE(AGENT)}). Re-run this same command once credentials are restored, or recover the file by hand.`);
+  }
+  process.exit(1);
+});

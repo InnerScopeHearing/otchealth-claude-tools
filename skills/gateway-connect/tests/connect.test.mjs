@@ -61,6 +61,49 @@ test('CLI --if-lane on a laneless agent exits 0 and does nothing (no network, no
 
 import { azureEnvPresent, credSource } from '../connect.mjs';
 
+// ---- laneCreds() failure message (2026-08-18, the agent-seat credential bootstrap fix) -----------
+// laneCreds() is not exported (internal), so this exercises it through the public mintToken() entry
+// point -- the same call path a real `gateway-connect` invocation takes. With every credential store
+// (Azure, AWS, GCP) unreachable, laneCreds() must name the REAL fix (OTC_AWS_*) rather than blaming
+// "GCP fallback failed" as if GCP Secret Manager were still a live option (it is fully retired).
+{
+  const { mintToken } = await import('../connect.mjs');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  test('mintToken(): with no Azure, AWS, or GCP creds resolvable, the error names OTC_AWS_* -- not a "GCP fallback failed" red herring', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'gwconnect-credboot-test-'));
+    const savedHome = process.env.HOME;
+    const savedVars = {};
+    const CLEAR = [
+      'AZURE_SP_CLIENT_ID', 'AZURE_SP_CLIENT_SECRET', 'AZURE_SP_TENANT_ID',
+      'IDENTITY_ENDPOINT', 'IDENTITY_HEADER',
+      'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+      'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
+      'OTC_AWS_ACCESS_KEY_ID', 'OTC_AWS_SECRET_ACCESS_KEY', 'OTC_AWS_SESSION_TOKEN',
+      'GCP_CLAUDE_DRIVER_SA_JSON',
+    ];
+    for (const k of CLEAR) { savedVars[k] = process.env[k]; delete process.env[k]; }
+    process.env.HOME = dir; // no ~/.gcp_claude_driver_sa.json can exist here
+    try {
+      await assert.rejects(
+        () => mintToken('cfo'),
+        (e) => {
+          assert.match(e.message, /OTC_AWS_ACCESS_KEY_ID \+ OTC_AWS_SECRET_ACCESS_KEY/, 'must name the actual fix');
+          assert.match(e.message, /AWS SSM fallback/i, 'must acknowledge SSM was already tried, not just Key Vault');
+          assert.match(e.message, /GCP Secret Manager is retired/, 'must not imply GCP is a live fallback option');
+          return true;
+        },
+      );
+    } finally {
+      process.env.HOME = savedHome;
+      for (const k of CLEAR) { if (savedVars[k] === undefined) delete process.env[k]; else process.env[k] = savedVars[k]; }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 test('azureEnvPresent + credSource: Key Vault when SP env is set, GCP fallback otherwise', () => {
   const save = { id: process.env.AZURE_SP_CLIENT_ID, sec: process.env.AZURE_SP_CLIENT_SECRET, tn: process.env.AZURE_SP_TENANT_ID };
   delete process.env.AZURE_SP_CLIENT_ID; delete process.env.AZURE_SP_CLIENT_SECRET; delete process.env.AZURE_SP_TENANT_ID;

@@ -60,6 +60,60 @@ these same three steps in one command, but the AUTO-MODE security classifier BLO
 script that pulls main then executes the fetched code), so prefer the three steps above; the wrapper only
 works where a Bash allow-rule for /tmp/octools exists.
 
+## Credential bootstrap (no Azure, ever) — what to set on each seat type
+Azure Key Vault is **permanently unreachable** (2026-08-18; the storage estate is write-locked). Every
+credential this skill needs — the ledger's blob storage (`s3-blob.mjs`), any Key-Vault-named secret
+(`kvSecret()` in `azure-secret.mjs`), and an OTCHealth gateway lane bearer (`skills/gateway-connect/`) —
+now bottlenecks on exactly ONE question: **does this seat's process environment resolve an AWS
+credential?** If yes, everything works (the AWS SSM `/otchealth/*` mirror stands in for Key Vault
+transparently). If no, nothing does — and every write path in this skill is designed to say so loudly
+and by name (never a silent no-op) rather than leave you guessing.
+
+**The single bootstrap credential an operator hands a seat is `OTC_AWS_ACCESS_KEY_ID` /
+`OTC_AWS_SECRET_ACCESS_KEY` — NOT the plain `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` names.**
+Reason: this fleet's cloud sandbox proxy injects its own non-functional placeholder value (prefix
+`prox...`) into the standard `AWS_ACCESS_KEY_ID` name on some seats. A real operator-supplied value
+there is therefore not deterministic — it may or may not win depending on injection order, which is not
+something to guess about. `OTC_AWS_*` is a name the proxy has no reason to ever touch, so a value set
+there survives deterministically. Every credential-resolving function in this skill (`awsCreds()` in
+`aws-secret.mjs`, and everything built on it) checks the plain `AWS_*` names first for backward
+compatibility, then falls back to `OTC_AWS_*` — and both are guarded against the `prox` placeholder
+being mistaken for a real key.
+
+**Per seat type:**
+- **Hyperagent seat** (or any long-running non-ECS agent container): set `OTC_AWS_ACCESS_KEY_ID` +
+  `OTC_AWS_SECRET_ACCESS_KEY` in the seat's environment/secrets configuration. This is the credential
+  that was MISSING and caused the original failure this bootstrap fix responds to (a CRO Hyperagent
+  seat's `mem.mjs status --agent cro` had neither AWS nor Azure creds and lost its write). Nothing else
+  needs to be set; `fetch-secrets-azure.mjs` (session-start.sh's secret hydration) and every kb-memory
+  write path pick it up automatically via the same resolver.
+- **Claude Code cloud seat** (this environment): same two variables, set in the cloud Environment's
+  `.env` box. If `AZURE_SP_CLIENT_ID/SECRET/TENANT_ID` are ALSO set (the historical Azure-first
+  posture), they are tried first and harmlessly fail fast (Key Vault itself is gone) before falling
+  through to `OTC_AWS_*` — no need to remove them, but they no longer do anything useful.
+- **ECS / Fargate job** (Container Apps Jobs, the gateway's own task): needs NOTHING set explicitly.
+  The task role supplies AWS credentials automatically via the container-credentials endpoint
+  (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, injected by the platform), which `awsCreds()` checks
+  FIRST, before either `AWS_*` or `OTC_AWS_*` env — this is the path that was never affected by the
+  Azure outage in the first place.
+
+**How to tell whether it worked:** `node skills/kb-memory/mem.mjs whoami --agent <role>` reports
+`memory backend: present (AWS/S3 ...)` or `MISSING — no AWS creds ... and no Azure creds either; writes
+will fail`, by name. A write that fails anyway (any of `remember`/`decision`/`pitfall`/`status`/
+`correct`) is NEVER silently lost: it prints a loud `ERROR:` naming the missing credential AND saves the
+attempted content to `~/.claude/kb-cache/_failed_writes-<agent>.jsonl` (the same durable local fallback
+`reflect.mjs`'s own `--commit` loop has always used) so it is recoverable by hand or by re-running the
+exact command once credentials are restored.
+
+**Why NOT route around this via the gateway instead of fixing AWS creds directly** (the question this
+fix's design explicitly considered and rejected as a *replacement*, though it remains a valid
+*complementary* path where the platform already provides it): the gateway's own OAuth lane
+client-secret (`skills/gateway-connect/connect.mjs`) is resolved through the SAME `kvSecret()` call this
+skill uses for everything else — Key Vault, then the AWS SSM mirror on failure. It has no independent
+bootstrap; a gateway bearer is just as unreachable as a direct ledger write when no AWS credential
+resolves. Setting `OTC_AWS_*` therefore fixes BOTH paths at once, from one credential, which is why it
+— not a second, gateway-specific credential — is the fleet's single bootstrap secret.
+
 ## Connected executive memory (each agent has its lane; the team shares automatically)
 Every agent keeps a PRIVATE lane (ring-correct). Two things ALSO publish a copy to a shared EXEC TEAM
 feed (`otchealthcommons/company-journal/_MEMORY/_exec/<agent>.jsonl`, one file per agent so there is no
