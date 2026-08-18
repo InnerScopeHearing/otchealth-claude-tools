@@ -326,6 +326,7 @@ export EMBEDDINGS_PROVIDER="${EMBEDDINGS_PROVIDER:-openai}"
 # because a partial answer had arrived. A failure was returned as a plausible value, twice over.
 SSM_PARTIAL=0
 SSM_MISSING_ENVS=""
+SSM_TRUNCATED=0
 if [ "$SECRET_BACKEND" = "ssm" ]; then
   ssm_rc=0
   # A redirect target that is guaranteed non-empty: `2>""` from a failed mktemp would break the
@@ -350,12 +351,37 @@ if [ "$SECRET_BACKEND" = "ssm" ]; then
   # owns secret-map.mjs; bash never learns it.)
   [ -s "$SSM_ERR" ] && sed 's/^/[octools]   /' "$SSM_ERR"
   SSM_MISSING_ENVS="$(sed -n "s/.*MISSING required secret '[^']*' (env \([A-Z0-9_]*\)).*/\1/p" "$SSM_ERR" | tr '\n' ' ')"
+  # THE HYDRATOR SAYS HOW MANY LINES IT WROTE; WE COUNT HOW MANY ARRIVED. stdout is a pipe carrying
+  # the large payload, stderr is one short line -- so comparing the two is an end-to-end integrity
+  # check on the transfer, independent of any single cause. It exists because a process.exit() in
+  # the hydrator used to discard queued stdout while still exiting 0 (measured: 1000 lines in, 35-47
+  # out, exit 0, silent). That specific bug is fixed in fetch-secrets-aws.mjs, but "rc=0 with
+  # truncated output must not read as success" has to be enforced HERE too, or the shell is once
+  # again trusting a number it never checked.
+  ssm_claimed="$(sed -n 's/^\[fetch-secrets-aws\] \([0-9][0-9]*\) secret(s) hydrated .*/\1/p' "$SSM_ERR" | tail -1)"
   rm -f "$SSM_ERR"
 
   ssm_n="$(printf '%s' "$FETCHED" | grep -c '=' || true)"
-  if [ "$ssm_rc" = "0" ] && [ -n "$FETCHED" ]; then
+  # An ABSENT claim is not a mismatch: it means the check could not run (stderr lost, older
+  # hydrator), and inventing a failure from a missing measurement is its own dishonesty. It is
+  # reported as unverified in the banner instead.
+  if [ -n "$ssm_claimed" ] && [ "$ssm_claimed" != "$ssm_n" ]; then SSM_TRUNCATED=1; fi
+
+  if [ "$SSM_TRUNCATED" = "1" ]; then
+    # Deliberately NOT an "OK" of any kind, whatever the exit code was: the payload we hold is
+    # provably not the payload that was sent, so nothing about it can be called complete. Keep what
+    # did arrive (those lines are real), name the shortfall, and let the fallback try to help.
+    [ -n "$FETCHED" ] && SECRET_SOURCE="aws-ssm(truncated)"
+    echo "[octools] AWS SSM TRUNCATED — the hydrator reported writing ${ssm_claimed} secret(s) but only ${ssm_n} arrived (exit ${ssm_rc})."
+    echo "[octools]   The output was cut in transit. This is NOT a healthy hydration; trying Azure Key Vault for the remainder."
+  elif [ "$ssm_rc" = "0" ] && [ -n "$FETCHED" ]; then
     SECRET_SOURCE="aws-ssm"
-    echo "[octools] AWS SSM OK — ${ssm_n} secrets loaded."
+    # SAY ONLY WHAT WAS VERIFIED. exit 0 means every secret marked `required: true` in
+    # setup/secret-map.mjs resolved -- that is 2 of the 98 mapped ids today. It is NOT a statement
+    # that all 98 arrived, and the old wording ("N secrets loaded", full stop) invited exactly that
+    # reading: SSM serving 3 of 98 printed a clean banner and skipped the fallback entirely.
+    echo "[octools] AWS SSM OK — ${ssm_n} secret(s) loaded; every REQUIRED secret resolved${ssm_claimed:+, and all ${ssm_claimed} sent line(s) arrived intact}."
+    echo "[octools]   (Optional secrets are not verified: this is a count of what arrived, not a completeness check.)"
   elif [ "$ssm_rc" = "2" ]; then
     # PARTIAL is its own outcome and is reported as neither success nor total failure. The secrets
     # that did arrive are real and worth keeping, so $FETCHED is retained; the missing ones are
@@ -385,7 +411,7 @@ fi
 # GATED ON "IS ANYTHING STILL MISSING", NOT ON "IS $FETCHED EMPTY". A partial SSM hydration used to
 # short-circuit this block: the fallback that exists specifically to cover a missing secret was
 # skipped because SOME other secret had arrived.
-if { [ -z "$FETCHED" ] || [ "$SSM_PARTIAL" = "1" ]; } && [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+if { [ -z "$FETCHED" ] || [ "$SSM_PARTIAL" = "1" ] || [ "$SSM_TRUNCATED" = "1" ]; } && [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
   KV_FETCHED=""
   for attempt in 1 2 3; do
     echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT), attempt $attempt/3..."
@@ -415,9 +441,45 @@ fi
 # -- the same shape of unearned reassurance as the success banner this whole block was fixed for.
 # The env names come from the hydrator (which owns the id -> env table), so this stays a lookup, not
 # a second copy of the map.
-if [ "$SSM_PARTIAL" = "1" ]; then
+#
+# AN EMPTY PARSE IS "UNKNOWN", NEVER "NOTHING WAS MISSING" (bug fixed 2026-08-18). STILL_MISSING is
+# built by iterating $SSM_MISSING_ENVS. When that string is EMPTY the loop body never runs,
+# STILL_MISSING stays empty, and the old code fell straight into the else branch and printed
+# "all required secrets are present" -- as the operator's LAST LINE -- having checked nothing at
+# all. Reproduced against the shipped bytes: rc=2 plus a dead vault printed the all-clear while
+# OPENAI_API_KEY was absent from $FETCHED. rc=2 has ALREADY told us something required is gone; if
+# we cannot say WHAT, the only honest output is to say that, loudly. Empty and "nothing missing"
+# must never render the same.
+#
+# The three inputs are kept apart on purpose so each renders as itself:
+#   SSM_TRUNCATED=1        the payload was cut in transit -- completeness is unknowable
+#   SSM_MISSING_ENVS empty the hydrator said something is missing but named nothing parseable
+#   otherwise              a real list, checked name by name against what the session actually has
+if [ "$SSM_TRUNCATED" = "1" ]; then
+  echo "==================================================================================="
+  echo "[octools] WARN: the AWS SSM output was TRUNCATED in transit (sent ${ssm_claimed:-?}, received ${ssm_n:-?})."
+  echo "          Which secrets were lost is UNKNOWN. Do NOT read this as a healthy session."
+  echo "          Nothing below has been verified as present beyond the lines that did arrive."
+  echo "          Re-run to get a clean read: bash setup/session-start.sh"
+  echo "==================================================================================="
+elif [ "$SSM_PARTIAL" = "1" ] && [ -z "$SSM_MISSING_ENVS" ]; then
+  echo "==================================================================================="
+  echo "[octools] WARN: AWS SSM reported a MISSING REQUIRED secret (exit 2), but this script"
+  echo "          could not determine WHICH one, so NOTHING was checked and NOTHING is cleared."
+  echo "          Treat this session as INCOMPLETELY hydrated. This is an UNKNOWN, not an all-clear."
+  echo "          Cause: the hydrator's \"MISSING required secret '<id>' (env <ENV>)\" line was"
+  echo "          absent or reformatted, so there was no name to parse. Read the [octools] lines"
+  echo "          above for the hydrator's own diagnostics, then: bash setup/session-start.sh"
+  echo "==================================================================================="
+elif [ "$SSM_PARTIAL" = "1" ]; then
   STILL_MISSING=""
   for env_name in $SSM_MISSING_ENVS; do
+    # A DIRECT ENVIRONMENT VARIABLE COUNTS AS PRESENT. get_key() below resolves "${!name}" FIRST and
+    # only then looks in $FETCHED, and this script's own header documents passing OPENAI_API_KEY etc.
+    # straight in as a supported configuration. Grepping $FETCHED alone reported those as missing
+    # while the session was in fact going to use them -- a false alarm, which is the cheapest way to
+    # teach an operator to ignore this warning and so hide the real one.
+    [ -n "${!env_name:-}" ] && continue
     printf '%s' "$FETCHED" | grep -q "^${env_name}=" || STILL_MISSING="${STILL_MISSING}${env_name} "
   done
   if [ -n "$STILL_MISSING" ]; then
@@ -428,7 +490,9 @@ if [ "$SSM_PARTIAL" = "1" ]; then
     echo "          bash setup/session-start.sh"
     echo "==================================================================================="
   else
-    echo "[octools] The SSM gap was covered by the fallback; all required secrets are present."
+    # Reached ONLY after every named secret was individually confirmed present. The claim is scoped
+    # to exactly that list -- it says the named gap closed, not that the session is complete.
+    echo "[octools] The SSM gap was covered: every REQUIRED secret named above (${SSM_MISSING_ENVS}) is now present."
   fi
 fi
 

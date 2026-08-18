@@ -16,6 +16,16 @@
 // kvSecretSet() returns success when the ACTIVE PRIMARY took the write (SSM under SECRET_BACKEND=
 // ssm, the default; Key Vault under SECRET_BACKEND=keyvault), so runnability is exactly the
 // reachability of whichever store that is. Anything else is a genuine skip.
+//
+// AND IT MUST TEST WRITE CAPABILITY, NOT CREDENTIAL PRESENCE (tightened 2026-08-18). The first
+// version of that fix used ssmAvailable(), which is literally `(await awsCreds()) !== null` -- it
+// answers "are there credentials on this seat", not "may they write". On a read-only-SSM seat
+// (ssm:GetParameter but no ssm:PutParameter, a perfectly ordinary least-privilege grant) it
+// returned true, the test RAN, PutParameter 403'd and the suite went red for a reason that has
+// nothing to do with the code under test. A skip guard that is wrong in the FAILING direction is
+// less dangerous than one wrong in the passing direction, but it is still a guard reporting
+// something it did not check. So the guard now performs the smallest real write it can -- put one
+// synthetic throwaway parameter, then delete it -- and skips only if that write is refused.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -23,7 +33,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { vaultToken, secretBackend } from '../skills/kb-memory/azure-secret.mjs';
-import { ssmAvailable, ssmSecretDelete } from '../skills/kb-memory/aws-secret.mjs';
+import { ssmAvailable, ssmSecretSet, ssmSecretDelete } from '../skills/kb-memory/aws-secret.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SET_SECRET = join(ROOT, 'setup', 'set-secret.mjs');
@@ -31,15 +41,47 @@ const GET_SECRET = join(ROOT, 'setup', 'get-secret.mjs');
 const VAULT = process.env.AZURE_KEYVAULT_NAME || 'kv-otc-55c84f6bef';
 
 const BACKEND = secretBackend();
-// Reachability of the store the write path will actually use -- not of whichever store happened to
-// be primary when this file was written.
-const ACTIVE_STORE_REACHABLE =
-  BACKEND === 'ssm' ? await ssmAvailable() : (await vaultToken()) !== null;
+
+/**
+ * Can this seat actually WRITE to SSM? Probes with one synthetic throwaway parameter and removes
+ * it. Never throws: any refusal (no credentials, no ssm:PutParameter) is reported as "cannot run".
+ *
+ * The probe is the same operation the test performs, so a probe that succeeds means the test's own
+ * write will too -- which is the property a skip guard has to have to be trustworthy.
+ */
+async function ssmWritable() {
+  if (!(await ssmAvailable())) return false;
+  const probe = `set-secret-roundtrip-probe-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  let ok = false;
+  try {
+    ok = await ssmSecretSet(probe, 'synthetic-probe-value'); // never a real credential
+  } catch {
+    ok = false;
+  }
+  if (ok) {
+    try {
+      await ssmSecretDelete(probe);
+    } catch {
+      /* teardown is best-effort; a leftover probe parameter is noise, not a failure */
+    }
+  }
+  return ok;
+}
+
+// Write capability of the store the write path will actually use -- not of whichever store happened
+// to be primary when this file was written, and not merely whether credentials exist.
+// NOTE, stated rather than hidden: the Key Vault arm is still a PRESENCE check (vaultToken()), not
+// a write probe. It is left that way deliberately -- SECRET_BACKEND=keyvault points at a retired
+// subscription where vaultToken() already returns null, so the arm skips for the right reason
+// today, and minting a real write against a dead vault would prove nothing. If Key Vault ever comes
+// back as primary, this arm needs the same probe treatment.
+const ACTIVE_STORE_WRITABLE =
+  BACKEND === 'ssm' ? await ssmWritable() : (await vaultToken()) !== null;
 
 test('set-secret.mjs -> get-secret.mjs round-trip: a written value reads back byte-identical', async (t) => {
-  if (!ACTIVE_STORE_REACHABLE) {
+  if (!ACTIVE_STORE_WRITABLE) {
     t.skip(
-      `SECRET_BACKEND=${BACKEND} but that store is not reachable from this seat, so there is nothing ` +
+      `SECRET_BACKEND=${BACKEND} but that store did not accept a write from this seat, so there is nothing ` +
         `to round-trip against. For SSM: a task role, or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY with ` +
         `ssm:PutParameter + ssm:GetParameter + ssm:DeleteParameter on ${process.env.AWS_SSM_PREFIX || '/otchealth'}/*. ` +
         `For Key Vault: any credential vaultToken() accepts. This skips ONLY when genuinely unrunnable; ` +
@@ -99,5 +141,13 @@ test('the skip guard tracks the ACTIVE store, not a hardcoded Azure credential',
   assert.ok(
     !/const LIVE_CREDS = Boolean\(\s*process\.env\.AZURE_SP_CLIENT_ID/.test(code),
     'the guard must not key off Azure SP vars alone; those are present-but-dead on every seat today',
+  );
+  // PRESENCE IS NOT CAPABILITY. ssmAvailable() is `(await awsCreds()) !== null` -- it cannot tell a
+  // read-only seat from a writable one, so on an ordinary least-privilege grant the guard said RUN
+  // and PutParameter then 403'd. The guard has to actually attempt the write it is gating.
+  assert.match(code, /ssmSecretSet\(/, 'the guard must PROBE the write, not just check for credentials');
+  assert.ok(
+    /ACTIVE_STORE_WRITABLE[\s\S]*ssmWritable\(\)/.test(code),
+    'the gate the test reads must be the write probe',
   );
 });

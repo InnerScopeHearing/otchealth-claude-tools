@@ -25,12 +25,26 @@ import { MAP } from './secret-map.mjs';
 const PREFIX = process.env.AWS_SSM_PREFIX || '/otchealth';
 const REGION = process.env.AWS_REGION || 'us-east-1';
 
+// NEVER call process.exit() IN THIS FILE (bug fixed 2026-08-18). stdout here is a PIPE -- the
+// caller is `FETCHED="$(node setup/fetch-secrets-aws.mjs ...)"` in session-start.sh -- and Node
+// writes to a pipe ASYNCHRONOUSLY. process.exit() tears the process down immediately and DISCARDS
+// whatever is still queued, so the exit code says "complete" about output that is not. Measured
+// through that exact command-substitution shape: 1000 queued lines arrived as 35-47, exit 0, no
+// warning anywhere. That directly contradicts session-start.sh's "THE HYDRATOR'S EXIT CODE IS THE
+// ANSWER" -- a trusted rc=0 could accompany a silently half-hydrated session, which is the same
+// failure-as-a-plausible-value shape this whole branch exists to remove.
+//
+// So: set process.exitCode and RETURN. Node then drains stdout before exiting on its own. The work
+// lives in main() purely so an early failure can `return` instead of reaching for process.exit().
+// tests/fetch-secrets-aws.test.mjs pins both the no-process.exit rule and the byte-completeness.
+async function main() {
 if (!(await ssmAvailable())) {
   // Distinguish "no credentials here" from "credentials fine, secret absent". Exiting 1 with an
   // empty stdout lets session-start.sh fall through to its next hydration source rather than
   // treating an unreachable store as an empty one.
   console.error(`[fetch-secrets-aws] no resolvable AWS credentials (no task role, and AWS_ACCESS_KEY_ID is unset or a sandbox proxy placeholder) — cannot fetch from ${PREFIX} in ${REGION}.`);
-  process.exit(1);
+  process.exitCode = 1;
+  return;
 }
 
 // ENUMERATE FIRST, THEN FETCH ONLY WHAT EXISTS.
@@ -87,5 +101,15 @@ for (const { id, env, required } of wanted) {
   }
 }
 
+// THIS COUNT IS LOAD-BEARING, not decoration. It goes to stderr (one short line, written before
+// exit) while the secrets go to stdout (large, and the thing a broken pipe can truncate).
+// session-start.sh compares this number against the lines it actually received, which is an
+// end-to-end integrity check on the transfer itself -- so a truncation from ANY cause, not just the
+// process.exit() one fixed above, is caught by the shell instead of being read as a clean load.
+// Keep the `<N> secret(s) hydrated` wording byte-stable: the shell's sed and
+// tests/fetch-secrets-aws.test.mjs both match on it.
 console.error(`[fetch-secrets-aws] ${emitted} secret(s) hydrated from ${PREFIX} (${REGION})${present ? ` of ${present.size} parameter(s) present` : ''}.`);
-process.exit(hadRequiredMiss ? 2 : 0);
+process.exitCode = hadRequiredMiss ? 2 : 0;
+}
+
+await main();

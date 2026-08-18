@@ -214,3 +214,172 @@ test("no resolvable AWS credentials exits 1 with EMPTY stdout, so the caller fal
   assert.equal(stdout, "", "an unreachable store must emit nothing at all");
   assert.match(stderr, /no resolvable AWS credentials/);
 });
+
+// ─── THE PIPE ITSELF: exit code and payload must agree ──────────────────────────────────────────
+//
+// Every test above reads stdout through execFile, which drains the pipe as fast as the child fills
+// it -- so it can never observe the failure below. The REAL caller is
+// `FETCHED="$(node setup/fetch-secrets-aws.mjs 2>"$SSM_ERR")"` in session-start.sh: a bash command
+// substitution, whose reader takes measurably longer to start draining. Node writes to a pipe
+// ASYNCHRONOUSLY, and process.exit() discards whatever is still queued. Measured through that exact
+// shape before the fix: 1000 lines written, 35-47 received, exit 0, not one word of warning.
+//
+// That is the branch's own thesis ("THE HYDRATOR'S EXIT CODE IS THE ANSWER") failing: rc=0 arriving
+// alongside a silently half-delivered hydration. These tests run the shipped script through the
+// real shape.
+
+/** Run the REAL script the way session-start.sh does: bash command substitution over a pipe. */
+async function runViaShell(opts = {}, { env = {}, reader = "substitution" } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "fetch-aws-pipe-"));
+  const logPath = join(dir, "calls.log");
+  writeFileSync(logPath, "");
+  const preloadPath = join(dir, "preload.mjs");
+  writeFileSync(preloadPath, preloadSource(logPath, opts));
+  const errPath = join(dir, "stderr.txt");
+
+  const childEnv = {
+    PATH: process.env.PATH,
+    HOME: dir,
+    NODE_OPTIONS: `--import ${preloadPath}`,
+    AWS_REGION: REGION,
+    AWS_SSM_PREFIX: "/otchealth",
+    AWS_ACCESS_KEY_ID: "AKIAUNITTESTONLY0000",
+    AWS_SECRET_ACCESS_KEY: "unit-test-secret-not-a-real-credential",
+    ...env,
+  };
+  delete childEnv.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI;
+  delete childEnv.AWS_CONTAINER_CREDENTIALS_FULL_URI;
+  delete childEnv.AWS_SESSION_TOKEN;
+
+  // Two readers, both real bash, for two different jobs.
+  //
+  // `substitution` is byte-for-byte the shape in session-start.sh. It is a sanity check that the
+  // normal path is intact -- NOT the regression guard, because whether it loses data is a race
+  // between how fast node queues and how fast bash drains. Measured under a deliberately restored
+  // process.exit(): ~3.9 MB truncated on three consecutive runs in one sitting and survived three
+  // consecutive runs in another. A guard that reports the bug only sometimes is not a guard.
+  //
+  // `slow` removes the race instead of betting on it: the reader sleeps before draining, so the
+  // queue provably builds. That is not a contrivance -- a loaded machine or a slow consumer is
+  // exactly the real-world condition that turns this latent bug into a lost credential, and it is
+  // the condition a test has to be able to create on demand. PIPESTATUS[0] is used because the
+  // pipeline's own $? belongs to the reader, not to node.
+  const outPath = join(dir, "stdout.txt");
+  const script =
+    reader === "slow"
+      ? `node ${JSON.stringify(SCRIPT)} 2>${JSON.stringify(errPath)} | { sleep 0.5; cat; } > ${JSON.stringify(outPath)}
+rc=\${PIPESTATUS[0]}
+grep -c '=' ${JSON.stringify(outPath)} || true
+echo "RC=$rc"`
+      : `FETCHED="$(node ${JSON.stringify(SCRIPT)} 2>${JSON.stringify(errPath)})" && rc=0 || rc=$?
+printf '%s' "$FETCHED" | grep -c '=' || true
+echo "RC=$rc"`;
+  const { stdout } = await execFileP("bash", ["-c", script], { env: childEnv, maxBuffer: 64 * 1024 * 1024, timeout: 120_000 });
+  const received = Number(stdout.split("\n")[0]);
+  const rc = Number(/RC=(\d+)/.exec(stdout)?.[1] ?? -1);
+  const stderr = readFileSync(errPath, "utf8");
+  const claimed = Number(/\[fetch-secrets-aws\] (\d+) secret\(s\) hydrated /.exec(stderr)?.[1] ?? -1);
+  return { received, rc, stderr, claimed };
+}
+
+test("REGRESSION GUARD: a slow reader must not cost the caller a single secret", async () => {
+  // The deterministic form. The reader stalls half a second before draining, so node's stdout queue
+  // provably builds up; process.exit() then discards it while still exiting 0. This is the test
+  // that goes RED the moment process.exit() comes back to this script.
+  const listed = MAP.map((m) => m.id);
+  const big = "x".repeat(Number(process.env.PIPE_TEST_BYTES || 4000)); // ~390 KB total, realistic-ish
+  const values = Object.fromEntries(MAP.map((m) => [m.id, `${big}-${m.id}`]));
+  const { received, rc, claimed } = await runViaShell({ listed, values }, { reader: "slow" });
+  assert.equal(rc, 0, "all required secrets are present, so this is a clean run");
+  assert.equal(claimed, MAP.length, "the script must state on stderr how many lines it wrote");
+  assert.equal(
+    received,
+    claimed,
+    `stdout was truncated in transit: the script reported writing ${claimed} line(s) but the ` +
+      `caller received ${received}. An exit code of 0 over a truncated payload is a failure ` +
+      `returned as a plausible value -- do not reintroduce process.exit() in this script.`,
+  );
+});
+
+test("the exact session-start.sh command-substitution shape delivers the whole payload", async () => {
+  // The realistic shape, asserted for completeness of the normal path. Stated honestly: this one
+  // does NOT reliably catch a reintroduced process.exit() -- see the runner comment above -- which
+  // is why the slow-reader test exists alongside it rather than instead of it.
+  const listed = MAP.map((m) => m.id);
+  const values = Object.fromEntries(MAP.map((m) => [m.id, `v-${m.id}`]));
+  const { received, rc, claimed } = await runViaShell({ listed, values });
+  assert.equal(rc, 0);
+  assert.equal(received, claimed, "the caller must receive every line the script reported writing");
+  assert.equal(received, MAP.length);
+});
+
+test("the script never calls process.exit(), which is what discards queued stdout", async () => {
+  // The behavioural test above is the real guard; this one names the cause so a future edit that
+  // reaches for process.exit() fails with the reason attached rather than an unexplained count.
+  const src = readFileSync(SCRIPT, "utf8");
+  const calls = src.split("\n").filter((l) => /^\s*process\.exit\s*\(/.test(l));
+  assert.deepEqual(calls, [], `process.exit() discards queued pipe writes; use process.exitCode:\n${calls.join("\n")}`);
+});
+
+// ─── THE CROSS-FILE CONTRACT: REAL stderr parsed by the REAL sed ────────────────────────────────
+//
+// session-start.sh recovers the missing env NAMES by running a sed against this script's stderr.
+// Until now each side was only ever tested against a PRIVATE COPY of the other: this file asserted
+// its own message format, and tests/session-start-hydration.test.mjs fed the shell a hand-written
+// string shaped like that format. Nothing ever ran one against the other, so a wording change on
+// either side would have passed both suites while silently emptying the list at runtime -- and an
+// empty list is exactly the input that produced the false all-clear this round is fixing.
+test("session-start.sh's REAL sed extracts the env name from this script's REAL stderr", async () => {
+  const { stderr, code } = await run({
+    listed: ["elevenlabs-api-key"],
+    values: { "elevenlabs-api-key": "el-test" }, // openai-api-key absent => a real MISSING line
+  });
+  assert.equal(code, 2, "precondition: this run must actually produce a missing-required diagnostic");
+
+  // Pull the parsing line out of the SHIPPED shell rather than restating it, so the test cannot
+  // drift from what runs.
+  const sh = readFileSync(join(ROOT, "setup", "session-start.sh"), "utf8");
+  // The PARSING line specifically: `SSM_MISSING_ENVS=""` also exists as the initialiser, and
+  // grabbing that one would make this test pass while parsing nothing -- the very failure shape it
+  // is here to catch. (It did, on the first run of this test.)
+  const sedLines = sh.split("\n").filter((l) => l.trim().startsWith("SSM_MISSING_ENVS=") && l.includes("sed "));
+  assert.equal(sedLines.length, 1, `expected exactly one SSM_MISSING_ENVS sed line, found ${sedLines.length}`);
+  const sedLine = sedLines[0];
+
+  const dir = mkdtempSync(join(tmpdir(), "sed-contract-"));
+  const errFile = join(dir, "ssm-err");
+  writeFileSync(errFile, stderr);
+  const { stdout: parsed } = await execFileP("bash", [
+    "-c",
+    `set -u\nSSM_ERR=${JSON.stringify(errFile)}\n${sedLine}\nprintf '%s' "$SSM_MISSING_ENVS"`,
+  ]);
+
+  assert.match(
+    parsed,
+    /\bOPENAI_API_KEY\b/,
+    `the shipped sed did not recover the env name from the shipped stderr.\nstderr was:\n${stderr}\nparsed: "${parsed}"`,
+  );
+});
+
+test("session-start.sh's REAL sed reads back the hydrated COUNT this script reports", async () => {
+  // The second half of the same contract: the shell compares that number against the lines it
+  // received, which is how a truncated transfer is caught. If either side reworded, the shell would
+  // read an empty count, skip the comparison, and be back to trusting a number it never checked.
+  const { stderr } = await run({
+    listed: ["openai-api-key", "elevenlabs-api-key"],
+    values: { "openai-api-key": "sk", "elevenlabs-api-key": "el" },
+  });
+  const sh = readFileSync(join(ROOT, "setup", "session-start.sh"), "utf8");
+  const claimLines = sh.split("\n").filter((l) => l.trim().startsWith("ssm_claimed=") && l.includes("sed "));
+  assert.equal(claimLines.length, 1, `expected exactly one ssm_claimed sed line, found ${claimLines.length}`);
+  const line = claimLines[0];
+
+  const dir = mkdtempSync(join(tmpdir(), "sed-count-"));
+  const errFile = join(dir, "ssm-err");
+  writeFileSync(errFile, stderr);
+  const { stdout: parsed } = await execFileP("bash", [
+    "-c",
+    `set -u\nSSM_ERR=${JSON.stringify(errFile)}\n${line}\nprintf '%s' "$ssm_claimed"`,
+  ]);
+  assert.equal(parsed, "2", `the shipped sed did not recover the count from the shipped stderr:\n${stderr}`);
+});

@@ -174,7 +174,7 @@ test("the fallback FILLS the gap without demoting the values SSM did serve", () 
   // get_key() takes the first match, so SSM must come first for a name both stores serve.
   const first = r.fetched.split("\n").find((l) => l.startsWith("DEPOT_TOKEN="));
   assert.equal(first, "DEPOT_TOKEN='from-ssm'", "the primary store must stay authoritative for ids it served");
-  assert.match(r.stdout, /gap was covered by the fallback/, "a real recovery should be stated as one");
+  assert.match(r.stdout, /gap was covered: every REQUIRED secret named above/, "a real recovery should be stated as one, scoped to what was checked");
 });
 
 test("a gap the fallback could NOT cover is reported, not papered over", () => {
@@ -192,7 +192,7 @@ test("exit 0 with real output IS reported as success, and skips the fallback", (
   // The counterweight: the fix must not turn every run into a warning. A clean hydration still
   // reads as clean, and does not waste three attempts on a dead vault.
   const r = runBlock({ ssmRc: 0, ssmOut: "OPENAI_API_KEY='sk'\nELEVENLABS_API_KEY='el'\n" });
-  assert.match(r.stdout, /AWS SSM OK — 2 secrets loaded/);
+  assert.match(r.stdout, /AWS SSM OK — 2 secret\(s\) loaded/);
   assert.equal(r.source, "aws-ssm");
   assert.ok(!r.kvCalled, "a complete hydration must not fall back");
 });
@@ -263,4 +263,175 @@ test("credentials.env receives the NORMALIZED backend, so a typo cannot self-per
   assert.ok(normIdx !== -1, "normalization must exist");
   assert.ok(writeIdx !== -1, "credentials.env must still record the backend");
   assert.ok(writeIdx > normIdx, "the value written to credentials.env must be the normalized one");
+});
+
+// ─── THE STATE TABLE: every outcome must render as ITSELF, and the last line must be true ───────
+//
+// The rule this section enforces: there is no input under which the operator's FINAL line claims
+// completeness the script did not verify. Each state below asserts the operator-visible output,
+// and several assert the LAST line specifically -- because a warning followed by an all-clear is
+// read as an all-clear, which is precisely how the blocker below shipped.
+
+/** The last line the hydration block itself printed, before the harness's own markers. */
+function lastOperatorLine(stdout) {
+  const lines = stdout.split("===FETCHED-BEGIN===")[0].split("\n").filter((l) => l.trim() !== "");
+  return lines[lines.length - 1] ?? "";
+}
+
+const ALL_CLEAR = /all required secrets are present|gap was covered/;
+
+test("BLOCKER: exit 2 with an UNPARSEABLE miss list must never print an all-clear", () => {
+  // THE REPRODUCTION. STILL_MISSING was built by iterating $SSM_MISSING_ENVS; an EMPTY string meant
+  // the loop body never ran, STILL_MISSING stayed empty, and the else branch announced "all
+  // required secrets are present" having checked nothing. The only thing that populates
+  // SSM_MISSING_ENVS is a bash sed against a string literal in fetch-secrets-aws.mjs, so a wording
+  // change on either side empties it -- and empty was indistinguishable from "nothing was missing".
+  // Here the hydrator still exits 2 (something IS gone) but reformats its message.
+  const r = runBlock({
+    ssmRc: 2,
+    ssmOut: "ELEVENLABS_API_KEY='el'\nDEPOT_TOKEN='dp'\n",
+    ssmErr: "[fetch-secrets-aws] MISSING required secret: openai-api-key -> OPENAI_API_KEY (not found)\n",
+    kvOut: "", // the vault is dead, as it is today
+  });
+  assert.ok(!ALL_CLEAR.test(r.stdout), `an unparseable miss list must not produce an all-clear:\n${r.stdout}`);
+  assert.match(r.stdout, /could not determine WHICH one/, "the state is UNKNOWN and must be named as unknown");
+  assert.match(lastOperatorLine(r.stdout), /^=+$/, "the last thing on screen must be the warning banner, not a reassurance");
+});
+
+test("BLOCKER: exit 2 with EMPTY stderr is UNKNOWN, not 'nothing missing'", () => {
+  // The degenerate case: the diagnostics are lost entirely (a redirect that failed, a hydrator that
+  // wrote nothing). rc=2 has already asserted a required secret is gone; silence about WHICH one is
+  // an unknown, and an unknown is not an all-clear.
+  const r = runBlock({ ssmRc: 2, ssmOut: "ELEVENLABS_API_KEY='el'\n", ssmErr: "", kvOut: "" });
+  assert.ok(!ALL_CLEAR.test(r.stdout), `empty diagnostics must not read as nothing-missing:\n${r.stdout}`);
+  assert.match(r.stdout, /INCOMPLETELY hydrated/);
+  assert.match(r.stdout, /UNKNOWN, not an all-clear/);
+});
+
+test("UNKNOWN is distinguishable from a NAMED still-missing gap", () => {
+  // Two different truths must not print the same words: "I know OPENAI_API_KEY is gone" and "I know
+  // something is gone but not what" are different operator actions.
+  const named = runBlock({ ssmRc: 2, ssmOut: "ELEVENLABS_API_KEY='el'\n", ssmErr: MISSING_ERR, kvOut: "" });
+  const unknown = runBlock({ ssmRc: 2, ssmOut: "ELEVENLABS_API_KEY='el'\n", ssmErr: "", kvOut: "" });
+  assert.match(named.stdout, /still MISSING after every store: .*OPENAI_API_KEY/);
+  assert.ok(!/still MISSING after every store/.test(unknown.stdout), "an unknown must not fabricate a name list");
+  assert.ok(!/could not determine WHICH one/.test(named.stdout), "a known name must not be reported as unknown");
+});
+
+test("a secret supplied as a DIRECT env var is not reported missing", () => {
+  // get_key() (session-start.sh, just below this block) resolves "${!name}" FIRST and only then
+  // looks in $FETCHED, and this script's own header documents passing OPENAI_API_KEY straight in as
+  // a supported configuration. Grepping $FETCHED alone called that MISSING while the session was in
+  // fact about to use it. A false alarm is safer than a false all-clear, but it trains the operator
+  // to ignore this warning -- which then hides a real one.
+  const r = runBlock({
+    ssmRc: 2,
+    ssmOut: "ELEVENLABS_API_KEY='el'\n",
+    ssmErr: MISSING_ERR,
+    kvOut: "",
+    env: { OPENAI_API_KEY: "supplied-directly-by-the-environment" },
+  });
+  assert.ok(
+    !/still MISSING after every store/.test(r.stdout),
+    `a secret present as a direct env var must not be reported missing:\n${r.stdout}`,
+  );
+  assert.match(r.stdout, /gap was covered/, "it is genuinely covered, just not by $FETCHED");
+});
+
+test("the same secret ABSENT from the environment is still reported missing", () => {
+  // The counterweight to the test above: the direct-env-var allowance must not become a blanket
+  // excuse that silences the warning for everyone.
+  const r = runBlock({
+    ssmRc: 2,
+    ssmOut: "ELEVENLABS_API_KEY='el'\n",
+    ssmErr: MISSING_ERR,
+    kvOut: "",
+    env: { OPENAI_API_KEY: "" },
+  });
+  assert.match(r.stdout, /still MISSING after every store: .*OPENAI_API_KEY/);
+});
+
+// ─── rc=0 WITH TRUNCATED OUTPUT MUST NOT READ AS SUCCESS ────────────────────────────────────────
+
+const hydratedLine = (n) => `[fetch-secrets-aws] ${n} secret(s) hydrated from /otchealth (us-east-1).\n`;
+
+test("exit 0 whose payload arrived SHORT of the hydrator's own count is not a success", () => {
+  // The hydrator states on stderr how many lines it wrote; the shell counts how many arrived.
+  // A mismatch means the transfer lost data, and a payload that is provably not the one sent cannot
+  // be called complete whatever the exit code says.
+  const r = runBlock({
+    ssmRc: 0,
+    ssmOut: "OPENAI_API_KEY='sk'\nELEVENLABS_API_KEY='el'\n",
+    ssmErr: hydratedLine(5),
+    kvOut: "",
+  });
+  assert.ok(!/AWS SSM OK/.test(r.stdout), `a short payload must never print a success banner:\n${r.stdout}`);
+  assert.match(r.stdout, /AWS SSM TRUNCATED — the hydrator reported writing 5 secret\(s\) but only 2 arrived/);
+  assert.ok(!ALL_CLEAR.test(r.stdout), "a truncated read must not end in an all-clear");
+  assert.match(r.stdout, /Which secrets were lost is UNKNOWN/);
+  assert.ok(r.kvCalled, "a truncated primary read must still try the fallback");
+});
+
+test("exit 0 whose payload MATCHES the hydrator's count reads as success, and says so precisely", () => {
+  const r = runBlock({
+    ssmRc: 0,
+    ssmOut: "OPENAI_API_KEY='sk'\nELEVENLABS_API_KEY='el'\n",
+    ssmErr: hydratedLine(2),
+  });
+  assert.match(r.stdout, /AWS SSM OK — 2 secret\(s\) loaded; every REQUIRED secret resolved, and all 2 sent line\(s\) arrived intact/);
+  assert.equal(r.source, "aws-ssm");
+  assert.ok(!r.kvCalled);
+});
+
+test("an ABSENT count is reported as unverified, not invented as a mismatch", () => {
+  // Inventing a failure from a measurement that could not be taken is the mirror image of the bug
+  // being fixed. No count on stderr => the integrity check simply did not run.
+  const r = runBlock({ ssmRc: 0, ssmOut: "OPENAI_API_KEY='sk'\n", ssmErr: "" });
+  assert.match(r.stdout, /AWS SSM OK — 1 secret\(s\) loaded; every REQUIRED secret resolved\./);
+  assert.ok(!/arrived intact/.test(r.stdout), "an unmeasured transfer must not claim it was measured");
+  assert.ok(!/TRUNCATED/.test(r.stdout));
+});
+
+// ─── THE SUCCESS BANNER MUST NOT IMPLY A COMPLETENESS IT NEVER CHECKED ──────────────────────────
+
+test("the success banner scopes its claim to REQUIRED secrets and disclaims the rest", () => {
+  // Only 2 of the 98 entries in setup/secret-map.mjs are `required: true`, so exit 0 attests to 2
+  // secrets, not 98. SSM serving 3 of 98 exits 0 and, under the old wording ("N secrets loaded"),
+  // printed a clean banner and skipped the fallback -- a completeness the script never verified.
+  const r = runBlock({ ssmRc: 0, ssmOut: "OPENAI_API_KEY='sk'\nELEVENLABS_API_KEY='el'\nDEPOT_TOKEN='dp'\n" });
+  assert.match(r.stdout, /every REQUIRED secret resolved/, "the banner must say WHAT was verified");
+  assert.match(r.stdout, /not a completeness check/, "the banner must say what it does NOT verify");
+});
+
+test("an unrecognised exit code fails loudly and names the code", () => {
+  const r = runBlock({ ssmRc: 7, ssmOut: "", ssmErr: "[fetch-secrets-aws] something unexpected\n" });
+  assert.ok(!/AWS SSM OK/.test(r.stdout));
+  assert.match(r.stdout, /AWS SSM returned nothing \(exit 7\)/, "the operator needs the actual code to act on");
+  assert.ok(!ALL_CLEAR.test(r.stdout));
+  assert.ok(r.kvCalled);
+});
+
+test("NO input produces an all-clear as the final line without a verified, named gap closure", () => {
+  // The design rule, asserted directly over the whole state table rather than one branch at a time.
+  const cases = [
+    { name: "rc=2, unparseable stderr", o: { ssmRc: 2, ssmOut: "A='1'\n", ssmErr: "reformatted\n", kvOut: "" } },
+    { name: "rc=2, empty stderr", o: { ssmRc: 2, ssmOut: "A='1'\n", ssmErr: "", kvOut: "" } },
+    { name: "rc=2, named + vault dead", o: { ssmRc: 2, ssmOut: "A='1'\n", ssmErr: MISSING_ERR, kvOut: "" } },
+    { name: "rc=0, truncated", o: { ssmRc: 0, ssmOut: "A='1'\n", ssmErr: hydratedLine(9), kvOut: "" } },
+    { name: "rc=1, unreachable", o: { ssmRc: 1, ssmOut: "", ssmErr: "", kvOut: "" } },
+    { name: "rc=7, unknown code", o: { ssmRc: 7, ssmOut: "", ssmErr: "", kvOut: "" } },
+    { name: "rc=0, empty payload", o: { ssmRc: 0, ssmOut: "", ssmErr: "", kvOut: "" } },
+  ];
+  for (const c of cases) {
+    const r = runBlock(c.o);
+    assert.ok(!ALL_CLEAR.test(r.stdout), `${c.name} must not produce an all-clear anywhere:\n${r.stdout}`);
+  }
+  // And the one state that IS allowed to say it: a named gap the fallback demonstrably filled.
+  const covered = runBlock({
+    ssmRc: 2,
+    ssmOut: "ELEVENLABS_API_KEY='el'\n",
+    ssmErr: MISSING_ERR,
+    kvOut: "OPENAI_API_KEY='from-kv'\n",
+  });
+  assert.match(covered.stdout, /gap was covered: every REQUIRED secret named above \(OPENAI_API_KEY *\) is now present/);
 });
