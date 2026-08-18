@@ -38,6 +38,14 @@ import { pathToFileURL } from "node:url";
 import { tokenize, jaccard } from "./dedupe.mjs";
 import { kvSecret } from "./azure-secret.mjs";
 import * as OS from "./opensearch-write.mjs";
+import { parseNdjson } from "./blobwrite.mjs";
+import { getTextFromS3, listBlobsFromS3 } from "./s3-blob.mjs";
+// Same BLOB_BACKEND convention as mem.mjs (see that file's header comment for the full rationale):
+// every account this reads from is write-blocked on Azure as of 2026-08-18, and the shared exec feed
+// specifically has almost no S3 history yet, so reads MERGE S3 (authoritative) with best-effort
+// Azure (still readable, carries the deep history) rather than hard-switching either way.
+const BLOB_BACKEND = (process.env.BLOB_BACKEND || "s3").toLowerCase();
+const S3_READS = BLOB_BACKEND !== "azure";
 const SM = "otchealth-shared-prod";
 export const IDX = "memory-exec";
 const AIS_API = "2023-11-01";
@@ -196,19 +204,71 @@ async function aisDelete(ids) {
 // read every shared exec-feed file. Exported so other kb-memory tooling (e.g. contradiction-scan.mjs)
 // reuses the SAME Blob-listing + credential-resolution logic instead of duplicating it; behavior is
 // unchanged for the existing internal caller (reindex()).
+//
+// FIXED (2026-08-18), same defect mem.mjs's cList() had: `list()`'s `if (!r.ok) break` returned
+// whatever had accumulated so far (empty, on a first-page failure) as a normal successful listing —
+// so a 403/network blip read as "no agent has shared anything" instead of an error, silently
+// emptying whatever this feeds (contradiction-scan's retraction set, the nightly reindex). Fixed the
+// same way otchealth-mcp-server's own copy of this bug was fixed: throw on anything but a genuine
+// "container not found" 404. Also added the S3 merge leg (see mem.mjs's BLOB_BACKEND comment for the
+// full why): S3 is authoritative for anything written since 2026-08-18, Azure best-effort for the
+// deep history that predates the mirror.
+async function listAzureExecFiles(acct, container, sas, prefix) {
+  const out = []; let m = "";
+  do {
+    let u = `https://${acct}.blob.core.windows.net/${container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${sas}`;
+    if (m) u += `&marker=${encodeURIComponent(m)}`;
+    const r = await fetch(u);
+    if (r.status === 404) break;
+    if (!r.ok) throw new Error(`readExecFeed: list ${r.status} (refusing to report an empty shared feed as success): ${(await r.text()).slice(0, 160)}`);
+    const xml = await r.text();
+    for (const mm of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(mm[1]);
+    m = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || "";
+  } while (m);
+  return out;
+}
 export async function readExecFeed() {
   const acct = (await sm("azure-commons-storage-account")) || "otchealthcommons";
   const key = await sm("azure-commons-storage-key");
   const container = "company-journal";
-  const sas = buildSas(acct, key);
-  const list = async (prefix) => { const out = []; let m = ""; do { let u = `https://${acct}.blob.core.windows.net/${container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${sas}`; if (m) u += `&marker=${encodeURIComponent(m)}`; const r = await fetch(u); if (!r.ok) break; const xml = await r.text(); for (const mm of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(mm[1]); m = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (m); return out; };
-  const files = (await list("_MEMORY/_exec/")).filter(f => f.endsWith(".jsonl"));
+  const sas = key ? buildSas(acct, key) : null;
+  const azureGet = async (f) => {
+    if (!sas) return null;
+    try { const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${encPath(f)}?${sas}`); return r.ok ? await r.text() : null; }
+    catch { return null; }
+  };
+
+  let files;
+  if (S3_READS) {
+    const s3Files = await listBlobsFromS3(acct, container, "_MEMORY/_exec/"); // authoritative; throws loud on a real S3 failure
+    let azFiles = [];
+    if (sas) { try { azFiles = await listAzureExecFiles(acct, container, sas, "_MEMORY/_exec/"); } catch { azFiles = []; } } // best-effort merge leg
+    files = [...new Set([...s3Files, ...azFiles])];
+  } else {
+    files = await listAzureExecFiles(acct, container, sas, "_MEMORY/_exec/");
+  }
+  files = files.filter((f) => f.endsWith(".jsonl"));
+
   const entries = [];
   for (const f of files) {
     const agent = f.split("/").pop().replace(/\.jsonl$/, "");
-    const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${encPath(f)}?${sas}`);
-    if (!r.ok) continue;
-    for (const line of (await r.text()).split("\n")) { const s = line.trim(); if (!s) continue; try { const e = JSON.parse(s); e._agent = agent; entries.push(e); } catch {} }
+    let text;
+    if (S3_READS) {
+      const s3Text = await getTextFromS3(acct, container, f); // authoritative; throws loud on a real S3 failure
+      const azText = await azureGet(f);
+      if (!azText) { text = s3Text; }
+      else if (!s3Text) { text = azText; }
+      else {
+        const byId = new Map();
+        for (const r of parseNdjson(azText)) if (r && r.id) byId.set(r.id, r);
+        for (const r of parseNdjson(s3Text)) if (r && r.id) byId.set(r.id, r); // S3 wins a same-id collision
+        text = [...byId.values()].sort((a, b) => (a.id || "").localeCompare(b.id || "")).map((r) => JSON.stringify(r)).join("\n") + "\n";
+      }
+    } else {
+      text = await azureGet(f);
+    }
+    if (!text) continue;
+    for (const line of text.split("\n")) { const s = line.trim(); if (!s) continue; try { const e = JSON.parse(s); e._agent = agent; entries.push(e); } catch {} }
   }
   return entries;
 }
