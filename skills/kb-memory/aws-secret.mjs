@@ -73,6 +73,35 @@ async function awsCreds() {
       };
     }
   }
+  // OTC_-PREFIXED FALLBACK (2026-08-18, the Azure-loss recovery).
+  //
+  // WHY A SECOND PAIR OF NAMES EXISTS AT ALL. The agent sandbox injects its own placeholder into
+  // AWS_ACCESS_KEY_ID (verified live: 14 characters, prefix "prox"), which the guard above correctly
+  // refuses. That refusal is right -- signing with a placeholder yields a 403 that reads like a
+  // permissions problem rather than "no credentials" -- but it also means an operator CANNOT reliably
+  // hand this seat a real AWS credential through the standard variable: whether the operator's value
+  // or the proxy's placeholder wins depends on injection order, which is not ours to control and not
+  // something to guess about.
+  //
+  // That became load-bearing on 2026-08-18, when Azure went away permanently and took with it the
+  // only path this seat had to AWS: aws-bootstrap.mjs resolves the AWS keys FROM Azure Key Vault, so
+  // the fallback died together with the thing it was meant to fall back from. Every agent session was
+  // left unable to read the 444-secret SSM store that was sitting there working the whole time.
+  //
+  // OTC_AWS_* is a name the proxy has no reason to touch, so an operator-set value survives
+  // deterministically. Checked AFTER the standard names, so it changes nothing on ECS (task role wins)
+  // or on any seat where the ordinary variables already hold a real key -- it can only ADD a path
+  // where there was none. The same "prox" guard applies, so a placeholder cannot sneak in through the
+  // new door either.
+  if (process.env.OTC_AWS_ACCESS_KEY_ID && process.env.OTC_AWS_SECRET_ACCESS_KEY) {
+    if (!/^prox/i.test(process.env.OTC_AWS_ACCESS_KEY_ID)) {
+      return {
+        ak: process.env.OTC_AWS_ACCESS_KEY_ID,
+        sk: process.env.OTC_AWS_SECRET_ACCESS_KEY,
+        st: process.env.OTC_AWS_SESSION_TOKEN || null,
+      };
+    }
+  }
   return null;
 }
 
