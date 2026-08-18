@@ -321,65 +321,60 @@ test("the script never calls process.exit(), which is what discards queued stdou
   assert.deepEqual(calls, [], `process.exit() discards queued pipe writes; use process.exitCode:\n${calls.join("\n")}`);
 });
 
-// ─── THE CROSS-FILE CONTRACT: REAL stderr parsed by the REAL sed ────────────────────────────────
+// ─── THE CROSS-FILE CONTRACT: REAL JSON written by THIS script, read by the REAL reader ─────────
 //
-// session-start.sh recovers the missing env NAMES by running a sed against this script's stderr.
-// Until now each side was only ever tested against a PRIVATE COPY of the other: this file asserted
-// its own message format, and tests/session-start-hydration.test.mjs fed the shell a hand-written
-// string shaped like that format. Nothing ever ran one against the other, so a wording change on
-// either side would have passed both suites while silently emptying the list at runtime -- and an
-// empty list is exactly the input that produced the false all-clear this round is fixing.
-test("session-start.sh's REAL sed extracts the env name from this script's REAL stderr", async () => {
-  const { stderr, code } = await run({
-    listed: ["elevenlabs-api-key"],
-    values: { "elevenlabs-api-key": "el-test" }, // openai-api-key absent => a real MISSING line
-  });
-  assert.equal(code, 2, "precondition: this run must actually produce a missing-required diagnostic");
-
-  // Pull the parsing line out of the SHIPPED shell rather than restating it, so the test cannot
-  // drift from what runs.
-  const sh = readFileSync(join(ROOT, "setup", "session-start.sh"), "utf8");
-  // The PARSING line specifically: `SSM_MISSING_ENVS=""` also exists as the initialiser, and
-  // grabbing that one would make this test pass while parsing nothing -- the very failure shape it
-  // is here to catch. (It did, on the first run of this test.)
-  const sedLines = sh.split("\n").filter((l) => l.trim().startsWith("SSM_MISSING_ENVS=") && l.includes("sed "));
-  assert.equal(sedLines.length, 1, `expected exactly one SSM_MISSING_ENVS sed line, found ${sedLines.length}`);
-  const sedLine = sedLines[0];
-
-  const dir = mkdtempSync(join(tmpdir(), "sed-contract-"));
-  const errFile = join(dir, "ssm-err");
-  writeFileSync(errFile, stderr);
-  const { stdout: parsed } = await execFileP("bash", [
-    "-c",
-    `set -u\nSSM_ERR=${JSON.stringify(errFile)}\n${sedLine}\nprintf '%s' "$SSM_MISSING_ENVS"`,
-  ]);
-
-  assert.match(
-    parsed,
-    /\bOPENAI_API_KEY\b/,
-    `the shipped sed did not recover the env name from the shipped stderr.\nstderr was:\n${stderr}\nparsed: "${parsed}"`,
+// Superseded 2026-08-18: session-start.sh used to recover the missing env NAMES and the hydrated
+// COUNT by running sed against this script's stderr, and until that round each side was only ever
+// tested against a PRIVATE COPY of the other -- this file asserted its own message format,
+// tests/session-start-hydration.test.mjs fed the shell a hand-written string shaped like it, and
+// nothing ever ran one against the other. A wording change on either side could pass both suites
+// while silently emptying the list at runtime, which is exactly the shape of bug that round fixed
+// three separate times. The redesign removes the prose contract itself: this script now writes a
+// JSON FLEET_HYDRATION_RESULT_FILE (setup/hydration-result.mjs), and session-start.sh reads it via
+// setup/hydration-report.mjs, never via sed. The cross-file contract this test now pins is
+// therefore "the REAL writer and the REAL reader agree on the schema" -- proven by running both,
+// not by comparing each side's private description of it.
+test("the REAL result file this script writes is read back correctly by the REAL hydration-result reader", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "hydration-contract-"));
+  const resultFile = join(dir, "result.json");
+  const { stdout, code } = await run(
+    {
+      listed: ["elevenlabs-api-key"],
+      values: { "elevenlabs-api-key": "el-test" }, // openai-api-key absent => a real MISSING entry
+    },
+    { FLEET_HYDRATION_RESULT_FILE: resultFile },
   );
+  assert.equal(code, 2, "precondition: this run must actually produce a missing-required secret");
+
+  const { readHydrationResult, statusOf } = await import("../setup/hydration-result.mjs");
+  const result = readHydrationResult(resultFile);
+  assert.notEqual(result, null, "the REAL reader must accept the REAL file this script wrote -- a schema drift here is exactly the cross-file contract failure this test exists to catch");
+  assert.equal(statusOf(result), "partial");
+  assert.deepEqual(
+    result.requiredMissing.map((m) => m.env).sort(),
+    ["OPENAI_API_KEY"],
+    "the missing entry's env name must be usable directly, with no further parsing",
+  );
+  assert.equal(result.store, "aws-ssm");
+  assert.equal(result.emittedCount, 1);
+
+  // And the transport-layer half of the same contract: the count this script CLAIMED it emitted
+  // must match what actually arrived on stdout, verified with the REAL counter session-start.sh's
+  // reporter uses -- not a re-implementation of it.
+  const { countAssignmentLines } = await import("../setup/hydration-report.mjs");
+  assert.equal(countAssignmentLines(stdout), result.emittedCount);
 });
 
-test("session-start.sh's REAL sed reads back the hydrated COUNT this script reports", async () => {
-  // The second half of the same contract: the shell compares that number against the lines it
-  // received, which is how a truncated transfer is caught. If either side reworded, the shell would
-  // read an empty count, skip the comparison, and be back to trusting a number it never checked.
-  const { stderr } = await run({
-    listed: ["openai-api-key", "elevenlabs-api-key"],
-    values: { "openai-api-key": "sk", "elevenlabs-api-key": "el" },
-  });
-  const sh = readFileSync(join(ROOT, "setup", "session-start.sh"), "utf8");
-  const claimLines = sh.split("\n").filter((l) => l.trim().startsWith("ssm_claimed=") && l.includes("sed "));
-  assert.equal(claimLines.length, 1, `expected exactly one ssm_claimed sed line, found ${claimLines.length}`);
-  const line = claimLines[0];
+test("an unreachable store (no credentials) is written as reachable:false, with every required id listed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "hydration-contract-unreachable-"));
+  const resultFile = join(dir, "result.json");
+  const { code } = await run({}, { FLEET_HYDRATION_RESULT_FILE: resultFile, AWS_ACCESS_KEY_ID: "", AWS_SECRET_ACCESS_KEY: "" });
+  assert.equal(code, 1);
 
-  const dir = mkdtempSync(join(tmpdir(), "sed-count-"));
-  const errFile = join(dir, "ssm-err");
-  writeFileSync(errFile, stderr);
-  const { stdout: parsed } = await execFileP("bash", [
-    "-c",
-    `set -u\nSSM_ERR=${JSON.stringify(errFile)}\n${line}\nprintf '%s' "$ssm_claimed"`,
-  ]);
-  assert.equal(parsed, "2", `the shipped sed did not recover the count from the shipped stderr:\n${stderr}`);
+  const { readHydrationResult } = await import("../setup/hydration-result.mjs");
+  const result = readHydrationResult(resultFile);
+  assert.notEqual(result, null);
+  assert.equal(result.reachable, false);
+  const requiredEnvs = MAP.filter((m) => m.required).map((m) => m.env).sort();
+  assert.deepEqual(result.requiredMissing.map((m) => m.env).sort(), requiredEnvs);
 });

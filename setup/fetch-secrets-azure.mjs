@@ -13,11 +13,24 @@
 //   AZURE_KEYVAULT_NAME    vault name (default kv-otc-55c84f6bef)
 //
 // Output: KEY=value lines on stdout for session-start.sh to fold into credentials.env.
+//
+// SAME TREATMENT AS THE AWS HYDRATOR (fixed 2026-08-18). This arm used to be visibly weaker: it
+// called process.exit() directly (the exact stdout-pipe-truncation hazard the AWS hydrator's
+// header documents and fixes), and session-start.sh invoked it as `... 2>/dev/null || true`,
+// discarding both its diagnostics and its exit code and never checking for a missing required
+// secret at all. Demoted-to-fallback is not a reason to verify less: this arm now uses the same
+// exitCode-not-exit() pattern and writes the same structured FLEET_HYDRATION_RESULT_FILE record
+// (setup/hydration-result.mjs) the AWS hydrator does, so session-start.sh's report
+// (setup/hydration-report.mjs) treats both arms identically instead of trusting one and merely
+// hoping about the other.
+
+import { writeHydrationResult } from './hydration-result.mjs';
 
 const VAULT  = process.env.AZURE_KEYVAULT_NAME || 'kv-otc-55c84f6bef';
 const TENANT = process.env.AZURE_SP_TENANT_ID;
 const CID    = process.env.AZURE_SP_CLIENT_ID;
 const CSEC   = process.env.AZURE_SP_CLIENT_SECRET;
+const RESULT_FILE = process.env.FLEET_HYDRATION_RESULT_FILE || '';
 
 // secret name in Key Vault  ->  env var name  ->  required?  (1:1 with GCP SM ids)
 const MAP = [
@@ -193,10 +206,8 @@ const MAP = [
   // credentials.env). Use setup/get-secret.mjs <id> <outfile> to materialize one.
 ];
 
-if (!TENANT || !CID || !CSEC) {
-  console.error('[fetch-secrets-azure] AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID not all set — cannot fetch.');
-  process.exit(1);
-}
+const REQUIRED_TOTAL = MAP.filter((m) => m.required).length;
+const allRequired = () => MAP.filter((m) => m.required).map((m) => ({ id: m.id, env: m.env }));
 
 async function getAccessToken() {
   const res = await fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
@@ -223,21 +234,76 @@ async function accessSecret(token, name) {
   return (j.value || '').trim();
 }
 
-let token;
-try { token = await getAccessToken(); }
-catch (e) { console.error(`[fetch-secrets-azure] auth failed: ${e.message}`); process.exit(1); }
-
-let hadRequiredMiss = false;
-for (const { id, env, required } of MAP) {
-  let val = null;
-  try { val = await accessSecret(token, id); }
-  catch (e) { console.error(`[fetch-secrets-azure] ${id}: ${e.message}`); }
-  if (val) {
-    const safe = `'${val.replace(/'/g, "'\\''")}'`;
-    process.stdout.write(`${env}=${safe}\n`);
-  } else if (required) {
-    console.error(`[fetch-secrets-azure] MISSING required secret '${id}' in vault ${VAULT}.`);
-    hadRequiredMiss = true;
+// NEVER call process.exit() IN THIS FILE (same rule, same reason, as fetch-secrets-aws.mjs): stdout
+// here is a PIPE (session-start.sh runs `KV_FETCHED="$(node fetch-secrets-azure.mjs ...)"`), and
+// Node writes to a pipe asynchronously. process.exit() tears the process down immediately and
+// discards whatever is still queued, so the exit code would say "complete" about output that is
+// not. Set process.exitCode and return instead; the work lives in main() so an early failure can
+// `return` rather than reach for process.exit().
+async function main() {
+  if (!TENANT || !CID || !CSEC) {
+    console.error('[fetch-secrets-azure] AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID not all set — cannot fetch.');
+    writeHydrationResult(RESULT_FILE, {
+      store: 'azure-keyvault',
+      reachable: false,
+      emittedCount: 0,
+      requiredTotal: REQUIRED_TOTAL,
+      requiredMissing: allRequired(),
+    });
+    process.exitCode = 1;
+    return;
   }
+
+  let token;
+  try {
+    token = await getAccessToken();
+  } catch (e) {
+    console.error(`[fetch-secrets-azure] auth failed: ${e.message}`);
+    writeHydrationResult(RESULT_FILE, {
+      store: 'azure-keyvault',
+      reachable: false,
+      emittedCount: 0,
+      requiredTotal: REQUIRED_TOTAL,
+      requiredMissing: allRequired(),
+    });
+    process.exitCode = 1;
+    return;
+  }
+
+  let hadRequiredMiss = false;
+  let emitted = 0;
+  // Same discipline as the AWS hydrator: these are the SAME {id, env} pairs MAP already holds,
+  // never text re-derived from the console.error() sentence below.
+  const requiredMissing = [];
+  for (const { id, env, required } of MAP) {
+    let val = null;
+    try {
+      val = await accessSecret(token, id);
+    } catch (e) {
+      console.error(`[fetch-secrets-azure] ${id}: ${e.message}`);
+    }
+    if (val) {
+      const safe = `'${val.replace(/'/g, "'\\''")}'`;
+      process.stdout.write(`${env}=${safe}\n`);
+      emitted += 1;
+    } else if (required) {
+      console.error(`[fetch-secrets-azure] MISSING required secret '${id}' in vault ${VAULT}.`);
+      requiredMissing.push({ id, env });
+      hadRequiredMiss = true;
+    }
+  }
+
+  console.error(`[fetch-secrets-azure] ${emitted} secret(s) hydrated from ${VAULT}.`);
+
+  writeHydrationResult(RESULT_FILE, {
+    store: 'azure-keyvault',
+    reachable: true,
+    emittedCount: emitted,
+    requiredTotal: REQUIRED_TOTAL,
+    requiredMissing,
+  });
+
+  process.exitCode = hadRequiredMiss ? 2 : 0;
 }
-process.exit(hadRequiredMiss ? 2 : 0);
+
+await main();

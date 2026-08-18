@@ -26,6 +26,22 @@
 // less dangerous than one wrong in the passing direction, but it is still a guard reporting
 // something it did not check. So the guard now performs the smallest real write it can -- put one
 // synthetic throwaway parameter, then delete it -- and skips only if that write is refused.
+//
+// THE WRITE PROBE IS NOW OPT-IN, NOT UNCONDITIONAL (fixed 2026-08-18, same day). ssmWritable() ran
+// at MODULE LOAD TIME -- a top-level `await`, before any individual test even started -- so every
+// ordinary `run-tests.sh` / `node --test` sweep paid for a REAL network round trip (a PutParameter,
+// then a DeleteParameter) against live AWS SSM regardless of whether anyone asked for a live
+// verification. Measured: this was the single cause of the toolkit suite going from ~35s to ~113s
+// (3.25x), not the ~3% a prior pass reported -- a network call that is merely SLOW in one
+// environment (a sandboxed proxy that does not fast-fail an unreachable host) can be arbitrarily
+// slow in another, and "arbitrarily slow" run on every single unit-test invocation is the wrong
+// shape no matter the actual number. A round-trip write test against a REAL external store is
+// legitimate and worth keeping, but it belongs behind an explicit opt-in, the same way
+// RUN_BROWSER_TESTS gates the heavier browser-agent selftest in run-tests.sh -- never a default
+// cost every contributor and every CI run pays on every pass. Set LIVE_SECRET_ROUNDTRIP=1 to run
+// the real probe and, if it succeeds, the real round-trip test. Unset (the default), the probe
+// itself never touches the network, and the test reports a clear, honest skip explaining how to
+// opt in -- it must never look like the write was attempted and failed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -68,6 +84,16 @@ async function ssmWritable() {
   return ok;
 }
 
+// OPT-IN, NOT UNCONDITIONAL (fixed 2026-08-18): the real network probe below (a PutParameter, then
+// a DeleteParameter against live AWS SSM) used to run at MODULE LOAD TIME on every single
+// `node --test`/run-tests.sh pass -- see this file's header for the measured 3.25x suite-duration
+// regression that caused. `LIVE_SECRET_ROUNDTRIP=1` is the explicit request for a real live
+// verification; unset (the default, including CI and every ordinary local run), the probe function
+// is never even called, so this file makes ZERO network calls and the round-trip test reports a
+// clear, correctly-worded skip explaining that it was never attempted -- never one that reads as
+// "the store refused the write", which would be a false claim about a check that did not run.
+const LIVE = process.env.LIVE_SECRET_ROUNDTRIP === '1';
+
 // Write capability of the store the write path will actually use -- not of whichever store happened
 // to be primary when this file was written, and not merely whether credentials exist.
 // NOTE, stated rather than hidden: the Key Vault arm is still a PRESENCE check (vaultToken()), not
@@ -76,16 +102,26 @@ async function ssmWritable() {
 // today, and minting a real write against a dead vault would prove nothing. If Key Vault ever comes
 // back as primary, this arm needs the same probe treatment.
 const ACTIVE_STORE_WRITABLE =
-  BACKEND === 'ssm' ? await ssmWritable() : (await vaultToken()) !== null;
+  LIVE && (BACKEND === 'ssm' ? await ssmWritable() : (await vaultToken()) !== null);
 
 test('set-secret.mjs -> get-secret.mjs round-trip: a written value reads back byte-identical', async (t) => {
+  if (!LIVE) {
+    t.skip(
+      `LIVE_SECRET_ROUNDTRIP is not set, so this test never attempted a network call (the default, ` +
+        `and the fast path every ordinary run-tests.sh / node --test pass takes). Set ` +
+        `LIVE_SECRET_ROUNDTRIP=1 to actually probe SECRET_BACKEND=${BACKEND} and, if it accepts a ` +
+        `write, run the real round trip against it.`,
+    );
+    return;
+  }
   if (!ACTIVE_STORE_WRITABLE) {
     t.skip(
-      `SECRET_BACKEND=${BACKEND} but that store did not accept a write from this seat, so there is nothing ` +
-        `to round-trip against. For SSM: a task role, or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY with ` +
-        `ssm:PutParameter + ssm:GetParameter + ssm:DeleteParameter on ${process.env.AWS_SSM_PREFIX || '/otchealth'}/*. ` +
-        `For Key Vault: any credential vaultToken() accepts. This skips ONLY when genuinely unrunnable; ` +
-        `it must not skip on a working configuration.`,
+      `LIVE_SECRET_ROUNDTRIP=1 was set, but SECRET_BACKEND=${BACKEND} did not accept a write from this ` +
+        `seat, so there is nothing to round-trip against. For SSM: a task role, or ` +
+        `AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY with ssm:PutParameter + ssm:GetParameter + ` +
+        `ssm:DeleteParameter on ${process.env.AWS_SSM_PREFIX || '/otchealth'}/*. For Key Vault: any ` +
+        `credential vaultToken() accepts. This skips ONLY when genuinely unrunnable; it must not ` +
+        `skip on a working configuration.`,
     );
     return;
   }
@@ -149,5 +185,24 @@ test('the skip guard tracks the ACTIVE store, not a hardcoded Azure credential',
   assert.ok(
     /ACTIVE_STORE_WRITABLE[\s\S]*ssmWritable\(\)/.test(code),
     'the gate the test reads must be the write probe',
+  );
+});
+
+test('REGRESSION GUARD: the real network probe stays opt-in, never unconditional at module load', () => {
+  // Direct guard against the exact regression this round fixed: ssmWritable() (a real
+  // PutParameter+DeleteParameter round trip) running unconditionally at top-level await cost every
+  // ordinary test run a live network call and 3.25x'd the whole toolkit suite's duration. Anyone
+  // deleting the LIVE_SECRET_ROUNDTRIP gate to "simplify" this file must fail here, loudly, rather
+  // than the suite silently getting slow again with no test pointing at why.
+  const src = execFileSync('cat', [join(ROOT, 'tests', 'set-secret-roundtrip.test.mjs')], { encoding: 'utf8' });
+  const code = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  assert.match(code, /LIVE_SECRET_ROUNDTRIP/, 'the opt-in env gate must exist in source');
+  // The gate must actually SHORT-CIRCUIT ssmWritable() -- `LIVE &&` before the call, not merely
+  // present somewhere in the file. `&&` short-circuits in JS, so when LIVE is false the right side
+  // (the network call) is never evaluated at all.
+  assert.match(
+    code,
+    /LIVE\s*&&\s*\(BACKEND\s*===\s*'ssm'\s*\?\s*await ssmWritable\(\)/,
+    'LIVE must short-circuit the write probe, not merely be read afterward',
   );
 });

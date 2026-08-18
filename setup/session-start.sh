@@ -307,6 +307,46 @@ export SECRET_BACKEND
 export SEARCH_BACKEND="${SEARCH_BACKEND:-opensearch}"
 export EMBEDDINGS_PROVIDER="${EMBEDDINGS_PROVIDER:-openai}"
 
+# ─── STRUCTURAL REDESIGN (2026-08-18, round 4) ──────────────────────
+# Three prior rounds each fixed one shape of "a failure reported as a plausible success" in THIS
+# block, and each fix was bash re-parsing a hydrator's human-readable log line (sed against
+# stderr, `-z` on the result, unquoted word-splitting over it). All three share one root cause:
+# prose has no schema, so an empty capture and an absent one print identically, and a shell test
+# built for "is this string empty" cannot tell the difference either. A fourth instance of the same
+# shape was found and closed the same way the first three were (see setup/hydration-result.mjs's
+# header for the exact reproduction).
+#
+# The fix this round is not a fifth patch to the parsing -- it is removing the parsing. Each
+# hydrator now writes a MACHINE-READABLE result (a JSON file, via FLEET_HYDRATION_RESULT_FILE) that
+# already holds the exact typed facts this block used to reconstruct from a sentence: is the store
+# reachable, how many secrets arrived, and the precise {id, env} of every required secret that did
+# not resolve. setup/hydration-report.mjs (a) decides whether the fallback is even worth attempting
+# (`gate` mode) using the SAME verdict logic for both arms, and (b) renders the final honesty
+# banner (`report` mode) from BOTH arms' structured results plus this session's own environment
+# (for the store-truth-vs-session-truth distinction). This shell script's job shrinks to: run the
+# hydrators, capture their raw stdout, and hand both to hydration-report.mjs -- it makes no
+# completeness decision of its own, so it has nothing left to get wrong the way the last three
+# rounds did.
+#
+# mk_tmp gives every one of these a non-empty path even if mktemp itself fails (mirrors the
+# guarded pattern the diagnostics file below already used): a failed temp-file allocation must
+# degrade the hydration's OWN diagnostics, never abort session startup.
+mk_tmp() {
+  local f
+  f="$(mktemp 2>/dev/null)" || f=""
+  [ -n "$f" ] || f="${TMPDIR:-/tmp}/octools-$1.$$"
+  printf '%s' "$f"
+}
+
+HR_SSM_ATTEMPTED=0
+SSM_RESULT_FILE="$(mk_tmp ssm-result)"
+SSM_FETCHED_FILE="$(mk_tmp ssm-fetched)"
+: > "$SSM_FETCHED_FILE"
+HR_KV_ATTEMPTED=0
+KV_RESULT_FILE="$(mk_tmp kv-result)"
+KV_FETCHED_FILE="$(mk_tmp kv-fetched)"
+: > "$KV_FETCHED_FILE"
+
 # ─── PRIMARY: pull fleet secrets from AWS SSM Parameter Store ───────
 # Azure subscription 55c84f6b is permanently gone, so the Key Vault block below cannot return
 # anything and, being the only hydration path, left credentials.env empty at every session start.
@@ -315,27 +355,15 @@ export EMBEDDINGS_PROVIDER="${EMBEDDINGS_PROVIDER:-openai}"
 # Same 3-attempt retry as the Azure path, for the same reason: on a fresh container the task-role
 # credential endpoint can lag this hook's first pass, and one bad beat would otherwise blank the
 # whole session's credentials silently.
-#
-# THE HYDRATOR'S EXIT CODE IS THE ANSWER; $FETCHED IS NOT (bug fixed 2026-08-18). This block used to
-# decide it had succeeded from `[ -n "$FETCHED" ]` alone. fetch-secrets-aws.mjs exits 2 when a
-# `required: true` secret (openai-api-key, elevenlabs-api-key) is absent from the store while STILL
-# emitting every other secret it did resolve -- so a run that lost a required credential printed
-# "AWS SSM OK — 2 secrets loaded" and moved on. Reproduced exactly. Only rc=1 was ever
-# distinguished; rc=2 was invisible. Worse, the Key Vault fallback below was gated on an EMPTY
-# $FETCHED, so the one path that could have covered the missing secret was skipped precisely
-# because a partial answer had arrived. A failure was returned as a plausible value, twice over.
-SSM_PARTIAL=0
-SSM_MISSING_ENVS=""
-SSM_TRUNCATED=0
 if [ "$SECRET_BACKEND" = "ssm" ]; then
+  HR_SSM_ATTEMPTED=1
   ssm_rc=0
   # A redirect target that is guaranteed non-empty: `2>""` from a failed mktemp would break the
   # fetch itself, which is a worse failure than losing the diagnostics we are here to preserve.
-  SSM_ERR="$(mktemp 2>/dev/null)" || SSM_ERR=""
-  [ -n "$SSM_ERR" ] || SSM_ERR="${TMPDIR:-/tmp}/octools-ssm-err.$$"
+  SSM_ERR="$(mk_tmp ssm-err)"
   for attempt in 1 2 3; do
     echo "[octools] Fetching secrets from AWS SSM (${AWS_SSM_PREFIX:-/otchealth}, ${AWS_REGION:-us-east-1}), attempt $attempt/3..."
-    FETCHED="$(node "${TOOLS_DIR}/setup/fetch-secrets-aws.mjs" 2>"$SSM_ERR")" && ssm_rc=0 || ssm_rc=$?
+    FETCHED="$(FLEET_HYDRATION_RESULT_FILE="$SSM_RESULT_FILE" node "${TOOLS_DIR}/setup/fetch-secrets-aws.mjs" 2>"$SSM_ERR")" && ssm_rc=0 || ssm_rc=$?
     # 0 = everything resolved. 1 = no resolvable AWS credentials on this seat. 2 = the store
     # answered but a required secret is not in it. All three are DETERMINISTIC -- a retry cannot
     # change any of them, it only adds dead sleep and delays the Azure fallback by the same. Retry
@@ -344,55 +372,17 @@ if [ "$SECRET_BACKEND" = "ssm" ]; then
     [ "$attempt" -lt 3 ] && sleep 2
   done
 
-  # STOP DISCARDING STDERR. The hydrator names each missing required secret, and that one line was
-  # going to /dev/null -- the operator was told a number of secrets loaded and never which one was
-  # gone. Echo the diagnostics through, and keep the env names so the post-fallback check below can
-  # say whether the gap was actually closed. (The id -> env mapping comes from the hydrator, which
-  # owns secret-map.mjs; bash never learns it.)
+  # Diagnostics for a human tailing the log. Formatting only (a fixed prefix on every line) -- no
+  # field is ever extracted from this text; every decision below reads SSM_RESULT_FILE instead.
   [ -s "$SSM_ERR" ] && sed 's/^/[octools]   /' "$SSM_ERR"
-  SSM_MISSING_ENVS="$(sed -n "s/.*MISSING required secret '[^']*' (env \([A-Z0-9_]*\)).*/\1/p" "$SSM_ERR" | tr '\n' ' ')"
-  # THE HYDRATOR SAYS HOW MANY LINES IT WROTE; WE COUNT HOW MANY ARRIVED. stdout is a pipe carrying
-  # the large payload, stderr is one short line -- so comparing the two is an end-to-end integrity
-  # check on the transfer, independent of any single cause. It exists because a process.exit() in
-  # the hydrator used to discard queued stdout while still exiting 0 (measured: 1000 lines in, 35-47
-  # out, exit 0, silent). That specific bug is fixed in fetch-secrets-aws.mjs, but "rc=0 with
-  # truncated output must not read as success" has to be enforced HERE too, or the shell is once
-  # again trusting a number it never checked.
-  ssm_claimed="$(sed -n 's/^\[fetch-secrets-aws\] \([0-9][0-9]*\) secret(s) hydrated .*/\1/p' "$SSM_ERR" | tail -1)"
   rm -f "$SSM_ERR"
 
-  ssm_n="$(printf '%s' "$FETCHED" | grep -c '=' || true)"
-  # An ABSENT claim is not a mismatch: it means the check could not run (stderr lost, older
-  # hydrator), and inventing a failure from a missing measurement is its own dishonesty. It is
-  # reported as unverified in the banner instead.
-  if [ -n "$ssm_claimed" ] && [ "$ssm_claimed" != "$ssm_n" ]; then SSM_TRUNCATED=1; fi
+  # The exact bytes this hydrator wrote to stdout, captured BEFORE any Key Vault merge, so
+  # hydration-report.mjs's truncation check compares this arm's own claim to this arm's own
+  # delivery -- never to a combined total that could hide which store actually lost data.
+  printf '%s' "$FETCHED" > "$SSM_FETCHED_FILE"
 
-  if [ "$SSM_TRUNCATED" = "1" ]; then
-    # Deliberately NOT an "OK" of any kind, whatever the exit code was: the payload we hold is
-    # provably not the payload that was sent, so nothing about it can be called complete. Keep what
-    # did arrive (those lines are real), name the shortfall, and let the fallback try to help.
-    [ -n "$FETCHED" ] && SECRET_SOURCE="aws-ssm(truncated)"
-    echo "[octools] AWS SSM TRUNCATED — the hydrator reported writing ${ssm_claimed} secret(s) but only ${ssm_n} arrived (exit ${ssm_rc})."
-    echo "[octools]   The output was cut in transit. This is NOT a healthy hydration; trying Azure Key Vault for the remainder."
-  elif [ "$ssm_rc" = "0" ] && [ -n "$FETCHED" ]; then
-    SECRET_SOURCE="aws-ssm"
-    # SAY ONLY WHAT WAS VERIFIED. exit 0 means every secret marked `required: true` in
-    # setup/secret-map.mjs resolved -- that is 2 of the 98 mapped ids today. It is NOT a statement
-    # that all 98 arrived, and the old wording ("N secrets loaded", full stop) invited exactly that
-    # reading: SSM serving 3 of 98 printed a clean banner and skipped the fallback entirely.
-    echo "[octools] AWS SSM OK — ${ssm_n} secret(s) loaded; every REQUIRED secret resolved${ssm_claimed:+, and all ${ssm_claimed} sent line(s) arrived intact}."
-    echo "[octools]   (Optional secrets are not verified: this is a count of what arrived, not a completeness check.)"
-  elif [ "$ssm_rc" = "2" ]; then
-    # PARTIAL is its own outcome and is reported as neither success nor total failure. The secrets
-    # that did arrive are real and worth keeping, so $FETCHED is retained; the missing ones are
-    # named, and SSM_PARTIAL re-opens the Key Vault fallback below so it can try to cover them.
-    SSM_PARTIAL=1
-    [ -n "$FETCHED" ] && SECRET_SOURCE="aws-ssm(partial)"
-    echo "[octools] AWS SSM PARTIAL — ${ssm_n} secret(s) loaded, but REQUIRED secret(s) MISSING from the store: ${SSM_MISSING_ENVS:-<see the lines above>}"
-    echo "[octools]   This is NOT a healthy hydration. Trying Azure Key Vault for the remainder."
-  else
-    echo "[octools] AWS SSM returned nothing (exit ${ssm_rc}); trying Azure Key Vault next."
-  fi
+  echo "[octools] AWS SSM hydrator exited ${ssm_rc}."
 fi
 
 # ─── FALLBACK: pull fleet secrets from Azure Key Vault ──────────────
@@ -402,24 +392,38 @@ fi
 # The Key Vault secret NAMES are a 1:1 mirror of the SSM ids, so nothing downstream changes
 # whichever source answers — only the fetch mechanism. The client_secret is never logged.
 #
-# Retry a few times on transient failure: on a fresh container the Environment's
-# AZURE_SP_* vars can occasionally not yet be visible to this hook's first pass, or
-# the vault.azure.net call can hit a cold-start blip. Without a retry, that one bad
-# beat leaves credentials.env fully blank (all secrets empty) for the rest of the
-# session, which is silent and easy to miss (only the fetch-time WARN reveals it).
-#
-# GATED ON "IS ANYTHING STILL MISSING", NOT ON "IS $FETCHED EMPTY". A partial SSM hydration used to
-# short-circuit this block: the fallback that exists specifically to cover a missing secret was
-# skipped because SOME other secret had arrived.
-if { [ -z "$FETCHED" ] || [ "$SSM_PARTIAL" = "1" ] || [ "$SSM_TRUNCATED" = "1" ]; } && [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+# WHETHER TO EVEN TRY: `gate` mode runs the identical verdictFor() logic hydration-report.mjs's
+# final banner uses (property D: the two arms are never treated by different rules), on the SSM
+# arm's own structured result. Its output is one byte, "0" or "1" -- anything else (a crash, empty
+# output, a stray line) is read as "1", because attempting an unnecessary fallback is harmless and
+# skipping a needed one is exactly the bug this rewrite exists to close.
+SSM_NEEDS_FALLBACK=1
+if [ "$HR_SSM_ATTEMPTED" = "1" ]; then
+  _gate="$(node "${TOOLS_DIR}/setup/hydration-report.mjs" gate "$SSM_RESULT_FILE" "$SSM_FETCHED_FILE" 2>/dev/null)"
+  case "$_gate" in
+    0) SSM_NEEDS_FALLBACK=0 ;;
+    *) SSM_NEEDS_FALLBACK=1 ;;
+  esac
+fi
+
+if [ "$SSM_NEEDS_FALLBACK" = "1" ] && [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+  HR_KV_ATTEMPTED=1
   KV_FETCHED=""
+  # Same diagnostics discipline as the SSM arm (property D): stderr is captured and shown, not
+  # discarded, and no field is ever extracted from it -- the completeness decision lives entirely
+  # in KV_RESULT_FILE, read by hydration-report.mjs.
+  KV_ERR="$(mk_tmp kv-err)"
   for attempt in 1 2 3; do
     echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT), attempt $attempt/3..."
-    KV_FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
-      node "${TOOLS_DIR}/setup/fetch-secrets-azure.mjs" 2>/dev/null || true)"
+    KV_FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" FLEET_HYDRATION_RESULT_FILE="$KV_RESULT_FILE" \
+      node "${TOOLS_DIR}/setup/fetch-secrets-azure.mjs" 2>"$KV_ERR")" && kv_rc=0 || kv_rc=$?
     [ -n "$KV_FETCHED" ] && break
     [ "$attempt" -lt 3 ] && sleep 2
   done
+  [ -s "$KV_ERR" ] && sed 's/^/[octools]   /' "$KV_ERR"
+  rm -f "$KV_ERR"
+  printf '%s' "$KV_FETCHED" > "$KV_FETCHED_FILE"
+  echo "[octools] Azure Key Vault hydrator exited ${kv_rc:-?}."
   if [ -n "$KV_FETCHED" ] && [ -n "$FETCHED" ]; then
     # MERGE, never replace. get_key() below takes the FIRST match for a name, so putting the SSM
     # lines first keeps the primary store authoritative for every id it did serve and lets Key
@@ -427,99 +431,56 @@ if { [ -z "$FETCHED" ] || [ "$SSM_PARTIAL" = "1" ] || [ "$SSM_TRUNCATED" = "1" ]
     # fallback happened to hold.
     FETCHED="${FETCHED}
 ${KV_FETCHED}"
-    SECRET_SOURCE="aws-ssm(partial)+azure-keyvault"
-    echo "[octools] Key Vault answered — $(printf '%s' "$KV_FETCHED" | grep -c '=' || true) secret(s) merged in behind the SSM values."
   elif [ -n "$KV_FETCHED" ]; then
     FETCHED="$KV_FETCHED"
-    SECRET_SOURCE="azure-keyvault"
-    echo "[octools] Key Vault OK — $(printf '%s' "$FETCHED" | grep -c '=' || true) secrets loaded."
   fi
 fi
 
-# DID THE FALLBACK ACTUALLY CLOSE THE GAP? Reporting "AWS SSM PARTIAL" and then "Key Vault
-# answered" without checking would leave a reader to assume a recovery that may not have happened
-# -- the same shape of unearned reassurance as the success banner this whole block was fixed for.
-# The env names come from the hydrator (which owns the id -> env table), so this stays a lookup, not
-# a second copy of the map.
-#
-# AN EMPTY PARSE IS "UNKNOWN", NEVER "NOTHING WAS MISSING" (bug fixed 2026-08-18). STILL_MISSING is
-# built by iterating $SSM_MISSING_ENVS. When that string is EMPTY the loop body never runs,
-# STILL_MISSING stays empty, and the old code fell straight into the else branch and printed
-# "all required secrets are present" -- as the operator's LAST LINE -- having checked nothing at
-# all. Reproduced against the shipped bytes: rc=2 plus a dead vault printed the all-clear while
-# OPENAI_API_KEY was absent from $FETCHED. rc=2 has ALREADY told us something required is gone; if
-# we cannot say WHAT, the only honest output is to say that, loudly. Empty and "nothing missing"
-# must never render the same.
-#
-# The three inputs are kept apart on purpose so each renders as itself:
-#   SSM_TRUNCATED=1        the payload was cut in transit -- completeness is unknowable
-#   SSM_MISSING_ENVS empty the hydrator said something is missing but named nothing parseable
-#   otherwise              a real list, checked name by name against what the session actually has
-if [ "$SSM_TRUNCATED" = "1" ]; then
+# ─── THE ONE HONESTY CHECK, run once, over BOTH arms' structured results ────────────────────────
+# hydration-report.mjs is the SOLE place that turns "what did each arm actually resolve" into an
+# operator-facing verdict (property A: no re-parsing here, ever). Its output contract is one thing
+# and one thing only: line 1 is `SECRET_SOURCE=<value>`, everything after is the banner. If that
+# contract is not met -- a crash, empty output, a mangled first line, ANYTHING -- this script does
+# NOT fall through to silence or to an assumed-good default. It prints its own loud, explicit
+# UNVERIFIED warning instead. That is the outermost safety net: even a future bug INSIDE
+# hydration-report.mjs cannot become a silent all-clear, because the code path that would have to
+# carry a false "everything is fine" simply does not exist here -- there is no default branch that
+# assumes completeness, only one that names the gap.
+HR_OUT="$(
+  HR_SSM_ATTEMPTED="$HR_SSM_ATTEMPTED" HR_SSM_RESULT_FILE="$SSM_RESULT_FILE" HR_SSM_FETCHED_FILE="$SSM_FETCHED_FILE" \
+  HR_KV_ATTEMPTED="$HR_KV_ATTEMPTED" HR_KV_RESULT_FILE="$KV_RESULT_FILE" HR_KV_FETCHED_FILE="$KV_FETCHED_FILE" \
+  node "${TOOLS_DIR}/setup/hydration-report.mjs" 2>&1
+)"
+HR_RC=$?
+_hr_first_line="$(printf '%s\n' "$HR_OUT" | head -1)"
+
+case "$_hr_first_line" in
+  SECRET_SOURCE=*)
+    if [ "$HR_RC" -eq 0 ]; then
+      SECRET_SOURCE="${_hr_first_line#SECRET_SOURCE=}"
+      printf '%s\n' "$HR_OUT" | tail -n +2
+    else
+      # The report printed something well-formed but STILL exited non-zero -- do not trust a
+      # banner whose own producer says it did not finish cleanly.
+      _hr_ok=0
+    fi
+    ;;
+  *)
+    _hr_ok=0
+    ;;
+esac
+
+if [ "${_hr_ok:-1}" = "0" ]; then
   echo "==================================================================================="
-  echo "[octools] WARN: the AWS SSM output was TRUNCATED in transit (sent ${ssm_claimed:-?}, received ${ssm_n:-?})."
-  echo "          Which secrets were lost is UNKNOWN. Do NOT read this as a healthy session."
-  echo "          Nothing below has been verified as present beyond the lines that did arrive."
+  echo "[octools] WARN: the hydration completeness report itself could not be produced (rc=${HR_RC})."
+  echo "          Treat this session's secret completeness as UNVERIFIED, not as an all-clear."
+  [ -n "$HR_OUT" ] && printf '%s\n' "$HR_OUT" | sed 's/^/[octools]   /'
   echo "          Re-run to get a clean read: bash setup/session-start.sh"
   echo "==================================================================================="
-elif [ "$SSM_PARTIAL" = "1" ] && [ -z "$SSM_MISSING_ENVS" ]; then
-  echo "==================================================================================="
-  echo "[octools] WARN: AWS SSM reported a MISSING REQUIRED secret (exit 2), but this script"
-  echo "          could not determine WHICH one, so NOTHING was checked and NOTHING is cleared."
-  echo "          Treat this session as INCOMPLETELY hydrated. This is an UNKNOWN, not an all-clear."
-  echo "          Cause: the hydrator's \"MISSING required secret '<id>' (env <ENV>)\" line was"
-  echo "          absent or reformatted, so there was no name to parse. Read the [octools] lines"
-  echo "          above for the hydrator's own diagnostics, then: bash setup/session-start.sh"
-  echo "==================================================================================="
-elif [ "$SSM_PARTIAL" = "1" ]; then
-  STILL_MISSING=""
-  for env_name in $SSM_MISSING_ENVS; do
-    # A DIRECT ENVIRONMENT VARIABLE COUNTS AS PRESENT. get_key() below resolves "${!name}" FIRST and
-    # only then looks in $FETCHED, and this script's own header documents passing OPENAI_API_KEY etc.
-    # straight in as a supported configuration. Grepping $FETCHED alone reported those as missing
-    # while the session was in fact going to use them -- a false alarm, which is the cheapest way to
-    # teach an operator to ignore this warning and so hide the real one.
-    #
-    # THE `case` GUARD IS NOT DECORATION. The sed above captures [A-Z0-9_]*, which admits a name
-    # beginning with a digit; bash then answers "${!9BAD}" with `invalid variable name`, and an
-    # EXPANSION error aborts the whole sourced block on the spot. Measured: everything from here
-    # down -- the still-missing warning, the covered message, the no-secrets-at-all banner -- was
-    # silently skipped, so one garbled diagnostic line turned the entire honesty check off. Names
-    # that cannot be shell variables simply fall through to the $FETCHED lookup.
-    direct_val=""
-    case "$env_name" in
-      [A-Za-z_]*) direct_val="${!env_name:-}" ;;
-    esac
-    [ -n "$direct_val" ] && continue
-    printf '%s' "$FETCHED" | grep -q "^${env_name}=" || STILL_MISSING="${STILL_MISSING}${env_name} "
-  done
-  if [ -n "$STILL_MISSING" ]; then
-    echo "==================================================================================="
-    echo "[octools] WARN: REQUIRED fleet secret(s) still MISSING after every store: ${STILL_MISSING}"
-    echo "          The session IS hydrated, but incompletely — tools needing these will fail."
-    echo "          Fix: add them to AWS SSM under ${AWS_SSM_PREFIX:-/otchealth}/<id>, then re-run:"
-    echo "          bash setup/session-start.sh"
-    echo "==================================================================================="
-  else
-    # Reached ONLY after every named secret was individually confirmed present. The claim is scoped
-    # to exactly that list -- it says the named gap closed, not that the session is complete.
-    echo "[octools] The SSM gap was covered: every REQUIRED secret named above (${SSM_MISSING_ENVS}) is now present."
-  fi
+  SECRET_SOURCE="${SECRET_SOURCE:-unknown}"
 fi
 
-# One consolidated warning, emitted only when EVERY source came up empty. Previously the Azure
-# block warned on its own failure, which after the cutover meant a loud "fleet secrets are OFF"
-# banner on every successful SSM-hydrated session.
-if [ -z "$FETCHED" ]; then
-  echo "==================================================================================="
-  echo "[octools] WARN: no fleet secrets loaded from any store. kb-memory + API keys may be OFF."
-  echo "          PRIMARY  AWS SSM (${AWS_SSM_PREFIX:-/otchealth}, ${AWS_REGION:-us-east-1}):"
-  echo "            needs a task role, or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with"
-  echo "            ssm:GetParameter + ssm:GetParametersByPath on ${AWS_SSM_PREFIX:-/otchealth}/*."
-  echo "          FALLBACK Azure Key Vault ($KEYVAULT): expected to be dead (subscription retired)."
-  echo "          Re-hydrate later in-session with: bash setup/session-start.sh"
-  echo "==================================================================================="
-fi
+rm -f "$SSM_RESULT_FILE" "$SSM_FETCHED_FILE" "$KV_RESULT_FILE" "$KV_FETCHED_FILE" 2>/dev/null
 # >>> END fleet-secret hydration
 
 # ─── LEGACY FALLBACK: GCP Secret Manager (RETIRED; only if Azure gave nothing) ──

@@ -18,12 +18,26 @@
 //
 // The id -> env table lives in setup/secret-map.mjs, shared with the Azure hydrator so the two
 // cannot drift (see that file, and tests/secret-map-parity.test.mjs).
+//
+// COMPLETENESS is reported STRUCTURALLY, not just in the stderr prose above: when
+// FLEET_HYDRATION_RESULT_FILE is set, writeHydrationResult() (setup/hydration-result.mjs) writes a
+// JSON record of exactly what happened -- reachable, how many lines were emitted, and the precise
+// {id, env} of every required secret that did not resolve. session-start.sh's report
+// (setup/hydration-report.mjs) reads that file instead of re-deriving the same facts by
+// pattern-matching this file's stderr sentences, which is the parsing step that hid three rounds
+// of "failure reported as success" bugs. See hydration-result.mjs for the full history.
 
 import { ssmListDetailed, ssmSecret, ssmAvailable } from '../skills/kb-memory/aws-secret.mjs';
 import { MAP } from './secret-map.mjs';
+import { writeHydrationResult } from './hydration-result.mjs';
 
 const PREFIX = process.env.AWS_SSM_PREFIX || '/otchealth';
 const REGION = process.env.AWS_REGION || 'us-east-1';
+// When set, session-start.sh reads THIS file (via hydration-report.mjs) instead of re-parsing the
+// human-readable stderr lines below. Optional so this script still runs standalone / under test
+// with no path at all -- writeHydrationResult() is a no-op without one.
+const RESULT_FILE = process.env.FLEET_HYDRATION_RESULT_FILE || '';
+const REQUIRED_TOTAL = MAP.filter((m) => m.required).length;
 
 // NEVER call process.exit() IN THIS FILE (bug fixed 2026-08-18). stdout here is a PIPE -- the
 // caller is `FETCHED="$(node setup/fetch-secrets-aws.mjs ...)"` in session-start.sh -- and Node
@@ -43,6 +57,17 @@ if (!(await ssmAvailable())) {
   // empty stdout lets session-start.sh fall through to its next hydration source rather than
   // treating an unreachable store as an empty one.
   console.error(`[fetch-secrets-aws] no resolvable AWS credentials (no task role, and AWS_ACCESS_KEY_ID is unset or a sandbox proxy placeholder) — cannot fetch from ${PREFIX} in ${REGION}.`);
+  // Store-truth, not session-truth: the STORE could not be reached, so its own requiredMissing
+  // list is not evidence of anything (a caller must read `reachable` first -- see statusOf() in
+  // hydration-result.mjs). Populated anyway for a complete, self-consistent record rather than an
+  // empty array that would misleadingly read as "reachable, nothing missing".
+  writeHydrationResult(RESULT_FILE, {
+    store: 'aws-ssm',
+    reachable: false,
+    emittedCount: 0,
+    requiredTotal: REQUIRED_TOTAL,
+    requiredMissing: MAP.filter((m) => m.required).map((m) => ({ id: m.id, env: m.env })),
+  });
   process.exitCode = 1;
   return;
 }
@@ -77,6 +102,12 @@ for (const m of MAP) {
 
 let hadRequiredMiss = false;
 let emitted = 0;
+// The requiredMissing entries below are the SAME {id, env} pairs the `MAP` rows already hold --
+// never text re-derived from the console.error() sentence a few lines down. That sentence is for
+// a human reading the log; this array is what session-start.sh's report actually consumes (via
+// hydration-report.mjs), and the two are independent so a wording change to one can never affect
+// the other's meaning.
+const requiredMissing = [];
 for (const { id, env, required } of wanted) {
   let val = null;
   try {
@@ -91,24 +122,27 @@ for (const { id, env, required } of wanted) {
     process.stdout.write(`${env}=${safe}\n`);
     emitted += 1;
   } else if (required) {
-    // The env name is on this line ON PURPOSE. session-start.sh parses it back out to check, AFTER
-    // its Key Vault fallback has run, whether the gap actually got filled -- and the table that
-    // knows id -> env lives here, not in bash. Copying it into the shell would recreate exactly the
-    // drift bug secret-map.mjs was extracted to kill. Keep the `MISSING required secret '<id>'`
-    // prefix byte-for-byte: the shell's sed and tests/fetch-secrets-aws.test.mjs both match on it.
+    // Human-readable only from here down. Nothing downstream parses this string -- see the
+    // `requiredMissing` array above for the machine-readable equivalent.
     console.error(`[fetch-secrets-aws] MISSING required secret '${id}' (env ${env}) at ${PREFIX}/${id} (${REGION}).`);
+    requiredMissing.push({ id, env });
     hadRequiredMiss = true;
   }
 }
 
-// THIS COUNT IS LOAD-BEARING, not decoration. It goes to stderr (one short line, written before
-// exit) while the secrets go to stdout (large, and the thing a broken pipe can truncate).
-// session-start.sh compares this number against the lines it actually received, which is an
-// end-to-end integrity check on the transfer itself -- so a truncation from ANY cause, not just the
-// process.exit() one fixed above, is caught by the shell instead of being read as a clean load.
-// Keep the `<N> secret(s) hydrated` wording byte-stable: the shell's sed and
-// tests/fetch-secrets-aws.test.mjs both match on it.
+// Human-readable summary, unchanged in spirit from before -- but no longer load-bearing. The
+// structured result written below is what session-start.sh's completeness/truncation checks
+// actually read; this line is diagnostics for a person tailing the log.
 console.error(`[fetch-secrets-aws] ${emitted} secret(s) hydrated from ${PREFIX} (${REGION})${present ? ` of ${present.size} parameter(s) present` : ''}.`);
+
+writeHydrationResult(RESULT_FILE, {
+  store: 'aws-ssm',
+  reachable: true,
+  emittedCount: emitted,
+  requiredTotal: REQUIRED_TOTAL,
+  requiredMissing,
+});
+
 process.exitCode = hadRequiredMiss ? 2 : 0;
 }
 
