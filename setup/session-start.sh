@@ -8,19 +8,30 @@
 #     2>/dev/null || (cd /tmp/octools && git pull --ff-only)
 #   bash /tmp/octools/setup/session-start.sh
 #
-# Secrets model (Azure-first, 2026-07): a service principal bootstraps everything
-# from Azure Key Vault. Set these four in the cloud environment's .env box:
-#   AZURE_SP_CLIENT_ID       the fleet service-principal app (client) id
-#   AZURE_SP_CLIENT_SECRET   its client secret
-#   AZURE_SP_TENANT_ID       the Entra tenant id
-#   AZURE_KEYVAULT_NAME      vault name (default kv-otc-55c84f6bef)
-# Using that SP, this script pulls all API keys from Key Vault (secret NAMES are a
-# 1:1 mirror of the retired GCP Secret Manager ids). OPENAI_API_KEY etc. may still
-# be passed directly as env vars to override the vault (useful for local dev).
+# Secrets model (UPDATED 2026-08-18, the agent-seat credential bootstrap fix): Azure Key Vault is
+# PERMANENTLY UNREACHABLE (the storage estate is write-locked; see skills/kb-memory/aws-secret.mjs's
+# and azure-secret.mjs's own headers). This script's secret fetch (fetch-secrets-azure.mjs) now goes
+# through kb-memory's shared kvSecret() resolver, which tries FOUR paths in order and needs only ONE:
+#   AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID   Azure service principal (dead
+#                                                                       today, kept for when/if Azure returns)
+#   IDENTITY_ENDPOINT / IDENTITY_HEADER    Azure Container Apps managed identity (ECS/job seats)
+#   (az CLI logged in)                     az-CLI/OIDC, secretless CI (e.g. GitHub Actions OIDC)
+#   OTC_AWS_ACCESS_KEY_ID / OTC_AWS_SECRET_ACCESS_KEY    AWS SSM mirror -- THE WORKING PATH TODAY for a
+#                                                          non-ECS seat (Hyperagent, Claude Code cloud).
+#                                                          NOT the plain AWS_ names: this sandbox's proxy
+#                                                          injects a non-functional placeholder into
+#                                                          those, so an operator's real value there is
+#                                                          not deterministic. See "Credential bootstrap"
+#                                                          in skills/kb-memory/SKILL.md for the full,
+#                                                          paste-ready per-seat-type guide.
+#   AZURE_KEYVAULT_NAME      vault name (default kv-otc-55c84f6bef); only used for diagnostic messages now.
+# Using whichever of those resolves, this script pulls all API keys (secret NAMES are a 1:1 mirror of
+# the retired GCP Secret Manager ids). OPENAI_API_KEY etc. may still be passed directly as env vars to
+# override the vault (useful for local dev).
 #
 # LEGACY (retired, GCP billing off): GCP_CLAUDE_DRIVER_SA_JSON + GOOGLE_CLOUD_PROJECT
-# are still honored as a fallback only if the Azure creds are absent AND a GCP SA
-# key is present. This path is expected to fail; Azure Key Vault is the source.
+# are still honored as a fallback only if none of the four paths above resolve AND a GCP SA
+# key is present. This path is expected to fail; it predates Azure Key Vault as the source.
 
 set -euo pipefail
 
@@ -277,43 +288,66 @@ PROJECT="${GOOGLE_CLOUD_PROJECT:-otchealth-shared-prod}"
 KEYVAULT="${AZURE_KEYVAULT_NAME:-kv-otc-55c84f6bef}"
 FETCHED=""
 
-# ─── PRIMARY: pull fleet secrets from Azure Key Vault ───────────────
-# GCP Secret Manager is RETIRED (billing off, 2026-07). The fleet secret store is now
-# Azure Key Vault, read via an Entra service principal supplied in the environment. The
-# Key Vault secret NAMES are a 1:1 mirror of the old Secret Manager ids, so nothing
-# downstream changes — only the fetch mechanism. The client_secret is never logged.
+# ─── PRIMARY: pull fleet secrets (fetch-secrets-azure.mjs -> kb-memory's shared kvSecret()) ──
+# GCP Secret Manager is RETIRED (billing off, 2026-07). Azure Key Vault is now PERMANENTLY
+# UNREACHABLE too (2026-08-18; see skills/kb-memory/aws-secret.mjs's header). fetch-secrets-azure.mjs
+# was refactored the same day to try FOUR auth paths per secret (managed identity -> AZURE_SP_* ->
+# az-CLI/OIDC -> the AWS SSM mirror), so this gate must accept any ONE of them, not just AZURE_SP_*.
 #
-# Retry a few times on transient failure: on a fresh container the Environment's
-# AZURE_SP_* vars can occasionally not yet be visible to this hook's first pass, or
-# the vault.azure.net call can hit a cold-start blip. Without a retry, that one bad
-# beat leaves credentials.env fully blank (all secrets empty) for the rest of the
-# session, which is silent and easy to miss (only the fetch-time WARN reveals it).
-if [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+# BUG FIXED HERE (2026-08-18, same fix): this gate used to check ONLY AZURE_SP_CLIENT_ID/SECRET/
+# TENANT_ID and, if they were absent, print a WARN and skip calling fetch-secrets-azure.mjs ENTIRELY
+# -- so a seat with a perfectly working OTC_AWS_* credential (the documented single-bootstrap-secret
+# for a non-ECS seat) never even got a chance to hydrate: the node script itself was never invoked.
+# Fixing the node script's own auth logic alone was not enough while this OUTER gate still silently
+# skipped it. Key Vault secret NAMES are a 1:1 mirror of the old GCP Secret Manager ids, so nothing
+# downstream (get_key(), credentials.env layout) changes — only which paths can supply a value now.
+# The client_secret (of whichever path is used) is never logged.
+_kb_ss_prox() { printf '%s' "$1" | grep -qi '^prox'; }
+_kb_ss_aws_ok() {
+  [ -n "${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}" ] && return 0
+  [ -n "${AWS_CONTAINER_CREDENTIALS_FULL_URI:-}" ] && return 0
+  if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] && ! _kb_ss_prox "${AWS_ACCESS_KEY_ID}"; then return 0; fi
+  if [ -n "${OTC_AWS_ACCESS_KEY_ID:-}" ] && [ -n "${OTC_AWS_SECRET_ACCESS_KEY:-}" ] && ! _kb_ss_prox "${OTC_AWS_ACCESS_KEY_ID}"; then return 0; fi
+  return 1
+}
+_KB_SS_HAVE_CRED=0
+{ [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; } \
+  || { [ -n "${IDENTITY_ENDPOINT:-}" ] && [ -n "${IDENTITY_HEADER:-}" ]; } \
+  || _kb_ss_aws_ok \
+  && _KB_SS_HAVE_CRED=1
+# Retry a few times on transient failure: on a fresh container the Environment's credential vars can
+# occasionally not yet be visible to this hook's first pass, or a remote call can hit a cold-start
+# blip. Without a retry, that one bad beat leaves credentials.env fully blank (all secrets empty) for
+# the rest of the session, which is silent and easy to miss (only the fetch-time WARN reveals it).
+if [ "$_KB_SS_HAVE_CRED" = "1" ]; then
   for attempt in 1 2 3; do
-    echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT), attempt $attempt/3..."
+    echo "[octools] Fetching secrets (Key Vault $KEYVAULT / AWS SSM mirror), attempt $attempt/3..."
     FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
       node "${TOOLS_DIR}/setup/fetch-secrets-azure.mjs" 2>/dev/null || true)"
     [ -n "$FETCHED" ] && break
     [ "$attempt" -lt 3 ] && sleep 2
   done
   if [ -n "$FETCHED" ]; then
-    echo "[octools] Key Vault OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
+    echo "[octools] Secrets OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
   else
     echo "==================================================================================="
-    echo "[octools] WARN: Key Vault returned nothing after 3 attempts. kb-memory + API keys may be OFF."
-    echo "          Check AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID, and"
-    echo "          that the SP holds 'Key Vault Secrets User' (or Officer) on $KEYVAULT."
-    echo "          Re-hydrate later in-session with: bash setup/session-start.sh"
+    echo "[octools] WARN: no secrets came back after 3 attempts. kb-memory + API keys may be OFF."
+    echo "          Azure Key Vault is permanently unreachable; the working path today is AWS SSM"
+    echo "          via OTC_AWS_ACCESS_KEY_ID/SECRET (NOT the plain AWS_ names -- this sandbox's"
+    echo "          proxy injects a non-functional placeholder into those). Full per-seat-type guide:"
+    echo "          skills/kb-memory/SKILL.md 'Credential bootstrap'. Re-hydrate later in-session"
+    echo "          with: bash setup/session-start.sh"
     echo "==================================================================================="
   fi
 else
   echo "==================================================================================="
-  echo "[octools] WARN: Azure Key Vault creds not set — fleet secrets are OFF this session."
-  echo "          Set these in the cloud environment's Environment variables (.env format):"
-  echo "            AZURE_SP_CLIENT_ID      the service-principal app (client) id"
-  echo "            AZURE_SP_CLIENT_SECRET  its client secret"
-  echo "            AZURE_SP_TENANT_ID      the Entra tenant id"
-  echo "            AZURE_KEYVAULT_NAME     vault name (default kv-otc-55c84f6bef)"
+  echo "[octools] WARN: no credential path set — fleet secrets are OFF this session."
+  echo "          Azure Key Vault is permanently unreachable; set ONE of these in the cloud"
+  echo "          environment's Environment variables (.env format) -- OTC_AWS_* is the one that"
+  echo "          actually works today for a non-ECS seat:"
+  echo "            OTC_AWS_ACCESS_KEY_ID / OTC_AWS_SECRET_ACCESS_KEY   (AWS SSM mirror -- USE THIS)"
+  echo "            AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID  (dead today)"
+  echo "          Full reasoning + per-seat-type guide: skills/kb-memory/SKILL.md 'Credential bootstrap'."
   echo "          Save, then start a NEW session (env changes apply to new sessions only)."
   echo "==================================================================================="
 fi

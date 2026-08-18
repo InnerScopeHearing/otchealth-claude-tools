@@ -13,13 +13,32 @@ SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 
 # Only meaningful on a Desktop with the Claude CLI (that's where an MCP server gets registered).
 command -v claude >/dev/null 2>&1 || { exit 0; }
-# Need SOME credential to mint the lane token. Azure Key Vault is the store now (GCP is RETIRED), and
-# connect.mjs resolves the lane creds KV-first (managed identity -> AZURE_SP_* -> az-CLI/OIDC). Accept any
-# of those; a still-present GCP SA is honored last, purely as harmless legacy. The old GCP-SA-only gate
-# made this hook a silent no-op on every Azure-native seat, so the session never auto-connected.
+# Need SOME credential to mint the lane token. connect.mjs's laneCreds() resolves lane creds via
+# kvSecret(): Key Vault (managed identity -> AZURE_SP_* -> az-CLI/OIDC) THEN, on failure, the AWS SSM
+# mirror -- see kb-memory/azure-secret.mjs's own header. Accept any of those; a still-present GCP SA is
+# honored last, purely as harmless legacy.
+#
+# AWS/OTC_AWS_* CHECK ADDED 2026-08-18 (the agent-seat credential bootstrap fix): this gate used to
+# check ONLY the Azure/GCP paths, so a seat with NO Azure creds but a WORKING AWS credential (via the
+# SSM mirror connect.mjs's underlying kvSecret() already supports) silently `exit 0`d here and never
+# even attempted connect.mjs -- the exact "still silently no-ops on a seat with a valid credential"
+# failure this fix exists to close, on a DIFFERENT script than the one the original bug report named.
+# The "prox"-prefix check mirrors aws-secret.mjs's awsCreds() guard against the sandbox proxy's
+# placeholder key; without it this gate would report "present" for a credential that cannot sign
+# anything, and connect.mjs would then fail anyway two steps later -- silence traded for a slower silence.
+_kb_gw_aws_ok() {
+  [ -n "${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}" ] && return 0
+  [ -n "${AWS_CONTAINER_CREDENTIALS_FULL_URI:-}" ] && return 0
+  if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] \
+     && ! printf '%s' "${AWS_ACCESS_KEY_ID}" | grep -qi '^prox'; then return 0; fi
+  if [ -n "${OTC_AWS_ACCESS_KEY_ID:-}" ] && [ -n "${OTC_AWS_SECRET_ACCESS_KEY:-}" ] \
+     && ! printf '%s' "${OTC_AWS_ACCESS_KEY_ID}" | grep -qi '^prox'; then return 0; fi
+  return 1
+}
 { [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; } \
   || { [ -n "${IDENTITY_ENDPOINT:-}" ] && [ -n "${IDENTITY_HEADER:-}" ]; } \
   || command -v az >/dev/null 2>&1 \
+  || _kb_gw_aws_ok \
   || [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ] || [ -f "${HOME}/.gcp_claude_driver_sa.json" ] \
   || exit 0
 
