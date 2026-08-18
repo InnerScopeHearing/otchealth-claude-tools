@@ -8,13 +8,37 @@
 // Usage (Stop hook passes {transcript_path} JSON on stdin):
 //   echo '{"transcript_path":"x.jsonl"}' | KB_AGENT=cto node reflect.mjs [--commit] [--min-tools 12]
 import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdirSync, appendFileSync, chmodSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { kvSecret } from "./azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
+// Durable local fallback for a lesson that failed to persist to the real ledger (2026-08-18).
+// Same directory mem.mjs's own local write-through cache already uses (~/.claude/kb-cache), so a
+// human or a recovery script has one place to look, not a new ad hoc path per failure class. One
+// file per agent so a recovery pass can be run per-agent without cross-agent interference.
+// Exported (not just used internally) so a test can exercise the fallback-write behavior directly
+// without needing a real mem.mjs failure to trigger it, and so a future recovery script can import
+// the SAME path-naming convention instead of re-deriving it.
+export const FAILED_WRITE_FILE = (agent) => `${homedir()}/.claude/kb-cache/_failed_writes-${agent || "unknown"}.jsonl`;
+export function appendFailedWriteFallback(agent, item, error) {
+  try {
+    const dir = `${homedir()}/.claude/kb-cache`;
+    mkdirSync(dir, { recursive: true });
+    const file = FAILED_WRITE_FILE(agent);
+    const row = { ts: new Date().toISOString(), agent, type: item.type, text: item.text, share: !!item.share, tags: item._fallback ? ["auto-extract-fallback"] : ["auto-reflect"], error, source: "reflect.mjs" };
+    appendFileSync(file, JSON.stringify(row) + "\n");
+    try { chmodSync(file, 0o600); } catch {} // cheap + idempotent; matches the 0600 posture the rest of kb-cache uses for anything sensitive
+  } catch (e) {
+    // Last resort: if even the local fallback file cannot be written (e.g. a read-only home dir),
+    // say so explicitly rather than swallowing it a second time -- this is the actual bottom of the
+    // stack, there is nowhere further to degrade to.
+    console.error(`[reflect] FALLBACK WRITE ALSO FAILED for agent '${agent}': ${e.message}. The lesson above is genuinely unrecoverable from this run.`);
+  }
+}
 const argv = process.argv.slice(2);
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const COMMIT = argv.includes("--commit");
@@ -138,9 +162,36 @@ async function main() {
   items = (Array.isArray(items) ? items : []).filter(x => x && x.text && /^(pitfall|decision|remember)$/.test(x.type)).slice(0, 3);
   if (!items.length) { console.log("reflect: no new durable lessons."); process.exit(0); }
   console.log(`reflect: ${items.length} candidate lesson(s)${COMMIT ? " (committing)" : " (dry-run; pass --commit to write)"}:`);
+  // FAIL-LOUD + DURABLE FALLBACK (2026-08-18). Exiting 0 unconditionally is still correct (a Stop
+  // hook must never block a session over a best-effort memory distill), but doing so used to also
+  // discard the evidence: `stdio: "ignore"` threw away mem.mjs's own stderr (the actual "ERROR: put
+  // 403 ..." detail), the catch block logged one generic "write failed" line, and on the "stop" hook
+  // path THAT line is itself piped to /dev/null by kb-inject.sh's invocations of this same script
+  // (see kb-inject.sh's three call sites) -- so a session could exit clean while every one of its
+  // distilled lessons silently vanished, with no trace anywhere. A failure reported as a plausible
+  // success is worse than an ugly one, because nobody goes looking for it.
+  let failures = 0;
   for (const it of items) {
     console.log(`  [${it.type}${it.share ? ",share" : ""}] ${it.text}`);
-    if (COMMIT) { try { const a = [join(HERE, "mem.mjs"), it.type, it.text, "--agent", AGENT, "--tags", it._fallback ? "auto-extract-fallback" : "auto-reflect"]; if (it.share) a.push("--share"); execFileSync("node", a, { stdio: "ignore" }); } catch (e) { console.error("  write failed: " + e.message); } }
+    if (COMMIT) {
+      try {
+        const a = [join(HERE, "mem.mjs"), it.type, it.text, "--agent", AGENT, "--tags", it._fallback ? "auto-extract-fallback" : "auto-reflect"];
+        if (it.share) a.push("--share");
+        // Capture stderr (was `stdio: "ignore"`, which threw the real diagnostic away) so a genuine
+        // failure names its actual cause instead of a bare "Command failed" message.
+        execFileSync("node", a, { stdio: ["ignore", "ignore", "pipe"] });
+      } catch (e) {
+        failures++;
+        const detail = (e.stderr ? String(e.stderr) : e.message || String(e)).trim().slice(0, 500);
+        console.error("=".repeat(78));
+        console.error(`[reflect] LOST WRITE: a durable lesson for agent '${AGENT}' failed to persist and was NOT recorded.`);
+        console.error(`  type=${it.type} text=${JSON.stringify(it.text).slice(0, 200)}`);
+        console.error(`  cause: ${detail}`);
+        console.error(`  saved to the local fallback below so this content is recoverable, not gone.`);
+        console.error("=".repeat(78));
+        appendFailedWriteFallback(AGENT, it, detail);
+      }
+    }
   }
   // ── CBP-1 (Checkpoint Bridge Protocol, 2026-07-05): after the existing per-item commit loop
   // above, ALSO sync the distilled item texts + a checkpoint marker into _STATE/<agent>.json via
@@ -152,9 +203,24 @@ async function main() {
       const factsJson = JSON.stringify(items.map((it) => it.text));
       const syncSource = process.env.KB_SYNC_SOURCE || "stop";
       const sessionId = process.env.KB_SESSION_ID || "";
-      execFileSync("node", [join(HERE, "mem.mjs"), "state-sync", "--agent", AGENT, "--facts", factsJson, "--source", syncSource, "--session-id", sessionId], { stdio: "ignore" });
-    } catch (e) { console.error("  state-sync failed (non-fatal): " + e.message); }
+      execFileSync("node", [join(HERE, "mem.mjs"), "state-sync", "--agent", AGENT, "--facts", factsJson, "--source", syncSource, "--session-id", sessionId], { stdio: ["ignore", "ignore", "pipe"] });
+    } catch (e) { console.error("  state-sync failed (non-fatal, checkpoint marker only, no memory content lost): " + String(e.stderr || e.message || e).trim().slice(0, 300)); }
   }
+  // A plain container-log summary line: even where stdout/stderr both end up redirected to
+  // /dev/null by a caller (kb-inject.sh's three invocations of this script do exactly that), a
+  // human or a future audit grepping raw logs for "LOST WRITE" or this summary still finds the
+  // fallback file's path named right here, once, unconditionally.
+  if (COMMIT) console.log(`reflect: ${items.length - failures}/${items.length} lesson(s) committed${failures ? `, ${failures} LOST (recovered to ${FAILED_WRITE_FILE(AGENT)})` : ""}.`);
   process.exit(0);
 }
-main().catch((e) => { console.error("reflect ERROR: " + e.message); process.exit(0); });
+// GUARDED (2026-08-18): only run the CLI flow (which calls process.exit()) when this file is the
+// entry point, not merely imported. Previously main() ran unconditionally at module load, so even
+// `import { appendFailedWriteFallback } from "./reflect.mjs"` for a unit test would read real stdin
+// and terminate the importing process via process.exit(0) as a side effect of the import itself —
+// invisible in a normal `node reflect.mjs` invocation (it IS the entry point there) but a landmine
+// for any future test or tool that imports this file, exactly the gap that made this file untestable
+// before today. Matches nightly-reflection.mjs's existing isMain guard, this file's own closest sibling.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  main().catch((e) => { console.error("reflect ERROR: " + e.message); process.exit(0); });
+}

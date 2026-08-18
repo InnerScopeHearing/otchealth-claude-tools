@@ -41,8 +41,13 @@ const hmac = (k, d) => crypto.createHmac("sha256", k).update(d).digest();
  *
  * Order matters: the task role is checked FIRST because it is the path that works with no Azure
  * involvement at all. Static env keys are the developer-seat fallback.
+ *
+ * EXPORTED (2026-08-18) so s3-blob.mjs (the kb-memory ledger's S3 backend) reuses this SAME
+ * resolver instead of a fourth reimplementation of "how does this seat get AWS credentials". Every
+ * caller of ssmSecret()/ssmSecretSet() already depends on this chain being correct; widening its
+ * visibility changes nothing about its behavior.
  */
-async function awsCreds() {
+export async function awsCreds() {
   const rel = process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI;
   const full = process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI;
   if (rel || full) {

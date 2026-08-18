@@ -43,6 +43,7 @@ import { writeAdvisory, RING_DENY } from "./dedupe.mjs";
 import { parseNdjson, serializeNdjson, nextId, isConflict, condHeaders } from "./blobwrite.mjs";
 import { kvSecret } from "./azure-secret.mjs";
 import { linkFields, walkGraph, formatEdge } from "./entity-graph.mjs";
+import { getTextFromS3, getTextMetaFromS3, putObjectToS3, listBlobsFromS3, s3Configured } from "./s3-blob.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
 
 const SM = "otchealth-shared-prod";
@@ -60,6 +61,44 @@ const AGENTS = {
 // can publish/read; this set is documentation + the default `team` roster.
 const EXEC = ["exec", "coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth", "developer"];
 const NO_SHARE = new Set(["clo-personal"]); // privilege wall: personal-matter memory never leaves its lane
+
+// ---- BLOB_BACKEND: azure | s3 (2026-08-18, the Azure-write-lock fix) --------------------------
+// Every storage account this file targets (otchealthcommons, otchealthcfodata, otchealthlegalstore)
+// is now WRITE-BLOCKED: every PUT returns `403 AuthorizationPermissionMismatch` while GET/LIST still
+// answer normally (verified live, all three accounts, 2026-08-18 -- see the PR description for the
+// probe). This reads like an account-wide read-only lock applied as an Azure-exit step, NOT literal
+// resource deletion (a prior note calling it "permanently deleted" overstates what was verified; the
+// data is still there and still readable). Whatever the precise mechanism, it is unconditional and
+// not expected to reverse, so writes need a real alternate destination, not a wait-and-retry.
+//
+// otchealth-mcp-server (the gateway) hit the identical wall and ships `BLOB_BACKEND=s3` in its own
+// production task definition today, backed by an S3 mirror at the EXACT SAME object paths
+// (`<account>/<container>/<blobPath>`) this file already computes -- see s3-blob.mjs's header for
+// the full mapping. Two differences from the gateway's own default justify diverging from it here:
+//
+//   1. The gateway's code DEFAULT stays 'azure' because ops sets BLOB_BACKEND=s3 explicitly in its
+//      ONE task definition. kb-memory has no equivalent single deployment point -- it runs on many
+//      independent agent seats, most of which will never set this var by hand. Keeping 'azure' as
+//      the default here would mean this fix only helps a seat that already knew to opt in, i.e. it
+//      would not actually close the reported bug for the general case. So the default here is 's3'.
+//   2. Unlike kvSecret()'s "try Azure, fall back to SSM" pattern (right for a maybe-transient
+//      credential hiccup), retrying a write against an account that is DURABLY locked burns
+//      fetchRetry's full backoff ladder (up to ~4 attempts, several seconds) on every single call,
+//      forever, for no chance of success. So this is a hard SELECT, not a try-then-fallback: writes
+//      go straight to S3 and never attempt the doomed Azure PUT.
+//
+// READS are different: S3 only has a COMPLETE mirror for the rooms migrated on 2026-08-15/16 (CFO,
+// legal). The otchealthcommons/company-journal mirror ROW was added today and is still nearly empty
+// (verified live: one object, the gateway's own just-written proof entry) -- the full multi-year
+// shared-team-feed and every private ledger's history live ONLY in Azure right now. Reading S3-only
+// would make thousands of existing pitfalls/decisions/status entries vanish from `tail`/`team`/
+// `recall` the moment this ships: a smaller, quieter version of the exact "silent memory loss" bug
+// this fix exists to close, just moved from writes to reads. So reads MERGE: S3 (authoritative,
+// carries every post-fix write) union Azure (best-effort; read-only but not yet gone, so still the
+// only copy of the deep history). Azure failing on a read is caught and ignored per-call here, never
+// fatal -- the day Azure truly disappears, reads keep working from S3 alone with no code change.
+const BLOB_BACKEND = (process.env.BLOB_BACKEND || "s3").toLowerCase(); // 'azure' | 's3'
+const S3_WRITES = BLOB_BACKEND !== "azure";
 
 // ---- args ----
 const argv = process.argv.slice(2);
@@ -104,9 +143,25 @@ function azureCredsPresent() {
     (process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER) // Container Apps managed identity
   );
 }
-// True when SOME credential can reach the Azure memory backend. Azure first (the norm); a still-hydrated
-// GCP SA is accepted last purely as harmless legacy (retired, never required).
-function memoryBackendPresent() { return azureCredsPresent() || !!resolveSaJson(); }
+// Cheap, SYNCHRONOUS presence check for AWS creds (no network) — mirrors aws-secret.mjs's awsCreds()
+// resolution ORDER (ECS task role env markers, then AWS_ACCESS_KEY_ID/SECRET, then the OTC_AWS_*
+// fallback) without actually calling it, so this stays as fast as the Azure check it sits beside.
+// Kept in sync deliberately with awsCreds()'s own "prox" placeholder guard (the cloud sandbox injects
+// a non-functional prefix="prox" credential into AWS_ACCESS_KEY_ID) so this never reports "present"
+// for a key that would actually fail to sign anything.
+function s3CredsPresent() {
+  return !!(
+    process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI ||
+    (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY && !/^prox/i.test(process.env.AWS_ACCESS_KEY_ID)) ||
+    (process.env.OTC_AWS_ACCESS_KEY_ID && process.env.OTC_AWS_SECRET_ACCESS_KEY && !/^prox/i.test(process.env.OTC_AWS_ACCESS_KEY_ID))
+  );
+}
+// True when SOME credential can reach the ACTIVE memory backend. Once BLOB_BACKEND=s3 (the default,
+// see above), that means AWS creds primarily, since S3 is what writes/authoritative-reads target now;
+// Azure/GCP are accepted too since they still back the best-effort history-merge leg on reads. This
+// replaces an Azure-only check that would otherwise report "MEMORY OFF" on every seat that has AWS
+// creds but no Azure creds — which, per the same-day audit that produced this fix, is now most seats.
+function memoryBackendPresent() { return (S3_WRITES && s3CredsPresent()) || azureCredsPresent() || !!resolveSaJson(); }
 function saJwt(scope) {
   const raw = resolveSaJson();
   if (!raw) { console.error("kb-memory: MEMORY IS OFF - no service account. Set GCP_CLAUDE_DRIVER_SA_JSON, or place ~/.gcp_claude_driver_sa.json (run /tmp/octools/setup/session-start.sh)."); process.exit(3); }
@@ -145,9 +200,16 @@ let ACCT, AKEY, AZ_SAS, KEYBASE, JSONL, MD, RECON;
 async function initStore() {
   if (!A) { console.error("need --agent <cfo|clo|clo-personal|commons|...>"); process.exit(2); }
   ACCT = process.env.KB_ACCOUNT || A.account || (await sm(A.accountSecret));
+  if (!ACCT) { console.error(`Missing storage account for ledger '${ON}' (account secret ${A.accountSecret}).`); process.exit(2); }
+  // The Azure key is BEST-EFFORT once S3_WRITES is true: it only backs the merge-on-read Azure leg
+  // (still-readable pre-migration history) and the explicit BLOB_BACKEND=azure legacy path. A
+  // missing/unreachable key must never hard-exit the command the way it used to, because S3 is the
+  // write target and the read authority now — losing Azure entirely degrades history depth, it does
+  // not break the tool.
   AKEY = process.env.KB_KEY || (await sm(A.keySecret));
-  if (!ACCT || !AKEY) { console.error(`Missing storage creds for ledger '${ON}' (account ${A.account}, key secret ${A.keySecret}).`); process.exit(2); }
-  AZ_SAS = buildSas(ACCT, AKEY);
+  if (AKEY) { AZ_SAS = buildSas(ACCT, AKEY); }
+  else if (!S3_WRITES) { console.error(`Missing storage creds for ledger '${ON}' (account ${A.account}, key secret ${A.keySecret}).`); process.exit(2); }
+  else { console.error(`[kb-memory] note: Azure key for '${ON}' unavailable; continuing S3-only (pre-fix Azure-only history for this ledger, if any, will not be visible until Azure is reachable again).`); }
   KEYBASE = A._file || ON;
   JSONL = `_MEMORY/${KEYBASE}.jsonl`; MD = `_MEMORY/${KEYBASE}.md`; RECON = `_MEMORY/${KEYBASE}.reconcile`;
 }
@@ -167,13 +229,63 @@ async function fetchRetry(u, opts, tries = 4) {
   }
   return last;
 }
-async function getText(name) { const r = await fetchRetry(url(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return await r.text(); }
+// Azure read, BEST-EFFORT: never throws, returns null on ANY failure (including "no key at all",
+// a genuine outage, or a non-2xx/404 response). S3_WRITES mode uses this ONLY to merge in history
+// that predates the 2026-08-18 write lock; Azure going fully dark someday degrades this to "no old
+// history found", never an error the caller has to handle. Two tries only (not the full 4): this is
+// a best-effort enrichment on the hot path, not the authoritative read, so it must not multiply
+// mem.mjs's latency chasing a store that may never answer.
+async function azureGetBestEffort(name) {
+  if (!AZ_SAS) return null;
+  try { const r = await fetchRetry(url(name), undefined, 2); return r && r.ok ? await r.text() : null; }
+  catch { return null; }
+}
+// Merge two ndjson blobs by entry `id` (S3 wins a same-id collision, since it is the authoritative,
+// more-recent copy going forward), then resort by `id` — ids are `YYYYMMDD-NNN[-xxxx]`, lexicographic
+// order IS chronological order, so this reconstructs a coherent append-order across two sources
+// without needing to trust either source's own on-disk ordering.
+function mergeJsonlText(s3Text, azureText) {
+  if (!azureText) return s3Text; // the overwhelmingly common case once a ledger has been consolidated
+  if (!s3Text) return azureText;
+  const byId = new Map();
+  for (const r of parseNdjson(azureText)) if (r && r.id) byId.set(r.id, r);
+  for (const r of parseNdjson(s3Text)) if (r && r.id) byId.set(r.id, r); // S3 overwrites Azure on collision
+  const rows = [...byId.values()].sort((a, b) => (a.id || "").localeCompare(b.id || ""));
+  return serializeNdjson(rows);
+}
+async function getText(name) {
+  if (S3_WRITES) {
+    const s3Text = await getTextFromS3(ACCT, A.container, name); // authoritative; throws loud on a real S3 failure
+    return mergeJsonlText(s3Text, await azureGetBestEffort(name));
+  }
+  const r = await fetchRetry(url(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return await r.text();
+}
 // ETag-aware read for optimistic concurrency: returns { text, etag } (etag null when the blob is absent).
-async function getTextMeta(name) { const r = await fetchRetry(url(name)); if (r.status === 404) return { text: null, etag: null }; if (!r.ok) throw new Error("get " + r.status); return { text: await r.text(), etag: r.headers.get("etag") }; }
-async function putText(name, body, ct) { const r = await fetchRetry(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160)); }
-// Conditional PUT for optimistic concurrency: pass the ETag read alongside the body; returns the raw
-// Response so the caller can detect a precondition failure (isConflict) and reload+retry.
-async function putTextCond(name, body, ct, etag) { return fetchRetry(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8", ...condHeaders(etag) }, body }); }
+// The etag is always S3's (never Azure's): S3 is the only PUT target now, so it is the only etag a
+// conditional write-back needs to be conditioned on.
+async function getTextMeta(name) {
+  if (S3_WRITES) {
+    const { text: s3Text, etag } = await getTextMetaFromS3(ACCT, A.container, name);
+    return { text: mergeJsonlText(s3Text, await azureGetBestEffort(name)), etag };
+  }
+  const r = await fetchRetry(url(name)); if (r.status === 404) return { text: null, etag: null }; if (!r.ok) throw new Error("get " + r.status); return { text: await r.text(), etag: r.headers.get("etag") };
+}
+async function putText(name, body, ct) {
+  if (S3_WRITES) { await putObjectToS3(ACCT, A.container, name, body, ct); return; }
+  const r = await fetchRetry(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160));
+}
+// Conditional PUT for optimistic concurrency: pass the ETag read alongside the body; returns a
+// Response-shaped object ({ok,status,text()}) so the caller (commitAppend) can detect a precondition
+// failure (isConflict) and reload+retry, unchanged from the Azure-only version of this function.
+// condHeaders() names ("If-Match"/"If-None-Match") are Azure-style casing; s3-blob.mjs lowercases
+// them itself before signing, so passing the SAME helper through to both backends is safe.
+async function putTextCond(name, body, ct, etag) {
+  if (S3_WRITES) {
+    try { const res = await putObjectToS3(ACCT, A.container, name, body, ct, condHeaders(etag)); return { ok: true, status: 200, etag: res.etag, text: async () => "" }; }
+    catch (e) { return { ok: false, status: e.status || 500, text: async () => String(e.message || e) }; }
+  }
+  return fetchRetry(url(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8", ...condHeaders(etag) }, body });
+}
 // Atomically append to the JSONL ledger under optimistic concurrency. `buildEntry(freshRows)` MUST
 // recompute everything it needs (id via nextId, supersedes, etc.) from the rows it is handed, because
 // on a concurrent-writer conflict we reload the fresh blob and call it again. Returns { rows, entry }
@@ -204,11 +316,62 @@ async function commitAppend(buildEntry, attempts = 6) {
 const C = AGENTS.commons;
 const SHARED_PREFIX = "_MEMORY/_exec/";
 let C_ACCT, C_SAS;
-async function commonsInit() { if (C_ACCT) return; C_ACCT = process.env.KB_COMMONS_ACCOUNT || C.account || (await sm(C.accountSecret)); const k = await sm(C.keySecret); if (!C_ACCT || !k) throw new Error("commons creds missing"); C_SAS = buildSas(C_ACCT, k); }
+async function commonsInit() {
+  if (C_ACCT) return;
+  C_ACCT = process.env.KB_COMMONS_ACCOUNT || C.account || (await sm(C.accountSecret));
+  if (!C_ACCT) throw new Error("commons account missing");
+  // Same posture as initStore(): the Azure key backs only the best-effort merge-on-read leg once
+  // S3_WRITES is true, so its absence is a degradation (less history visible), never a hard failure.
+  const k = await sm(C.keySecret);
+  if (k) C_SAS = buildSas(C_ACCT, k);
+  else if (!S3_WRITES) throw new Error("commons creds missing");
+}
 const cUrl = (name) => `https://${C_ACCT}.blob.core.windows.net/${C.container}/${encPath(name)}?${C_SAS}`;
-async function cGet(name) { const r = await fetchRetry(cUrl(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("cget " + r.status); return await r.text(); }
-async function cPut(name, body) { const r = await fetchRetry(cUrl(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/x-ndjson" }, body }); if (!r.ok) throw new Error("cput " + r.status + " " + (await r.text()).slice(0, 160)); }
-async function cList(prefix) { const out = []; let marker = ""; do { let u = `https://${C_ACCT}.blob.core.windows.net/${C.container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${C_SAS}`; if (marker) u += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(u); if (!r.ok) break; const xml = await r.text(); for (const m of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(m[1]); marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker); return out; }
+async function cGetAzureBestEffort(name) {
+  if (!C_SAS) return null;
+  try { const r = await fetchRetry(cUrl(name), undefined, 2); return r && r.ok ? await r.text() : null; }
+  catch { return null; }
+}
+async function cGet(name) {
+  if (S3_WRITES) return mergeJsonlText(await getTextFromS3(C_ACCT, C.container, name), await cGetAzureBestEffort(name));
+  const r = await fetchRetry(cUrl(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("cget " + r.status); return await r.text();
+}
+async function cPut(name, body) {
+  if (S3_WRITES) { await putObjectToS3(C_ACCT, C.container, name, body, "application/x-ndjson"); return; }
+  const r = await fetchRetry(cUrl(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/x-ndjson" }, body }); if (!r.ok) throw new Error("cput " + r.status + " " + (await r.text()).slice(0, 160));
+}
+// AZURE listing, FIXED (2026-08-18): the original `if (!r.ok) break;` returned whatever had
+// accumulated so far (empty, on a first-page failure) as a normal successful result — so an expired
+// SAS, a network blip, or (as of today) the account-wide write lock's edges reported "nobody on the
+// exec team has shared anything" instead of an error. That is consumed by `team`/`tail`/`recall`/
+// the retraction filter, so the failure mode was an agent believing the rest of the fleet had
+// recorded nothing and a retracted belief able to resurface as current truth — worse than the
+// write-side bug, because a wrong answer reads as a right one. otchealth-mcp-server's own Azure
+// listing (src/memory/store.ts's listShared) hit and fixed the identical bug; this is the same fix:
+// throw on anything other than a genuine "container does not exist yet" 404.
+async function cListAzureAll(prefix) {
+  const out = []; let marker = "";
+  do {
+    let u = `https://${C_ACCT}.blob.core.windows.net/${C.container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${C_SAS}`;
+    if (marker) u += `&marker=${encodeURIComponent(marker)}`;
+    const r = await fetch(u);
+    if (r.status === 404) break;
+    if (!r.ok) throw new Error(`commons list ${r.status} (refusing to report an empty shared feed as success): ${(await r.text()).slice(0, 160)}`);
+    const xml = await r.text();
+    for (const m of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(m[1]);
+    marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || "";
+  } while (marker);
+  return out;
+}
+async function cList(prefix) {
+  if (S3_WRITES) {
+    const s3Names = await listBlobsFromS3(C_ACCT, C.container, prefix); // authoritative; throws loud on a real S3 failure
+    let azNames = [];
+    if (C_SAS) { try { azNames = await cListAzureAll(prefix); } catch { azNames = []; } } // best-effort merge leg only
+    return [...new Set([...s3Names, ...azNames])];
+  }
+  return cListAzureAll(prefix);
+}
 const sharedKey = (agent) => `${SHARED_PREFIX}${agent}.jsonl`;
 async function publishShared(agent, entry) {
   if (NO_SHARE.has(agent)) { console.error(`[kb-memory] NOTE: ${agent} is privileged; entry kept in the private lane only (NOT shared to the exec team).`); return false; }
@@ -635,11 +798,17 @@ async function runPack() {
     const envAg = (process.env.KB_AGENT || "").trim();
     const resolved = sessMark || repoMark || envAg;
     const src = sessMark ? "session marker (~/.claude/.kb-agent)" : repoMark ? "repo .kb-agent" : envAg ? "env KB_AGENT" : "(none)";
-    const saOk = memoryBackendPresent();
+    // whoami is a diagnostic, not the hot path, so it pays for the real (async) S3-credential probe
+    // rather than the cheap sync presence check runPack() uses — accuracy matters more here than the
+    // few ms of an ECS-metadata round trip.
+    const s3Ok = S3_WRITES && (await s3Configured());
+    const azOk = azureCredsPresent() || !!resolveSaJson();
+    const saOk = s3Ok || azOk;
     console.log("# kb-memory whoami");
     console.log(`resolved identity (the hooks use this): ${resolved || "(NONE - auto-recall OFF)"}  [via ${src}]`);
     if (sessMark && envAg && sessMark !== envAg) console.log(`note: session marker '${sessMark}' overrides shared env KB_AGENT '${envAg}' (correct when agents share one environment).`);
-    console.log(`memory backend: ${saOk ? "present (Azure Key Vault + Blob)" : "MISSING - no Azure creds (AZURE_SP_* or managed identity); writes will fail"}`);
+    console.log(`blob backend: ${BLOB_BACKEND} (writes go here; reads merge this with best-effort Azure history when s3)`);
+    console.log(`memory backend: ${saOk ? `present (${s3Ok ? "AWS/S3" : ""}${s3Ok && azOk ? " + " : ""}${azOk ? "Azure Key Vault/Blob, read-merge only" : ""})` : "MISSING - no AWS creds (checked the ECS task role, AWS_ACCESS_KEY_ID/SECRET, OTC_AWS_*) and no Azure creds either; writes will fail"}`);
     if (!AGENT) { console.log(resolved ? `tip: run 'whoami --agent ${resolved}' to probe its ledger, or 'use <role>' to claim.` : "RESULT: FAIL - no identity. Run 'mem.mjs use <role>' then re-run."); return; }
     if (resolved && resolved !== AGENT) console.log(`WARNING: this session resolves to '${resolved}', not '${AGENT}'. Claim it: mem.mjs use ${AGENT}`);
     try {
