@@ -66,7 +66,11 @@ test("PUT with Azure-style mixed-case conditional headers (If-Match/If-None-Matc
       return { ok: true, status: 200, headers: new Map([["etag", '"abc123"']]), text: async () => "" };
     }, () => putObjectToS3("otchealthcommons", "company-journal", "_MEMORY/_exec/cto.jsonl", "line\n", "application/x-ndjson", { "If-Match": '"prior-etag"' })));
   assert.ok(captured, "fetch must have been called");
-  assert.ok(captured.url.startsWith("https://otchealth-finance-legal-dr-55c84f6b.s3.us-east-1.amazonaws.com/"), "must target the finance/legal DR bucket");
+  // The commons feed lives in brain-dr, NOT finance-legal-dr. This assertion is incidental to what
+  // the test is really about (SigV4 header casing), which is exactly why it is dangerous: an
+  // incidental hardcoded bucket defends whatever value it was written with. Routing is pinned
+  // deliberately in s3-mirror-table.test.mjs; this line just has to agree with it.
+  assert.ok(captured.url.startsWith("https://otchealth-brain-dr-55c84f6b.s3.us-east-1.amazonaws.com/"), "must target the shared-brain DR bucket");
   assert.ok(captured.url.includes("otchealthcommons%2Fcompany-journal%2F_MEMORY%2F_exec%2Fcto.jsonl") || captured.url.includes("otchealthcommons/company-journal/_MEMORY/_exec/cto.jsonl"), `unexpected key in url: ${captured.url}`);
   // The signed Authorization header's SignedHeaders list must contain lowercase "if-match", proving
   // the mixed-case input got normalized before signing (the exact bug fixed in this file).
