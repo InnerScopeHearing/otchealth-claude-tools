@@ -30,6 +30,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
+import { pathToFileURL } from "node:url";
 import { kvSecret, kvSecretSet } from "../kb-memory/azure-secret.mjs";
 
 const PROJECT = "otchealth-shared-prod";
@@ -125,7 +126,10 @@ async function smAddVersion(tok, id, value) {
 
 // ---------- provider registry ----------
 // Each provider names ONLY the SM secret ids it reads/writes; no values live here.
-const PROVIDERS = {
+// Exported (2026-08-18) so a sibling script (token-age-metrics.mjs) can derive the exact set of
+// genuinely-rotating refresh-token secret ids from this ONE registry instead of re-guessing/
+// duplicating it -- "reuse whatever token-keeper knows" rather than hand-listing secret names again.
+export const PROVIDERS = {
   xero: {
     kind: "oauth-rotating",
     tokenUrl: "https://identity.xero.com/connect/token",
@@ -254,7 +258,14 @@ async function status(tok) {
 function arg(flag) { const i = process.argv.indexOf(flag); return i >= 0 ? (process.argv[i + 1] || true) : null; }
 const has = (flag) => process.argv.includes(flag);
 
-(async () => {
+// isMain guard (2026-08-18): without this, `import`ing this module for its PROVIDERS registry (see
+// token-age-metrics.mjs) ran this WHOLE CLI as an unconditional side effect on import -- it read the
+// IMPORTING script's own process.argv (there is only one process), misparsed its flags as a keeper
+// command, and process.exit()'d the importer out from under it before its own code ever ran. Mirrors
+// the exact isMain guard skills/fleet-medic/medic.mjs already uses for the same reason. Zero change
+// to `node keeper.mjs ...` behavior: isMain is true whenever this file is the process entry point.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) (async () => {
   const cmd = process.argv[2] || "status";
   const engine = detectEngine();
 

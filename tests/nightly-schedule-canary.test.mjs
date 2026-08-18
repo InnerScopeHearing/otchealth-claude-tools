@@ -83,7 +83,7 @@ test("pageExitCode: non-strict never pages, even with anomalies (report-only def
   assert.equal(pageExitCode(0, false), 0);
 });
 
-test("the live registry: all 9 nightly-workflow entries are present and each carries a positive interval_min", () => {
+test("the live registry: all 10 nightly-workflow entries are present and each carries a positive interval_min", () => {
   // Guards against a silent typo/removal in setup/heartbeat-registry.json itself dropping one of the
   // tracked entries or leaving its interval_min unset (which would make heartbeat.mjs's own status
   // math treat it as NO-DATA instead of a real staleness check). ITEM 5.3 (Wave 5, AI-OS
@@ -93,6 +93,8 @@ test("the live registry: all 9 nightly-workflow entries are present and each car
   // landed on main independently in the same window; both are tracked here. 2026-07-28 review finding
   // added "nightly-secrets-dr-export" (its workflow had a heartbeat.mjs beat step with nothing in this
   // registry to check it against -- see that entry's own note). Deliberately NOT tracking
+  // 2026-08-18 added "nightly-token-age-metrics" (emits otc.fleet.token_age_hours,
+  // see that entry's own note).
   // "azure-watchdog" here yet: its only trigger is manual workflow_dispatch (the schedule is disabled
   // until 5 off-Azure secrets are provisioned, see azure-watchdog.yml's own header comment) -- adding a
   // kind:"nightly-workflow" registry entry for a workflow with no live schedule would make
@@ -113,6 +115,7 @@ test("the live registry: all 9 nightly-workflow entries are present and each car
     "oauth-clients-canary",
     "nightly-s3-dr-mirror",
     "nightly-secrets-dr-export",
+    "nightly-token-age-metrics",
   ].sort();
   assert.deepEqual(trackedJobNames(registry), expected);
   for (const job of expected) {

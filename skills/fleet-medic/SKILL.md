@@ -60,3 +60,12 @@ run on demand if a persistent escalation warrants it.
 Non-PHI ring. Reads only health METADATA (agent id, status, age, hook/ledger counts) + the shared feed,
 never a private/clo-personal lane's content. The directive carries only generic activation steps, no
 secrets. Fail-open: a medic that crashes must never be worse than no medic (every path exits 0).
+
+## Telemetry: `otc.fleet.agent_error` (2026-08-18)
+Every `scan` (with or without `--dispatch`) also emits one Datadog point PER agent, value 1 if that
+agent is DARK or NO-MEMORY this scan, else 0, tagged `agent:<name>,job:fleet-medic,condition:<c>`.
+This closes the Datadog monitor "AI Fleet — agent errors (1h)" (id 22893313), which showed "No Data"
+since 2026-06-27 because nothing ever emitted it. Rides the EXISTING `scan --dispatch` cron (every
+~30 min) with no job-config change. A send failure is counted + logged loudly (never silently
+dropped) but does not change this job's overall fail-open exit-0 policy; see `emitAgentErrorMetrics()`
+in `medic.mjs`. `MEDIC_SKIP_METRICS=1` disables it without a code change.
