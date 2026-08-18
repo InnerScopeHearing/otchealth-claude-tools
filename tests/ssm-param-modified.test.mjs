@@ -1,7 +1,8 @@
 // ssmParamModifiedMs() is the age SOURCE for otc.fleet.token_age_hours: it must return full-precision
 // milliseconds (unlike ssmListDetailed()'s `created`, which is truncated to a YYYY-MM-DD string and
 // would make an hours-resolution metric meaningless), never decrypt a value it does not need, and
-// return null (not throw) for anything it cannot answer.
+// distinguish ABSENT (null) from UNREADABLE (throws) -- conflating them lets an SSM outage read as
+// "this secret does not exist", which is how a green job emits nothing and the monitor goes silent.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ssmParamModifiedMs } from "../skills/kb-memory/aws-secret.mjs";
@@ -47,7 +48,14 @@ test("a nonexistent parameter (404) returns null, never throws", async () => {
   assert.equal(ms, null);
 });
 
-test("no AWS credentials resolvable returns null, never throws (the ordinary case on a bare seat)", async () => {
+// CONTRACT CHANGE (CTO review): this test previously asserted that no-credentials returns null,
+// i.e. the SAME answer as "the parameter does not exist". That conflation was the defect. The
+// caller (token-age-metrics.mjs) turns null into "NOT FOUND in SSM -- skipping", counted in a
+// bucket that does NOT fail the run, so a credential or SSM outage would have produced a GREEN job
+// that emitted zero metrics -- putting the monitor straight back into the "No Data" state this
+// whole feature exists to end, with nothing left to notice it. "I could not tell you" must never
+// be reported as "there is nothing there".
+test("no AWS credentials resolvable THROWS -- unreadable is not the same answer as absent", async () => {
   const prev = {
     ak: process.env.AWS_ACCESS_KEY_ID, sk: process.env.AWS_SECRET_ACCESS_KEY,
     rel: process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, full: process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI,
@@ -59,8 +67,11 @@ test("no AWS credentials resolvable returns null, never throws (the ordinary cas
     const original = globalThis.fetch;
     globalThis.fetch = async () => { fetchCalled = true; return { status: 200, text: async () => "{}" }; };
     try {
-      const ms = await ssmParamModifiedMs("anything");
-      assert.equal(ms, null);
+      await assert.rejects(
+        () => ssmParamModifiedMs("anything"),
+        (e) => e instanceof Error && /status=0|no-aws-credentials/i.test(e.message),
+        "must surface a real error, not a null that reads as 'not found'",
+      );
       assert.equal(fetchCalled, false, "must not attempt a signed call with no credentials to sign with");
     } finally { globalThis.fetch = original; }
   } finally {
@@ -68,4 +79,23 @@ test("no AWS credentials resolvable returns null, never throws (the ordinary cas
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
   }
+});
+
+test("a transient SSM failure (throttle/5xx) THROWS and is never reported as 'not found'", async () => {
+  // The specific scenario the conflation would have hidden: SSM is up but throttling. Under the old
+  // return-null-for-everything contract this looked identical to a deleted parameter.
+  await assert.rejects(
+    () =>
+      withEnvAndFetch(
+        async () => ({ status: 400, text: async () => JSON.stringify({ __type: "ThrottlingException" }) }),
+        () => ssmParamModifiedMs("qbo-refresh-otchealth"),
+      ),
+    (e) => e instanceof Error && /ThrottlingException/.test(e.message),
+    "a throttle must be distinguishable from an absent parameter",
+  );
+  await assert.rejects(
+    () => withEnvAndFetch(async () => ({ status: 500, text: async () => "" }), () => ssmParamModifiedMs("qbo-refresh-otchealth")),
+    (e) => e instanceof Error && /status=500/.test(e.message),
+    "a 5xx must be distinguishable from an absent parameter",
+  );
 });
