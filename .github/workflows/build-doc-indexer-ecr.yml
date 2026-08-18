@@ -18,13 +18,45 @@ name: build-doc-indexer-ecr
 # The task definitions reference doc-indexer:latest by TAG, not by digest, and Fargate pulls on
 # every task start, so a new :latest is picked up by the next scheduled run with no task-definition
 # change required.
+# BUILD ON MERGE, added 2026-08-18. Until today this workflow was workflow_dispatch ONLY, and every
+# one of the 8 runs it had ever had was a manual click. That is not a safety gate, it is a
+# remembering gate, and it failed the way remembering gates fail: today's merge-to-deploy gap was
+# 14.64 hours, and an earlier one ran 42 hours, during which every "fix" merged to main was inert in
+# every running job while the merge itself looked like the fix landing.
+#
+# The manual step protected nothing. Task definitions reference doc-indexer:latest by TAG and Fargate
+# re-pulls on every task start, so jobs were always going to run whatever :latest happened to be. The
+# only thing the dispatch-only trigger controlled was WHEN someone remembered to make :latest current.
+# main is already protected by the toolkit test gate on every PR, so building from it is not a
+# widening of what can reach production; it just removes the interval where main and :latest disagree.
+#
+# paths-ignore, deliberately, NOT paths. An allowlist fails UNSAFE: a future file in a path nobody
+# thought to list silently stops triggering a rebuild, which is precisely the failure being fixed
+# here. A denylist fails SAFE: an unrecognised new path still builds. The only entries are paths that
+# cannot affect the image, and the Dockerfile copies from the repo root, so almost everything can.
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'runbooks/**'
+      - 'research/**'
+      - 'specs/**'
+      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
     inputs:
       tag:
         description: 'Image tag to build and push'
         required: false
         default: 'latest'
+
+# Queue, never cancel. Two merges landing close together must both get built: cancelling the first
+# would leave :latest carrying the earlier commit while main has moved past it, recreating a smaller
+# version of the exact staleness this trigger exists to remove.
+concurrency:
+  group: build-doc-indexer-ecr
+  cancel-in-progress: false
 
 permissions:
   contents: read
