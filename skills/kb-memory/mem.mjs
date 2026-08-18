@@ -46,6 +46,7 @@ import { linkFields, walkGraph, formatEdge } from "./entity-graph.mjs";
 import { getTextFromS3, getTextMetaFromS3, putObjectToS3, listBlobsFromS3, s3Configured } from "./s3-blob.mjs";
 import { awsCredsPresent } from "./aws-secret.mjs";
 import { FAILED_WRITE_FILE, appendFailedWriteFallback } from "./local-fallback.mjs";
+import { redactSecrets } from "./redact.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url)); // for spawning sibling scripts (index-one.mjs)
 
 const SM = "otchealth-shared-prod";
@@ -1004,7 +1005,13 @@ async function runPack() {
   console.error("verbs: remember | decision | correct | pitfall | status | entity | recall | tail | team | inbound | reconcile | render | whoami | use | list-agents | state | state-sync\n  cross-lane: add --on <lane> to write on ANOTHER agent's ledger (append-only, attributed by=<--agent>); the owner sees it via 'inbound' / 'tail' on wake and 'reconcile' to ack.\n  state --get [--json] | state --set [--goal \"...\"] [--constraints \"a;b;c\"] [--decisions \"a;b;c\"] [--last \"...\"]  (typed current-state handoff doc)\n  state-sync --agent <a> --facts '[\"...\"]' [--source precompact|stop|periodic] [--session-id <id>]  (CBP-1: additive session_facts + checkpoint, never touches goal/constraints/open_decisions)");
   process.exit(2);
 })().catch((e) => {
-  console.error("ERROR: " + e.message);
+  // redactSecrets, not raw e.message: this string is both PRINTED here and PERSISTED into the
+  // fallback file below, and a recovery pass replays those rows into the ledger where a row can be
+  // share:true. The errors that reach this catch come from the credential chain itself, so a token,
+  // a signed URL or a DSN is plausibly in scope at throw time. Redaction keeps every key and drops
+  // only values, so the fail-loud diagnosis this path exists to deliver survives intact.
+  const safeMessage = redactSecrets(e.message);
+  console.error("ERROR: " + safeMessage);
   // DURABLE LOCAL FALLBACK for a DIRECT CLI write (2026-08-18, the agent-seat credential bootstrap
   // fix). Before this, only content that happened to route through reflect.mjs's spawn-and-catch
   // --commit loop got saved when its write failed; a human/agent typing `mem.mjs status "..." --agent
@@ -1021,7 +1028,7 @@ async function runPack() {
     const item = { type: cmd, text: TEXT, share: SHARE || cmd === "status", tags: ["mem-direct-fallback"] };
     if (cmd === "correct" && WAS) item.was = WAS;
     if (CROSS) item.on = ON;
-    appendFailedWriteFallback(AGENT, item, e.message, "mem.mjs");
+    appendFailedWriteFallback(AGENT, item, safeMessage, "mem.mjs");
     console.error(`[kb-memory] NOT LOST: saved to the local fallback (${FAILED_WRITE_FILE(AGENT)}). Re-run this same command once credentials are restored, or recover the file by hand.`);
   }
   process.exit(1);

@@ -147,6 +147,22 @@ function spawnMem(args, { home, env: extraEnv = {} } = {}) {
     AZURE_SP_CLIENT_ID: undefined, AZURE_SP_CLIENT_SECRET: undefined, AZURE_SP_TENANT_ID: undefined,
     IDENTITY_ENDPOINT: undefined, IDENTITY_HEADER: undefined,
     GCP_CLAUDE_DRIVER_SA_JSON: undefined,
+    // Silence the Azure CLI's telemetry uploader. mem.mjs's credential chain tries `az account
+    // get-access-token` (azure-secret.mjs azCliToken) as one of its four auth paths, and on a FRESH
+    // $HOME the real Azure CLI both creates $HOME/.azure and spawns a DETACHED python uploader that
+    // keeps writing into it after the az process itself has exited. That async writer raced
+    // withTempHome()'s teardown, which is why CI failed with ENOTEMPTY on rmdir '<tmp>/.azure'.
+    // TWO pieces of evidence from run 32175770849, not inference: the rmdir error names .azure
+    // specifically, and the job's own cleanup reports orphaned `python3` processes still alive at
+    // job end (the real az CLI is Python).
+    //
+    // WHY IT NEVER REPRODUCES IN THE CLOUD SANDBOX, which cost real debugging time and is worth
+    // recording: `which az` there resolves, so "az is missing" is NOT the explanation. It resolves
+    // to a hand-written BASH SHIM at /usr/local/bin/az that only fakes `az account show` and exits
+    // 1 for everything else. A shim creates no ~/.azure and forks no uploader, so the race is
+    // structurally impossible locally and structurally likely on GitHub's ubuntu-latest, which
+    // ships the genuine CLI. Do not "fix" a future flake here by trusting a green local run.
+    AZURE_CORE_COLLECT_TELEMETRY: "0",
     ...extraEnv,
   };
   // Actually strip the `undefined` markers -- spawnSync's `env` object does not support deleting a
@@ -158,7 +174,11 @@ function spawnMem(args, { home, env: extraEnv = {} } = {}) {
 }
 async function withTempHome(run) {
   const dir = await mkdtemp(join(tmpdir(), "mem-credboot-test-"));
-  try { return await run(dir); } finally { await rm(dir, { recursive: true, force: true }); }
+  // `force: true` only swallows ENOENT -- it does NOT help when a directory is repopulated mid-walk.
+  // maxRetries/retryDelay are the documented remedy for exactly the EBUSY/ENOTEMPTY/EPERM class this
+  // hit (a detached process still writing into the tree being removed). Cheap insurance: on the
+  // normal path the first attempt succeeds and neither option costs anything.
+  try { return await run(dir); } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 }
 const fallbackFile = (home, agent) => join(home, ".claude", "kb-cache", `_failed_writes-${agent}.jsonl`);
 
@@ -247,6 +267,12 @@ test("mem.mjs's top-level catch is wired to appendFailedWriteFallback for the di
   const catchStart = src.indexOf("})().catch((e) => {");
   assert.ok(catchStart > -1, "the top-level IIFE catch must exist");
   const tail = src.slice(catchStart);
-  assert.match(tail, /appendFailedWriteFallback\(AGENT, item, e\.message, "mem\.mjs"\)/);
+  // The persisted error is `safeMessage` (redactSecrets(e.message)), NOT the raw message. These rows
+  // are replayed into the ledger by a recovery pass and a row can be share:true, so a credential in
+  // an error string would become durable cross-lane content. Pinning BOTH directions -- redacted is
+  // passed, raw is not -- is what keeps a future refactor from quietly reverting it.
+  assert.match(tail, /appendFailedWriteFallback\(AGENT, item, safeMessage, "mem\.mjs"\)/);
+  assert.match(tail, /const safeMessage = redactSecrets\(e\.message\)/, "the redaction must happen inside this catch");
+  assert.doesNotMatch(tail, /appendFailedWriteFallback\([^)]*e\.message/, "the RAW message must never be what gets persisted");
   assert.match(tail, /WRITE_VERBS = new Set\(\["remember", "fact", "decision", "pitfall", "status", "correct"\]\)/);
 });

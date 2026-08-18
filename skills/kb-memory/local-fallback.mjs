@@ -14,6 +14,7 @@
 // per agent so a recovery pass can be run per-agent without cross-agent interference.
 import { mkdirSync, appendFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
+import { redactSecrets } from "./redact.mjs";
 
 export const FAILED_WRITE_FILE = (agent) => `${homedir()}/.claude/kb-cache/_failed_writes-${agent || "unknown"}.jsonl`;
 
@@ -31,7 +32,14 @@ export function appendFailedWriteFallback(agent, item, error, source = "reflect.
     mkdirSync(dir, { recursive: true });
     const file = FAILED_WRITE_FILE(agent);
     const tags = item._fallback ? ["auto-extract-fallback"] : (Array.isArray(item.tags) && item.tags.length ? item.tags : ["auto-reflect"]);
-    const row = { ts: new Date().toISOString(), agent, type: item.type, text: item.text, share: !!item.share, tags, error, source };
+    // `error` is redacted at THIS choke point, not only at each call site, because every caller
+    // (mem.mjs's direct-CLI catch and reflect.mjs's --commit loop alike) funnels through here, and
+    // these rows are not transient: a recovery pass replays them into the ledger, where a row can be
+    // share:true and therefore visible across lanes. Redaction is idempotent, so a caller that has
+    // already redacted (mem.mjs does, to print the same string) loses nothing by passing through
+    // twice. `text` is deliberately NOT redacted: it is the operator's own content, the entire
+    // reason this file exists, and mangling it would defeat the guarantee the fallback makes.
+    const row = { ts: new Date().toISOString(), agent, type: item.type, text: item.text, share: !!item.share, tags, error: redactSecrets(error), source };
     // OPTIONAL, ADDITIVE fields: a direct `mem.mjs correct` (or a cross-lane `--on` write) carries
     // context a bare {type,text} would lose on recovery. Only set when the caller actually supplied
     // them, so reflect.mjs's own calls (which never pass these) produce byte-identical rows to before.
