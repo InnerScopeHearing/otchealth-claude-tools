@@ -1,11 +1,42 @@
 #!/usr/bin/env node
 // company-brain — ask ONE question, get a cited answer grounded across EVERYTHING the company
 // knows: the agent lessons/decisions (memory-exec), the legal data room, the CFO finance room, the
-// commerce room, and the company journal. Federates the per-room Azure AI Search indexes (hybrid
-// keyword + vector), then synthesizes a cited answer with gpt-4o. The "billion-dollar brain" query.
+// commerce room, and the company journal. Federates the per-room search indexes (hybrid keyword +
+// vector), then synthesizes a cited answer. The "billion-dollar brain" query.
 //
 // RING SAFETY: legal-personal (attorney-privileged) is EXCLUDED by default and only included with
 // --include-personal AND --agent clo. MedReview/PHI is never indexed here. Non-PHI ring.
+//
+// ================== BACKEND SELECTORS (Azure exit, 2026-08-18) ==================
+// This file used to be 100% hardcoded to Azure: init() resolved azure-search-endpoint /
+// azure-search-admin-key and three tiers of Azure OpenAI chat deployments, with NO OpenSearch and no
+// OpenAI-direct branch anywhere. Azure subscription 55c84f6b is PERMANENTLY GONE, so every single
+// invocation threw -- and every per-repo CLAUDE.md names this tool in a mandatory GROUND-FIRST
+// PROTOCOL as the first call for any company question. Three INDEPENDENT selectors now dispatch it,
+// the same names and values the rest of the fleet already uses (skills/kb-memory/semantic.mjs,
+// otchealth-mcp-server's src/search/index.ts + src/azure/foundry.ts):
+//   SEARCH_BACKEND      opensearch (DEFAULT) | azure
+//   EMBEDDINGS_PROVIDER openai     (DEFAULT) | foundry
+//   LLM_PROVIDER        openai     (DEFAULT) | foundry
+// They are independent on purpose: a run is only Azure-free when ALL THREE are off Azure (search,
+// embeddings and chat each reach Azure separately).
+//
+// THE DEFAULTS ARE THE LIVE OPTIONS, NOT azure/foundry. This is a DELIBERATE DEPARTURE from the
+// default('azure')/default('foundry') posture of semantic.mjs and the gateway's env schema, and it
+// is the correct call now: those defaults were written while Azure was the live estate and the new
+// path was the escape hatch. That is inverted. Defaulting the fleet's most-invoked tool to a
+// permanently deleted subscription is not a conservative choice, it is a guaranteed outage on every
+// call for anyone who has not set an env var -- which is every agent seat, since these variables are
+// unset fleet-wide. Azure remains fully reachable via SEARCH_BACKEND=azure / EMBEDDINGS_PROVIDER=
+// foundry / LLM_PROVIDER=foundry; nothing was deleted, and the day a vault and a search service
+// exist again the old path is one env var away.
+//
+// EMBEDDING SPACE IS PINNED, NOT CONFIGURABLE: text-embedding-3-large @ 3072 dims, the space the
+// ~492,557 live room documents were built in. OpenAI serves the identical model, so this switch
+// needs no reindex. A DIFFERENT model (Bedrock Titan/Cohere, or the OpenAI `dimensions` truncation
+// parameter) would produce vectors in an incompatible space, and cosine similarity between
+// incompatible spaces still returns plausible numbers -- semantic search would rank garbage while
+// every health check stayed green. See opensearch-rooms.mjs's assertEmbeddingSpace() guard.
 //
 // DIFF MODE: `brain.mjs diff "<topic>" --since <date>` walks the WARM memory-of-record (the raw
 // per-agent exec-feed ledgers kb-memory writes, the same {ts, supersedes, was} rows semantic.mjs
@@ -23,8 +54,16 @@ import { pathToFileURL } from "node:url";
 import { TIERS, LEGACY_STANDARD, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { RING_DENY } from "../kb-memory/dedupe.mjs";
+// OpenAI-direct embeddings + credential resolution, reused from the module that already owns them
+// (it is imported, never edited). resolveOpenAIKey() checks env -> AWS SSM -> Key Vault in that
+// order, so it resolves with no Azure involvement at all.
+import { resolveOpenAIKey, embedOpenAI, resolveOpenSearchConfig } from "../kb-memory/opensearch-write.mjs";
+// The OpenSearch ROOM adapter (this skill's own new file): chunked/flat aware hybrid search over the
+// federated brain rooms, plus the embedding-space guard.
+import * as OSR from "./opensearch-rooms.mjs";
 const SM = "otchealth-shared-prod";
 const AIS_API = "2023-11-01";
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -32,6 +71,24 @@ const QUERY = argv.slice(1).filter((a, i, arr) => !a.startsWith("--") && !(i > 0
 const PERK = parseInt(val("--n", "6"), 10) || 6;
 const AGENT = (val("--agent", "") || "").toLowerCase();
 // The --include-personal privilege gate is enforced in selectRooms() (single source of truth).
+
+/**
+ * Resolve the three backend selectors from an env bag. PURE (takes the env, returns an object) so
+ * the DEFAULTS themselves are directly unit-testable without mutating process.env -- the defaults
+ * are the load-bearing part of this change, so they get a test, not a comment.
+ *
+ * Defaults are the LIVE options (opensearch / openai / openai), NOT azure/foundry. See this file's
+ * header for why that inversion is deliberate and correct as of the Azure exit.
+ */
+export function resolveSelectors(env = process.env) {
+  const pick = (raw, dflt) => String(raw == null || raw === "" ? dflt : raw).trim().toLowerCase();
+  return {
+    searchBackend: pick(env.SEARCH_BACKEND, "opensearch"),   // 'opensearch' | 'azure'
+    embeddingsProvider: pick(env.EMBEDDINGS_PROVIDER, "openai"), // 'openai' | 'foundry'
+    llmProvider: pick(env.LLM_PROVIDER, "openai"),           // 'openai' | 'foundry'
+  };
+}
+const { searchBackend: SEARCH_BACKEND, embeddingsProvider: EMBEDDINGS_PROVIDER, llmProvider: LLM_PROVIDER } = resolveSelectors();
 
 // room -> AI Search index. (Indexes built by doc-indexer per profile/container + kb-memory semantic.)
 const ROOMS = {
@@ -42,11 +99,13 @@ const ROOMS = {
   journal:  { index: "commons-company-journal",     label: "daily company journal + digests" },
 };
 const PERSONAL = { index: "legal-personal", label: "PRIVILEGED personal legal (CLO only)" };
-// Phase-3: on the S1 service these doc rooms are CHUNKED (one child doc per chunk; vector field
-// text_vector; parent_id links chunks -> parent). memory-exec stays FLAT. searchIndex() keys chunked
-// handling on the LIVE endpoint (S1 vs Basic), so this skill is a zero-op until the cutover flips
-// azure-search-endpoint and then self-switches with no coordinated deploy.
-const DOC_ROOMS = new Set(["legal-company", "finance-cfo-source-docs", "commons-company-journal", "legal-personal", "commerce-commerce-source-docs"]);
+// CHUNKED doc rooms (one child doc per chunk; vector field text_vector on both engines; parent_id
+// links chunks -> parent). memory-exec stays FLAT. The set is no longer duplicated here: it is
+// imported from opensearch-rooms.mjs, which mirrors the gateway's single registry
+// (otchealth-mcp-server/src/azure/search.ts:68-74) -- room shape is a property of the DATA, not of
+// which engine serves it, which is why the gateway resolves it from one registry for both backends
+// too (src/search/index.ts isChunkedRoom). Identical membership to the literal it replaces.
+const DOC_ROOMS = OSR.CHUNKED_ROOMS;
 
 // The attorney-privilege wall, isolated as a PURE function so tests/brain-rooms.test.mjs can prove it
 // without any Azure call. legal-personal joins the target rooms ONLY when the caller is the CLO AND
@@ -64,27 +123,88 @@ async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return 
 
 let AIS_EP, AIS_KEY, AOAI_EP, AOAI_KEY, AOAI_DEP, CHAT_PROVIDERS = [];
 async function init() {
-  AIS_EP = (await sm("azure-search-endpoint") || "").replace(/\/$/, ""); AIS_KEY = await sm("azure-search-admin-key");
-  AOAI_EP = ((await sm("azure-foundry-openai-endpoint")) || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, ""); AOAI_KEY = (await sm("azure-foundry-key")) || (await sm("azure-openai-key")); AOAI_DEP = (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
-  // Chat synthesis routes through PRIMARY -> SECONDARY -> TERTIARY providers so a transient throttle
-  // on any one deployment never silences the brain (down-payment on model-routing, initiative #5).
-  // PRIMARY + SECONDARY both live on the Foundry resource (2,000K TPM GlobalStandard, ample headroom).
-  // The LEGACY Azure OpenAI resource (its gpt-4o deployment is capped at 50K TPM on the regional
-  // "Standard" SKU, already 100% subscribed with zero headroom) is demoted to a last-resort TERTIARY
-  // fallback only, never primary -- primarying on it was the root cause of the recurring "Azure OpenAI
-  // throttled (blocked_calls)" Datadog page (2026-08-01). SECONDARY: gpt-4.1-mini is BANNED for
-  // quality/summarization work (see setup/model-routing.mjs); the brain's whole job IS quality
-  // synthesis, so the secondary defaults to the shared 'quality' tier (gpt-5.1, reasoning-family).
-  const fEp = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); const fKey = await sm("azure-foundry-key");
-  const lEp = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); const lKey = await sm("azure-openai-key");
-  if (fEp && fKey) { const dep = process.env.BRAIN_MODEL || TIERS.standard.deployment; CHAT_PROVIDERS.push({ ep: fEp, key: fKey, dep, label: `foundry/${dep}`, modelFamily: modelFamilyOf(dep) }); }
-  if (fEp && fKey) { const fbDep = process.env.BRAIN_FALLBACK_MODEL || TIERS.quality.deployment; CHAT_PROVIDERS.push({ ep: fEp, key: fKey, dep: fbDep, label: `foundry/${fbDep}`, modelFamily: modelFamilyOf(fbDep) }); }
-  if (lEp && lKey) { const legDep = process.env.BRAIN_LEGACY_MODEL || LEGACY_STANDARD.deployment; CHAT_PROVIDERS.push({ ep: lEp, key: lKey, dep: legDep, label: `legacy/${legDep}`, modelFamily: modelFamilyOf(legDep) }); }
-  if (!AIS_EP || !AIS_KEY) throw new Error("missing azure-search creds");
-  if (!CHAT_PROVIDERS.length) throw new Error("no chat provider creds");
+  // ---- SEARCH ----------------------------------------------------------------------------------
+  if (SEARCH_BACKEND === "opensearch") {
+    // Throws a clear, actionable message when AWS credentials are genuinely unresolvable, and never
+    // touches azure-search-*. Memoized inside that module, so calling it here IS the whole setup:
+    // resolving up front means a credential problem fails at init, not halfway through a federation.
+    await resolveOpenSearchConfig();
+  } else if (SEARCH_BACKEND === "azure") {
+    AIS_EP = (await sm("azure-search-endpoint") || "").replace(/\/$/, ""); AIS_KEY = await sm("azure-search-admin-key");
+    if (!AIS_EP || !AIS_KEY) throw new Error("SEARCH_BACKEND=azure but azure-search-endpoint/azure-search-admin-key are unavailable (Azure subscription 55c84f6b is retired; use the default SEARCH_BACKEND=opensearch)");
+  } else {
+    // A typo must not silently route the brain at nothing (and must not fall back to the dead store).
+    throw new Error(`SEARCH_BACKEND="${SEARCH_BACKEND}" is not recognised (expected "opensearch" or "azure")`);
+  }
+
+  // ---- EMBEDDINGS -------------------------------------------------------------------------------
+  if (EMBEDDINGS_PROVIDER === "openai") {
+    await resolveOpenAIKey(); // throws a clear message if unresolvable; never touches azure-openai-*
+  } else {
+    AOAI_EP = ((await sm("azure-foundry-openai-endpoint")) || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
+    AOAI_KEY = (await sm("azure-foundry-key")) || (await sm("azure-openai-key"));
+    AOAI_DEP = (await sm("azure-openai-embedding-deployment")) || OSR.EMBEDDING_MODEL;
+    if (!AOAI_EP || !AOAI_KEY) throw new Error("EMBEDDINGS_PROVIDER=foundry but the Azure OpenAI endpoint/key are unavailable (use the default EMBEDDINGS_PROVIDER=openai)");
+  }
+
+  // ---- CHAT SYNTHESIS ---------------------------------------------------------------------------
+  // Two providers in order so a transient throttle on one never silences the brain. gpt-4.1-mini is
+  // BANNED for quality/summarization work (setup/model-routing.mjs) and the brain's whole job IS
+  // quality synthesis, so the fallback is the shared 'quality' tier (gpt-5.1, reasoning-family).
+  if (LLM_PROVIDER === "openai") {
+    // api.openai.com. The model ids default to the SAME strings as the Foundry tier deployment names
+    // -- the identical documented judgement call the gateway makes (otchealth-mcp-server
+    // src/azure/foundry.ts openaiModelForTier): a bet that the Azure deployment was named after its
+    // real underlying model. If the bet is wrong, OpenAI returns a fast, loud 404 model_not_found,
+    // never a silently-wrong answer from a different model, so a bad guess fails safely. Override
+    // with BRAIN_MODEL / BRAIN_FALLBACK_MODEL (or OPENAI_CHAT_MODEL / OPENAI_HIGH_MODEL, the gateway's
+    // own names) the moment the real ids are confirmed.
+    const key = await resolveOpenAIKey();
+    const dep = process.env.BRAIN_MODEL || process.env.OPENAI_CHAT_MODEL || TIERS.standard.deployment;
+    const fbDep = process.env.BRAIN_FALLBACK_MODEL || process.env.OPENAI_HIGH_MODEL || TIERS.quality.deployment;
+    CHAT_PROVIDERS.push({ kind: "openai", key, dep, label: `openai/${dep}`, modelFamily: modelFamilyOf(dep) });
+    if (fbDep !== dep) CHAT_PROVIDERS.push({ kind: "openai", key, dep: fbDep, label: `openai/${fbDep}`, modelFamily: modelFamilyOf(fbDep) });
+  } else {
+    // Azure path, unchanged. PRIMARY + SECONDARY both live on the Foundry resource (2,000K TPM
+    // GlobalStandard); the LEGACY Azure OpenAI resource (gpt-4o capped at 50K TPM regional
+    // "Standard", 100% subscribed, zero headroom) stays a last-resort TERTIARY only -- primarying on
+    // it caused the recurring "Azure OpenAI throttled (blocked_calls)" Datadog page (2026-08-01).
+    const fEp = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); const fKey = await sm("azure-foundry-key");
+    const lEp = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); const lKey = await sm("azure-openai-key");
+    if (fEp && fKey) { const dep = process.env.BRAIN_MODEL || TIERS.standard.deployment; CHAT_PROVIDERS.push({ kind: "azure", ep: fEp, key: fKey, dep, label: `foundry/${dep}`, modelFamily: modelFamilyOf(dep) }); }
+    if (fEp && fKey) { const fbDep = process.env.BRAIN_FALLBACK_MODEL || TIERS.quality.deployment; CHAT_PROVIDERS.push({ kind: "azure", ep: fEp, key: fKey, dep: fbDep, label: `foundry/${fbDep}`, modelFamily: modelFamilyOf(fbDep) }); }
+    if (lEp && lKey) { const legDep = process.env.BRAIN_LEGACY_MODEL || LEGACY_STANDARD.deployment; CHAT_PROVIDERS.push({ kind: "azure", ep: lEp, key: lKey, dep: legDep, label: `legacy/${legDep}`, modelFamily: modelFamilyOf(legDep) }); }
+  }
+  if (!CHAT_PROVIDERS.length) throw new Error(`no chat provider creds for LLM_PROVIDER=${LLM_PROVIDER}`);
 }
-async function embed(text) { for (let a = 0; a < 6; a++) { const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: [text] }) }); if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, (ra ? ra * 1000 : 1500 * (a + 1)))); continue; } if (!r.ok) throw new Error("embed " + r.status); return (await r.json()).data[0].embedding; } throw new Error("embed 429 exhausted"); }
+async function embed(text) {
+  if (EMBEDDINGS_PROVIDER === "openai") {
+    // Pinned to text-embedding-3-large @ 3072 inside embedOpenAI (never configurable, no `dimensions`
+    // parameter). The guard below is the query-time proof that the vector is in the one space the
+    // ~492,557 live room documents were embedded in.
+    const vec = (await embedOpenAI([text]))[0];
+    OSR.assertEmbeddingSpace(vec);
+    return vec;
+  }
+  for (let a = 0; a < 6; a++) {
+    const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: [text] }) });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, (ra ? ra * 1000 : 1500 * (a + 1)))); continue; }
+    if (!r.ok) throw new Error("embed " + r.status);
+    const vec = (await r.json()).data[0].embedding;
+    OSR.assertEmbeddingSpace(vec);
+    return vec;
+  }
+  throw new Error("embed 429 exhausted");
+}
 async function searchIndex(index, vec, query) {
+  if (SEARCH_BACKEND === "opensearch") {
+    // Chunked/flat awareness, the vector-field choice, RRF fusion and chunk -> parent collapsing all
+    // live in the adapter. THROWS on a BM25 failure (see its header): a room that could not be
+    // searched must never be reported as a room that held nothing.
+    const { hits } = await OSR.searchRoom(index, { queryText: query, vector: vec, top: PERK });
+    return hits;
+  }
+  // ---- Azure AI Search (non-default; kept intact for a future re-provisioned service) -------------
   // vector_semantic_hybrid: BM25 keyword + vector fused by RRF, then the L2 SEMANTIC RERANKER
   // (every room index carries the "sem" semantic config). This is the Microsoft-benchmarked default
   // that fixes weak keyword-only recall. Falls back to plain hybrid if semantic errors (missing
@@ -105,7 +225,12 @@ async function searchIndex(index, vec, query) {
   // endpoint has not cut over yet), drop the vectorQueries AND the select (a select that names a field
   // absent on the live index is itself a 400 cause) so recall degrades to keyword, never to empty.
   if (!r.ok) { const { vectorQueries, select, ...kw } = base; r = await fetch(url, { method: "POST", headers: hdr, body: JSON.stringify(kw) }); }
-  if (!r.ok) return [];
+  // THROW, never `return []`. Returning an empty array here made a BROKEN room indistinguishable from
+  // an EMPTY one: ask() then printed "No grounded results across the company brain", which reads as
+  // "the company has no record of this" -- a fabricated negative finding on a ground-first tool every
+  // agent is instructed to trust. The retries above are recall-preserving degradations; this is the
+  // point where the room genuinely could not be searched.
+  if (!r.ok) throw new Error(`azure room '${index}': search failed ${r.status} ${(await r.text()).slice(0, 200)}`);
   // With the semantic reranker present, @search.rerankerScore (0-4) is the authoritative relevance;
   // fall back to @search.score when a room had to use plain hybrid. `chunk` is the chunked-room text field.
   let hits = ((await r.json()).value || []).map((h, i) => ({
@@ -123,20 +248,40 @@ async function searchIndex(index, vec, query) {
   }
   return hits.map(({ _parent, ...h }) => h);
 }
+/** PURE. Where one resolved chat provider's request goes and what it looks like. OpenAI addresses the
+ *  model in the BODY and authenticates with a bearer token; Azure bakes the deployment into the URL
+ *  and uses an api-key header. Exported so the provider split is testable without a network call. */
+export function chatRequestFor(p, body) {
+  if (p.kind === "openai") {
+    return {
+      url: OPENAI_CHAT_URL,
+      headers: { Authorization: `Bearer ${p.key}`, "Content-Type": "application/json" },
+      body: { ...body, model: p.dep },
+    };
+  }
+  return {
+    url: `${p.ep}/openai/deployments/${p.dep}/chat/completions?api-version=2024-06-01`,
+    headers: { "api-key": p.key, "Content-Type": "application/json" },
+    body,
+  };
+}
 async function callChat(p, system, user, tries) {
   // Request-body shape (max_completion_tokens vs max_tokens+temperature) is decided ONCE, centrally,
-  // in setup/model-routing.mjs so every Foundry caller in the fleet (and the gateway) agrees.
-  const body = chatBody(p.dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 900 });
+  // in setup/model-routing.mjs so every caller in the fleet (and the gateway) agrees. It keys off the
+  // model NAME, so it is correct for both providers: gpt-5.x/o-series are reasoning-family and reject
+  // max_tokens + a non-default temperature on api.openai.com exactly as they do on Foundry.
+  const shaped = chatBody(p.dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 900 });
+  const req = chatRequestFor(p, shaped);
   for (let a = 0; a < tries; a++) {
-    const r = await fetch(`${p.ep}/openai/deployments/${p.dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": p.key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await fetch(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(req.body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
-    if (!r.ok) throw new Error("chat " + r.status);
+    if (!r.ok) throw new Error(`chat ${p.label} ${r.status} ${(await r.text()).slice(0, 160)}`);
     return (await r.json()).choices[0].message.content;
   }
   throw Object.assign(new Error("429"), { throttled: true });
 }
 async function chat(system, user) {
-  // Try each provider in order (foundry standard -> foundry quality -> legacy last-resort). A throttle
+  // Try each provider in order (standard -> quality [-> legacy last-resort on Azure]). A throttle
   // on one falls through to the next instead of failing the query. Fewer retries on the primary so we
   // reach the fallback faster when it is sustained-busy.
   let lastErr;
@@ -145,7 +290,38 @@ async function chat(system, user) {
     try { const out = await callChat(p, system, user, i === 0 ? 4 : 6); if (i > 0) console.error(`  (brain synthesized via fallback ${p.label})`); return out; }
     catch (e) { lastErr = e; if (e.throttled && i < CHAT_PROVIDERS.length - 1) { console.error(`  (${p.label} throttled; falling back to ${CHAT_PROVIDERS[i + 1].label})`); continue; } if (e.throttled) continue; throw e; }
   }
-  throw new Error("all chat providers throttled (Azure OpenAI busy; retry shortly)");
+  throw new Error(`all chat providers failed or were throttled (LLM_PROVIDER=${LLM_PROVIDER}); last error: ${lastErr && lastErr.message}`);
+}
+
+/**
+ * PURE. Decide what a federation of room searches actually PROVED, given how many rooms were
+ * attempted, which ones failed, and how many hits came back.
+ *
+ * THIS IS THE ANTI-FALSE-NEGATIVE RULE. A ground-first tool that prints "No grounded results across
+ * the company brain" when its search backend was simply unreachable is worse than one that crashes:
+ * every per-repo CLAUDE.md instructs agents to answer ONLY from this tool's output and never from
+ * general knowledge, so an empty-because-broken result is read as an authoritative "the company has
+ * no record of this" and gets repeated as fact. Absence of evidence is only evidence of absence when
+ * the search actually ran.
+ *   - every room failed                -> ok:false (hard error, non-zero exit)
+ *   - some rooms failed AND zero hits  -> ok:false (cannot distinguish "nothing there" from "broken")
+ *   - some rooms failed AND some hits  -> ok:true, degraded:true (answer, but label it PARTIAL)
+ *   - no failures                      -> ok:true (an empty result here is a real negative finding)
+ * Exported for unit tests.
+ */
+export function assessSearchOutcome({ roomsAttempted = 0, failures = [], hits = 0 } = {}) {
+  const failed = failures.length;
+  const names = failures.map((f) => `${f.room || f.index || "?"}: ${f.error || f.message || "unknown error"}`).join("; ");
+  if (roomsAttempted > 0 && failed >= roomsAttempted) {
+    return { ok: false, degraded: true, message: `COMPANY BRAIN SEARCH FAILED: all ${roomsAttempted} room(s) errored, so NOTHING was searched. This is NOT a "no results" answer -- do not treat it as evidence that the company has no record of this. Failures: ${names}` };
+  }
+  if (failed > 0 && hits === 0) {
+    return { ok: false, degraded: true, message: `COMPANY BRAIN SEARCH INCONCLUSIVE: ${failed} of ${roomsAttempted} room(s) errored and the rooms that did answer returned nothing, so "no results" cannot be distinguished from "search broken". Failures: ${names}` };
+  }
+  if (failed > 0) {
+    return { ok: true, degraded: true, message: `WARNING -- PARTIAL ANSWER: ${failed} of ${roomsAttempted} room(s) could not be searched, so this answer is grounded in an incomplete corpus. Failures: ${names}` };
+  }
+  return { ok: true, degraded: false, message: "" };
 }
 
 async function ask() {
@@ -154,16 +330,35 @@ async function ask() {
   await init();
   const vec = await embed(QUERY);
   const all = [];
-  for (const t of targets) { const hits = await searchIndex(t.index, vec, QUERY); for (const h of hits) all.push({ ...h, room: t.room }); console.error(`  ${t.room}: ${hits.length} hit(s)`); }
+  const failures = [];
+  for (const t of targets) {
+    // Per-room try/catch, then ONE verdict over the whole federation below: one dead room must not
+    // abort a query the other five could have answered, and must not vanish either.
+    try {
+      const hits = await searchIndex(t.index, vec, QUERY);
+      for (const h of hits) all.push({ ...h, room: t.room });
+      console.error(`  ${t.room}: ${hits.length} hit(s)`);
+    } catch (e) {
+      failures.push({ room: t.room, index: t.index, error: e && e.message });
+      console.error(`  ${t.room}: SEARCH FAILED -- ${e && e.message}`);
+    }
+  }
   all.sort((a, b) => b.score - a.score);
   const top = all.slice(0, 14);
-  if (!top.length) { console.log("No grounded results across the company brain for that question."); process.exit(0); }
+  const outcome = assessSearchOutcome({ roomsAttempted: targets.length, failures, hits: all.length });
+  if (!outcome.ok) { console.error(`\n${outcome.message}`); process.exit(1); }
+  if (outcome.degraded) console.error(`\n${outcome.message}\n`);
+  if (!top.length) { console.log("No grounded results across the company brain for that question. (All rooms were searched successfully; this is a real negative finding, not a search failure.)"); process.exit(0); }
   const sources = top.map((h, i) => `[${i + 1}] room=${h.room}${h.agent ? ` agent=${h.agent}` : ""}${h.entity ? ` entity=${h.entity}` : ""} ${h.path ? `(${h.path})` : ""}\n${h.text}`).join("\n\n");
   const sys = "You are the OTCHealth/InnerScope company brain. Answer the question using ONLY the provided sources from the company's own data rooms and agent memory. Cite each fact with its [n]. If the sources do not answer it, say so. Be concrete and decision-useful. Do not invent.";
   const answer = await chat(sys, `QUESTION: ${QUERY}\n\nSOURCES:\n${sources}`);
   console.log(`\n================ COMPANY BRAIN ================\nQ: ${QUERY}\n`);
   console.log(answer);
   console.log(`\n--- grounded in ${top.length} sources across ${[...new Set(top.map(h => h.room))].join(", ")} ---`);
+  // Also on STDOUT: a reader who only sees the answer (piped, captured, pasted into a doc) must see
+  // that the corpus was incomplete. A degradation only visible on stderr is a degradation that gets
+  // quoted as a complete answer.
+  if (outcome.degraded) console.log(`!!! ${outcome.message}`);
 }
 
 // =============================== DIFF MODE ===============================
@@ -262,9 +457,18 @@ function renderDiff(topic, delta) {
 }
 
 // read every shared exec-feed ledger row (same source semantic.mjs indexes from), ring-filtered.
+//
+// REMAINING AZURE DEPENDENCY, DELIBERATELY LEFT IN PLACE AND MADE LOUD (2026-08-18). Only DIFF mode
+// uses this; `ask` (the ground-first path every CLAUDE.md mandates) no longer touches Azure at all.
+// The warm ledger still lives in Azure Blob, and porting it to the S3 mirror is a separate migration
+// item with its own layout questions, so it is NOT guessed at here. What IS fixed is the failure
+// shape: this function used to swallow a failed blob listing (`if (!r.ok) break;`) and return zero
+// rows, which renderDiff() then printed as "ADDED (0) / CHANGED (0) / RETIRED (0)" -- a confident
+// "nothing changed on this topic" manufactured out of an unreachable storage account. It now throws.
 async function readExecFeedRows({ agent, includePersonal }) {
   const acct = (await sm("azure-commons-storage-account")) || "otchealthcommons";
   const key = await sm("azure-commons-storage-key");
+  if (!key) throw new Error(`company-brain diff: azure-commons-storage-key is unavailable, so the memory-of-record ledger (azure://${acct}/company-journal) cannot be read. Refusing to render an empty delta that would read as "nothing changed". Note: diff mode still depends on Azure Blob; ask mode does not.`);
   const container = "company-journal";
   const sv = "2021-12-02", sp = "rl", ss = "b", srt = "co";
   const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
@@ -275,7 +479,7 @@ async function readExecFeedRows({ agent, includePersonal }) {
   const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
   const list = async (prefix) => {
     const out = []; let m = "";
-    do { let u = `https://${acct}.blob.core.windows.net/${container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${sas}`; if (m) u += `&marker=${encodeURIComponent(m)}`; const r = await fetch(u); if (!r.ok) break; const xml = await r.text(); for (const mm of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(mm[1]); m = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (m);
+    do { let u = `https://${acct}.blob.core.windows.net/${container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${sas}`; if (m) u += `&marker=${encodeURIComponent(m)}`; const r = await fetch(u); if (!r.ok) throw new Error(`company-brain diff: listing azure://${acct}/${container}/${prefix} failed ${r.status}; refusing to report an empty memory delta from an unreadable ledger`); const xml = await r.text(); for (const mm of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(mm[1]); m = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (m);
     return out;
   };
   const files = (await list("_MEMORY/_exec/")).filter((f) => f.endsWith(".jsonl"));
@@ -353,7 +557,11 @@ if (isMain) {
     try {
       if (cmd === "ask") await ask();
       else if (cmd === "diff") await diffCmd();
-      else if (cmd === "rooms") { console.log("Company-brain rooms (Azure AI Search indexes):"); for (const [k, v] of Object.entries(ROOMS)) console.log(`  ${k.padEnd(9)} ${v.index.padEnd(28)} ${v.label}`); console.log(`  personal  (CLO-only, --include-personal --agent clo) ${PERSONAL.label}`); }
+      else if (cmd === "rooms") {
+        console.log(`Company-brain rooms (search=${SEARCH_BACKEND}, embeddings=${EMBEDDINGS_PROVIDER} [${OSR.EMBEDDING_MODEL} @ ${OSR.EMBEDDING_DIMS}], chat=${LLM_PROVIDER}):`);
+        for (const [k, v] of Object.entries(ROOMS)) console.log(`  ${k.padEnd(9)} ${v.index.padEnd(30)} ${DOC_ROOMS.has(v.index) ? "chunked" : "flat   "}  ${v.label}`);
+        console.log(`  personal  (CLO-only, --include-personal --agent clo) ${PERSONAL.label}`);
+      }
       else { console.error('usage: brain.mjs ask "<question>" [--rooms ...] [--n 6] | diff "<topic>" --since <date> [--summarize] | rooms'); process.exit(2); }
     } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
   })();
