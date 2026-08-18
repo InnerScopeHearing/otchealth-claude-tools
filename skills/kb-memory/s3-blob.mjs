@@ -55,7 +55,16 @@ const MIRROR = Object.freeze({
   "otchealthcfodata/cfo-source-docs":      { bucket: "otchealth-finance-legal-dr-55c84f6b", keyPrefix: "otchealthcfodata/cfo-source-docs/" },
   "otchealthcfodata/cro-from-the-chair":   { bucket: "otchealth-finance-legal-dr-55c84f6b", keyPrefix: "otchealthcfodata/cro-from-the-chair/" },
   "otchealthcfodata/innd-stock":           { bucket: "otchealth-finance-legal-dr-55c84f6b", keyPrefix: "otchealthcfodata/innd-stock/" },
-  "otchealthcommons/company-journal":      { bucket: "otchealth-finance-legal-dr-55c84f6b", keyPrefix: "otchealthcommons/company-journal/" },
+  // THE BUCKET IS brain-dr, AND THAT IS AN OBSERVED FACT, NOT AN INFERENCE. A live listing found the
+  // real shared exec brain at otchealth-brain-dr-55c84f6b/otchealthcommons/company-journal/_MEMORY/
+  // _exec/*.jsonl -- 29 lane files, every one the latest version, zero delete markers (cto.jsonl
+  // 1,236,579 bytes, cfo.jsonl 1,956,515, clo.jsonl 932,806). An earlier version of THIS row said
+  // finance-legal-dr, justified from IAM; that is the same wrong answer the gateway's own row made
+  // first (mcp-server #248). ONE statement in infra/aws/iam.tf grants Get/Put/List on brain_dr AND
+  // finance_legal_dr together, so IAM is structurally incapable of discriminating between them: it
+  // can only ever say a write is PERMITTED, never WHERE the data is. Pick the bucket from an
+  // observed object listing; use IAM only to confirm the access you need already exists.
+  "otchealthcommons/company-journal":      { bucket: "otchealth-brain-dr-55c84f6b", keyPrefix: "otchealthcommons/company-journal/" },
 });
 
 /** Resolve (account, container) to its S3 mirror location, or null when unmapped. Never guesses. */
