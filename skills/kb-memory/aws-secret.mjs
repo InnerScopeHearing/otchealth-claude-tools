@@ -226,6 +226,24 @@ export async function ssmListDetailed() {
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/** Metadata-only freshness lookup for ONE named SSM parameter: returns its LastModifiedDate as
+ *  epoch milliseconds (a real number, full precision -- unlike ssmListDetailed()'s `created` field,
+ *  which is truncated to a YYYY-MM-DD string and therefore useless for an hours-resolution age
+ *  metric), or null if the parameter does not exist / SSM is unreachable. Never throws.
+ *
+ *  WithDecryption is always false: the caller wants only WHEN this secret was last written, never
+ *  its value, and GetParameter's Value field is ignored entirely below -- a SecureString parameter's
+ *  plaintext is never materialized by this function, matching the same discipline
+ *  ssmListDetailed()'s enumeration already documents (see its comment on WithDecryption). Uses plain
+ *  GetParameter (not GetParametersByPath), the same IAM action ssmSecret() already relies on, so no
+ *  new permission is required of the Fargate task role. */
+export async function ssmParamModifiedMs(name) {
+  const res = await ssmCall("GetParameter", { Name: `${PREFIX}/${name}`, WithDecryption: false });
+  if (res.status !== 200 || !res.json?.Parameter) return null;
+  const lm = res.json.Parameter.LastModifiedDate;
+  return typeof lm === "number" && Number.isFinite(lm) ? Math.round(lm * 1000) : null;
+}
+
 /** List every mirrored secret name (without the prefix). Used by the drift check. */
 export async function ssmList() {
   const names = [];

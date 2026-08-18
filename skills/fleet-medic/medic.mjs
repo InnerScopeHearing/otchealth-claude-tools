@@ -29,6 +29,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { ddMetric } from "../datadog/dd-emit.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -193,6 +194,46 @@ async function emitDispatch(ingestKey, agent, item) {
   return false;
 }
 
+// otc.fleet.agent_error emission (2026-08-18) — closes the Datadog monitor "AI Fleet — agent errors
+// (1h)" (id 22893313, sum:otc.fleet.agent_error{*}.as_count() > 0), which has shown "No Data" since
+// it was created 2026-06-27 because nothing in the codebase ever emitted this metric (confirmed by a
+// repo-wide grep). fleet-medic's classify() is exactly "where errors are already known" for an
+// AGENT (as opposed to a scheduled JOB, which skills/azure-canary/canary.mjs already watches
+// separately) — DARK (an active session running with memory OFF) and NO-MEMORY (never initialized)
+// are real per-agent error conditions, not mere staleness (WATCH), so they map directly onto "agent
+// error" without inventing a new detection mechanism.
+//
+// Emits ONE point per agent EVERY scan, value 1 (errored this scan) or 0 (not errored), tagged
+// agent:<name>. This is deliberate, not merely "emit on error": a count metric with NOTHING
+// submitted during a healthy stretch reads as "No Data" in Datadog exactly like this monitor's
+// original bug, so a 0-value point is what keeps the monitor's data continuous through the common
+// case (zero errors) and lets `.as_count() > 0` mean what it says. Runs on every `scan` call
+// (dispatch or not) — the classification is already computed either way, and the existing production
+// job already runs `scan --dispatch` every ~30 min (skills/doc-indexer/job/fleet-medic.sh), so this
+// rides that schedule with NO change needed to the job itself. MEDIC_SKIP_METRICS=1 is an escape
+// hatch if this ever needs disabling without a code change.
+//
+// LOUD ON FAILURE: unlike emitDispatch()'s PostHog capture (which is also retried+checked, see its
+// own header), a Datadog send failure here does not change medic's overall fail-open exit-0 policy
+// (a broken medic must not be worse than none) — but it prints a distinct, greppable error line per
+// failed agent AND is counted into the run summary printed at the end of scan(), the same
+// "N ok, M failed" visibility pattern emitDispatch()'s fix established. A run that "Succeeded" while
+// silently losing this telemetry must never look identical to a real one in plain container logs.
+export async function emitAgentErrorMetrics(results) {
+  if (process.env.MEDIC_SKIP_METRICS === "1") return { emitted: 0, failed: 0, skipped: true };
+  let emitted = 0, failed = 0;
+  for (const r of results) {
+    const isError = r.condition === "DARK" || r.condition === "NO-MEMORY";
+    const res = await ddMetric("otc.fleet.agent_error", isError ? 1 : 0, {
+      tags: [`agent:${r.agent}`, "job:fleet-medic", `condition:${r.condition}`],
+      type: "count",
+    });
+    if (res.ok) emitted++;
+    else { failed++; console.error(`  [fleet-medic] METRIC EMIT FAILED for agent_error{agent:${r.agent}}: ${res.error}`); }
+  }
+  return { emitted, failed, skipped: false };
+}
+
 // Azure commons blob (account SAS) for the _MEDIC directives + medic state.
 const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
 // 'd' = delete in sp: the medic ACKS a directive by DELETING it (surface once). Without 'd' the DELETE
@@ -226,6 +267,11 @@ async function scan() {
       const act = r.dispatch ? " -> DISPATCH" : r.cooled_down ? " (cooldown)" : "";
       console.log(`[${tag}] ${r.agent.padEnd(11)} ${r.condition.padEnd(10)} ${act.padEnd(13)} ${r.reason}`);
     }
+  }
+
+  const metricSummary = await emitAgentErrorMetrics(results);
+  if (!metricSummary.skipped) {
+    console.log(`[fleet-medic] agent_error metrics: ${metricSummary.emitted} emitted, ${metricSummary.failed} failed (of ${results.length} agents)`);
   }
 
   if (!dispatching) return;
