@@ -479,7 +479,18 @@ elif [ "$SSM_PARTIAL" = "1" ]; then
     # straight in as a supported configuration. Grepping $FETCHED alone reported those as missing
     # while the session was in fact going to use them -- a false alarm, which is the cheapest way to
     # teach an operator to ignore this warning and so hide the real one.
-    [ -n "${!env_name:-}" ] && continue
+    #
+    # THE `case` GUARD IS NOT DECORATION. The sed above captures [A-Z0-9_]*, which admits a name
+    # beginning with a digit; bash then answers "${!9BAD}" with `invalid variable name`, and an
+    # EXPANSION error aborts the whole sourced block on the spot. Measured: everything from here
+    # down -- the still-missing warning, the covered message, the no-secrets-at-all banner -- was
+    # silently skipped, so one garbled diagnostic line turned the entire honesty check off. Names
+    # that cannot be shell variables simply fall through to the $FETCHED lookup.
+    direct_val=""
+    case "$env_name" in
+      [A-Za-z_]*) direct_val="${!env_name:-}" ;;
+    esac
+    [ -n "$direct_val" ] && continue
     printf '%s' "$FETCHED" | grep -q "^${env_name}=" || STILL_MISSING="${STILL_MISSING}${env_name} "
   done
   if [ -n "$STILL_MISSING" ]; then

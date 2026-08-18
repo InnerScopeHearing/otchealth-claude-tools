@@ -435,3 +435,20 @@ test("NO input produces an all-clear as the final line without a verified, named
   });
   assert.match(covered.stdout, /gap was covered: every REQUIRED secret named above \(OPENAI_API_KEY *\) is now present/);
 });
+
+test("a garbled env NAME cannot silently switch the whole honesty check off", () => {
+  // The sed that recovers env names captures [A-Z0-9_]*, which admits "9BAD". Bash answers
+  // "${!9BAD}" with an `invalid variable name` EXPANSION error, and that aborts the sourced block
+  // where it stands -- measured: the still-missing warning, the covered message and the
+  // no-secrets-at-all banner were ALL skipped, so one malformed diagnostic line turned off exactly
+  // the reporting this round exists to make trustworthy. Silence is not an acceptable rendering of
+  // any state.
+  const r = runBlock({
+    ssmRc: 2,
+    ssmOut: "ELEVENLABS_API_KEY='el'\n",
+    ssmErr: "[fetch-secrets-aws] MISSING required secret 'x' (env 9BAD) at /otchealth/x (us-east-1).\n",
+    kvOut: "",
+  });
+  assert.match(r.stdout, /still MISSING after every store: .*9BAD/, "the block must reach its own conclusion, not die mid-way");
+  assert.ok(!/invalid variable name/.test(r.stdout));
+});
