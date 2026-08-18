@@ -336,3 +336,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** direct code read of the disallowed-lane branch
 - **Opened:** 2026-08-18T00:43:05.379Z
 - **Closed:** 2026-08-18T00:43:05.379Z
+
+### finding:FND-20260818-cc78 severity:high status:open | fleet-medic alerts silently NOT delivered: its GitHub log issue passed the 2500-comment cap, so every alert is dropped after a warn-level fleet_medic_alert_route_failed line
+
+- **Source audit doc:** CloudWatch /ecs/otchealth 2026-08-18T23:05:03Z (post-deploy log read, PR otchealth-mcp-server#253)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-18T23:12:11.685Z
+- **Closed:** (open)
