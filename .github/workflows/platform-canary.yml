@@ -1,0 +1,127 @@
+# PER-LANE / PER-PLATFORM HEALTH CANARY -- the permanent sensor for a silent gateway break.
+#
+# skills/platform-canary/platform-canary.mjs asserts, for every gateway lane, that a token mints, that
+# the advertised tool count is above that lane's floor (the connector-surface misclassification
+# signature: a privileged lane handed ~11 tools instead of ~1000), that the lane is not classified as a
+# connector surface, that the gateway resolves it to its own identity, and that brain_search returns
+# EXACTLY the room set it should -- expected rooms present, forbidden rooms absent. The forbidden half
+# is the load-bearing one: legal-personal and legal-personal-memory are attorney-privileged and the
+# personal-legal ring is clo-personal + exec ONLY. It then asserts the shared exec ledger is readable
+# AND non-trivial (see below), and finally checks the credential-free platform surfaces: /health's
+# registry floor, the unauthenticated front door still answering 401 with its WWW-Authenticate pointer,
+# a forged M365 static token still being refused, and both OAuth discovery documents still resolving.
+#
+# WHY THE LEDGER FLOOR IS NOT OPTIONAL. On 2026-08-17/18 gateway commit c72dd3b read the commons brain
+# from bucket otchealth-finance-legal-dr instead of otchealth-brain-dr and found one stray 725-byte
+# cto.jsonl, so every lane on every platform saw shared_entry_count=1 while the real ~29-lane history
+# sat intact at the correct bucket. HTTP 200, well-formed JSON, no error anywhere in the fleet. A canary
+# that asserted only "the ledger responded" would have been green throughout. This one asserts a floor
+# on the CONTENT, which is the only thing that catches it.
+#
+# CADENCE is every 6 hours, not daily (the oauth-clients-canary precedent rather than the nightly-*
+# one). A ring widening is a live exposure of privileged personal legal material; a 24h detection
+# window for that is too long, and this check is cheap.
+#
+# EXIT SEMANTICS (see skills/platform-canary/assertions.mjs's exitCode()): 1 = an assertion FAILED,
+# something is provably broken; 2 = the canary is BLIND, a check could not run at all. Both are
+# non-zero and both page, but they carry different messages because they demand different responses.
+# A run that evaluates nothing exits 2, never 0 -- an empty run must never look like a pass.
+#
+# ARMING (one-time): the lane half needs fleet credentials, which it resolves through the shared
+# kvSecret() chain. With Azure subscription 55c84f6b deleted, that chain reaches the secret store via
+# its AWS SSM path, which needs OTC_AWS_ACCESS_KEY_ID / OTC_AWS_SECRET_ACCESS_KEY as repo secrets.
+# Until those exist this workflow deliberately runs the CREDENTIAL-FREE PLATFORM HALF ONLY and says so
+# loudly, rather than paging every 6 hours with an identical, unactionable "cannot reach the secret
+# store". That is the azure-watchdog.yml lesson: a monitor that always fails is an alert storm, not a
+# detection. Provision the two secrets and the lane half arms itself on the next run with no code change.
+name: Platform Canary (per-lane + per-platform)
+
+on:
+  schedule:
+    - cron: '25 */6 * * *'   # every 6h at :25, offset from oauth-clients-canary's ':17 */6'
+  workflow_dispatch:
+    inputs:
+      report_only:
+        description: 'Run report-only (always exit 0). Use for a safe manual look without paging.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-canary
+  cancel-in-progress: false
+
+jobs:
+  platform-canary:
+    name: per-lane + per-platform health canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Unit-test the assertion core before trusting its verdict
+        # A canary whose own classifier has regressed is worse than no canary: it would report green
+        # from broken logic. The incident fixture (shared_entry_count=1) is a permanent regression lock
+        # in this suite, so this step failing means the canary can no longer detect the 2026-08-17/18
+        # failure class and its verdict below must not be believed.
+        run: node --test tests/platform-canary.test.mjs
+
+      - name: Run the canary
+        working-directory: skills/platform-canary
+        env:
+          # Fleet secret store, reached through kvSecret()'s AWS SSM path. Values are consumed by the
+          # resolver and are never printed, never written to a file, and never appear in a verdict.
+          OTC_AWS_ACCESS_KEY_ID: ${{ secrets.OTC_AWS_ACCESS_KEY_ID }}
+          OTC_AWS_SECRET_ACCESS_KEY: ${{ secrets.OTC_AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1
+          # Off-Azure PostHog credential: setup/page-on-failure.mjs prefers this env var over the secret
+          # store, so paging does not itself depend on the store this canary may be reporting as broken.
+          POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
+          REPORT_ONLY: ${{ inputs.report_only }}
+        run: |
+          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code would be tee's, not the canary's, and this gate could never fail.
+          ARGS="--json"
+          if [ "${REPORT_ONLY}" = "true" ]; then ARGS="$ARGS --report"; fi
+          if [ -z "${OTC_AWS_ACCESS_KEY_ID:-}" ] || [ -z "${OTC_AWS_SECRET_ACCESS_KEY:-}" ]; then
+            echo "::warning::[platform-canary] LANE COVERAGE IS UNARMED: OTC_AWS_ACCESS_KEY_ID/OTC_AWS_SECRET_ACCESS_KEY are not set as repo secrets, so no lane credential can be resolved. Running the credential-free PLATFORM half only. The per-lane token/tool-floor/connector-surface/ring/ledger assertions are NOT running and nothing is watching the personal-legal ring until these two secrets are provisioned."
+            ARGS="$ARGS --lanes __unarmed__ --no-ledger"
+          fi
+          node platform-canary.mjs $ARGS 2>&1 | tee "${GITHUB_WORKSPACE}/platform-canary.log"
+
+      - name: Upload canary log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: platform-canary-log
+          path: platform-canary.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Page on failure (email, PostHog fallback)
+        if: failure()
+        env:
+          POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
+        run: node setup/page-on-failure.mjs --workflow "Platform Canary" --log "${GITHUB_WORKSPACE}/platform-canary.log"
+
+      # Schedule-liveness heartbeat, a DIFFERENT failure class than the verdict above and the reason it
+      # fires unconditionally: this beat means "this workflow's cron fired at all". A workflow that never
+      # runs never gets the chance to go red, so without this beat, the canary silently ceasing to exist
+      # would look exactly like a healthy fleet. skills/nightly-schedule-canary/schedule-canary.mjs reads
+      # the matching kind:"nightly-workflow" entry in setup/heartbeat-registry.json and pages if it goes
+      # LATE. The monitor is thereby itself monitored.
+      - name: "Heartbeat: mark this workflow's schedule as alive (independent of the canary's own verdict)"
+        if: always()
+        continue-on-error: true
+        env:
+          OTC_AWS_ACCESS_KEY_ID: ${{ secrets.OTC_AWS_ACCESS_KEY_ID }}
+          OTC_AWS_SECRET_ACCESS_KEY: ${{ secrets.OTC_AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1
+        run: node setup/heartbeat.mjs beat platform-canary ok >/dev/null 2>&1 || true

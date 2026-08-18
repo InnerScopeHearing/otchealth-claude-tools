@@ -1,0 +1,8 @@
+{
+  "_comment": "THE CONNECTOR-SURFACE MISCLASSIFICATION. The cto lane's credential has been bound to a connector-style client, so the gateway hands it the 11-tool EXTERNAL_READONLY_TOOLSET instead of its full catalog and reports is_connector_surface=true. This is the documented occ_cro_* misbinding shape that left the CRO seat unable to ground any answer in the company brain. Every call the seat can still make succeeds, so the ONLY visible symptom is the tool count, which is why the floor exists. The lane is otherwise perfectly healthy here: it mints, it resolves to the right identity, and its room set is correct.",
+  "lanes": {
+    "cto": { "lane": "cto", "credsPresent": true, "tokenMinted": true, "toolCount": 11, "connectorSurface": true, "callerAgent": "cto", "roomsSearched": ["memory-exec", "commons-company-journal"] }
+  },
+  "ledger": { "sharedEntryCount": 312, "agents": ["cto", "cfo", "clo", "clo-personal", "coo", "cro", "exec", "developer"] },
+  "platforms": {}
+}

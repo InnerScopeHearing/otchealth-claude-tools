@@ -1,0 +1,9 @@
+{
+  "_comment": "THE P0 RING REGRESSION. Identical to healthy.json except that the cfo lane's rooms_searched now contains legal-personal and legal-personal-memory. This is the shape of the leak that was real and live until 2026-07-16, when INDEX_LANES mapped both personal-legal rooms to the full EXEC_RING and a cfo-lane brain_search consequently federated attorney-privileged personal legal material including a live California family-law matter involving minors. Nothing errors in this state; the search simply returns more than it should. Note that clo-personal below is unchanged and still sees both rooms, so this fixture also proves the assertion distinguishes a forbidden room from an ALLOWED one rather than just pattern-matching the room name anywhere it appears.",
+  "lanes": {
+    "cfo": { "lane": "cfo", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "cfo", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company", "legal-personal", "legal-personal-memory"] },
+    "clo-personal": { "lane": "clo-personal", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "clo-personal", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company", "legal-personal", "legal-personal-memory"] }
+  },
+  "ledger": { "sharedEntryCount": 312, "agents": ["cto", "cfo", "clo", "clo-personal", "coo", "cro", "exec", "developer"] },
+  "platforms": {}
+}

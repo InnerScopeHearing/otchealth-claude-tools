@@ -83,7 +83,7 @@ test("pageExitCode: non-strict never pages, even with anomalies (report-only def
   assert.equal(pageExitCode(0, false), 0);
 });
 
-test("the live registry: all 10 nightly-workflow entries are present and each carries a positive interval_min", () => {
+test("the live registry: all 11 nightly-workflow entries are present and each carries a positive interval_min", () => {
   // Guards against a silent typo/removal in setup/heartbeat-registry.json itself dropping one of the
   // tracked entries or leaving its interval_min unset (which would make heartbeat.mjs's own status
   // math treat it as NO-DATA instead of a real staleness check). ITEM 5.3 (Wave 5, AI-OS
@@ -109,6 +109,13 @@ test("the live registry: all 10 nightly-workflow entries are present and each ca
     "oauth-clients-canary",
     "nightly-s3-dr-mirror",
     "nightly-secrets-dr-export",
+    // 2026-08-18: .github/workflows/platform-canary.yml (cron '25 */6 * * *'). Unlike
+    // "azure-watchdog" above it DOES have a live schedule, so tracking it is correct rather than
+    // permanently-DEAD noise. Its own exit code already pages when a lane or platform assertion
+    // breaks; this heartbeat catches the other failure class, its cron going silent, which no
+    // content check can ever see about itself. 480min SLO (8h) matches its 6-hourly cadence, the
+    // oauth-clients-canary shape, not the 1560min daily one.
+    "platform-canary",
   ].sort();
   assert.deepEqual(trackedJobNames(registry), expected);
   for (const job of expected) {

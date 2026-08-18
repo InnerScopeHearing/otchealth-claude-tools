@@ -1,0 +1,143 @@
+{
+  "_comment": "THE PER-LANE / PER-PLATFORM HEALTH REGISTRY. Declarative expectations for every gateway lane and every credential-free platform surface, in the same spirit as setup/expected-indexes.json, setup/expected-streams.json and skills/continuity-canary/expected-docs.json: the thing being watched is declared here, the classifier lives in assertions.mjs, and the runner is dumb. Add a lane row to start watching a lane. NOTE the ring design: a lane does NOT declare that the personal-legal rooms are forbidden to it. forbiddenRoomsFor() in assertions.mjs adds personal_legal_rooms to EVERY lane automatically unless that lane is named in personal_legal_ring, so a newly added lane is born forbidden and must be explicitly admitted to the ring. Forgetting to write a forbidden_rooms entry can therefore never silently create an unwatched lane.",
+
+  "personal_legal_rooms": ["legal-personal", "legal-personal-memory"],
+  "personal_legal_ring": ["clo-personal", "exec"],
+  "_ring_note": "PERSONAL_LEGAL_RING is clo-personal and exec ONLY. These rooms hold attorney-privileged personal legal material including a live California family-law matter involving minors. This was a real P0 cross-ring leak once (a cfo-lane brain_search returned both rooms; closed 2026-07-16 by narrowing INDEX_LANES) and nothing has watched it continuously since. Widening this array is a security decision, never a convenience fix.",
+
+  "ledger": {
+    "probe_lane": "cto",
+    "min_shared_entries": 25,
+    "min_agents": 5,
+    "_note": "THE 2026-08-17/18 INCIDENT FLOOR. Gateway commit c72dd3b read the commons brain from otchealth-finance-legal-dr instead of otchealth-brain-dr and found a single stray 725-byte cto.jsonl, so every lane on every platform saw shared_entry_count=1 while the real ~6MB / 29-lane history sat intact at the correct bucket. The call succeeded and returned well-formed JSON the whole time, so only a CONTENT floor catches it. 25 entries / 5 distinct lanes sits far above the corrupt state (1 entry, 1 lane) and far below the real history, so it fires on a misroute without flapping on a quiet day."
+  },
+
+  "lanes": [
+    {
+      "lane": "cto",
+      "optional": false,
+      "min_tool_count": 100,
+      "expect_connector_surface": false,
+      "expected_rooms": ["memory-exec", "commons-company-journal"],
+      "forbidden_rooms": ["finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "note": "cto is deliberately OUTSIDE EXEC_RING: it holds kb_search_privileged and legal_blob_* in its ship-lane toolset but every privileged call refuses (mode=ring-forbidden). Live-verified 2026-08-18: rooms_searched is the two open rooms only."
+    },
+    {
+      "lane": "developer",
+      "optional": false,
+      "min_tool_count": 100,
+      "expect_connector_surface": false,
+      "expected_rooms": ["memory-exec", "commons-company-journal"],
+      "forbidden_rooms": ["finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "note": "Same posture as cto: full ship-lane toolset, not in EXEC_RING, two open rooms. Live-verified 2026-08-18."
+    },
+    {
+      "lane": "cfo",
+      "optional": false,
+      "min_tool_count": 100,
+      "expect_connector_surface": false,
+      "expected_rooms": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "forbidden_rooms": [],
+      "note": "EXEC_RING member: finance rooms plus company legal. The two personal-legal rooms are added to its forbidden set automatically by policy, and this is the exact lane whose 2026-07-16 P0 leak this canary is watching for a recurrence of."
+    },
+    {
+      "lane": "clo",
+      "optional": false,
+      "min_tool_count": 100,
+      "expect_connector_surface": false,
+      "expected_rooms": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "forbidden_rooms": [],
+      "note": "The company-legal lane, and the single most plausible candidate for an accidental widening into the personal ring since the two room families are one word apart. Correctly excluded as of 2026-08-18; this row is what keeps it that way."
+    },
+    {
+      "lane": "clo-personal",
+      "optional": false,
+      "min_tool_count": 100,
+      "expect_connector_surface": false,
+      "expected_rooms": ["memory-exec", "commons-company-journal", "legal-company", "legal-personal", "legal-personal-memory"],
+      "forbidden_rooms": [],
+      "note": "THE RING POSITIVE CONTROL. A ring assertion that only ever checks that rooms are ABSENT will still pass if the personal rooms have silently disappeared from the estate entirely, which is a different outage wearing the same green light. This lane asserts the allow path works: the two personal rooms must be PRESENT here. Ring membership means policy does not add them to its forbidden set."
+    },
+    {
+      "lane": "coo",
+      "optional": true,
+      "min_tool_count": 8,
+      "expect_connector_surface": false,
+      "expected_rooms": ["memory-exec", "commons-company-journal"],
+      "forbidden_rooms": ["finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "note": "Non-privileged. Floor is 8 rather than 100 because the documented EXTERNAL_READONLY_TOOLSET is 11 tools by design here, so the ~11-tool connector signature is NOT an anomaly on this lane. Marked optional: whether a client_credentials mint yields the 11-tool set or the full catalog for this lane is not independently proven, so a surprise here should be investigated rather than paged on nightly."
+    },
+    {
+      "lane": "cro",
+      "optional": true,
+      "min_tool_count": 20,
+      "expect_connector_surface": false,
+      "expects_brain_search": false,
+      "expected_rooms": [],
+      "forbidden_rooms": [],
+      "note": "The 2026-08-10 CRO credential fix repointed oauth-lane-cro-id/secret off the occ_cro connector client onto the non-connector CRO client. Its advertised surface is HeyGen-heavy (43 actions observed on the connector form) and it was observed with NO brain-read tool at all, which fails closed and is therefore not a ring violation. expects_brain_search:false records that honestly instead of asserting a room set that may not exist; revisit if the CRO toolset is widened to include the read-only brain tools it is documented to have."
+    },
+    {
+      "lane": "cpo",
+      "optional": true,
+      "min_tool_count": 20,
+      "expect_connector_surface": false,
+      "expects_brain_search": false,
+      "expected_rooms": [],
+      "forbidden_rooms": [],
+      "note": "Reachable as an account connector but absent from gateway-connect's LANES table, so a client_credentials mint here will most likely SKIP. Listed so its state is recorded rather than invisible. It is an EXEC_RING member per the ring definition yet is advertised no brain-read tool at all, which is safe-direction but means the seat is brain-blind; that is a known open question, not something to page on nightly."
+    },
+    {
+      "lane": "exec",
+      "optional": true,
+      "min_tool_count": 100,
+      "expect_connector_surface": false,
+      "expected_rooms": ["memory-exec", "commons-company-journal", "legal-personal", "legal-personal-memory"],
+      "forbidden_rooms": [],
+      "note": "The second member of the personal-legal ring. No oauth-lane-exec-* credential is known to exist, so this lane is expected to SKIP; it is listed anyway so that the day one IS provisioned, it is watched from the first run instead of being onboarded unmonitored."
+    }
+  ],
+
+  "platforms": [
+    {
+      "name": "gateway_health",
+      "kind": "health",
+      "path": "/health",
+      "min_tool_count": 500,
+      "note": "The registry floor, not the per-lane floor. A revision that boots with a partially-registered catalog answers /health perfectly happily; only a floor on tool_count catches it. 500 is well under the live 1008 and well over any plausible partial registration."
+    },
+    {
+      "name": "unauthenticated_mcp_refused",
+      "kind": "http_status",
+      "method": "POST",
+      "path": "/mcp",
+      "expect_status": 401,
+      "expect_header": "www-authenticate",
+      "note": "THE FRONT DOOR. An unauthenticated POST must be refused with 401 AND must carry the WWW-Authenticate header that points at the RFC 9728 protected-resource metadata. A regression to 200 here would be an unauthenticated exposure of the entire gateway surface, which is the single worst outcome this file can watch for; the header half separately catches discovery breaking while the door itself still holds."
+    },
+    {
+      "name": "forged_m365_token_refused",
+      "kind": "http_status",
+      "method": "POST",
+      "path": "/mcp?m365_dev_token=platform-canary-forged-token-not-a-real-credential",
+      "expect_status": 401,
+      "note": "The M365 declarative agents authenticate by a static token in a query parameter rather than a header, which is a materially weaker door than the bearer path and deserves its own continuous proof that it still refuses a value that was never issued."
+    },
+    {
+      "name": "oauth_protected_resource_metadata",
+      "kind": "http_status",
+      "method": "GET",
+      "path": "/.well-known/oauth-protected-resource",
+      "expect_status": 200,
+      "note": "RFC 9728 discovery. If this 404s, every client that follows the WWW-Authenticate pointer above lands nowhere and new connector onboarding breaks with a confusing error far from the cause."
+    },
+    {
+      "name": "oauth_authorization_server_metadata",
+      "kind": "http_status",
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server",
+      "expect_status": 200,
+      "note": "The authorization-server metadata every platform seat reads to discover the token and registration endpoints."
+    }
+  ]
+}
