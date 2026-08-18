@@ -330,19 +330,39 @@ export async function ssmListDetailed() {
 /** Metadata-only freshness lookup for ONE named SSM parameter: returns its LastModifiedDate as
  *  epoch milliseconds (a real number, full precision -- unlike ssmListDetailed()'s `created` field,
  *  which is truncated to a YYYY-MM-DD string and therefore useless for an hours-resolution age
- *  metric), or null if the parameter does not exist / SSM is unreachable. Never throws.
+ *  metric).
+ *
+ *  ABSENT AND BROKEN ARE DIFFERENT ANSWERS, AND THIS FUNCTION REFUSES TO CONFLATE THEM. Returns
+ *  null for one case ONLY -- the parameter genuinely does not exist (SSM's ParameterNotFound) --
+ *  and THROWS for every other non-200: throttling, an expired credential, a 5xx, a network error.
+ *  The first draft returned null for all of them, which reintroduced, through a different door, the
+ *  exact bug the caller exists to fix: a transient SSM failure would be reported as "not found in
+ *  SSM", skipped, and counted in a bucket that does NOT fail the run, so a total SSM outage would
+ *  produce a green job that emitted zero metrics -- and the monitor would go back to reading "No
+ *  Data" exactly as it did when nothing emitted the metric at all. A wrong number is worse than no
+ *  number; a wrong SILENCE is worse still, because nothing is left to notice it.
  *
  *  WithDecryption is always false: the caller wants only WHEN this secret was last written, never
  *  its value, and GetParameter's Value field is ignored entirely below -- a SecureString parameter's
  *  plaintext is never materialized by this function, matching the same discipline
  *  ssmListDetailed()'s enumeration already documents (see its comment on WithDecryption). Uses plain
  *  GetParameter (not GetParametersByPath), the same IAM action ssmSecret() already relies on, so no
- *  new permission is required of the Fargate task role. */
+ *  new permission is required of the Fargate task role. The thrown message carries only the
+ *  parameter NAME and the transport status, never a value. */
 export async function ssmParamModifiedMs(name) {
   const res = await ssmCall("GetParameter", { Name: `${PREFIX}/${name}`, WithDecryption: false });
-  if (res.status !== 200 || !res.json?.Parameter) return null;
-  const lm = res.json.Parameter.LastModifiedDate;
-  return typeof lm === "number" && Number.isFinite(lm) ? Math.round(lm * 1000) : null;
+  if (res.status === 200 && res.json?.Parameter) {
+    const lm = res.json.Parameter.LastModifiedDate;
+    return typeof lm === "number" && Number.isFinite(lm) ? Math.round(lm * 1000) : null;
+  }
+  // SSM signals a genuinely missing parameter as HTTP 400 with __type ...#ParameterNotFound. That
+  // is the ONLY status that may answer "absent" rather than "I could not tell you."
+  const kind = String(res.json?.__type || res.json?.code || "");
+  if (res.status === 400 && /ParameterNotFound/i.test(kind)) return null;
+  throw new Error(
+    `SSM GetParameter(${PREFIX}/${name}) failed: status=${res.status}` +
+      `${kind ? ` type=${kind}` : ""}${res.reason ? ` reason=${res.reason}` : ""}`,
+  );
 }
 
 /** List every mirrored secret name (without the prefix). Used by the drift check. */

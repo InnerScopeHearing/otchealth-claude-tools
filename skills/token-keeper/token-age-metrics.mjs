@@ -108,8 +108,24 @@ async function main() {
 
   const now = Date.now();
   const rows = [];
+  // ABSENT vs BROKEN are handled differently ON PURPOSE. ssmParamModifiedMs returns null only for a
+  // genuinely missing parameter and THROWS for any other failure (throttle, expired credential, 5xx,
+  // network). Collapsing the two here would mean a transient SSM outage reported every secret as
+  // "not found", emitted nothing, and still exited 0 -- restoring the monitor to the "No Data" state
+  // this whole script exists to end, with nothing left to notice it. A lookup error is therefore a
+  // RUN FAILURE (folded into `failed`, which forces the non-zero exit below), while a genuinely
+  // absent secret is a reported, non-fatal skip.
+  let lookupErrors = 0;
   for (const t of targets) {
-    const lastModifiedMs = await ssmParamModifiedMs(t.id);
+    let lastModifiedMs;
+    try {
+      lastModifiedMs = await ssmParamModifiedMs(t.id);
+    } catch (e) {
+      lookupErrors++;
+      console.error(`[token-age-metrics] SSM LOOKUP FAILED for ${t.id} (${t.label}): ${(e && e.message) || e}`);
+      rows.push({ ...t, found: false, lookup_error: (e && e.message) || String(e) });
+      continue;
+    }
     if (lastModifiedMs == null) {
       console.error(`[token-age-metrics] NOT FOUND in SSM: ${t.id} (${t.label}) -- skipping, no age emitted for it.`);
       rows.push({ ...t, found: false });
@@ -135,12 +151,28 @@ async function main() {
     }
   }
 
-  const notFound = rows.filter((r) => !r.found).length;
-  const summary = { ts: new Date(now).toISOString(), tracked: rows.length, emitted, failed, not_found: notFound, dry_run: DRY_RUN, rows };
+  const notFound = rows.filter((r) => !r.found && !r.lookup_error).length;
+  const summary = {
+    ts: new Date(now).toISOString(),
+    tracked: rows.length,
+    emitted,
+    failed,
+    lookup_errors: lookupErrors,
+    not_found: notFound,
+    dry_run: DRY_RUN,
+    rows,
+  };
   if (JSON_OUT) console.log(JSON.stringify(summary, null, 2));
-  else console.log(`[token-age-metrics] run complete: ${emitted} emitted, ${failed} failed, ${notFound} not found in SSM (tracked ${rows.length}).`);
+  else
+    console.log(
+      `[token-age-metrics] run complete: ${emitted} emitted, ${failed} send-failed, ` +
+        `${lookupErrors} lookup-failed, ${notFound} not found in SSM (tracked ${rows.length}).`,
+    );
 
-  if (failed > 0) process.exit(1); // loud: a metric-send failure fails this run, not just a log line
+  // Loud: EITHER a metric-send failure OR an SSM lookup failure fails this run. A run that could not
+  // read the ages is not a run that found nothing -- and only a non-zero exit reaches
+  // page-on-failure.mjs.
+  if (failed > 0 || lookupErrors > 0) process.exit(1);
 }
 
 const isMain = process.argv[1] && process.argv[1].endsWith("token-age-metrics.mjs");
