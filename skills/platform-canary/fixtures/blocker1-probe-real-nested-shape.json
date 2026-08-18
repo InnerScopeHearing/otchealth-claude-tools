@@ -1,0 +1,29 @@
+{
+  "_comment": "BLOCKER 1 -- THE REAL catalog_probe SHAPE. This fixture is a RAW gateway payload, not a pre-digested observation: it is the exact JSON copied from a live catalog_probe call against mcp.otchealth.app on 2026-08-18 (cto lane), with the identity fields nested under result.request_context where they actually live. Round 1's runner read probe.is_connector_surface and probe.caller_agent at the TOP level, where they have never existed, so both resolved to null on every single run and two of the five per-lane assertions -- connector_surface, and the P0 caller_agent cross-wiring check -- could never fire. The unit test feeds this to probeIdentity() and asserts it extracts BOTH fields, so the accessor is pinned to the real wire shape rather than to anyone's description of it.",
+  "raw_probe_payload": {
+    "result": {
+      "build_tag": "catalog-probe-2026-07-26.1",
+      "revision": {
+        "image_tag": "c72dd3b",
+        "task_definition": "otchealth-gateway:16",
+        "started_at": "2026-08-18T02:34:19.312Z",
+        "uptime_seconds": 3864
+      },
+      "tool_registry_count": 1008,
+      "known_tools_present": { "catalog_probe": true },
+      "request_context": {
+        "caller_agent": "cto",
+        "is_m365_static_auth": false,
+        "is_connector_surface": true
+      }
+    },
+    "compliance_warning": null,
+    "correlation_id": "0bf4a4c3-cd57-4f7c-ac5c-b8e6fab69979",
+    "dry_run": false
+  },
+  "_round1_wrong_shape": {
+    "_note": "What round 1's accessor expected. Nothing at this level exists on the wire; both reads returned undefined -> null -> silent skip.",
+    "is_connector_surface": null,
+    "caller_agent": null
+  }
+}

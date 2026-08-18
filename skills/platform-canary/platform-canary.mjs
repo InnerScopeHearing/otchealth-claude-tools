@@ -36,7 +36,10 @@
 //
 // EXIT CODES (see assertions.mjs's exitCode(); this deliberately differs from azure-canary's
 // report-by-default convention because a silent break is the exact thing being defended against):
-//   0 = everything that ran, passed   1 = an assertion FAILED   2 = the canary is BLIND (could not run)
+//   0 = everything that ran, passed AND coverage was sufficient
+//   1 = an assertion FAILED (something is proven broken)
+//   2 = the canary is BLIND (a check could not run at all)
+//   3 = COVERAGE REDUCED (all healthy, but too little was checked for the green to mean anything)
 // --report forces 0 for a safe manual/local run.
 //
 // Auth: one client_credentials mint per lane from oauth-lane-<lane>-id/-secret via the shared kvSecret
@@ -58,14 +61,17 @@ const opt = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : nu
 const REPORT_ONLY = flag("--report") || process.env.PLATFORM_CANARY_REPORT === "1";
 const JSONOUT = flag("--json");
 const NO_LEDGER = flag("--no-ledger");
+const NO_RETRIEVAL = flag("--no-retrieval");
 const NO_PLATFORMS = flag("--no-platforms");
 const ONLY_LANES = (opt("--lanes") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const FIXTURE = opt("--fixture");
 
-// The complete set of gateway tools this canary is permitted to invoke. All four are reads. callTool()
+// The complete set of gateway tools this canary is permitted to invoke. Every one is a READ. callTool()
 // enforces this at runtime so the read-only property is a property of the code, not of a promise in a
-// comment that a later edit can quietly break.
-const ALLOWED_TOOLS = new Set(["brain_search", "catalog_probe", "memory_team"]);
+// comment that a later edit can quietly break. Deliberately stated without a count: round 1's comment
+// said "all four" over a three-element set, and a comment that miscounts the thing directly beneath it
+// is a small instance of exactly the defect class this file exists to catch.
+const ALLOWED_TOOLS = new Set(["brain_search", "catalog_probe", "memory_team", "kb_search"]);
 
 function warn(msg) { console.log(`::warning::[platform-canary] ${msg}`); }
 
@@ -135,7 +141,54 @@ async function callTool(bearer, name, args) {
   if (j?.result?.isError) throw new Error(`${name} returned isError`);
   const err = j?.result?.structuredContent?.error || j?.error;
   if (err) throw new Error(`${name}: ${err.code || err.message || "error"}`);
-  return j?.result?.structuredContent?.result ?? j?.result?.structuredContent ?? null;
+  // TWO PAYLOAD SHAPES ARE REAL. The gateway normally answers with structuredContent, whose `result`
+  // field carries the tool's own payload; some paths return only a content[] block whose first text
+  // part is that same JSON. Round 1 read only the first shape. Both are handled, and the fallback is
+  // tried in order rather than merged, so an unparseable text part degrades to null (-> ERROR upstream)
+  // instead of silently half-populating an observation.
+  const sc = j?.result?.structuredContent;
+  if (sc && typeof sc === "object") return sc.result ?? sc;
+  const text = j?.result?.content?.find?.((c) => c?.type === "text")?.text;
+  if (typeof text === "string") {
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === "object" && parsed.result !== undefined ? parsed.result : parsed;
+    } catch { return null; }
+  }
+  return null;
+}
+
+/**
+ * Pull catalog_probe's identity fields out of whatever shape the gateway handed back.
+ *
+ * ===================================================================================================
+ * THE REAL SHAPE, COPIED FROM A LIVE CALL to mcp.otchealth.app on 2026-08-18 (cto lane), not from any
+ * description of it:
+ *
+ *   {"result":{"build_tag":"catalog-probe-2026-07-26.1","revision":{...},"tool_registry_count":1008,
+ *     "known_tools_present":{...},
+ *     "request_context":{"caller_agent":"cto","is_m365_static_auth":false,"is_connector_surface":true}},
+ *    "compliance_warning":null,"correlation_id":"0bf4a4c3-...","dry_run":false}
+ *
+ * Both identity fields are nested under `request_context`. Round 1 read `probe.is_connector_surface`
+ * and `probe.caller_agent` at the TOP level, where neither has ever existed, so both resolved to null
+ * on every run -- and null was then classified as a silent skip, meaning two of the five per-lane
+ * assertions (connector_surface and caller_agent, one of them the P0 cross-wiring check) could never
+ * fire. The canary paged blind on those two checks by construction.
+ *
+ * Accessor accepts the payload either already unwrapped (`.request_context`) or still carrying its
+ * outer envelope (`.result.request_context`), and returns undefined -- never null-as-a-value -- when
+ * the field genuinely is not there, so the caller can tell "absent" from "observed false".
+ * ===================================================================================================
+ */
+export function probeIdentity(probe) {
+  const ctx = probe?.request_context ?? probe?.result?.request_context ?? null;
+  if (!ctx || typeof ctx !== "object") return { connectorSurface: undefined, callerAgent: undefined, shapeOk: false };
+  return {
+    connectorSurface: typeof ctx.is_connector_surface === "boolean" ? ctx.is_connector_surface : undefined,
+    callerAgent: typeof ctx.caller_agent === "string" && ctx.caller_agent ? ctx.caller_agent : undefined,
+    shapeOk: true,
+  };
 }
 
 /** Collect one lane's observation. Never throws: every failure mode becomes a field on the observation
@@ -157,12 +210,21 @@ async function observeLane(laneCfg) {
 
   // catalog_probe is not advertised to every lane. Its absence leaves connectorSurface/callerAgent
   // undefined, which assertions.mjs classifies as ERROR (blind), never as a pass.
+  //
+  // A SUCCESSFUL PROBE WHOSE FIELDS ARE MISSING IS ALSO AN ERROR, not a skip. "the call worked but the
+  // field I need is not there" is a shape regression -- exactly what a renamed or re-nested field would
+  // look like -- and it must be as loud as a failed call, never indistinguishable from a pass.
   try {
     const probe = await callTool(bearer, "catalog_probe", {});
-    if (probe && typeof probe === "object") {
-      obs.connectorSurface = probe.is_connector_surface ?? probe.connector_surface ?? null;
-      obs.callerAgent = probe.caller_agent ?? null;
+    const id = probeIdentity(probe);
+    if (!id.shapeOk) {
+      obs.probeShapeError = "catalog_probe answered but carried no request_context block (expected result.request_context.{caller_agent,is_connector_surface}); the response shape has changed";
+    } else {
+      if (id.connectorSurface === undefined) obs.probeShapeError = "catalog_probe's request_context carried no boolean is_connector_surface";
+      if (id.callerAgent === undefined) obs.probeShapeError = (obs.probeShapeError ? obs.probeShapeError + "; " : "") + "catalog_probe's request_context carried no caller_agent";
     }
+    obs.connectorSurface = id.connectorSurface ?? null;
+    obs.callerAgent = id.callerAgent ?? null;
   } catch (e) { obs.probeError = e.message; }
 
   if (laneCfg.expects_brain_search !== false) {
@@ -184,10 +246,34 @@ async function observeLedger(cfg) {
     const bearer = await laneBearer(lane);
     if (!bearer) return { error: `ledger probe lane "${lane}" has no credential in the store (oauth-lane-${lane}-id/-secret)` };
     const team = await callTool(bearer, "memory_team", { limit: 1 });
+    // recent[0].ts is the newest shared entry's ISO timestamp (live shape verified 2026-08-18). Only
+    // the timestamp is read; the entry's `text` is never touched, so no ledger content enters this
+    // process even though memory_team returns it.
+    const newest = Array.isArray(team?.recent) && team.recent.length ? team.recent[0] : null;
     return {
       sharedEntryCount: Number(team?.shared_entry_count),
       agents: Array.isArray(team?.agents) ? team.agents : null,
+      newestTs: newest && typeof newest.ts === "string" ? newest.ts : null,
     };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+/**
+ * RETRIEVAL HEALTH observation. One kb_search against an OPEN index (never a ring-gated one), reading
+ * ONLY the envelope's `mode` and `count`; the matches array is never touched, so no document text
+ * enters this process. `mode` is the gateway's own hybrid-vs-keyword marker and is the only externally
+ * visible signal that the embeddings half of every hybrid query is still alive.
+ */
+async function observeRetrieval(cfg) {
+  const rc = cfg.retrieval || {};
+  const lane = rc.probe_lane || cfg.ledger?.probe_lane;
+  try {
+    const bearer = await laneBearer(lane);
+    if (!bearer) return { error: `retrieval probe lane "${lane}" has no credential in the store (oauth-lane-${lane}-id/-secret)` };
+    const res = await callTool(bearer, "kb_search", { index: rc.index, query: rc.query, top: rc.top || 3 });
+    return { mode: typeof res?.mode === "string" ? res.mode : null, resultCount: Number(res?.count) };
   } catch (e) {
     return { error: e.message };
   }
@@ -214,6 +300,12 @@ async function observePlatform(p) {
 
 async function emitPosthog(props) {
   try {
+    // FIXTURE MODE IS HERMETIC, and this is where round 1's "no network, no credentials" claim was
+    // false: main() called emitPosthog() unconditionally, which reads posthog-fleet-ingest-key from the
+    // secret store and POSTs to us.i.posthog.com even for an offline fixture evaluation. A claim of
+    // hermeticity that the code does not honour is worse than no claim, because the next person builds
+    // an air-gapped test on it.
+    if (FIXTURE) return;
     const key = process.env.POSTHOG_FLEET_INGEST_KEY || (await kvSecret("posthog-fleet-ingest-key"));
     if (!key) return;
     const host = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
@@ -231,6 +323,7 @@ async function collect(cfg) {
   const lanes = (cfg.lanes || []).filter((l) => !ONLY_LANES.length || ONLY_LANES.includes(l.lane));
   for (const laneCfg of lanes) observations.lanes[laneCfg.lane] = await observeLane(laneCfg);
   if (!NO_LEDGER) observations.ledger = await observeLedger(cfg);
+  if (!NO_RETRIEVAL && cfg.retrieval) observations.retrieval = await observeRetrieval(cfg);
   if (!NO_PLATFORMS) for (const p of cfg.platforms || []) observations.platforms[p.name] = await observePlatform(p);
   return { observations, lanes };
 }
@@ -252,9 +345,10 @@ async function main() {
     // credential. This is how the incident fixture is demonstrated end to end from the command line.
     observations = JSON.parse(readFileSync(resolvePath(FIXTURE), "utf8"));
     if (NO_LEDGER) delete observations.ledger;
+    if (NO_RETRIEVAL) delete observations.retrieval;
     if (NO_PLATFORMS) observations.platforms = {};
     lanes = (cfg.lanes || []).filter((l) => observations.lanes && observations.lanes[l.lane] !== undefined);
-    console.log(`[platform-canary] FIXTURE MODE: evaluating ${FIXTURE} (no network, no credentials)`);
+    console.log(`[platform-canary] FIXTURE MODE: evaluating ${FIXTURE} (no network, no credentials, no telemetry emit)`);
   } else {
     ({ observations, lanes } = await collect(cfg));
   }
@@ -263,10 +357,12 @@ async function main() {
   const { findings, counts } = evaluateRun(evalCfg, observations);
 
   const summary = {
-    ok: counts.fail === 0 && counts.error === 0,
+    ok: counts.fail === 0 && counts.error === 0 && counts.reduced === 0,
     gateway: GW,
     fixture: FIXTURE || null,
-    pass: counts.pass, fail: counts.fail, error: counts.error, skip: counts.skip, p0: counts.p0,
+    pass: counts.pass, fail: counts.fail, error: counts.error, skip: counts.skip,
+    reduced: counts.reduced, p0: counts.p0,
+    lanes_evaluated: counts.lanesEvaluated, ring_assertions_run: counts.ringAssertionsRun,
     findings,
   };
   await emitPosthog({ ...summary, findings: findings.map((f) => ({ scope: f.scope, subject: f.subject, check: f.check, state: f.state, severity: f.severity })) });
@@ -274,7 +370,7 @@ async function main() {
   if (JSONOUT) {
     console.log(JSON.stringify(summary, null, 2));
   } else {
-    console.log(`[platform-canary] ${GW} | pass ${counts.pass} | FAIL ${counts.fail} | ERROR(blind) ${counts.error} | skip ${counts.skip} | P0 ${counts.p0}`);
+    console.log(`[platform-canary] ${GW} | pass ${counts.pass} | FAIL ${counts.fail} | ERROR(blind) ${counts.error} | REDUCED(coverage) ${counts.reduced} | skip ${counts.skip} | P0 ${counts.p0} | lanes evaluated ${counts.lanesEvaluated} | ring assertions run ${counts.ringAssertionsRun}`);
     for (const f of findings) {
       const sev = f.severity ? ` [${f.severity}]` : "";
       console.log(`  ${f.state.padEnd(5)}${sev.padEnd(6)} ${f.scope}/${f.subject}/${f.check}: ${f.message}`);
@@ -285,11 +381,13 @@ async function main() {
   // human responses, so they are never collapsed into one line.
   for (const f of findings.filter((x) => x.state === "FAIL")) warn(`ASSERTION FAILED${f.severity === SEVERITY.P0 ? " (P0)" : ""} -- ${f.message}`);
   for (const f of findings.filter((x) => x.state === "ERROR")) warn(`CHECK COULD NOT RUN -- ${f.message}`);
+  for (const f of findings.filter((x) => x.state === "REDUCED")) warn(`COVERAGE REDUCED -- ${f.message}`);
 
-  const code = exitCode({ assertionFailures: counts.fail, checkErrors: counts.error, verdictsProduced: findings.length, reportOnly: REPORT_ONLY });
+  const code = exitCode({ assertionFailures: counts.fail, checkErrors: counts.error, coverageReductions: counts.reduced, verdictsProduced: findings.length, reportOnly: REPORT_ONLY });
   if (code === 1) console.error(`::error::[platform-canary] ${counts.fail} ASSERTION(S) FAILED${counts.p0 ? ` including ${counts.p0} P0` : ""}. A lane or platform surface is provably broken; do not treat this as flaky.`);
   if (code === 2) console.error(`::error::[platform-canary] THE CANARY IS BLIND: ${counts.error} check(s) could not run at all${findings.length ? "" : " and nothing was evaluated"}. This is not a pass. Fix the sensor before trusting any lane's health.`);
-  if (code === 0 && !REPORT_ONLY) console.log("[platform-canary] OK (every lane and platform assertion that ran, passed)");
+  if (code === 3) console.error(`::error::[platform-canary] COVERAGE REDUCED: everything that was checked was healthy, but ${counts.reduced} coverage floor(s) were not met (${counts.lanesEvaluated} lane(s) evaluated, ring assertion run on ${counts.ringAssertionsRun}). This is NOT a pass. A run that inspects a corner of the estate and reports OK is the exact failure this canary exists to prevent, so it is refused here too.`);
+  if (code === 0 && !REPORT_ONLY) console.log(`[platform-canary] OK (every lane and platform assertion that ran, passed; ${counts.lanesEvaluated} lane(s) evaluated, ring assertion run on ${counts.ringAssertionsRun})`);
   process.exit(code);
 }
 

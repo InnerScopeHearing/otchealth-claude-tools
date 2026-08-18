@@ -1,0 +1,9 @@
+{
+  "_comment": "GAPS 2 AND 3 -- THE TWO SILENT RETRIEVAL DEGRADATIONS, in one observation set. (2) The room resolved and therefore still appears in every lane's rooms_searched, so every ring and room-set assertion passes, but it returned ZERO results: the index is empty, frozen, or mid-reindex. (3) The room answered in mode 'keyword', not 'hybrid': hybridSearch() caught an embed() failure and set vector=null, so RRF fused BM25 alone. Nothing errors in either case, every health check stays green, and the fleet's retrieval quality silently collapses -- a rotated embeddings credential does exactly this, fleet-wide, with no signal anywhere. Both must FAIL.",
+  "lanes": {
+    "cto": { "lane": "cto", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "cto", "roomsSearched": ["memory-exec", "commons-company-journal"] }
+  },
+  "ledger": {"sharedEntryCount": 312, "agents": ["cto", "cfo", "clo", "clo-personal", "coo", "cro", "exec", "developer"], "newestTs": "2026-08-18T02:35:33.703Z"},
+  "retrieval": {"mode": "keyword", "resultCount": 0},
+  "platforms": {}
+}

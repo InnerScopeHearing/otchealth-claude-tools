@@ -9,7 +9,27 @@
     "probe_lane": "cto",
     "min_shared_entries": 25,
     "min_agents": 5,
+    "max_age_h": 72,
+    "_freshness_note": "AGE, not just size. A healthy 300-entry ledger that stopped ACCEPTING WRITES days ago passes every floor above forever, because a frozen collection never shrinks. That is the same blind spot azure-canary hit when a frozen search index sat undetected for ~12 days behind a doc-count floor, and it is the direct analogue of the 2026-08-17/18 incident (a broken WRITE path behind a perfectly healthy READ). memory_team already returns recent[0].ts so this costs no extra call. 72h is deliberately loose: it must not flap over a quiet weekend, it only has to catch a write path that has actually stopped.",
     "_note": "THE 2026-08-17/18 INCIDENT FLOOR. Gateway commit c72dd3b read the commons brain from otchealth-finance-legal-dr instead of otchealth-brain-dr and found a single stray 725-byte cto.jsonl, so every lane on every platform saw shared_entry_count=1 while the real ~6MB / 29-lane history sat intact at the correct bucket. The call succeeded and returned well-formed JSON the whole time, so only a CONTENT floor catches it. 25 entries / 5 distinct lanes sits far above the corrupt state (1 entry, 1 lane) and far below the real history, so it fires on a misroute without flapping on a quiet day."
+  },
+
+  "coverage": {
+    "min_lanes_evaluated": 5,
+    "min_ring_assertions": 5,
+    "require_ledger": true,
+    "require_retrieval": true,
+    "_note": "THE ANTI-PLACEBO FLOOR. In round 1, when the AWS secret-store credentials were absent the workflow appended '--lanes __unarmed__ --no-ledger'; no lane matched, the ledger block was dropped, and the run evaluated only the five credential-free platform surfaces and exited 0. Every six hours, forever, it would have reported OK while checking neither a lane, nor a ring, nor the ledger. These floors make that structurally impossible: 5 = the five REQUIRED lanes (cto, developer, cfo, clo, clo-personal), all of which have a brain-read tool, so the forbidden-room ring assertion must actually EXECUTE on all five. The four optional lanes (coo, cro, cpo, exec) are excluded from the floor precisely because their credentials may legitimately be absent. Reduced coverage is its own outcome class (REDUCED, exit 3), distinct from a failed assertion (1) and from a blind check (2)."
+  },
+
+  "retrieval": {
+    "probe_lane": "cto",
+    "index": "memory-exec",
+    "query": "decision",
+    "top": 3,
+    "min_results": 1,
+    "require_hybrid": true,
+    "_note": "TWO SILENT DEGRADATIONS NO OTHER CHECK HERE CAN SEE. (1) brain_search's rooms_searched lists every room whose query RESOLVED, including a room that matched nothing, so an empty/frozen/mid-reindex index still appears in every lane's room set and every ring assertion still passes; a floor on RESULTS is what separates 'the room answered' from 'the room has anything in it'. (2) src/search/opensearch.ts's hybridSearch() catches ANY embed() failure and sets vector=null, then fuses BM25 alone and returns mode:'keyword' instead of 'hybrid' -- a rotated embeddings key silently halves fleet-wide retrieval quality with zero error anywhere. kb_search surfaces that mode string directly (verified live on mcp.otchealth.app 2026-08-18: memory-exec answered mode:'hybrid'), so it is asserted rather than inferred. Read-only, an OPEN index only, and only the response envelope's mode+count are read -- never a match."
   },
 
   "lanes": [
@@ -72,20 +92,18 @@
       "optional": true,
       "min_tool_count": 20,
       "expect_connector_surface": false,
-      "expects_brain_search": false,
-      "expected_rooms": [],
-      "forbidden_rooms": [],
-      "note": "The 2026-08-10 CRO credential fix repointed oauth-lane-cro-id/secret off the occ_cro connector client onto the non-connector CRO client. Its advertised surface is HeyGen-heavy (43 actions observed on the connector form) and it was observed with NO brain-read tool at all, which fails closed and is therefore not a ring violation. expects_brain_search:false records that honestly instead of asserting a room set that may not exist; revisit if the CRO toolset is widened to include the read-only brain tools it is documented to have."
+      "expected_rooms": ["memory-exec", "commons-company-journal"],
+      "forbidden_rooms": ["finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "note": "CORRECTED. The round-1 row asserted this lane 'was observed with NO brain-read tool at all' and set expects_brain_search:false. That is FALSE and it was contradicted by an OPEN finding in this repo's own FINDINGS-LEDGER.md: FND-20260817-e462, verified by tools/list per lane via client_credentials, measured cro=1008 tools (coo=11) on 2026-08-17. The gateway source explains why, in src/tools/registry.ts: connectorToolset()'s CRO_CONNECTOR_TOOLSET branch (EXTERNAL_READONLY_TOOLSET + HeyGen tools) applies ONLY when isConnectorSurface() is true, i.e. an occ_/dcr_ client; oauth-lane-cro-* was repointed onto the NON-connector CRO client on 2026-08-10, and TOOL_CATALOG_CURATION_MODE=report does not narrow internal lanes, so a client_credentials cro mint sees the FULL catalog. brain_search is in that catalog AND in EXTERNAL_READONLY_TOOLSET, so it is advertised under either binding -- which is why expects_brain_search is now simply left at its default (true) rather than asserted false. THE 43-HeyGen-ONLY SURFACE IS A SEPARATE, REAL FACT: that is what the saved Hyperagent CRO connector skill sees (occ_cro credential -> connector surface -> CRO_CONNECTOR_TOOLSET). Two different credentials, two different surfaces; round 1 conflated them. expected_rooms is the two OPEN rooms only because cro is NOT in EXEC_RING (src/tools/kb/search-privileged.ts: EXEC_RING = cfo, clo, clo-personal, cpo, cco, exec). min_tool_count stays 20: it must fire on the bare ~11-tool external set while passing on either legitimate state (43 connector-form, or 1008 full)."
     },
     {
       "lane": "cpo",
       "optional": true,
       "min_tool_count": 20,
       "expect_connector_surface": false,
-      "expects_brain_search": false,
-      "expected_rooms": [],
+      "expected_rooms": ["memory-exec", "commons-company-journal"],
       "forbidden_rooms": [],
-      "note": "Reachable as an account connector but absent from gateway-connect's LANES table, so a client_credentials mint here will most likely SKIP. Listed so its state is recorded rather than invisible. It is an EXEC_RING member per the ring definition yet is advertised no brain-read tool at all, which is safe-direction but means the seat is brain-blind; that is a known open question, not something to page on nightly."
+      "note": "CORRECTED alongside cro. expects_brain_search:false is removed here too: cpo IS an EXEC_RING member (src/tools/kb/search-privileged.ts), so isShipLane('cpo') is true and a client_credentials mint would receive the full ship catalog including brain_search. No oauth-lane-cpo-* credential is known to exist, so this lane is still expected to SKIP at mint; it is listed so that the day one IS provisioned it is watched from the first run. expected_rooms is deliberately ONLY the two open rooms every brain-reading lane gets -- an EXEC_RING lane would also see the finance/legal rooms, but that is not live-verified from this seat and extra rooms are never asserted absent unless they are forbidden, so understating it cannot cause a false alarm while overstating it could. NOTE that under the round-1 code this row's expects_brain_search:false silently deleted the personal-legal ring assertion for this lane entirely; the forbidden half is now unconditional and no config line can do that again."
     },
     {
       "lane": "exec",

@@ -1,6 +1,6 @@
 ---
 name: platform-canary
-description: The fleet's PER-LANE / PER-PLATFORM GATEWAY HEALTH CANARY. For every lane on the MCP gateway it asserts that a token mints, that the advertised tool count is ABOVE that lane's floor (catching the connector-surface misclassification whose signature is a privileged lane offered ~11 tools instead of ~1000), that connector_surface is false for privileged lanes, that the gateway resolves the credential to that lane's own identity, and that brain_search returns EXACTLY the expected room set, both that expected rooms are PRESENT and that forbidden rooms are ABSENT. The personal-legal assertion (legal-personal and legal-personal-memory visible to clo-personal and exec ONLY) is the load-bearing one and carries P0 severity, with clo-personal acting as the positive control so the allow path is proven too. It then asserts the shared exec ledger is readable AND non-trivial, a floor on entry count and on distinct agent lanes, because shared_entry_count=1 was the exact 2026-08-17/18 misrouted-bucket incident and a canary that would not have caught it is not worth writing. Finally it checks the credential-free platform surfaces, the gateway /health registry floor, the unauthenticated front door still refusing with a WWW-Authenticate pointer, a forged M365 static token still refused, and both OAuth discovery documents. Strictly READ-ONLY (a runtime allowlist refuses any tool outside brain_search/catalog_probe/memory_team) and it NEVER prints privileged content, room names, counts and allow/deny outcomes only. Exits 1 on a failed assertion and 2 when it is BLIND (a check could not run at all), two distinct loud outcomes because they demand different responses; --report forces exit 0 for a safe manual run and --fixture evaluates a recorded observation set offline with no network and no credentials. Config-driven via expected-lanes.json, emits a platform_canary PostHog event, and is scheduled every 6h by .github/workflows/platform-canary.yml.
+description: The fleet's PER-LANE / PER-PLATFORM GATEWAY HEALTH CANARY. For every lane on the MCP gateway it asserts that a token mints, that the advertised tool count is ABOVE that lane's floor (catching the connector-surface misclassification whose signature is a privileged lane offered ~11 tools instead of ~1000), that connector_surface is false for privileged lanes, that the gateway resolves the credential to that lane's own identity, and that brain_search returns EXACTLY the expected room set, both that expected rooms are PRESENT and that forbidden rooms are ABSENT. The personal-legal assertion (legal-personal and legal-personal-memory visible to clo-personal and exec ONLY) is the load-bearing one and carries P0 severity, with clo-personal acting as the positive control so the allow path is proven too. It then asserts the shared exec ledger is readable AND non-trivial, a floor on entry count and on distinct agent lanes, because shared_entry_count=1 was the exact 2026-08-17/18 misrouted-bucket incident and a canary that would not have caught it is not worth writing. Finally it checks the credential-free platform surfaces, the gateway /health registry floor, the unauthenticated front door still refusing with a WWW-Authenticate pointer, a forged M365 static token still refused, and both OAuth discovery documents. It also asserts the ledger is FRESH and not merely large (a frozen-but-readable ledger passes every size floor forever), that a broad query against an open room returns results at all (a room that resolves with zero hits still appears in every lane's rooms_searched), that retrieval is still running in HYBRID and not silently degraded to keyword-only by a dead embeddings credential, and that the run itself COVERED enough lanes, rings and blocks to be worth believing. Strictly READ-ONLY (a runtime allowlist refuses any tool outside brain_search/catalog_probe/memory_team/kb_search) and it NEVER prints privileged content, room names, counts and allow/deny outcomes only. Exits 1 on a failed assertion, 2 when it is BLIND (a check could not run at all) and 3 when COVERAGE IS REDUCED (all healthy, but too little was checked), three distinct loud outcomes because they demand different responses; --report forces exit 0 for a safe manual run and --fixture evaluates a recorded observation set offline with no network, no credentials and no telemetry emit. Config-driven via expected-lanes.json, emits a platform_canary PostHog event, and is scheduled every 6h by .github/workflows/platform-canary.yml.
 ---
 
 # platform-canary -- make a silent gateway break impossible to miss
@@ -42,11 +42,21 @@ Per lane, from `expected-lanes.json`:
 | `connector_surface` | a client_credentials lane is classified as a connector surface |
 | `caller_agent` | the gateway resolves the credential to a different lane (P0: a cross-wired credential makes both lanes' ring assertions meaningless) |
 | `room_set` | an expected room is absent from `rooms_searched` |
-| `ring` | a forbidden room is present. **P0** when it is a personal-legal room |
+| `ring` | a forbidden room is present. **P0** when it is a personal-legal room. **UNCONDITIONAL** |
+| `room_set_registry_drift` | the registry says `expects_brain_search:false` but the lane searched rooms anyway |
 
-Then the shared ledger (`ledger_entry_floor`, `ledger_agent_floor`) and the credential-free platform
-surfaces (`gateway_health`, `unauthenticated_mcp_refused`, `forged_m365_token_refused`, and both OAuth
-discovery documents).
+Then the shared ledger (`ledger_entry_floor`, `ledger_agent_floor`, `ledger_freshness`), retrieval
+health (`room_results`, `retrieval_mode`), the credential-free platform surfaces (`gateway_health`,
+`unauthenticated_mcp_refused`, `forged_m365_token_refused`, and both OAuth discovery documents), and
+finally coverage (`coverage_lanes`, `coverage_ring`, `coverage_ledger`, `coverage_retrieval`).
+
+**The forbidden-room half of the ring check is UNCONDITIONAL and no config can switch it off.** Round 1
+branched around the whole room-set assertion when a lane declared `expects_brain_search:false` and
+emitted a SKIP, and SKIPs do not affect the exit code -- so one config line (already set on `cro` and
+`cpo`) silently deleted the P0 ring assertion for that lane, and an observation with `legal-personal` in
+a `cro` room set PASSED. `expects_brain_search` now governs only the expected-PRESENT half. A locking
+test iterates every non-ring lane in the shipped registry, forces the flag false, and requires a P0
+every time, so the two halves can never be re-coupled.
 
 **The forbidden-room set is derived from policy, not declared per lane.** `forbiddenRoomsFor()` adds
 `personal_legal_rooms` to every lane automatically unless that lane is named in `personal_legal_ring`,
@@ -60,9 +70,11 @@ light. `clo-personal` asserts they are PRESENT, so the allow path is proven on e
 ## Run
 ```
 node skills/platform-canary/platform-canary.mjs [--report] [--json] [--lanes a,b]
-                                                [--no-ledger] [--no-platforms] [--fixture <file>]
+                                                [--no-ledger] [--no-retrieval] [--no-platforms]
+                                                [--fixture <file>]
 ```
-- default: exits **1** on a failed assertion, **2** when BLIND, **0** when clean.
+- default: exits **1** on a failed assertion, **2** when BLIND, **3** when COVERAGE IS REDUCED, **0**
+  when clean and sufficiently covered.
 - `--report`: forces exit 0. Safe for a manual look; anomalies still print and still emit.
 - `--fixture <file>`: evaluate a recorded observation set offline. No network, no credentials. This is
   how the incident reproduction is demonstrated:
@@ -70,15 +82,31 @@ node skills/platform-canary/platform-canary.mjs [--report] [--json] [--lanes a,b
   node platform-canary.mjs --fixture fixtures/incident-2026-08-17-shared-ledger.json   # exits 1
   node platform-canary.mjs --fixture fixtures/healthy.json                              # exits 0
   ```
-- `--lanes`: restrict to named lanes. Passing a name that matches nothing runs the credential-free
-  platform half alone, which is what the workflow does when lane credentials are not provisioned.
+- `--lanes`: restrict to named lanes. **A filter that matches nothing no longer produces a pass**: the
+  coverage floors below turn such a run into exit 3. The workflow no longer narrows itself when lane
+  credentials are missing, for exactly that reason.
 
-## Exit codes: "broken" and "blind" are different facts
-`0` everything that ran, passed. `1` an assertion FAILED, something is provably broken. `2` the canary
-could not run a check at all, so it has proven nothing. Both non-zero states are loud and carry
-different messages, because one says fix the system and the other says fix the sensor. A run that
-evaluates nothing exits 2, never 0: an empty run must never look like a pass. A proven failure outranks
-blindness (exit 1 wins) because there is something concrete to act on.
+## The governing rule
+**There is no configuration, credential state, or environment under which this canary exits 0 while a
+lane, a ring, or the ledger went unchecked.** Silence is impossible; reduced coverage is loud. The rule
+is written at the top of `assertions.mjs` so the next person cannot quietly re-introduce a skip.
+
+## Exit codes: "broken", "blind" and "only looked at a corner" are three different facts
+`0` everything that ran passed AND coverage was sufficient. `1` an assertion FAILED, something is
+provably broken. `2` the canary could not run a check at all, so it proved nothing about that check.
+`3` everything checked was healthy but the run covered too little for the green to mean anything.
+All three non-zero states are loud and carry different messages, because they say fix the system / fix
+the sensor / distrust this result. A run that evaluates nothing exits 2, never 0. Precedence is
+failure > blindness > reduced coverage, in order of how actionable each is.
+
+### Why exit 3 exists
+When the AWS secret-store credentials were absent, round 1's workflow appended `--lanes __unarmed__
+--no-ledger`. No lane matched, the ledger block was dropped, and the run evaluated only the five
+credential-free platform surfaces, found them healthy, and **exited 0**. Every six hours, forever, it
+would have reported OK while checking neither a lane, nor a ring, nor the ledger -- the precise failure
+class it was built to detect, wearing a green light. `assertCoverage()` makes that structurally
+impossible: floors on lanes evaluated, on ring assertions actually EXECUTED, and on the ledger and
+retrieval blocks having run at all.
 
 ## Safety properties
 - **Read-only by construction.** `ALLOWED_TOOLS` is enforced inside `callTool()` at runtime, so a later
@@ -99,7 +127,12 @@ blindness (exit 1 wins) because there is something concrete to act on.
 - `fixtures/` -- `healthy.json` (control), `incident-2026-08-17-shared-ledger.json` (the regression
   lock; every lane block in it is byte-identical to the control, which is exactly why a lane-only canary
   would have gone green through the incident), `ring-violation-cfo-personal-legal.json`,
-  `connector-surface-misclassification.json`.
+  `connector-surface-misclassification.json`, plus the round-2 locks:
+  `blocker1-probe-real-nested-shape.json` (the RAW catalog_probe payload copied from a live call, which
+  pins the identity accessor to the wire shape rather than to anyone's description of it),
+  `blocker2-cro-ring-violation-expects-brain-search-false.json` (the config line that used to delete the
+  ring assertion), `blocker3-unarmed-platform-only.json` (the run that used to exit 0 having checked
+  nothing), `gap1-ledger-frozen-but-large.json`, `gap2-3-retrieval-degraded.json`.
 
 ## Reused, not duplicated
 The pure-classifier + pure-exit-code + config-registry + PostHog-emit + fail-loud shape mirrors
@@ -108,10 +141,18 @@ The pure-classifier + pure-exit-code + config-registry + PostHog-emit + fail-lou
 registry file follows the `setup/expected-indexes.json` / `setup/expected-streams.json` /
 `expected-docs.json` convention. The ABSENCE-is-also-an-alarm principle those encode is carried here in
 three ways: a check that could not run is an ERROR verdict rather than silence, the ledger is asserted
-on content rather than on the call succeeding, and the workflow beats
-`setup/heartbeat-registry.json`'s `platform-canary` entry unconditionally so
-`skills/nightly-schedule-canary` pages if this canary's own cron ever goes quiet. The monitor is itself
-monitored.
+on content and on AGE rather than on the call succeeding, and a run that covered too little is its own
+outcome class rather than a pass.
+
+**This canary is NOT currently self-monitored, and round 1 said otherwise.** The claim was that the
+workflow's heartbeat step feeds `setup/heartbeat-registry.json`'s `platform-canary` entry so
+`skills/nightly-schedule-canary` pages if this canary's cron goes silent. The registry entry does exist,
+but `setup/heartbeat.mjs` writes EXCLUSIVELY to Azure Blob using Key Vault credentials, and that
+subscription is deleted -- so the beat exits 78 before writing, `schedule-canary.mjs` reads the same dead
+store, and the workflow's `|| true` hides all of it. The step is kept (it arms itself the moment a
+working backend exists) but the claim is withdrawn: an untrue statement that something is monitored is
+worse than no monitoring, because it stops anyone from looking. **To close it: port `heartbeat.mjs`'s
+storage layer to S3, then restore the claim, and not before.**
 
 ## Scheduling
 `.github/workflows/platform-canary.yml`, every 6h (a ring widening is a live exposure; a 24h detection
@@ -120,8 +161,11 @@ regressed classifier cannot report green from broken logic.
 
 **Arming the lane half (one-time):** lane credentials resolve through `kvSecret()`, which since the
 Azure subscription deletion reaches the store via its AWS SSM path. That needs `OTC_AWS_ACCESS_KEY_ID`
-and `OTC_AWS_SECRET_ACCESS_KEY` as repo secrets. Until they exist the workflow deliberately runs the
-credential-free platform half only and says so loudly, rather than paging every 6 hours with an
-identical unactionable "cannot reach the secret store" -- the `azure-watchdog.yml` lesson that a monitor
-which always fails is an alert storm, not a detection. Provision the two secrets and the lane half arms
-itself on the next run with no code change.
+and `OTC_AWS_SECRET_ACCESS_KEY` as repo secrets. **Until they exist this workflow pages every 6 hours,
+deliberately.** Round 1 avoided that by narrowing the run to the platform half, which made an unarmed
+canary report OK -- a worse outcome than an alert storm, because an alert storm is annoying while a
+monitor that manufactures confidence is dangerous. The narrowing is gone: required lanes without a
+credential report ERROR (exit 2) and the coverage floor reports REDUCED (exit 3), each with its own
+message. If the noise is genuinely unacceptable before the secrets land, DISABLE THE SCHEDULE -- an
+absent canary is at least honestly absent -- but never re-introduce a filter that turns "checked
+nothing" back into "OK". Provision the two secrets and the lane half arms itself with no code change.

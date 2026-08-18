@@ -1,0 +1,9 @@
+{
+  "_comment": "BLOCKER 2 -- THE PROOF CASE, reproduced verbatim from the adversarial reviewer's execution. The cro lane is configured with expects_brain_search:false in the shipped registry (as cpo also was). Under round-1 code, evaluateLane() branched around assertRoomSet() entirely for such a lane and emitted a SKIP, and SKIPs do not affect the exit code -- so this observation set, in which a cro-lane brain_search searched BOTH attorney-privileged personal-legal rooms, PASSED. One line of config silently deleted the single most important assertion in the file. This fixture must FAIL with a P0 ring violation, and the accompanying locking test asserts that expects_brain_search can never again suppress the forbidden-room half.",
+  "lanes": {
+    "cro": { "lane": "cro", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "cro", "roomsSearched": ["memory-exec", "commons-company-journal", "legal-personal", "legal-personal-memory"] }
+  },
+  "ledger": {"sharedEntryCount": 312, "agents": ["cto", "cfo", "clo", "clo-personal", "coo", "cro", "exec", "developer"], "newestTs": "2026-08-18T02:35:33.703Z"},
+  "retrieval": {"mode": "hybrid", "resultCount": 3},
+  "platforms": {}
+}

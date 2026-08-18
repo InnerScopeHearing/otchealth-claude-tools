@@ -7,7 +7,8 @@
     "clo": { "lane": "clo", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "clo", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"] },
     "clo-personal": { "lane": "clo-personal", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "clo-personal", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company", "legal-personal", "legal-personal-memory"] }
   },
-  "ledger": { "sharedEntryCount": 1, "agents": ["cto"] },
+  "ledger": {"sharedEntryCount": 1, "agents": ["cto"], "newestTs": "2026-08-18T02:35:33.703Z"},
+  "retrieval": {"mode": "hybrid", "resultCount": 3},
   "platforms": {
     "gateway_health": { "status": "ok", "toolCount": 1008 },
     "unauthenticated_mcp_refused": { "status": 401, "headers": ["content-type", "www-authenticate"] },

@@ -3,6 +3,7 @@
   "lanes": {
     "cto": { "lane": "cto", "credsPresent": true, "tokenMinted": true, "toolCount": 11, "connectorSurface": true, "callerAgent": "cto", "roomsSearched": ["memory-exec", "commons-company-journal"] }
   },
-  "ledger": { "sharedEntryCount": 312, "agents": ["cto", "cfo", "clo", "clo-personal", "coo", "cro", "exec", "developer"] },
+  "ledger": {"sharedEntryCount": 312, "agents": ["cto", "cfo", "clo", "clo-personal", "coo", "cro", "exec", "developer"], "newestTs": "2026-08-18T02:35:33.703Z"},
+  "retrieval": {"mode": "hybrid", "resultCount": 3},
   "platforms": {}
 }

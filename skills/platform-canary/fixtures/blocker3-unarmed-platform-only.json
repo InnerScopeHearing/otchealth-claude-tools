@@ -1,0 +1,11 @@
+{
+  "_comment": "BLOCKER 3 -- THE UNARMED RUN, exactly as the workflow produced it when OTC_AWS_ACCESS_KEY_ID / OTC_AWS_SECRET_ACCESS_KEY were absent: '--lanes __unarmed__ --no-ledger' meant NO lane matched the filter and the ledger block was dropped, so the run evaluated only the five credential-free platform surfaces, found them all healthy, and exited 0. As scheduled TODAY that is what it would have reported every six hours: OK, while checking neither a lane, nor a ring, nor the ledger -- the precise failure class it exists to detect, wearing a green light. This fixture MUST NOT exit 0. It carries no lane, no ledger and no retrieval block on purpose; the coverage assertion is what turns it non-zero (REDUCED, exit 3).",
+  "lanes": {},
+  "platforms": {
+    "gateway_health": { "status": "ok", "toolCount": 1008 },
+    "unauthenticated_mcp_refused": { "status": 401, "headers": ["content-type", "www-authenticate"] },
+    "forged_m365_token_refused": { "status": 401, "headers": ["content-type", "www-authenticate"] },
+    "oauth_protected_resource_metadata": { "status": 200, "headers": ["content-type"] },
+    "oauth_authorization_server_metadata": { "status": 200, "headers": ["content-type"] }
+  }
+}

@@ -30,10 +30,24 @@
 # ARMING (one-time): the lane half needs fleet credentials, which it resolves through the shared
 # kvSecret() chain. With Azure subscription 55c84f6b deleted, that chain reaches the secret store via
 # its AWS SSM path, which needs OTC_AWS_ACCESS_KEY_ID / OTC_AWS_SECRET_ACCESS_KEY as repo secrets.
-# Until those exist this workflow deliberately runs the CREDENTIAL-FREE PLATFORM HALF ONLY and says so
-# loudly, rather than paging every 6 hours with an identical, unactionable "cannot reach the secret
-# store". That is the azure-watchdog.yml lesson: a monitor that always fails is an alert storm, not a
-# detection. Provision the two secrets and the lane half arms itself on the next run with no code change.
+#
+# UNARMED RUNS NOW FAIL LOUDLY (exit 3, COVERAGE REDUCED) INSTEAD OF REPORTING OK. Round 1 appended
+# '--lanes __unarmed__ --no-ledger' when those two secrets were absent, so no lane matched the filter,
+# the ledger block was dropped, and the run evaluated only the five credential-free platform surfaces
+# and exited 0. As scheduled, this workflow would have reported OK every six hours while checking
+# NEITHER a lane, NOR a ring, NOR the ledger -- the exact failure class it was built to detect, wearing
+# a green light. That was a worse outcome than an alert storm: an alert storm is annoying, a monitor
+# that manufactures confidence is dangerous.
+#
+# So the filter is gone. The canary runs its full check set; required lanes without a credential report
+# ERROR (blind, exit 2) and the coverage floor reports REDUCED (exit 3), each with its own message. This
+# WILL page every 6 hours until the two secrets are provisioned. That is deliberate and it is the
+# correct trade: the alternative is a permanently green canary that watches nothing. If the noise is
+# genuinely unacceptable before the secrets land, DISABLE the schedule -- an absent canary is at least
+# honestly absent, and a disabled workflow is visible in the Actions tab, whereas a green one that
+# checked nothing is not. (The heartbeat step at the bottom would normally be what notices a silent cron,
+# but it does not currently work; see its own note.) Do NOT re-introduce a filter that turns "checked
+# nothing" back into "OK".
 name: Platform Canary (per-lane + per-platform)
 
 on:
@@ -67,12 +81,23 @@ jobs:
         with:
           node-version: 22
 
+      - name: "Create the run log up front (so the page step can never reference a file that does not exist)"
+        # GAP 5, the page path. Every later step appends to this file, and the page step below is
+        # `if: failure()` -- which fires when the UNIT-TEST step fails too, i.e. before the canary has
+        # written anything. Round 1 would have handed page-on-failure.mjs a path that did not exist.
+        # Creating it here means the page always has something to attach, even if that something is
+        # only the header line plus the unit-test output.
+        run: |
+          printf '[platform-canary] run %s started %s\n' "${GITHUB_RUN_ID}" "$(date -u +%FT%TZ)" > "${GITHUB_WORKSPACE}/platform-canary.log"
+
       - name: Unit-test the assertion core before trusting its verdict
         # A canary whose own classifier has regressed is worse than no canary: it would report green
         # from broken logic. The incident fixture (shared_entry_count=1) is a permanent regression lock
         # in this suite, so this step failing means the canary can no longer detect the 2026-08-17/18
         # failure class and its verdict below must not be believed.
-        run: node --test tests/platform-canary.test.mjs
+        run: |
+          set -o pipefail
+          node --test tests/platform-canary.test.mjs 2>&1 | tee -a "${GITHUB_WORKSPACE}/platform-canary.log"
 
       - name: Run the canary
         working-directory: skills/platform-canary
@@ -91,10 +116,12 @@ jobs:
           ARGS="--json"
           if [ "${REPORT_ONLY}" = "true" ]; then ARGS="$ARGS --report"; fi
           if [ -z "${OTC_AWS_ACCESS_KEY_ID:-}" ] || [ -z "${OTC_AWS_SECRET_ACCESS_KEY:-}" ]; then
-            echo "::warning::[platform-canary] LANE COVERAGE IS UNARMED: OTC_AWS_ACCESS_KEY_ID/OTC_AWS_SECRET_ACCESS_KEY are not set as repo secrets, so no lane credential can be resolved. Running the credential-free PLATFORM half only. The per-lane token/tool-floor/connector-surface/ring/ledger assertions are NOT running and nothing is watching the personal-legal ring until these two secrets are provisioned."
-            ARGS="$ARGS --lanes __unarmed__ --no-ledger"
+            # WARN, but DO NOT narrow the run. See the ARMING note in this file's header: narrowing is
+            # what made an unarmed run look healthy. The canary itself now reports the reduced coverage
+            # as its own non-zero outcome, which is the whole point of the change.
+            echo "::warning::[platform-canary] LANE COVERAGE IS UNARMED: OTC_AWS_ACCESS_KEY_ID/OTC_AWS_SECRET_ACCESS_KEY are not set as repo secrets, so no lane credential can be resolved. The run below is EXPECTED to exit non-zero (2 = blind on every lane, and/or 3 = coverage reduced). It is NOT narrowed to the platform half: a narrowed run would exit 0 and report OK while watching neither a lane, nor the personal-legal ring, nor the shared ledger."
           fi
-          node platform-canary.mjs $ARGS 2>&1 | tee "${GITHUB_WORKSPACE}/platform-canary.log"
+          node platform-canary.mjs $ARGS 2>&1 | tee -a "${GITHUB_WORKSPACE}/platform-canary.log"
 
       - name: Upload canary log
         if: always()
@@ -109,15 +136,32 @@ jobs:
         if: failure()
         env:
           POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
-        run: node setup/page-on-failure.mjs --workflow "Platform Canary" --log "${GITHUB_WORKSPACE}/platform-canary.log"
+        run: |
+          LOG="${GITHUB_WORKSPACE}/platform-canary.log"
+          # Belt and braces: the step above creates this file, but a page must never itself fail for
+          # want of a log. A page that dies because its evidence is missing is a silent page.
+          [ -s "$LOG" ] || printf '[platform-canary] no log was produced; the run failed before writing one.\n' > "$LOG"
+          node setup/page-on-failure.mjs --workflow "Platform Canary" --log "$LOG"
 
-      # Schedule-liveness heartbeat, a DIFFERENT failure class than the verdict above and the reason it
-      # fires unconditionally: this beat means "this workflow's cron fired at all". A workflow that never
-      # runs never gets the chance to go red, so without this beat, the canary silently ceasing to exist
-      # would look exactly like a healthy fleet. skills/nightly-schedule-canary/schedule-canary.mjs reads
-      # the matching kind:"nightly-workflow" entry in setup/heartbeat-registry.json and pages if it goes
-      # LATE. The monitor is thereby itself monitored.
-      - name: "Heartbeat: mark this workflow's schedule as alive (independent of the canary's own verdict)"
+      # Schedule-liveness heartbeat. INTENT: this beat means "this workflow's cron fired at all", a
+      # different failure class from the verdict above -- a workflow that never runs never gets the
+      # chance to go red, so without a liveness signal, the canary silently ceasing to exist looks
+      # exactly like a healthy fleet. The matching kind:"nightly-workflow" entry exists in
+      # setup/heartbeat-registry.json and skills/nightly-schedule-canary/schedule-canary.mjs would read
+      # it.
+      #
+      # HONEST STATUS: THIS BEAT DOES NOT CURRENTLY WORK, AND SO THIS CANARY IS *NOT* SELF-MONITORED.
+      # Round 1 claimed "the monitor is thereby itself monitored". That claim was false. setup/heartbeat.mjs
+      # writes EXCLUSIVELY to Azure Blob (`https://<acct>.blob.core.windows.net/...`), resolving
+      # azure-commons-storage-account/-key from Key Vault -- and that Azure subscription is deleted, so
+      # the credential read fails and the script exits 78 before writing anything. schedule-canary.mjs
+      # reads the same dead store. The `|| true` below then swallows it, which is why the breakage is
+      # invisible. The step is KEPT (it is harmless and it arms itself the moment a working heartbeat
+      # backend exists) but the claim is removed rather than left standing: an untrue comment asserting
+      # that something is monitored is worse than no monitoring at all, because it stops anyone looking.
+      # TO ACTUALLY CLOSE THIS: port setup/heartbeat.mjs's storage layer to S3 (the same move the rest of
+      # the estate already made), then restore the self-monitoring claim -- and not before.
+      - name: "Heartbeat: mark this workflow's schedule as alive (CURRENTLY A NO-OP -- see the note above)"
         if: always()
         continue-on-error: true
         env:

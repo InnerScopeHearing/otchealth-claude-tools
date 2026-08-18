@@ -1,0 +1,9 @@
+{
+  "_comment": "GAP 1 -- FROZEN BUT READABLE. Identical to healthy.json's ledger in every respect a floor can see: 300 entries across 8 distinct agent lanes, read successfully, well-formed. The only difference is that the newest entry is DAYS old, meaning the ledger stopped accepting writes. Every size floor passes forever in this state, because a frozen collection never shrinks -- it stays identical. This is the same AGE-not-FLOOR blind spot that let a frozen search index sit undetected for ~12 days, and it is the direct analogue of the 2026-08-17/18 incident: a broken WRITE path sitting behind a perfectly healthy READ. This fixture must FAIL on ledger_freshness while passing both ledger floors.",
+  "lanes": {
+    "cto": { "lane": "cto", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "cto", "roomsSearched": ["memory-exec", "commons-company-journal"] }
+  },
+  "ledger": {"sharedEntryCount": 300, "agents": ["cto", "cfo", "clo", "clo-personal", "coo", "cro", "exec", "developer"], "newestTs": "2026-08-10T00:00:00.000Z"},
+  "retrieval": {"mode": "hybrid", "resultCount": 3},
+  "platforms": {}
+}
