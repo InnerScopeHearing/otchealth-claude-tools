@@ -168,8 +168,17 @@ export async function kvSecretSet(name, value) {
   if (!kvOk && ssmOk) {
     console.error(`[kv-secret] PARTIAL ROTATION for "${name}": SSM updated, Key Vault did NOT.`);
   }
-  // Success means the ACTIVE primary took the write; a mirror-only failure is loud but not fatal.
-  return (process.env.SECRET_BACKEND || "keyvault") === "ssm" ? ssmOk : kvOk;
+  // FIX (2026-08-18, post Azure-subscription-deletion): success means the write landed in EITHER
+  // durable store, not "whichever store SECRET_BACKEND names as primary". This used to be
+  // `(SECRET_BACKEND === "ssm") ? ssmOk : kvOk`, so a process that had NOT opted into
+  // SECRET_BACKEND=ssm reported a clean SSM write as a FAILURE whenever the Key Vault leg failed --
+  // which, now that kv-otc-55c84f6bef is permanently gone, is every single time. A caller (e.g.
+  // onedrive.mjs's smWrite(), which every OAuth token-rotation path -- Xero/Gmail/OneDrive/QBO --
+  // goes through) would then treat a real, durable, already-persisted write as a failure and fall
+  // through to the retired GCP Secret Manager path, throwing a confusing "Key Vault write failed and
+  // no GCP SA present" over a rotation that had, in fact, already succeeded. A mirror-only failure is
+  // still logged loudly above; it just no longer overrides a genuine success on the other leg.
+  return ssmOk || kvOk;
 }
 
 /** The original Key-Vault-only writer, now one leg of the dual-write above. */

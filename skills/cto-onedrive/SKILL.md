@@ -19,9 +19,9 @@ Matt from the CTO; "Processed" = the CTO's done pile.
 
 This is a thin wrapper over `skills/cfo-onedrive/onedrive.mjs` (the shared OneDrive engine). It sets
 the engine's exchange-folder overrides to the CTO folders and self-hydrates the Graph app creds
-(`GRAPH_MAIL_CLIENT_ID` / `_SECRET` / `_TENANT_ID`) from Secret Manager if they are not already in
-the environment, so it runs in any session. All `<path>` arguments are relative to the OneDrive ROOT,
-so the CTO can also operate anywhere on the drive.
+(`GRAPH_MAIL_CLIENT_ID` / `_SECRET` / `_TENANT_ID`) via the shared `kvSecret()` resolver if they are
+not already in the environment, so it runs in any session. All `<path>` arguments are relative to the
+OneDrive ROOT, so the CTO can also operate anywhere on the drive.
 
 ## Commands
 
@@ -48,9 +48,17 @@ node skills/cto-onedrive/cto-onedrive.mjs find-dupes [path]
 
 ## Credentials (hydrated)
 - `GRAPH_MAIL_CLIENT_ID` / `GRAPH_MAIL_CLIENT_SECRET` / `GRAPH_MAIL_TENANT_ID` (the Graph app; the
-  wrapper self-hydrates these from Secret Manager if unset).
-- `GCP_CLAUDE_DRIVER_SA_JSON` (reads/writes `graph-onedrive-refresh-token` in Secret Manager; the
-  delegated refresh token auto-rotates and is persisted).
+  wrapper self-hydrates these via `kvSecret()` from `skills/kb-memory/azure-secret.mjs` if unset --
+  the same resolver every already-migrated fleet skill uses: Azure Key Vault first, AWS SSM Parameter
+  Store (`/otchealth/<name>`) as the fallback. Key Vault `kv-otc-55c84f6bef` was permanently deleted
+  2026-08-13 with the rest of the Azure subscription, so in practice this now resolves from the SSM
+  mirror. A credential neither store can resolve is a loud, named startup failure, never a silent
+  empty value (fixed 2026-08-18; the wrapper used to shell out to `setup/get-secret.mjs`, a
+  Key-Vault-only path with no fallback, and would silently fail once Key Vault was gone).
+- The delegated refresh token (`graph-onedrive-refresh-token`) is read and, on rotation, written by
+  the shared engine (`onedrive.mjs`) itself via the same `kvSecret`/`kvSecretSet` resolver, which
+  dual-writes a rotation to both stores. `GCP_CLAUDE_DRIVER_SA_JSON` / GCP Secret Manager is a
+  defunct last-resort fallback inside the engine, not something this wrapper depends on.
 
 ## Notes
 - Delegated access (acts as Matt, `Files.ReadWrite` over his entire OneDrive); the tenant blocks
