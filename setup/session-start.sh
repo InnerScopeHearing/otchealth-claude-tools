@@ -276,19 +276,61 @@ PROJECT="${GOOGLE_CLOUD_PROJECT:-otchealth-shared-prod}"
 
 KEYVAULT="${AZURE_KEYVAULT_NAME:-kv-otc-55c84f6bef}"
 FETCHED=""
+SECRET_SOURCE=""
 
-# ─── PRIMARY: pull fleet secrets from Azure Key Vault ───────────────
-# GCP Secret Manager is RETIRED (billing off, 2026-07). The fleet secret store is now
-# Azure Key Vault, read via an Entra service principal supplied in the environment. The
-# Key Vault secret NAMES are a 1:1 mirror of the old Secret Manager ids, so nothing
-# downstream changes — only the fetch mechanism. The client_secret is never logged.
+# ─── Fleet backend defaults (static config, NOT secrets) ────────────
+# Exported before any hydration so every child process below, and every tool that later sources
+# credentials.env, agrees on which cloud is live. Each of these had a default baked into code that
+# pointed at Azure, and none of them was ever set anywhere in the fleet, so every script silently
+# addressed a retired subscription:
+#   SECRET_BACKEND      azure-secret.mjs defaulted to "keyvault"  -> now the live AWS SSM store
+#   SEARCH_BACKEND      index-one.mjs defaulted to "azure"        -> now the live OpenSearch cluster
+#   EMBEDDINGS_PROVIDER index-one.mjs defaulted to "foundry"      -> now OpenAI (Foundry is Azure)
+# Set any of them in the environment to override; these are defaults, not overrides.
+export SECRET_BACKEND="${SECRET_BACKEND:-ssm}"
+export SEARCH_BACKEND="${SEARCH_BACKEND:-opensearch}"
+export EMBEDDINGS_PROVIDER="${EMBEDDINGS_PROVIDER:-openai}"
+
+# ─── PRIMARY: pull fleet secrets from AWS SSM Parameter Store ───────
+# Azure subscription 55c84f6b is permanently gone, so the Key Vault block below cannot return
+# anything and, being the only hydration path, left credentials.env empty at every session start.
+# All 444 fleet secrets are mirrored to SSM under /otchealth/<id>; this reads them.
+#
+# Same 3-attempt retry as the Azure path, for the same reason: on a fresh container the task-role
+# credential endpoint can lag this hook's first pass, and one bad beat would otherwise blank the
+# whole session's credentials silently.
+if [ "$SECRET_BACKEND" = "ssm" ]; then
+  for attempt in 1 2 3; do
+    echo "[octools] Fetching secrets from AWS SSM (${AWS_SSM_PREFIX:-/otchealth}, ${AWS_REGION:-us-east-1}), attempt $attempt/3..."
+    FETCHED="$(node "${TOOLS_DIR}/setup/fetch-secrets-aws.mjs" 2>/dev/null)" && ssm_rc=0 || ssm_rc=$?
+    [ -n "$FETCHED" ] && break
+    # Exit 1 means "no resolvable AWS credentials on this seat" -- deterministic, not transient.
+    # Retrying it would only add 4s of dead sleep to every session start on an AWS-less seat, and
+    # delay the Azure fallback by the same. Any other non-zero status is worth a retry.
+    [ "$ssm_rc" = "1" ] && break
+    [ "$attempt" -lt 3 ] && sleep 2
+  done
+  if [ -n "$FETCHED" ]; then
+    SECRET_SOURCE="aws-ssm"
+    echo "[octools] AWS SSM OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
+  else
+    echo "[octools] AWS SSM returned nothing; trying Azure Key Vault next."
+  fi
+fi
+
+# ─── FALLBACK: pull fleet secrets from Azure Key Vault ──────────────
+# Demoted from primary 2026-08-18 (Azure exit). Retained, not deleted: it is the transition path
+# for any secret that exists only in the vault, and the path that comes back if a vault is ever
+# re-provisioned. Expected to return nothing while subscription 55c84f6b stays retired.
+# The Key Vault secret NAMES are a 1:1 mirror of the SSM ids, so nothing downstream changes
+# whichever source answers — only the fetch mechanism. The client_secret is never logged.
 #
 # Retry a few times on transient failure: on a fresh container the Environment's
 # AZURE_SP_* vars can occasionally not yet be visible to this hook's first pass, or
 # the vault.azure.net call can hit a cold-start blip. Without a retry, that one bad
 # beat leaves credentials.env fully blank (all secrets empty) for the rest of the
 # session, which is silent and easy to miss (only the fetch-time WARN reveals it).
-if [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+if [ -z "$FETCHED" ] && [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
   for attempt in 1 2 3; do
     echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT), attempt $attempt/3..."
     FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
@@ -297,24 +339,22 @@ if [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [
     [ "$attempt" -lt 3 ] && sleep 2
   done
   if [ -n "$FETCHED" ]; then
+    SECRET_SOURCE="azure-keyvault"
     echo "[octools] Key Vault OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
-  else
-    echo "==================================================================================="
-    echo "[octools] WARN: Key Vault returned nothing after 3 attempts. kb-memory + API keys may be OFF."
-    echo "          Check AZURE_SP_CLIENT_ID / AZURE_SP_CLIENT_SECRET / AZURE_SP_TENANT_ID, and"
-    echo "          that the SP holds 'Key Vault Secrets User' (or Officer) on $KEYVAULT."
-    echo "          Re-hydrate later in-session with: bash setup/session-start.sh"
-    echo "==================================================================================="
   fi
-else
+fi
+
+# One consolidated warning, emitted only when EVERY source came up empty. Previously the Azure
+# block warned on its own failure, which after the cutover meant a loud "fleet secrets are OFF"
+# banner on every successful SSM-hydrated session.
+if [ -z "$FETCHED" ]; then
   echo "==================================================================================="
-  echo "[octools] WARN: Azure Key Vault creds not set — fleet secrets are OFF this session."
-  echo "          Set these in the cloud environment's Environment variables (.env format):"
-  echo "            AZURE_SP_CLIENT_ID      the service-principal app (client) id"
-  echo "            AZURE_SP_CLIENT_SECRET  its client secret"
-  echo "            AZURE_SP_TENANT_ID      the Entra tenant id"
-  echo "            AZURE_KEYVAULT_NAME     vault name (default kv-otc-55c84f6bef)"
-  echo "          Save, then start a NEW session (env changes apply to new sessions only)."
+  echo "[octools] WARN: no fleet secrets loaded from any store. kb-memory + API keys may be OFF."
+  echo "          PRIMARY  AWS SSM (${AWS_SSM_PREFIX:-/otchealth}, ${AWS_REGION:-us-east-1}):"
+  echo "            needs a task role, or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with"
+  echo "            ssm:GetParameter + ssm:GetParametersByPath on ${AWS_SSM_PREFIX:-/otchealth}/*."
+  echo "          FALLBACK Azure Key Vault ($KEYVAULT): expected to be dead (subscription retired)."
+  echo "          Re-hydrate later in-session with: bash setup/session-start.sh"
   echo "==================================================================================="
 fi
 
@@ -389,8 +429,16 @@ FOURVAULT_NEON_DIRECT_V="$(get_key FOURVAULT_NEON_DATABASE_URL_DIRECT)"
 ( umask 077; : > "$CRED" )
 {
   echo "# Auto-generated by otchealth-claude-tools/setup/session-start.sh"
-  echo "# Secrets sourced from Azure Key Vault (${KEYVAULT}) via the fleet service principal."
-  echo "# RING: NON-PHI ONLY. This SP must never touch a PHI project."
+  echo "# Secrets sourced from: ${SECRET_SOURCE:-none}"
+  echo "# RING: NON-PHI ONLY. These credentials must never touch a PHI project."
+  # Fleet backend selection (static config, NOT secrets). credentials.env is auto-sourced with
+  # `set -a` into every shell, so writing them here is what makes the defaults reach tools started
+  # later in the session -- not just the children of this script. Without this line a subsequent
+  # shell would fall back to each script's own baked-in default, every one of which points at the
+  # retired Azure subscription.
+  echo "SECRET_BACKEND=${SECRET_BACKEND}"
+  echo "SEARCH_BACKEND=${SEARCH_BACKEND}"
+  echo "EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER}"
   # Fleet feature flag (static, not a secret). Enables the low-cardinality otc.fleet.* Datadog
   # metrics emitted by kb-memory on each ledger write (mem.mjs emitFleet -> datadog/dd-fleet.mjs):
   # throttled <=1 emit / 5 min / agent, fail-open, tags = agent/type/ring/engine/shared ONLY (no ids,

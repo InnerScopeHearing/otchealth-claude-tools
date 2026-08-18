@@ -1,6 +1,12 @@
-// azure-secret.mjs — fetch a secret from Azure Key Vault. This is the fleet secret store after the
-// GCP Secret Manager retirement (billing off, 2026-07). Returns the secret value (string) or null;
-// NEVER throws (fail-open).
+// azure-secret.mjs — the fleet's secret resolver. Returns the secret value (string) or null;
+// NEVER throws (fail-open). ~400 callers depend on that contract; do not change it.
+//
+// THE ACTIVE STORE IS AWS SSM (2026-08-18, Azure-exit item 2). Azure subscription 55c84f6b is
+// PERMANENTLY GONE, so Key Vault cannot serve any read. SECRET_BACKEND therefore defaults to "ssm"
+// (see secretBackend() below) instead of the historical "keyvault". The file keeps its name and its
+// Key Vault code paths on purpose: they are the transition fallback, they are what a future
+// re-provisioned vault would use, and renaming a module ~400 call sites import is a bigger blast
+// radius than the outage this fixes. Set SECRET_BACKEND=keyvault to restore the legacy ordering.
 //
 // THREE auth paths, tried in order (2026-07-05, A3-KV-REFERENCES / A9-MANAGED-IDENTITY groundwork):
 //   1. MANAGED IDENTITY (preferred, no stored secret at all): if the container has IDENTITY_ENDPOINT
@@ -43,7 +49,7 @@
 // this one. Whenever the SP path is what actually worked, it logs a loud warning so RBAC drift on
 // the identity is visible in logs/alerts immediately, not discovered months later.
 
-import { ssmSecret, ssmSecretSet } from "./aws-secret.mjs";
+import { ssmSecret, ssmSecretSet, ssmAvailable } from "./aws-secret.mjs";
 import { execFileSync } from "node:child_process";
 
 let _identityTok = null, _identityExp = 0;
@@ -56,6 +62,33 @@ let _azTok = null, _azExp = 0;
 // conveyed by the first line; repeating it on every fetch adds nothing but log spam.
 let _spFallbackNotedRead = false, _spFallbackNotedWrite = false;
 let _ssmFallbackNoted = false;
+let _kvMirrorSkipNoted = false;
+let _backendWarned = false;
+
+/**
+ * Which store is the ACTIVE PRIMARY: "ssm" (default) or "keyvault".
+ *
+ * DEFAULT CHANGED 2026-08-18 from "keyvault" to "ssm". Azure subscription 55c84f6b is permanently
+ * gone, so the old default made every read address a dead store first and pay the full three-path
+ * Key Vault auth walk (identity -> SP -> az CLI, each a network round trip) before reaching the SSM
+ * mirror that already holds all 444 parameters. SECRET_BACKEND was grep-confirmed unset everywhere
+ * in the fleet, so nothing was overriding it and every caller paid that cost on every read.
+ *
+ * An UNRECOGNISED value resolves to "ssm" rather than erroring or falling back to "keyvault": a
+ * typo must not silently route the fleet at a store that cannot answer. It warns once so the typo
+ * is visible without turning a config slip into an outage.
+ */
+export function secretBackend() {
+  const raw = process.env.SECRET_BACKEND;
+  if (raw == null || raw === "") return "ssm";
+  const v = String(raw).trim().toLowerCase();
+  if (v === "ssm" || v === "keyvault") return v;
+  if (!_backendWarned) {
+    _backendWarned = true;
+    console.warn(`[kv-secret] note (once): SECRET_BACKEND="${raw}" is not recognised (expected "ssm" or "keyvault"); using "ssm".`);
+  }
+  return "ssm";
+}
 
 /** Container Apps managed-identity token, via the platform-injected sidecar endpoint. Returns null
  *  (never throws) if the container has no identity attached (IDENTITY_ENDPOINT unset) or the call
@@ -157,19 +190,46 @@ export async function kvSecretSet(name, value) {
   // failure somewhere else entirely. Writing both here is what keeps the fallback above trustworthy.
   // The SSM leg is attempted first and its result folded into the return value, so a half-written
   // rotation is reported rather than silently accepted.
+  const backend = secretBackend();
   const ssmOk = await ssmSecretSet(name, value).catch(() => false);
-  const kvOk = await kvSecretSetAzure(name, value);
-  if (kvOk && !ssmOk) {
-    console.error(
-      `[kv-secret] PARTIAL ROTATION for "${name}": Key Vault updated, SSM mirror did NOT. The stores ` +
-        `have diverged -- the SSM fallback will serve a STALE value for this secret until it is reconciled.`,
+
+  // MIRROR LEG. With Key Vault as primary this is the anti-drift dual-write described above and it
+  // always runs. With SSM as primary (the default since the Azure exit) the vault is a dead host:
+  // writing to it would burn all three auth paths on every single write and then report a "partial
+  // rotation" that is not a divergence at all, just a store that no longer exists. So it is OFF by
+  // default there and re-armed with SECRET_MIRROR_KEYVAULT=1 the moment a vault exists again.
+  const mirrorKeyVault = backend === "keyvault" || process.env.SECRET_MIRROR_KEYVAULT === "1";
+  if (!mirrorKeyVault && !_kvMirrorSkipNoted) {
+    _kvMirrorSkipNoted = true;
+    console.warn(
+      `[kv-secret] note (once): writing to AWS SSM only; the Key Vault mirror leg is off because ` +
+        `SECRET_BACKEND=ssm (Azure subscription retired). Set SECRET_MIRROR_KEYVAULT=1 to dual-write again.`,
     );
   }
-  if (!kvOk && ssmOk) {
-    console.error(`[kv-secret] PARTIAL ROTATION for "${name}": SSM updated, Key Vault did NOT.`);
+  const kvOk = mirrorKeyVault ? await kvSecretSetAzure(name, value) : false;
+
+  // Divergence is only meaningful when BOTH stores were actually written. When the mirror leg is
+  // deliberately skipped, kvOk is false by construction and shouting "PARTIAL ROTATION" on every
+  // write would be a permanent false alarm -- the exact alert-fatigue shape that trains a fleet to
+  // ignore a real one.
+  if (mirrorKeyVault) {
+    if (kvOk && !ssmOk) {
+      console.error(
+        `[kv-secret] PARTIAL ROTATION for "${name}": Key Vault updated, SSM mirror did NOT. The stores ` +
+          `have diverged -- the SSM fallback will serve a STALE value for this secret until it is reconciled.`,
+      );
+    }
+    if (!kvOk && ssmOk) {
+      console.error(`[kv-secret] PARTIAL ROTATION for "${name}": SSM updated, Key Vault did NOT.`);
+    }
   }
   // Success means the ACTIVE primary took the write; a mirror-only failure is loud but not fatal.
-  return (process.env.SECRET_BACKEND || "keyvault") === "ssm" ? ssmOk : kvOk;
+  // BUG FIXED 2026-08-18: this used to read `(process.env.SECRET_BACKEND || "keyvault") === "ssm"`,
+  // so with SECRET_BACKEND unset (its state everywhere in the fleet) it returned kvOk. Against a
+  // retired subscription kvOk is always false, so setup/set-secret.mjs printed FAILED and exited 1
+  // on every write that had in fact landed in SSM correctly -- reporting a durable, successful
+  // rotation as a failure.
+  return backend === "ssm" ? ssmOk : kvOk;
 }
 
 /** The original Key-Vault-only writer, now one leg of the dual-write above. */
@@ -208,24 +268,38 @@ async function kvSecretSetAzure(name, value) {
   return false;
 }
 
-/** Fetch one secret from Key Vault. Returns the trimmed value, or null if unavailable. Never throws.
- *  Tries the identity path first (preferred — no stored secret needed), then the SP path, but ONLY
- *  escalates to the next path when the actual secret GET comes back 401/403 (an auth-shaped
- *  failure — "this credential isn't allowed", worth retrying via the other credential). A 404 (wrong
- *  secret name) or 5xx (vault down) stops immediately without trying the other path, because
- *  silently retrying there would mask a genuinely different bug behind "it worked anyway via SP". */
+/** Fetch one fleet secret. Returns the trimmed value, or null if no store can serve it.
+ *
+ *  NEVER THROWS. This is a load-bearing contract, not an implementation detail: roughly 400 call
+ *  sites treat a null as "not configured" and degrade gracefully. Making this throw would convert
+ *  a partial outage into a total one across the whole fleet.
+ *
+ *  Resolution order is the ACTIVE PRIMARY store first (AWS SSM by default, see secretBackend()),
+ *  then the other store on any failure of the first. Per-store credential behaviour is documented
+ *  on keyVaultRead() and resolveSecret(). For which store answered, use kvSecretStatus(). */
 export async function kvSecret(name) {
-  // SECRET_BACKEND=ssm makes AWS SSM the PRIMARY store (the Azure-exit posture). Default 'keyvault'
-  // is byte-for-byte the previous behaviour. Either way the OTHER store is tried on failure, and
-  // that cross-fallback is the whole point: it is what lets a job keep its credentials when Azure is
-  // suspended. Without it, an Azure outage does not just degrade the brain, it takes away every
-  // job's ability to authenticate to anything, including whatever would have reported the outage.
-  if ((process.env.SECRET_BACKEND || "keyvault") === "ssm") {
-    const v = await ssmSecret(name);
-    if (v != null) return v;
-    // Fall through to Key Vault below rather than returning null: during the transition the mirror
-    // may not yet carry a newly-created secret.
-  }
+  return (await resolveSecret(name)).value;
+}
+
+/**
+ * The Key Vault leg, on its own, so that "stop trying Azure credentials" can never mean "stop
+ * trying other STORES".
+ *
+ * BUG FIXED 2026-08-18: this loop used to live inline in kvSecret(), where its non-auth bail-out
+ * (`if (r.status !== 401 && r.status !== 403) return null`) returned from kvSecret ITSELF and
+ * therefore jumped clean over the SSM fallback below it. Any Key Vault reply that was not exactly
+ * 401/403 -- a 5xx, a gateway/proxy error, the not-found-shaped response a retired subscription's
+ * vault host produces -- resolved the whole call to null while a perfectly good SSM copy sat
+ * unread. The fallback existed but was unreachable for a whole class of failures.
+ *
+ * The credential-escalation policy itself is deliberately unchanged: a 404 (wrong secret name) or
+ * 5xx (vault genuinely down) still stops us from trying the OTHER AZURE IDENTITY, because retrying
+ * with a different credential cannot fix either one and would mask a real, different bug. It now
+ * returns from this helper, so the caller's cross-store fallback still runs.
+ *
+ * @returns {Promise<{ value: string|null, attempts: string[] }>}
+ */
+async function keyVaultRead(name) {
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
   const attempts = [];
   for (const mode of ["identity", "sp", "azcli"]) {
@@ -245,21 +319,52 @@ export async function kvSecret(name) {
           console.warn(`[kv-secret] note (once): READs are succeeding via the SP credential, not a managed identity (identity token rejected -- expected on a seat with no managed identity). This is informational, not a failure; suppressing further per-read notices.`);
         }
         const v = (await r.json()).value;
-        return v == null ? null : String(v).trim() || null;
+        return { value: v == null ? null : String(v).trim() || null, attempts };
       }
       attempts.push(`${mode}:http-${r.status}`);
-      if (r.status !== 401 && r.status !== 403) return null; // 404/5xx: don't retry via the other path
+      if (r.status !== 401 && r.status !== 403) return { value: null, attempts }; // 404/5xx: don't retry via the other AZURE credential
     } catch (e) {
       attempts.push(`${mode}:error-${String(e && e.message || e)}`);
     }
   }
-  if (attempts.length) {
-    console.error(`[kv-secret] READ failed for "${name}" via all auth paths: ${attempts.join(", ")}`);
+  return { value: null, attempts };
+}
+
+/**
+ * Shared resolver behind kvSecret() and kvSecretStatus(). Tries the ACTIVE primary store first,
+ * then the other one -- always, for every failure mode of the first.
+ *
+ * The cross-store fallback is the whole point: it is what lets a job keep its credentials when one
+ * cloud is unreachable. Without it, an outage does not merely degrade the brain, it takes away
+ * every job's ability to authenticate to anything, including whatever would have reported the
+ * outage. Never throws.
+ *
+ * @returns {Promise<{ value: string|null, source: "ssm"|"keyvault"|null, backend: string,
+ *                     keyVaultAttempts: string[], ssmTried: boolean }>}
+ */
+async function resolveSecret(name) {
+  const backend = secretBackend();
+  const out = { value: null, source: null, backend, keyVaultAttempts: [], ssmTried: false };
+
+  if (backend === "ssm") {
+    out.ssmTried = true;
+    const v = await ssmSecret(name);
+    if (v != null) { out.value = v; out.source = "ssm"; return out; }
+    // Fall through to Key Vault rather than returning null: during the transition the mirror may
+    // not yet carry a newly-created secret.
   }
-  // Key Vault could not serve it. If SSM was not already tried as primary, try it now -- this is the
-  // branch that actually runs during an Azure outage, when every attempt above fails on auth or
-  // network.
-  if ((process.env.SECRET_BACKEND || "keyvault") !== "ssm") {
+
+  const kv = await keyVaultRead(name);
+  out.keyVaultAttempts = kv.attempts;
+  if (kv.value != null) { out.value = kv.value; out.source = "keyvault"; return out; }
+  if (kv.attempts.length) {
+    console.error(`[kv-secret] READ failed for "${name}" via all auth paths: ${kv.attempts.join(", ")}`);
+  }
+
+  // Key Vault could not serve it. If SSM was not already tried as primary, try it now -- this is
+  // the branch that runs during an Azure outage, when every attempt above fails on auth or network.
+  if (!out.ssmTried) {
+    out.ssmTried = true;
     const v = await ssmSecret(name);
     if (v != null) {
       if (!_ssmFallbackNoted) {
@@ -269,10 +374,28 @@ export async function kvSecret(name) {
             `This is the Azure-outage fallback working as designed, not a failure.`,
         );
       }
-      return v;
+      out.value = v;
+      out.source = "ssm";
+      return out;
     }
   }
-  return null;
+  return out;
+}
+
+/**
+ * DIAGNOSTIC sibling of kvSecret() for health checks, canaries and pagers: same resolution, but it
+ * reports WHICH store answered and what each path did, instead of collapsing everything to a value
+ * or null.
+ *
+ * Added as a SEPARATE primitive on purpose. kvSecret()'s header promises "NEVER throws (fail-open)"
+ * and roughly 400 call sites are built on that promise; making it throw during an outage would turn
+ * a degraded fleet into a dead one. This function does not throw either -- a health caller decides
+ * for itself what to do with `{ value: null, source: null }`, which is strictly more information
+ * than an exception carries. kvSecretOrThrow() remains the throwing option for callers that want
+ * one.
+ */
+export async function kvSecretStatus(name) {
+  return resolveSecret(name);
 }
 
 // ── FAIL-LOUD startup guard (P0 stability, 2026-07-04) ──────────────────────
@@ -295,12 +418,17 @@ export async function requireSecrets(names) {
     const spOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
     const identityOk = Boolean(process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER);
     const azOk = Boolean(await azCliToken());
+    const backend = secretBackend();
+    const ssmOk = await ssmAvailable();
     console.error("==================================================================================");
-    console.error(`[FATAL] Required secret(s) UNAVAILABLE from Key Vault (${vault}): ${missing.join(", ")}`);
-    console.error(`        Managed identity attached: ${identityOk ? "yes" : "no"}. AZURE_SP_* creds present: ${spOk ? "yes" : "NO"}. az-CLI/OIDC login: ${azOk ? "yes" : "no — run azure/login@v2 (OIDC) or 'az login'"}.`);
-    console.error("        All three auth paths were tried per secret (see [kv-secret] WARN/ERROR lines above for which");
-    console.error("        path failed and how — a 401/403 means an RBAC grant is likely missing on the identity).");
-    console.error("        Refusing to run with missing credentials (fail-loud, not silent). GCP Secret Manager is retired.");
+    console.error(`[FATAL] Required secret(s) UNAVAILABLE from BOTH stores: ${missing.join(", ")}`);
+    console.error(`        Active primary: ${backend === "ssm" ? `AWS SSM (${process.env.AWS_SSM_PREFIX || "/otchealth"}, region ${process.env.AWS_REGION || "us-east-1"})` : `Azure Key Vault (${vault})`}.`);
+    console.error(`        AWS credentials resolvable: ${ssmOk ? "yes" : "NO — no task role and no usable AWS_ACCESS_KEY_ID"}.`);
+    console.error(`        Azure fallback: managed identity ${identityOk ? "yes" : "no"}, AZURE_SP_* ${spOk ? "yes" : "NO"}, az-CLI/OIDC ${azOk ? "yes" : "no"}.`);
+    console.error("        Both stores were tried per secret (see [kv-secret] WARN/ERROR lines above for which path");
+    console.error("        failed and how — a 401/403 means an RBAC grant is likely missing on the identity).");
+    console.error("        Refusing to run with missing credentials (fail-loud, not silent). GCP Secret Manager is retired,");
+    console.error("        and Azure subscription 55c84f6b is permanently gone — AWS SSM is the live store.");
     console.error("==================================================================================");
     process.exit(78);
   }
@@ -310,6 +438,12 @@ export async function requireSecrets(names) {
 // Non-exiting variant: throw (for callers that want to catch). Never returns null.
 export async function kvSecretOrThrow(name) {
   const v = await kvSecret(name);
-  if (v == null) throw new Error(`required secret '${name}' unavailable from Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"}) — see [kv-secret] log lines above for which auth path(s) failed`);
+  if (v == null) {
+    const backend = secretBackend();
+    const where = backend === "ssm"
+      ? `AWS SSM (${process.env.AWS_SSM_PREFIX || "/otchealth"}) with an Azure Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"}) fallback`
+      : `Azure Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"}) with an AWS SSM fallback`;
+    throw new Error(`required secret '${name}' unavailable from ${where} — see [kv-secret] log lines above for which path(s) failed`);
+  }
   return v;
 }
