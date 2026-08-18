@@ -132,9 +132,18 @@ async function scan() {
   }
 
   const dispatched = [];
+  let persisted = 0;
   for (const d of firing) {
     const s = d.signal;
-    try { await cosmosPutSignal({ id: s.id, owner: s.owner, ...s, escalate: d.escalate, consecutive: d.consecutive }); }
+    // 2026-08-18: this catch used to be the ONLY trace of a persist failure (a `[warn]` line), while
+    // the summary below unconditionally reported `firing.length` as "persisted" regardless of whether
+    // the write actually succeeded. Live production logs from THIS EXACT PATH prove the failure mode:
+    // "[warn] could not persist signal ... -> 403: Subscription owning the database account is
+    // disabled" immediately followed by "[signal-radar] persisted 1 signal(s)" -- a run that persisted
+    // ZERO signals reporting one persisted, silently, every 30 minutes. `persisted` now counts only
+    // writes that actually returned success, so the summary line -- and any --json/dispatch consumer
+    // reading it -- reflects what happened, not what was attempted.
+    try { await cosmosPutSignal({ id: s.id, owner: s.owner, ...s, escalate: d.escalate, consecutive: d.consecutive }); persisted++; }
     catch (e) { console.error(`  [warn] could not persist signal ${s.id}: ${e.message}`); }
 
     await posthogEmit("signal_detected", s.owner, { detector: s.detector, subject: s.subject, severity: s.severity, mnpi: s.mnpi, escalate: d.escalate, consecutive: d.consecutive });
@@ -152,7 +161,10 @@ async function scan() {
   }
   // Narration only, never part of the structured contract: in --json mode this MUST go to stderr so
   // stdout stays pure, parseable JSON for a machine caller (e.g. the Container Apps Job wrapper).
-  const summaryLine = `[signal-radar] persisted ${firing.length} signal(s); dispatched ${dispatched.length} to owner inbox(es).`;
+  const summaryLine =
+    persisted === firing.length
+      ? `[signal-radar] persisted ${persisted} signal(s); dispatched ${dispatched.length} to owner inbox(es).`
+      : `[signal-radar] persisted ${persisted}/${firing.length} signal(s) (${firing.length - persisted} FAILED, see [warn] lines above); dispatched ${dispatched.length} to owner inbox(es).`;
   if (asJson) console.error(summaryLine); else console.log(`\n${summaryLine}`);
 }
 
