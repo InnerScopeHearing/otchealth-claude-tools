@@ -34,6 +34,20 @@
 // variable that is printed, logged, or emitted. Verdict messages carry names and numbers, never prose
 // from the brain. A canary that leaks privileged text into a CI log is worse than no canary.
 //
+// ROUND-3 ARCHITECTURE (read assertions.mjs's header first). This file is now a DUMB COLLECTOR with
+// exactly one job: gather everything the DERIVED check plan requires. It consults no per-lane opt-out
+// to decide what to collect, and it never narrows the config it hands to evaluateRun(). Both rules are
+// load-bearing:
+//   * `expects_brain_search:false` used to live here as `if (laneCfg.expects_brain_search !== false)`
+//     around the brain_search call. With the flag set the room list was never gathered, so the ring
+//     assertion had nothing to judge and took a vacuous-SKIP branch -- one config line deleting the P0
+//     personal-legal check on a lane while the run exited 0. The flag is gone from this file and from
+//     the registry, and validateRegistry() now ERRORs if anyone re-adds it.
+//   * The config passed to evaluateRun() is the FULL registry, always. A --lanes filter or a --no-*
+//     switch narrows what is COLLECTED, never what is PLANNED, so the gap surfaces as named REDUCED
+//     verdicts (exit 3) instead of vanishing. --no-platforms used to drop all five platform checks --
+//     including the P0 unauthenticated-front-door assertion -- and still print OK.
+//
 // EXIT CODES (see assertions.mjs's exitCode(); this deliberately differs from azure-canary's
 // report-by-default convention because a silent break is the exact thing being defended against):
 //   0 = everything that ran, passed AND coverage was sufficient
@@ -191,14 +205,29 @@ export function probeIdentity(probe) {
   };
 }
 
+/**
+ * The default transport bundle. Injected so observeLane() can be exercised by a test against its REAL
+ * output shape with no network -- round 2's regression lock for the ring bug fed the classifier a
+ * roomsSearched array that the live collector COULD NOT PRODUCE when the flag was set, so the test
+ * passed while the bug was live. A collector that can only be tested through a hand-built observation
+ * is a collector nobody has actually tested.
+ */
+export const defaultIo = {
+  bearer: laneBearer,
+  toolCount: advertisedToolCount,
+  call: callTool,
+};
+
 /** Collect one lane's observation. Never throws: every failure mode becomes a field on the observation
- *  so assertions.mjs can classify "did not run" separately from "ran and failed". */
-async function observeLane(laneCfg) {
+ *  so assertions.mjs can classify "did not run" separately from "ran and failed". Every captured error
+ *  string is READ downstream (evaluateLane threads them into the ERROR messages) -- they were all
+ *  write-only before, so the operator got a confident generic cause instead of the real one. */
+export async function observeLane(laneCfg, io = defaultIo) {
   const lane = laneCfg.lane;
   const obs = { lane, credsPresent: true, tokenMinted: false };
   let bearer;
   try {
-    bearer = await laneBearer(lane);
+    bearer = await io.bearer(lane);
   } catch (e) {
     obs.mintError = e.message;
     return obs;
@@ -206,7 +235,7 @@ async function observeLane(laneCfg) {
   if (!bearer) { obs.credsPresent = false; return obs; }
   obs.tokenMinted = true;
 
-  try { obs.toolCount = await advertisedToolCount(bearer); } catch (e) { obs.toolCountError = e.message; }
+  try { obs.toolCount = await io.toolCount(bearer); } catch (e) { obs.toolCountError = e.message; }
 
   // catalog_probe is not advertised to every lane. Its absence leaves connectorSurface/callerAgent
   // undefined, which assertions.mjs classifies as ERROR (blind), never as a pass.
@@ -215,7 +244,7 @@ async function observeLane(laneCfg) {
   // field I need is not there" is a shape regression -- exactly what a renamed or re-nested field would
   // look like -- and it must be as loud as a failed call, never indistinguishable from a pass.
   try {
-    const probe = await callTool(bearer, "catalog_probe", {});
+    const probe = await io.call(bearer, "catalog_probe", {});
     const id = probeIdentity(probe);
     if (!id.shapeOk) {
       obs.probeShapeError = "catalog_probe answered but carried no request_context block (expected result.request_context.{caller_agent,is_connector_surface}); the response shape has changed";
@@ -227,14 +256,18 @@ async function observeLane(laneCfg) {
     obs.callerAgent = id.callerAgent ?? null;
   } catch (e) { obs.probeError = e.message; }
 
-  if (laneCfg.expects_brain_search !== false) {
-    try {
-      // A deliberately neutral probe query with top:1. Only rooms_searched is read off the response;
-      // the results array is never touched, so no privileged content enters this process.
-      const res = await callTool(bearer, "brain_search", { query: "platform canary lane probe", top: 1 });
-      obs.roomsSearched = Array.isArray(res?.rooms_searched) ? res.rooms_searched : null;
-    } catch (e) { obs.brainSearchError = e.message; }
-  }
+  // THE ROOM LIST IS ALWAYS COLLECTED. There is deliberately no condition here, and none may be added:
+  // the ring check is planned for every lane unconditionally, so the collector's contract is to gather
+  // what the plan needs. A lane that genuinely has no brain-read tool produces a brainSearchError, which
+  // becomes an ERROR (blind) carrying that exact reason -- an honest "I could not determine this lane's
+  // room set", never a pass and never a skip.
+  try {
+    // A deliberately neutral probe query with top:1. Only rooms_searched is read off the response;
+    // the results array is never touched, so no privileged content enters this process.
+    const res = await io.call(bearer, "brain_search", { query: "platform canary lane probe", top: 1 });
+    obs.roomsSearched = Array.isArray(res?.rooms_searched) ? res.rooms_searched : null;
+    if (obs.roomsSearched === null) obs.brainSearchError = "brain_search answered but carried no readable rooms_searched array";
+  } catch (e) { obs.brainSearchError = e.message; }
   return obs;
 }
 
@@ -318,6 +351,8 @@ async function emitPosthog(props) {
 
 // ---------------------------------------------------------------------------------------------
 
+/** Gather observations. A --lanes filter or a --no-* switch narrows what is COLLECTED here; it never
+ *  narrows the config handed to evaluateRun(), so every gap becomes a named REDUCED verdict. */
 async function collect(cfg) {
   const observations = { lanes: {}, platforms: {} };
   const lanes = (cfg.lanes || []).filter((l) => !ONLY_LANES.length || ONLY_LANES.includes(l.lane));
@@ -325,7 +360,7 @@ async function collect(cfg) {
   if (!NO_LEDGER) observations.ledger = await observeLedger(cfg);
   if (!NO_RETRIEVAL && cfg.retrieval) observations.retrieval = await observeRetrieval(cfg);
   if (!NO_PLATFORMS) for (const p of cfg.platforms || []) observations.platforms[p.name] = await observePlatform(p);
-  return { observations, lanes };
+  return { observations };
 }
 
 async function main() {
@@ -339,7 +374,7 @@ async function main() {
     process.exit(REPORT_ONLY ? 0 : 2);
   }
 
-  let observations, lanes;
+  let observations;
   if (FIXTURE) {
     // Offline mode: evaluate a recorded observation set. Same pure classifier, no network, no
     // credential. This is how the incident fixture is demonstrated end to end from the command line.
@@ -347,14 +382,24 @@ async function main() {
     if (NO_LEDGER) delete observations.ledger;
     if (NO_RETRIEVAL) delete observations.retrieval;
     if (NO_PLATFORMS) observations.platforms = {};
-    lanes = (cfg.lanes || []).filter((l) => observations.lanes && observations.lanes[l.lane] !== undefined);
+    // --lanes now behaves in fixture mode exactly as SKILL.md always documented it: as a filter. It was
+    // silently ignored here, so a documented flag did nothing and any conclusion drawn from a
+    // "--fixture X --lanes Y" run was about the whole fixture, not about Y.
+    if (ONLY_LANES.length && observations.lanes) {
+      for (const l of Object.keys(observations.lanes)) if (!ONLY_LANES.includes(l)) delete observations.lanes[l];
+    }
     console.log(`[platform-canary] FIXTURE MODE: evaluating ${FIXTURE} (no network, no credentials, no telemetry emit)`);
   } else {
-    ({ observations, lanes } = await collect(cfg));
+    ({ observations } = await collect(cfg));
   }
 
-  const evalCfg = { ...cfg, lanes: FIXTURE ? lanes : (cfg.lanes || []).filter((l) => !ONLY_LANES.length || ONLY_LANES.includes(l.lane)) };
-  const { findings, counts } = evaluateRun(evalCfg, observations);
+  // THE CONFIG IS NEVER NARROWED. evaluateRun() plans from the FULL registry, so anything the collector
+  // did not reach -- a --lanes filter, a --no-* switch, an unarmed credential, a lane the fixture does
+  // not contain -- surfaces as a named REDUCED verdict instead of quietly shrinking the check set.
+  // A fixture is a SNAPSHOT: judge its age-based assertions against the clock it was taken on, not
+  // against today's, or the control fixture starts failing the freshness SLO purely by getting older.
+  const pinnedNow = FIXTURE && typeof observations._now === "string" ? Date.parse(observations._now) : Date.now();
+  const { findings, counts } = evaluateRun(cfg, observations, { now: pinnedNow });
 
   const summary = {
     ok: counts.fail === 0 && counts.error === 0 && counts.reduced === 0,
@@ -362,7 +407,9 @@ async function main() {
     fixture: FIXTURE || null,
     pass: counts.pass, fail: counts.fail, error: counts.error, skip: counts.skip,
     reduced: counts.reduced, p0: counts.p0,
-    lanes_evaluated: counts.lanesEvaluated, ring_assertions_run: counts.ringAssertionsRun,
+    lanes_evaluated: counts.lanesEvaluated,
+    ring_deny_lanes_checked: counts.ringDenyLanesChecked, ring_allow_lanes_checked: counts.ringAllowLanesChecked,
+    planned_checks: counts.planned, answered_checks: counts.answered,
     findings,
   };
   await emitPosthog({ ...summary, findings: findings.map((f) => ({ scope: f.scope, subject: f.subject, check: f.check, state: f.state, severity: f.severity })) });
@@ -370,7 +417,7 @@ async function main() {
   if (JSONOUT) {
     console.log(JSON.stringify(summary, null, 2));
   } else {
-    console.log(`[platform-canary] ${GW} | pass ${counts.pass} | FAIL ${counts.fail} | ERROR(blind) ${counts.error} | REDUCED(coverage) ${counts.reduced} | skip ${counts.skip} | P0 ${counts.p0} | lanes evaluated ${counts.lanesEvaluated} | ring assertions run ${counts.ringAssertionsRun}`);
+    console.log(`[platform-canary] ${GW} | pass ${counts.pass} | FAIL ${counts.fail} | ERROR(blind) ${counts.error} | REDUCED(coverage) ${counts.reduced} | skip ${counts.skip} | P0 ${counts.p0} | lanes evaluated ${counts.lanesEvaluated} | ring deny-checked ${counts.ringDenyLanesChecked} / allow-checked ${counts.ringAllowLanesChecked} | plan ${counts.answered}/${counts.planned}`);
     for (const f of findings) {
       const sev = f.severity ? ` [${f.severity}]` : "";
       console.log(`  ${f.state.padEnd(5)}${sev.padEnd(6)} ${f.scope}/${f.subject}/${f.check}: ${f.message}`);
@@ -386,8 +433,8 @@ async function main() {
   const code = exitCode({ assertionFailures: counts.fail, checkErrors: counts.error, coverageReductions: counts.reduced, verdictsProduced: findings.length, reportOnly: REPORT_ONLY });
   if (code === 1) console.error(`::error::[platform-canary] ${counts.fail} ASSERTION(S) FAILED${counts.p0 ? ` including ${counts.p0} P0` : ""}. A lane or platform surface is provably broken; do not treat this as flaky.`);
   if (code === 2) console.error(`::error::[platform-canary] THE CANARY IS BLIND: ${counts.error} check(s) could not run at all${findings.length ? "" : " and nothing was evaluated"}. This is not a pass. Fix the sensor before trusting any lane's health.`);
-  if (code === 3) console.error(`::error::[platform-canary] COVERAGE REDUCED: everything that was checked was healthy, but ${counts.reduced} coverage floor(s) were not met (${counts.lanesEvaluated} lane(s) evaluated, ring assertion run on ${counts.ringAssertionsRun}). This is NOT a pass. A run that inspects a corner of the estate and reports OK is the exact failure this canary exists to prevent, so it is refused here too.`);
-  if (code === 0 && !REPORT_ONLY) console.log(`[platform-canary] OK (every lane and platform assertion that ran, passed; ${counts.lanesEvaluated} lane(s) evaluated, ring assertion run on ${counts.ringAssertionsRun})`);
+  if (code === 3) console.error(`::error::[platform-canary] COVERAGE REDUCED: everything that was checked was healthy, but ${counts.reduced} of ${counts.planned} PLANNED check(s) produced no verdict at all (each named above). This is NOT a pass. A run that inspects a corner of the estate and reports OK is the exact failure this canary exists to prevent, so it is refused here too.`);
+  if (code === 0 && !REPORT_ONLY) console.log(`[platform-canary] OK (all ${counts.planned} planned check(s) answered and passed; ${counts.lanesEvaluated} lane(s) evaluated, ring deny-path checked on ${counts.ringDenyLanesChecked} lane(s), allow-path on ${counts.ringAllowLanesChecked})`);
   process.exit(code);
 }
 

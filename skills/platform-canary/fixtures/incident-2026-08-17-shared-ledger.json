@@ -1,19 +1,162 @@
 {
   "_comment": "TONIGHT'S INCIDENT, 2026-08-17/18, REPRODUCED EXACTLY. Gateway commit c72dd3b routed the commons brain (otchealthcommons/company-journal, exec ledger _MEMORY/_exec/<agent>.jsonl) to bucket otchealth-finance-legal-dr instead of otchealth-brain-dr, and found a single stray 725-byte cto.jsonl there. memory_team therefore answered HTTP 200 with well-formed JSON reporting shared_entry_count=1 and agents=['cto'], identically on every lane and every platform, while the real ~6MB / 29-lane history sat intact and untouched at the correct bucket. NOTE that every lane block below is byte-identical to healthy.json: the lanes were genuinely fine, which is exactly why a lane-only canary would have gone green straight through this. The ONLY difference from the healthy control is the ledger block. If this fixture ever stops failing, the ledger floor has been weakened and this whole incident class is invisible again.",
+  "_now": "2026-08-18T04:00:00.000Z",
   "lanes": {
-    "cto": { "lane": "cto", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "cto", "roomsSearched": ["memory-exec", "commons-company-journal"] },
-    "developer": { "lane": "developer", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "developer", "roomsSearched": ["memory-exec", "commons-company-journal"] },
-    "cfo": { "lane": "cfo", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "cfo", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"] },
-    "clo": { "lane": "clo", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "clo", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"] },
-    "clo-personal": { "lane": "clo-personal", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "clo-personal", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company", "legal-personal", "legal-personal-memory"] }
+    "cto": {
+      "lane": "cto",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "cto",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal"
+      ]
+    },
+    "developer": {
+      "lane": "developer",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "developer",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal"
+      ]
+    },
+    "cfo": {
+      "lane": "cfo",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "cfo",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal",
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ]
+    },
+    "clo": {
+      "lane": "clo",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "clo",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal",
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ]
+    },
+    "clo-personal": {
+      "lane": "clo-personal",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "clo-personal",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal",
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company",
+        "legal-personal",
+        "legal-personal-memory"
+      ]
+    },
+    "coo": {
+      "lane": "coo",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 11,
+      "connectorSurface": false,
+      "callerAgent": "coo",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal"
+      ]
+    },
+    "cro": {
+      "lane": "cro",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "cro",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal"
+      ]
+    },
+    "cpo": {
+      "lane": "cpo",
+      "credsPresent": false,
+      "tokenMinted": false
+    },
+    "cco": {
+      "lane": "cco",
+      "credsPresent": false,
+      "tokenMinted": false
+    },
+    "exec": {
+      "lane": "exec",
+      "credsPresent": false,
+      "tokenMinted": false
+    }
   },
-  "ledger": {"sharedEntryCount": 1, "agents": ["cto"], "newestTs": "2026-08-18T02:35:33.703Z"},
-  "retrieval": {"mode": "hybrid", "resultCount": 3},
+  "ledger": {
+    "sharedEntryCount": 1,
+    "agents": [
+      "cto"
+    ],
+    "newestTs": "2026-08-18T02:35:33.703Z"
+  },
+  "retrieval": {
+    "mode": "hybrid",
+    "resultCount": 3
+  },
   "platforms": {
-    "gateway_health": { "status": "ok", "toolCount": 1008 },
-    "unauthenticated_mcp_refused": { "status": 401, "headers": ["content-type", "www-authenticate"] },
-    "forged_m365_token_refused": { "status": 401, "headers": ["content-type", "www-authenticate"] },
-    "oauth_protected_resource_metadata": { "status": 200, "headers": ["content-type"] },
-    "oauth_authorization_server_metadata": { "status": 200, "headers": ["content-type"] }
+    "gateway_health": {
+      "status": "ok",
+      "toolCount": 1008
+    },
+    "unauthenticated_mcp_refused": {
+      "status": 401,
+      "headers": [
+        "content-type",
+        "www-authenticate"
+      ]
+    },
+    "forged_m365_token_refused": {
+      "status": 401,
+      "headers": [
+        "content-type",
+        "www-authenticate"
+      ]
+    },
+    "oauth_protected_resource_metadata": {
+      "status": 200,
+      "headers": [
+        "content-type"
+      ]
+    },
+    "oauth_authorization_server_metadata": {
+      "status": 200,
+      "headers": [
+        "content-type"
+      ]
+    }
   }
 }

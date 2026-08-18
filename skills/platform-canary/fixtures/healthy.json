@@ -1,19 +1,170 @@
 {
-  "_comment": "HEALTHY BASELINE. A recorded observation set in which every per-lane and per-platform assertion passes. Values mirror the live 2026-08-18 lane probe (room sets verbatim) except the ledger, which carries the real multi-lane history rather than the misrouted-bucket state. This is the control fixture: the incident and ring-violation fixtures below differ from it in exactly one dimension each, so a test failure points at the assertion under test rather than at fixture drift.",
+  "_comment": "HEALTHY BASELINE. A recorded observation set in which every per-lane and per-platform assertion passes. Values mirror the live 2026-08-18 lane probe (room sets verbatim) except the ledger, which carries the real multi-lane history rather than the misrouted-bucket state. This is the control fixture: the incident and ring-violation fixtures differ from it in exactly one dimension each, so a test failure points at the assertion under test rather than at fixture drift. ROUND 3: it now carries an observation for EVERY lane in the registry, including the five whose credentials are not provisioned (recorded honestly as credsPresent:false -> SKIP, not omitted), because the derived check plan covers every registry lane and a fixture that omits lanes is a fixture that proves less than it looks like it proves.",
+  "_now": "2026-08-18T04:00:00.000Z",
+  "_now_note": "The instant this observation set was recorded. Fixture mode pins 'now' to it so the ledger FRESHNESS assertion is evaluated against the snapshot's own clock. Without this the control fixture silently rots: its newestTs is fixed, so the same unchanged file would start FAILING the 72h SLO a few days after it was written, and the suite would break for a reason that has nothing to do with the code under test.",
   "lanes": {
-    "cto": { "lane": "cto", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "cto", "roomsSearched": ["memory-exec", "commons-company-journal"] },
-    "developer": { "lane": "developer", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "developer", "roomsSearched": ["memory-exec", "commons-company-journal"] },
-    "cfo": { "lane": "cfo", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "cfo", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"] },
-    "clo": { "lane": "clo", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "clo", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"] },
-    "clo-personal": { "lane": "clo-personal", "credsPresent": true, "tokenMinted": true, "toolCount": 1008, "connectorSurface": false, "callerAgent": "clo-personal", "roomsSearched": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company", "legal-personal", "legal-personal-memory"] }
+    "cto": {
+      "lane": "cto",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "cto",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal"
+      ]
+    },
+    "developer": {
+      "lane": "developer",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "developer",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal"
+      ]
+    },
+    "cfo": {
+      "lane": "cfo",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "cfo",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal",
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ]
+    },
+    "clo": {
+      "lane": "clo",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "clo",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal",
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ]
+    },
+    "clo-personal": {
+      "lane": "clo-personal",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "clo-personal",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal",
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company",
+        "legal-personal",
+        "legal-personal-memory"
+      ]
+    },
+    "coo": {
+      "lane": "coo",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 11,
+      "connectorSurface": false,
+      "callerAgent": "coo",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal"
+      ]
+    },
+    "cro": {
+      "lane": "cro",
+      "credsPresent": true,
+      "tokenMinted": true,
+      "toolCount": 1008,
+      "connectorSurface": false,
+      "callerAgent": "cro",
+      "roomsSearched": [
+        "memory-exec",
+        "commons-company-journal"
+      ]
+    },
+    "cpo": {
+      "lane": "cpo",
+      "credsPresent": false,
+      "tokenMinted": false
+    },
+    "cco": {
+      "lane": "cco",
+      "credsPresent": false,
+      "tokenMinted": false
+    },
+    "exec": {
+      "lane": "exec",
+      "credsPresent": false,
+      "tokenMinted": false
+    }
   },
-  "ledger": {"sharedEntryCount": 312, "agents": ["cto", "cfo", "clo", "clo-personal", "coo", "cro", "exec", "developer"], "newestTs": "2026-08-18T02:35:33.703Z"},
-  "retrieval": {"mode": "hybrid", "resultCount": 3},
+  "ledger": {
+    "sharedEntryCount": 312,
+    "agents": [
+      "cto",
+      "cfo",
+      "clo",
+      "clo-personal",
+      "coo",
+      "cro",
+      "exec",
+      "developer"
+    ],
+    "newestTs": "2026-08-18T02:35:33.703Z"
+  },
+  "retrieval": {
+    "mode": "hybrid",
+    "resultCount": 3
+  },
   "platforms": {
-    "gateway_health": { "status": "ok", "toolCount": 1008 },
-    "unauthenticated_mcp_refused": { "status": 401, "headers": ["content-type", "www-authenticate"] },
-    "forged_m365_token_refused": { "status": 401, "headers": ["content-type", "www-authenticate"] },
-    "oauth_protected_resource_metadata": { "status": 200, "headers": ["content-type"] },
-    "oauth_authorization_server_metadata": { "status": 200, "headers": ["content-type"] }
+    "gateway_health": {
+      "status": "ok",
+      "toolCount": 1008
+    },
+    "unauthenticated_mcp_refused": {
+      "status": 401,
+      "headers": [
+        "content-type",
+        "www-authenticate"
+      ]
+    },
+    "forged_m365_token_refused": {
+      "status": 401,
+      "headers": [
+        "content-type",
+        "www-authenticate"
+      ]
+    },
+    "oauth_protected_resource_metadata": {
+      "status": 200,
+      "headers": [
+        "content-type"
+      ]
+    },
+    "oauth_authorization_server_metadata": {
+      "status": 200,
+      "headers": [
+        "content-type"
+      ]
+    }
   }
 }

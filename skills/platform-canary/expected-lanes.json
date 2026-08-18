@@ -1,10 +1,14 @@
 {
-  "_comment": "THE PER-LANE / PER-PLATFORM HEALTH REGISTRY. Declarative expectations for every gateway lane and every credential-free platform surface, in the same spirit as setup/expected-indexes.json, setup/expected-streams.json and skills/continuity-canary/expected-docs.json: the thing being watched is declared here, the classifier lives in assertions.mjs, and the runner is dumb. Add a lane row to start watching a lane. NOTE the ring design: a lane does NOT declare that the personal-legal rooms are forbidden to it. forbiddenRoomsFor() in assertions.mjs adds personal_legal_rooms to EVERY lane automatically unless that lane is named in personal_legal_ring, so a newly added lane is born forbidden and must be explicitly admitted to the ring. Forgetting to write a forbidden_rooms entry can therefore never silently create an unwatched lane.",
-
-  "personal_legal_rooms": ["legal-personal", "legal-personal-memory"],
-  "personal_legal_ring": ["clo-personal", "exec"],
+  "_comment": "THE PER-LANE / PER-PLATFORM HEALTH REGISTRY. Declarative expectations for every gateway lane and every credential-free platform surface, in the same spirit as setup/expected-indexes.json, setup/expected-streams.json and skills/continuity-canary/expected-docs.json. ROUND-3 CONTRACT: this file supplies VALUES ONLY. It cannot decide whether a check EXISTS -- assertions.mjs's planChecks() derives the complete check set from lane IDENTITY and this file's STRUCTURE before any observation is taken, and validateRegistry() ERRORs on a lane row missing any required key rather than letting an absent value flow into a comparison that quietly passes (an omitted min_tool_count once rendered as 'PASS ... tool_count 11 >= floor undefined' for a lane degraded to the 11-tool external surface). Every lane row MUST carry lane, optional, min_tool_count, expect_connector_surface, expected_rooms and forbidden_rooms. The retired key expects_brain_search is actively REFUSED: it once stopped the collector gathering a lane's room list, which silently deleted that lane's personal-legal ring assertion. NOTE the ring design: a lane does NOT declare that the personal-legal rooms are forbidden to it. forbiddenRoomsFor() adds personal_legal_rooms to EVERY lane automatically unless that lane is named in personal_legal_ring, so a newly added lane is born forbidden and must be explicitly admitted.",
+  "personal_legal_rooms": [
+    "legal-personal",
+    "legal-personal-memory"
+  ],
+  "personal_legal_ring": [
+    "clo-personal",
+    "exec"
+  ],
   "_ring_note": "PERSONAL_LEGAL_RING is clo-personal and exec ONLY. These rooms hold attorney-privileged personal legal material including a live California family-law matter involving minors. This was a real P0 cross-ring leak once (a cfo-lane brain_search returned both rooms; closed 2026-07-16 by narrowing INDEX_LANES) and nothing has watched it continuously since. Widening this array is a security decision, never a convenience fix.",
-
   "ledger": {
     "probe_lane": "cto",
     "min_shared_entries": 25,
@@ -13,33 +17,30 @@
     "_freshness_note": "AGE, not just size. A healthy 300-entry ledger that stopped ACCEPTING WRITES days ago passes every floor above forever, because a frozen collection never shrinks. That is the same blind spot azure-canary hit when a frozen search index sat undetected for ~12 days behind a doc-count floor, and it is the direct analogue of the 2026-08-17/18 incident (a broken WRITE path behind a perfectly healthy READ). memory_team already returns recent[0].ts so this costs no extra call. 72h is deliberately loose: it must not flap over a quiet weekend, it only has to catch a write path that has actually stopped.",
     "_note": "THE 2026-08-17/18 INCIDENT FLOOR. Gateway commit c72dd3b read the commons brain from otchealth-finance-legal-dr instead of otchealth-brain-dr and found a single stray 725-byte cto.jsonl, so every lane on every platform saw shared_entry_count=1 while the real ~6MB / 29-lane history sat intact at the correct bucket. The call succeeded and returned well-formed JSON the whole time, so only a CONTENT floor catches it. 25 entries / 5 distinct lanes sits far above the corrupt state (1 entry, 1 lane) and far below the real history, so it fires on a misroute without flapping on a quiet day."
   },
-
-  "coverage": {
-    "min_lanes_evaluated": 5,
-    "min_ring_assertions": 5,
-    "require_ledger": true,
-    "require_retrieval": true,
-    "_note": "THE ANTI-PLACEBO FLOOR. In round 1, when the AWS secret-store credentials were absent the workflow appended '--lanes __unarmed__ --no-ledger'; no lane matched, the ledger block was dropped, and the run evaluated only the five credential-free platform surfaces and exited 0. Every six hours, forever, it would have reported OK while checking neither a lane, nor a ring, nor the ledger. These floors make that structurally impossible: 5 = the five REQUIRED lanes (cto, developer, cfo, clo, clo-personal), all of which have a brain-read tool, so the forbidden-room ring assertion must actually EXECUTE on all five. The four optional lanes (coo, cro, cpo, exec) are excluded from the floor precisely because their credentials may legitimately be absent. Reduced coverage is its own outcome class (REDUCED, exit 3), distinct from a failed assertion (1) and from a blind check (2)."
-  },
-
   "retrieval": {
     "probe_lane": "cto",
     "index": "memory-exec",
     "query": "decision",
     "top": 3,
     "min_results": 1,
-    "require_hybrid": true,
-    "_note": "TWO SILENT DEGRADATIONS NO OTHER CHECK HERE CAN SEE. (1) brain_search's rooms_searched lists every room whose query RESOLVED, including a room that matched nothing, so an empty/frozen/mid-reindex index still appears in every lane's room set and every ring assertion still passes; a floor on RESULTS is what separates 'the room answered' from 'the room has anything in it'. (2) src/search/opensearch.ts's hybridSearch() catches ANY embed() failure and sets vector=null, then fuses BM25 alone and returns mode:'keyword' instead of 'hybrid' -- a rotated embeddings key silently halves fleet-wide retrieval quality with zero error anywhere. kb_search surfaces that mode string directly (verified live on mcp.otchealth.app 2026-08-18: memory-exec answered mode:'hybrid'), so it is asserted rather than inferred. Read-only, an OPEN index only, and only the response envelope's mode+count are read -- never a match."
+    "_note": "TWO SILENT DEGRADATIONS NO OTHER CHECK HERE CAN SEE. (1) brain_search's rooms_searched lists every room whose query RESOLVED, including a room that matched nothing, so an empty/frozen/mid-reindex index still appears in every lane's room set and every ring assertion still passes; a floor on RESULTS is what separates 'the room answered' from 'the room has anything in it'. (2) src/search/opensearch.ts's hybridSearch() catches ANY embed() failure and sets vector=null, then fuses BM25 alone and returns mode:'keyword' instead of 'hybrid' -- a rotated embeddings key silently halves fleet-wide retrieval quality with zero error anywhere. kb_search surfaces that mode string directly (verified live on mcp.otchealth.app 2026-08-18: memory-exec answered mode:'hybrid'). The former require_hybrid switch is REMOVED: a config key able to delete the only observable for a dead embeddings provider is the same defect class this round exists to end. Read-only, an OPEN index only, and only the response envelope's mode+count are read -- never a match."
   },
-
   "lanes": [
     {
       "lane": "cto",
       "optional": false,
       "min_tool_count": 100,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal"],
-      "forbidden_rooms": ["finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal"
+      ],
+      "forbidden_rooms": [
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ],
       "note": "cto is deliberately OUTSIDE EXEC_RING: it holds kb_search_privileged and legal_blob_* in its ship-lane toolset but every privileged call refuses (mode=ring-forbidden). Live-verified 2026-08-18: rooms_searched is the two open rooms only."
     },
     {
@@ -47,8 +48,16 @@
       "optional": false,
       "min_tool_count": 100,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal"],
-      "forbidden_rooms": ["finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal"
+      ],
+      "forbidden_rooms": [
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ],
       "note": "Same posture as cto: full ship-lane toolset, not in EXEC_RING, two open rooms. Live-verified 2026-08-18."
     },
     {
@@ -56,7 +65,14 @@
       "optional": false,
       "min_tool_count": 100,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal",
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ],
       "forbidden_rooms": [],
       "note": "EXEC_RING member: finance rooms plus company legal. The two personal-legal rooms are added to its forbidden set automatically by policy, and this is the exact lane whose 2026-07-16 P0 leak this canary is watching for a recurrence of."
     },
@@ -65,7 +81,14 @@
       "optional": false,
       "min_tool_count": 100,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal", "finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal",
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ],
       "forbidden_rooms": [],
       "note": "The company-legal lane, and the single most plausible candidate for an accidental widening into the personal ring since the two room families are one word apart. Correctly excluded as of 2026-08-18; this row is what keeps it that way."
     },
@@ -74,7 +97,13 @@
       "optional": false,
       "min_tool_count": 100,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal", "legal-company", "legal-personal", "legal-personal-memory"],
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal",
+        "legal-company",
+        "legal-personal",
+        "legal-personal-memory"
+      ],
       "forbidden_rooms": [],
       "note": "THE RING POSITIVE CONTROL. A ring assertion that only ever checks that rooms are ABSENT will still pass if the personal rooms have silently disappeared from the estate entirely, which is a different outage wearing the same green light. This lane asserts the allow path works: the two personal rooms must be PRESENT here. Ring membership means policy does not add them to its forbidden set."
     },
@@ -83,39 +112,74 @@
       "optional": true,
       "min_tool_count": 8,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal"],
-      "forbidden_rooms": ["finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
-      "note": "Non-privileged. Floor is 8 rather than 100 because the documented EXTERNAL_READONLY_TOOLSET is 11 tools by design here, so the ~11-tool connector signature is NOT an anomaly on this lane. Marked optional: whether a client_credentials mint yields the 11-tool set or the full catalog for this lane is not independently proven, so a surprise here should be investigated rather than paged on nightly."
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal"
+      ],
+      "forbidden_rooms": [
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ],
+      "note": "Non-privileged. Floor is 8 rather than 100 because the documented EXTERNAL_READONLY_TOOLSET is 11 tools by design here, so the ~11-tool connector signature is NOT an anomaly on this lane. optional:true means only that an ABSENT credential is a SKIP rather than an ERROR -- it does NOT downgrade anything else: a provisioned credential that fails to mint, or a ring violation, is a hard FAIL and exit 1 on an optional lane exactly as on a required one. (An earlier note here claimed a surprise on this lane would 'be investigated rather than paged on nightly'; that was false by execution and is withdrawn.)"
     },
     {
       "lane": "cro",
       "optional": true,
       "min_tool_count": 20,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal"],
-      "forbidden_rooms": ["finance-cfo-source-docs", "finance-otchealth-cfo-source-docs", "finance-cfo-memory", "legal-company"],
-      "note": "CORRECTED. The round-1 row asserted this lane 'was observed with NO brain-read tool at all' and set expects_brain_search:false. That is FALSE and it was contradicted by an OPEN finding in this repo's own FINDINGS-LEDGER.md: FND-20260817-e462, verified by tools/list per lane via client_credentials, measured cro=1008 tools (coo=11) on 2026-08-17. The gateway source explains why, in src/tools/registry.ts: connectorToolset()'s CRO_CONNECTOR_TOOLSET branch (EXTERNAL_READONLY_TOOLSET + HeyGen tools) applies ONLY when isConnectorSurface() is true, i.e. an occ_/dcr_ client; oauth-lane-cro-* was repointed onto the NON-connector CRO client on 2026-08-10, and TOOL_CATALOG_CURATION_MODE=report does not narrow internal lanes, so a client_credentials cro mint sees the FULL catalog. brain_search is in that catalog AND in EXTERNAL_READONLY_TOOLSET, so it is advertised under either binding -- which is why expects_brain_search is now simply left at its default (true) rather than asserted false. THE 43-HeyGen-ONLY SURFACE IS A SEPARATE, REAL FACT: that is what the saved Hyperagent CRO connector skill sees (occ_cro credential -> connector surface -> CRO_CONNECTOR_TOOLSET). Two different credentials, two different surfaces; round 1 conflated them. expected_rooms is the two OPEN rooms only because cro is NOT in EXEC_RING (src/tools/kb/search-privileged.ts: EXEC_RING = cfo, clo, clo-personal, cpo, cco, exec). min_tool_count stays 20: it must fire on the bare ~11-tool external set while passing on either legitimate state (43 connector-form, or 1008 full)."
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal"
+      ],
+      "forbidden_rooms": [
+        "finance-cfo-source-docs",
+        "finance-otchealth-cfo-source-docs",
+        "finance-cfo-memory",
+        "legal-company"
+      ],
+      "note": "CORRECTED in round 2, kept. The round-1 row asserted this lane 'was observed with NO brain-read tool at all' and set expects_brain_search:false; that was FALSE and contradicted by FND-20260817-e462 in this repo's FINDINGS-LEDGER.md (tools/list per lane via client_credentials measured cro=1008 tools, coo=11, on 2026-08-17). src/tools/registry.ts explains why: connectorToolset()'s CRO_CONNECTOR_TOOLSET branch applies ONLY when isConnectorSurface() is true, i.e. an occ_/dcr_ client; oauth-lane-cro-* was repointed onto the NON-connector CRO client on 2026-08-10, so a client_credentials cro mint sees the FULL catalog. THE 43-HeyGen-ONLY SURFACE IS A SEPARATE, REAL FACT: that is what the saved Hyperagent CRO connector skill sees (occ_cro credential -> connector surface -> CRO_CONNECTOR_TOOLSET). Two different credentials, two different surfaces; round 1 conflated them. expected_rooms is the two OPEN rooms only because cro is NOT in EXEC_RING. min_tool_count stays 20: it must fire on the bare ~11-tool external set while passing on either legitimate state (43 connector-form, or 1008 full). The room list is now ALWAYS collected for this lane, so a ring violation here is caught rather than skipped."
     },
     {
       "lane": "cpo",
       "optional": true,
       "min_tool_count": 20,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal"],
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal"
+      ],
       "forbidden_rooms": [],
-      "note": "CORRECTED alongside cro. expects_brain_search:false is removed here too: cpo IS an EXEC_RING member (src/tools/kb/search-privileged.ts), so isShipLane('cpo') is true and a client_credentials mint would receive the full ship catalog including brain_search. No oauth-lane-cpo-* credential is known to exist, so this lane is still expected to SKIP at mint; it is listed so that the day one IS provisioned it is watched from the first run. expected_rooms is deliberately ONLY the two open rooms every brain-reading lane gets -- an EXEC_RING lane would also see the finance/legal rooms, but that is not live-verified from this seat and extra rooms are never asserted absent unless they are forbidden, so understating it cannot cause a false alarm while overstating it could. NOTE that under the round-1 code this row's expects_brain_search:false silently deleted the personal-legal ring assertion for this lane entirely; the forbidden half is now unconditional and no config line can do that again."
+      "note": "cpo IS an EXEC_RING member (src/tools/kb/search-privileged.ts), so isShipLane('cpo') is true and a client_credentials mint would receive the full ship catalog including brain_search. No oauth-lane-cpo-* credential is known to exist, so this lane is still expected to SKIP at mint; it is listed so that the day one IS provisioned it is watched from the first run. expected_rooms is deliberately ONLY the two open rooms every brain-reading lane gets -- an EXEC_RING lane would also see the finance/legal rooms, but that is not live-verified from this seat, and understating expected_rooms cannot cause a false alarm while overstating it could. The personal-legal ring assertion does NOT depend on this list at all: it is derived from ring membership, so cpo's deny-side ring check runs on every observation regardless of what is written here."
+    },
+    {
+      "lane": "cco",
+      "optional": true,
+      "min_tool_count": 20,
+      "expect_connector_surface": false,
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal"
+      ],
+      "forbidden_rooms": [],
+      "note": "ADDED IN ROUND 3. This lane had NO ROW AT ALL through rounds 1 and 2 while SKILL.md line 3 claimed the canary covers 'every lane on the MCP gateway'. cco is a full EXEC_RING member (src/tools/kb/search-privileged.ts: EXEC_RING = cfo, clo, clo-personal, cpo, cco, exec) and INDEX_LANES therefore grants it finance-cfo-source-docs, finance-otchealth-cfo-source-docs, finance-cfo-memory and legal-company -- finance-MNPI plus company-legal privileged read -- while it is NOT in PERSONAL_LEGAL_RING, so the two attorney-privileged personal-legal rooms must be absent from it. That deny-side ring assertion went entirely unwatched. optional:true because no oauth-lane-cco-* credential is known to exist, so it is expected to SKIP at mint today; the row exists so it is watched from the first run on the day one is provisioned rather than being onboarded unmonitored. expected_rooms is understated to the two open rooms for the same reason as cpo (not live-verified from this seat, and understating cannot cause a false alarm); the ring check is derived from ring membership and does not depend on it. forbidden_rooms is empty because the finance/legal-company rooms are legitimately readable by an EXEC_RING lane; the two personal-legal rooms are added automatically by policy."
     },
     {
       "lane": "exec",
       "optional": true,
       "min_tool_count": 100,
       "expect_connector_surface": false,
-      "expected_rooms": ["memory-exec", "commons-company-journal", "legal-personal", "legal-personal-memory"],
+      "expected_rooms": [
+        "memory-exec",
+        "commons-company-journal",
+        "legal-personal",
+        "legal-personal-memory"
+      ],
       "forbidden_rooms": [],
       "note": "The second member of the personal-legal ring. No oauth-lane-exec-* credential is known to exist, so this lane is expected to SKIP; it is listed anyway so that the day one IS provisioned, it is watched from the first run instead of being onboarded unmonitored."
     }
   ],
-
   "platforms": [
     {
       "name": "gateway_health",
@@ -157,5 +221,19 @@
       "expect_status": 200,
       "note": "The authorization-server metadata every platform seat reads to discover the token and registration endpoints."
     }
-  ]
+  ],
+  "known_internal_lanes": [
+    "cto",
+    "cfo",
+    "clo",
+    "clo-personal",
+    "coo",
+    "cro",
+    "cpo",
+    "cco",
+    "developer",
+    "exec"
+  ],
+  "_known_internal_lanes_note": "MIRRORS src/config/lane-toolsets.ts's KNOWN_INTERNAL_LANES (read 2026-08-18) in the gateway repo. validateRegistry() ERRORs if any lane named here has no row below, which is what makes a missing lane loud instead of invisible. 'cco' had NO row at all through rounds 1 and 2 while SKILL.md claimed coverage of 'every lane on the MCP gateway' -- and cco is a full EXEC_RING member (src/tools/kb/search-privileged.ts: EXEC_RING = cfo, clo, clo-personal, cpo, cco, exec), so it carries finance-MNPI and company-legal privileged read and its personal-legal ring went unwatched. When the gateway's lane list changes, change this array in the same commit as the new row.",
+  "_coverage_note": "THERE IS DELIBERATELY NO coverage FLOOR BLOCK ANY MORE. Coverage used to be hand-maintained minimums (min_lanes_evaluated / min_ring_assertions / require_ledger / require_retrieval) and it had NO PLATFORM TERM AT ALL, so --no-platforms dropped all five platform checks -- including the P0 unauthenticated-front-door assertion -- and the run still printed OK and exited 0. Its lock test also compared config to config, so flipping a lane to optional AND lowering the floor in one edit stayed green while removing real coverage. assertCoverage() now diffs the DERIVED plan against the verdicts actually produced and names every gap individually, so there is no number left for config to edit downward."
 }

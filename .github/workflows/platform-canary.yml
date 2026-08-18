@@ -23,9 +23,17 @@
 # window for that is too long, and this check is cheap.
 #
 # EXIT SEMANTICS (see skills/platform-canary/assertions.mjs's exitCode()): 1 = an assertion FAILED,
-# something is provably broken; 2 = the canary is BLIND, a check could not run at all. Both are
-# non-zero and both page, but they carry different messages because they demand different responses.
-# A run that evaluates nothing exits 2, never 0 -- an empty run must never look like a pass.
+# something is provably broken; 2 = the canary is BLIND, a check could not run at all; 3 = COVERAGE
+# REDUCED, everything checked was healthy but a planned check produced no verdict. All three are
+# non-zero and all three page, but they carry different messages because they demand different
+# responses. A run that evaluates nothing exits 2, never 0 -- an empty run must never look like a pass.
+#
+# ROUND 3: the check set is DERIVED, not configured. planChecks() computes every check that MUST produce
+# a verdict from lane identity and the registry's structure BEFORE any observation is taken; an absent
+# observation becomes a named ERROR for each check it blocked, and assertCoverage() diffs the plan
+# against what was actually answered as a structural backstop. No switch on this workflow's command line
+# -- and no key in the registry -- can make a check cease to exist; the most it can do is turn that
+# check's verdict into a loud, named non-zero one.
 #
 # ARMING (one-time): the lane half needs fleet credentials, which it resolves through the shared
 # kvSecret() chain. With Azure subscription 55c84f6b deleted, that chain reaches the secret store via
