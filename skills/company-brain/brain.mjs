@@ -443,9 +443,10 @@ export function diffMemory(rows, since, opts = {}) {
   return { since, added, changed, retired, stillTrue };
 }
 
-function renderDiff(topic, delta) {
+function renderDiff(topic, delta, warning = null) {
   const clip = (s, n = 160) => { s = (s || "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s; };
   let out = `\n================ COMPANY BRAIN DIFF ================\nTopic: ${topic}\nSince: ${delta.since}\n\n`;
+  if (warning) out += `!!! ${warning}\n\n`;
   out += `## ADDED (${delta.added.length})\n` + (delta.added.length ? delta.added.map((r) => `- [${r.agent}/${r.type}] [${(r.ts || "").slice(0, 10)}] ${clip(r.text)}`).join("\n") : "- (none)") + "\n\n";
   out += `## CHANGED (${delta.changed.length})\n` + (delta.changed.length ? delta.changed.map((c) => {
     const arrow = c.chain.map((r) => clip(r.text, 100)).join("\n      -> ");
@@ -456,16 +457,62 @@ function renderDiff(topic, delta) {
   return out;
 }
 
+/**
+ * Decide the read outcome for the exec-feed ledger walk (diff mode). Mirrors assessSearchOutcome()'s
+ * exact policy on purpose: both are "did a federated multi-source read partially fail" verdicts (one
+ * over search rooms, one over exec-feed lanes) and a reader should be able to reason about degradation
+ * the same way regardless of which of this file's two failure surfaces produced it.
+ *   - every attempted lane failed -> ok:false (FAILED): nothing was read, so this must never render as
+ *     "no history on this topic".
+ *   - some lanes failed AND zero rows came back overall -> ok:false (INCONCLUSIVE): the lanes that DID
+ *     answer found nothing, but with a real read failure in the mix, "no history" cannot be
+ *     distinguished from "read broken" -- exactly the ask() INCONCLUSIVE case, same reasoning.
+ *   - some lanes failed but at least one row was still read -> ok:true, degraded:true (PARTIAL): render
+ *     the delta (discarding real partial evidence would be its own failure) but label it incomplete and
+ *     name the lane(s) that could not be read, so the gap is actionable.
+ *   - no failures -> ok:true, degraded:false.
+ * Pure, no I/O, unit-testable exactly like assessSearchOutcome.
+ */
+export function assessExecFeedOutcome({ lanesAttempted = 0, failures = [], rows = 0 } = {}) {
+  const failed = failures.length;
+  const names = failures.map((f) => `${f.lane || "?"}: ${f.error || "unknown error"}`).join("; ");
+  if (lanesAttempted > 0 && failed >= lanesAttempted) {
+    return { ok: false, degraded: true, message: `COMPANY BRAIN DIFF FAILED: all ${lanesAttempted} exec-feed lane(s) could not be read, so NOTHING was walked. This is NOT evidence the ledger has no history on this topic -- do not treat it as "nothing changed". Failures: ${names}` };
+  }
+  if (failed > 0 && rows === 0) {
+    return { ok: false, degraded: true, message: `COMPANY BRAIN DIFF INCONCLUSIVE: ${failed} of ${lanesAttempted} exec-feed lane(s) could not be read, and the lane(s) that WERE read returned zero rows, so "no history" cannot be distinguished from "read broken". Failures: ${names}` };
+  }
+  if (failed > 0) {
+    return { ok: true, degraded: true, message: `WARNING -- PARTIAL DIFF: ${failed} of ${lanesAttempted} exec-feed lane(s) could not be read, so this delta is missing whatever that lane recorded on the topic. Failures: ${names}` };
+  }
+  return { ok: true, degraded: false, message: "" };
+}
+
 // read every shared exec-feed ledger row (same source semantic.mjs indexes from), ring-filtered.
 //
 // REMAINING AZURE DEPENDENCY, DELIBERATELY LEFT IN PLACE AND MADE LOUD (2026-08-18). Only DIFF mode
 // uses this; `ask` (the ground-first path every CLAUDE.md mandates) no longer touches Azure at all.
 // The warm ledger still lives in Azure Blob, and porting it to the S3 mirror is a separate migration
-// item with its own layout questions, so it is NOT guessed at here. What IS fixed is the failure
-// shape: this function used to swallow a failed blob listing (`if (!r.ok) break;`) and return zero
-// rows, which renderDiff() then printed as "ADDED (0) / CHANGED (0) / RETIRED (0)" -- a confident
-// "nothing changed on this topic" manufactured out of an unreachable storage account. It now throws.
-async function readExecFeedRows({ agent, includePersonal }) {
+// item with its own layout questions (there is no established "warm per-lane JSONL ledger" layout on
+// S3 yet, unlike the room indexes which had a direct OpenSearch analogue to port to), so it is NOT
+// guessed at here. If azure-commons-storage-key is unresolvable (the whole Azure subscription this
+// account lived in is permanently deleted, see this file's header), diff mode is NON-FUNCTIONAL in
+// production today, full stop -- this function still throws in that case (below), it does not degrade
+// to a partial answer, because there would be no lanes to even report as partially failed. A reader of
+// this code should not come away thinking diff mode works; it depends on a resource that no longer
+// exists until someone ports the ledger to S3.
+//
+// THE FAILURE SHAPE THIS FUNCTION FIXES: it used to swallow BOTH kinds of read failure to zero rows --
+// a failed blob LISTING (`if (!r.ok) break;`) and, independently, a failed per-lane blob GET
+// (`if (!r.ok) continue;`). The listing half was fixed first (it now throws, see list() below) but the
+// per-lane GET was left swallowing silently: renderDiff() had no way to know a lane's rows were simply
+// never read, and printed "ADDED (0) / CHANGED (0) / RETIRED (0)" for that lane's topic exactly as if
+// the ledger had been read successfully and found nothing -- the same defect class in miniature, one
+// call away from the fetch it was supposedly already fixed for. Now every per-lane GET failure (a
+// non-2xx response OR a thrown network error) is captured into `failures` and returned to the caller
+// instead of discarded, so diffCmd() can render it via assessExecFeedOutcome() above rather than let it
+// evaporate.
+export async function readExecFeedRows({ agent, includePersonal }) {
   const acct = (await sm("azure-commons-storage-account")) || "otchealthcommons";
   const key = await sm("azure-commons-storage-key");
   if (!key) throw new Error(`company-brain diff: azure-commons-storage-key is unavailable, so the memory-of-record ledger (azure://${acct}/company-journal) cannot be read. Refusing to render an empty delta that would read as "nothing changed". Note: diff mode still depends on Azure Blob; ask mode does not.`);
@@ -486,17 +533,28 @@ async function readExecFeedRows({ agent, includePersonal }) {
   const lanes = files.map((f) => f.split("/").pop().replace(/\.jsonl$/, ""));
   const allowedLanes = new Set(selectLanes(lanes, { agent, includePersonal }));
   const rows = [];
+  const failures = [];
   for (const f of files) {
     const lane = f.split("/").pop().replace(/\.jsonl$/, "");
-    if (!allowedLanes.has(lane)) continue; // privilege wall: skip a disallowed lane entirely
-    const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${encPath(f)}?${sas}`);
-    if (!r.ok) continue;
-    for (const line of (await r.text()).split("\n")) {
+    if (!allowedLanes.has(lane)) continue; // privilege wall: skip a disallowed lane entirely (not a failure)
+    let text;
+    try {
+      const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${encPath(f)}?${sas}`);
+      if (!r.ok) { failures.push({ lane, error: `HTTP ${r.status}` }); continue; } // FIX: was `continue` with no record
+      text = await r.text();
+    } catch (e) {
+      // A per-lane network exception must not abort the other lanes (same "one dead room must not
+      // abort the federation" policy as ask()'s per-room try/catch) -- but it MUST be recorded, not
+      // dropped, which is exactly what a bare try/catch-and-continue would otherwise do again.
+      failures.push({ lane, error: (e && e.message) || String(e) });
+      continue;
+    }
+    for (const line of text.split("\n")) {
       const s = line.trim(); if (!s) continue;
       try { const row = { ...JSON.parse(s), agent: lane }; if (ringSafeForDiff(row, agent)) rows.push(row); } catch {}
     }
   }
-  return rows;
+  return { rows, failures, lanesAttempted: allowedLanes.size };
 }
 
 async function diffCmd() {
@@ -519,7 +577,16 @@ async function diffCmd() {
   //    ring-filtered exactly like selectRooms(); then keep only rows related to the topic: either a
   //    direct semantic hit, or a row that supersedes/is-superseded-by one (so a chain is never cut off
   //    mid-way just because only one side of it matched the search).
-  const allRows = await readExecFeedRows({ agent: AGENT, includePersonal });
+  const { rows: allRows, failures: execFeedFailures, lanesAttempted } = await readExecFeedRows({ agent: AGENT, includePersonal });
+  for (const f of execFeedFailures) console.error(`  exec-feed lane ${f.lane}: READ FAILED -- ${f.error}`);
+  const outcome = assessExecFeedOutcome({ lanesAttempted, failures: execFeedFailures, rows: allRows.length });
+  // EXIT-CODE POLICY (mirrors ask()'s policy in assessSearchOutcome/ask() above, for the same reason):
+  // total failure (every lane failed, or some failed and the rest came back empty) is indistinguishable
+  // from "search broken" and must not be reported as a clean run, so it exits non-zero. A PARTIAL
+  // failure (some rows still came back) renders the delta anyway rather than throwing away real
+  // evidence, but stays exit 0 -- the same tradeoff ask() makes for a degraded-but-answerable query.
+  if (!outcome.ok) { console.error(`\n${outcome.message}`); process.exit(1); }
+  if (outcome.degraded) console.error(`\n${outcome.message}\n`);
   const byId = new Map(allRows.map((r) => [r.id, r]));
   const isHit = (r) => candidateText.some((t) => t && (r.text || "").toLowerCase().includes(t.replace(/\.\.\.$/, "")) || (r.text || "").toLowerCase().slice(0, 60) === t);
   const relatedIds = new Set();
@@ -539,8 +606,11 @@ async function diffCmd() {
   const relatedRows = allRows.filter((r) => relatedIds.has(r.id));
   const delta = diffMemory(relatedRows, since);
 
-  if (FLAG_JSON()) { console.log(JSON.stringify(delta, null, 2)); return; }
-  const rendered = renderDiff(topic, delta);
+  // A reader who only sees stdout (piped, captured, pasted into a doc) must see that the ledger read
+  // was incomplete -- a warning that only ever reached stderr is a warning that gets quoted as a
+  // complete delta. Same policy as ask()'s stdout echo of a degraded outcome.
+  if (FLAG_JSON()) { console.log(JSON.stringify({ ...delta, execFeedWarning: outcome.degraded ? outcome.message : null, execFeedFailures }, null, 2)); return; }
+  const rendered = renderDiff(topic, delta, outcome.degraded ? outcome.message : null);
   console.log(rendered);
 
   if (argv.includes("--summarize") && (delta.added.length || delta.changed.length || delta.retired.length)) {
