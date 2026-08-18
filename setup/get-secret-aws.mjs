@@ -28,20 +28,32 @@ if (!name) {
   process.exit(1);
 }
 
+// raw: true — this script materializes PEM / multiline / binary secrets, and ssmSecret() trims by
+// default (right for the header/DSN callers it was built for, wrong for a key file). Without it the
+// terminating newline of every stored .p8 was silently dropped: measured here, a 38-byte value
+// written out as 37 bytes with "[get-secret-aws] <name> -> <file>" printed as success. Its sibling
+// setup/get-secret.mjs carried the identical bug and is fixed the same way; both are pinned by
+// tests/get-secret-raw-bytes.test.mjs.
 let value = null;
 try {
-  value = await ssmSecret(name);
+  value = await ssmSecret(name, { raw: true });
 } catch (e) {
   console.error(`[get-secret-aws] ${name}: ${e.message}`);
   process.exit(1);
 }
-if (value == null || value === '') {
+// Only a genuine absence is a miss. The old `|| value === ''` treated an empty-or-whitespace stored
+// value as "not found in SSM" and exited 1 while the store was holding it -- a present secret
+// reported as absent, the same defect class inverted.
+if (value == null) {
   console.error(`[get-secret-aws] ${name}: not found in SSM`);
   process.exit(1);
 }
 
 if (outfile) {
-  writeFileSync(outfile, value);
+  // mode on CREATE, not only after: chmod alone left a window between creation (at the process
+  // umask, potentially world-readable) and the chmod. The comment already claimed this posture;
+  // now the code delivers it, matching setup/get-secret.mjs.
+  writeFileSync(outfile, value, { mode: 0o600 });
   chmodSync(outfile, 0o600); // same posture as the Azure/GCP helpers: never world-readable
   console.error(`[get-secret-aws] ${name} -> ${outfile}`);
 } else {

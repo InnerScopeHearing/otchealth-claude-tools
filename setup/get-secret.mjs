@@ -38,7 +38,16 @@ if (!id) { console.error('usage: get-secret.mjs <secret-id> [outfile]'); process
 // kvSecretStatus is the diagnostic sibling of kvSecret: same resolution, but it also reports which
 // store answered. On a miss that detail is the difference between "typo in the name" and "neither
 // store is reachable from this seat", so it is worth surfacing on the error path.
-const res = await kvSecretStatus(id);
+//
+// raw: true is REQUIRED here, not a preference. This script's whole reason to exist is
+// materializing PEM / multiline / binary secrets, and the shared resolver trims by default --
+// correct for the header-and-connection-string callers it was built for, wrong for a key file.
+// Without it, routing this path through the resolver silently truncated every stored PEM by its
+// terminating newline: measured, a 148-byte asc-api-key-p8 landed on disk as 147 bytes with exit 0
+// and "wrote 147 bytes" printed as if nothing had happened. The same trim collapsed a
+// whitespace-only value to null and reported a secret the store IS holding as a total miss. Pinned
+// by tests/get-secret-raw-bytes.test.mjs.
+const res = await kvSecretStatus(id, { raw: true });
 if (res.value == null) {
   console.error(`[get-secret] "${id}" not available from either store (primary: ${secretBackend()}).`);
   if (res.keyVaultAttempts.length) console.error(`[get-secret] key vault attempts: ${res.keyVaultAttempts.join(', ')}`);

@@ -287,7 +287,23 @@ SECRET_SOURCE=""
 #   SEARCH_BACKEND      index-one.mjs defaulted to "azure"        -> now the live OpenSearch cluster
 #   EMBEDDINGS_PROVIDER index-one.mjs defaulted to "foundry"      -> now OpenAI (Foundry is Azure)
 # Set any of them in the environment to override; these are defaults, not overrides.
-export SECRET_BACKEND="${SECRET_BACKEND:-ssm}"
+#
+# >>> BEGIN fleet-secret hydration (extracted verbatim by tests/session-start-hydration.test.mjs;
+# >>> move the markers with the block if it ever moves, they are what makes this testable)
+#
+# SECRET_BACKEND is NORMALIZED BY THE JS, not parsed again here. This block used to compare the raw
+# string (`[ "$SECRET_BACKEND" = "ssm" ]`) while every Node caller went through secretBackend() in
+# skills/kb-memory/azure-secret.mjs, which trims, lowercases, and maps anything unrecognised to
+# "ssm". Two parsers for one setting gave two answers: "SSM", " ssm", "Ssm" or a typo made THIS
+# SHELL skip the AWS hydrator entirely -- session starts with no credentials -- while every tool it
+# launched read happily from SSM. And because the value is written into credentials.env below and
+# re-sourced by every later shell, one bad value outlived the session that introduced it. Asking
+# the JS keeps exactly one definition of what the setting means. The `|| printf ssm` is a floor,
+# not a second parser: if node cannot run at all we land on the same default secretBackend() would
+# have returned, and session startup is never aborted over a config lookup.
+SECRET_BACKEND="$(node "${TOOLS_DIR}/setup/secret-backend.mjs" 2>/dev/null || printf 'ssm')"
+[ -n "$SECRET_BACKEND" ] || SECRET_BACKEND="ssm"
+export SECRET_BACKEND
 export SEARCH_BACKEND="${SEARCH_BACKEND:-opensearch}"
 export EMBEDDINGS_PROVIDER="${EMBEDDINGS_PROVIDER:-openai}"
 
@@ -299,22 +315,57 @@ export EMBEDDINGS_PROVIDER="${EMBEDDINGS_PROVIDER:-openai}"
 # Same 3-attempt retry as the Azure path, for the same reason: on a fresh container the task-role
 # credential endpoint can lag this hook's first pass, and one bad beat would otherwise blank the
 # whole session's credentials silently.
+#
+# THE HYDRATOR'S EXIT CODE IS THE ANSWER; $FETCHED IS NOT (bug fixed 2026-08-18). This block used to
+# decide it had succeeded from `[ -n "$FETCHED" ]` alone. fetch-secrets-aws.mjs exits 2 when a
+# `required: true` secret (openai-api-key, elevenlabs-api-key) is absent from the store while STILL
+# emitting every other secret it did resolve -- so a run that lost a required credential printed
+# "AWS SSM OK — 2 secrets loaded" and moved on. Reproduced exactly. Only rc=1 was ever
+# distinguished; rc=2 was invisible. Worse, the Key Vault fallback below was gated on an EMPTY
+# $FETCHED, so the one path that could have covered the missing secret was skipped precisely
+# because a partial answer had arrived. A failure was returned as a plausible value, twice over.
+SSM_PARTIAL=0
+SSM_MISSING_ENVS=""
 if [ "$SECRET_BACKEND" = "ssm" ]; then
+  ssm_rc=0
+  # A redirect target that is guaranteed non-empty: `2>""` from a failed mktemp would break the
+  # fetch itself, which is a worse failure than losing the diagnostics we are here to preserve.
+  SSM_ERR="$(mktemp 2>/dev/null)" || SSM_ERR=""
+  [ -n "$SSM_ERR" ] || SSM_ERR="${TMPDIR:-/tmp}/octools-ssm-err.$$"
   for attempt in 1 2 3; do
     echo "[octools] Fetching secrets from AWS SSM (${AWS_SSM_PREFIX:-/otchealth}, ${AWS_REGION:-us-east-1}), attempt $attempt/3..."
-    FETCHED="$(node "${TOOLS_DIR}/setup/fetch-secrets-aws.mjs" 2>/dev/null)" && ssm_rc=0 || ssm_rc=$?
-    [ -n "$FETCHED" ] && break
-    # Exit 1 means "no resolvable AWS credentials on this seat" -- deterministic, not transient.
-    # Retrying it would only add 4s of dead sleep to every session start on an AWS-less seat, and
-    # delay the Azure fallback by the same. Any other non-zero status is worth a retry.
-    [ "$ssm_rc" = "1" ] && break
+    FETCHED="$(node "${TOOLS_DIR}/setup/fetch-secrets-aws.mjs" 2>"$SSM_ERR")" && ssm_rc=0 || ssm_rc=$?
+    # 0 = everything resolved. 1 = no resolvable AWS credentials on this seat. 2 = the store
+    # answered but a required secret is not in it. All three are DETERMINISTIC -- a retry cannot
+    # change any of them, it only adds dead sleep and delays the Azure fallback by the same. Retry
+    # only the undefined-shaped failures (a crash, a network blip), which is what a retry is for.
+    case "$ssm_rc" in 0|1|2) break ;; esac
     [ "$attempt" -lt 3 ] && sleep 2
   done
-  if [ -n "$FETCHED" ]; then
+
+  # STOP DISCARDING STDERR. The hydrator names each missing required secret, and that one line was
+  # going to /dev/null -- the operator was told a number of secrets loaded and never which one was
+  # gone. Echo the diagnostics through, and keep the env names so the post-fallback check below can
+  # say whether the gap was actually closed. (The id -> env mapping comes from the hydrator, which
+  # owns secret-map.mjs; bash never learns it.)
+  [ -s "$SSM_ERR" ] && sed 's/^/[octools]   /' "$SSM_ERR"
+  SSM_MISSING_ENVS="$(sed -n "s/.*MISSING required secret '[^']*' (env \([A-Z0-9_]*\)).*/\1/p" "$SSM_ERR" | tr '\n' ' ')"
+  rm -f "$SSM_ERR"
+
+  ssm_n="$(printf '%s' "$FETCHED" | grep -c '=' || true)"
+  if [ "$ssm_rc" = "0" ] && [ -n "$FETCHED" ]; then
     SECRET_SOURCE="aws-ssm"
-    echo "[octools] AWS SSM OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
+    echo "[octools] AWS SSM OK — ${ssm_n} secrets loaded."
+  elif [ "$ssm_rc" = "2" ]; then
+    # PARTIAL is its own outcome and is reported as neither success nor total failure. The secrets
+    # that did arrive are real and worth keeping, so $FETCHED is retained; the missing ones are
+    # named, and SSM_PARTIAL re-opens the Key Vault fallback below so it can try to cover them.
+    SSM_PARTIAL=1
+    [ -n "$FETCHED" ] && SECRET_SOURCE="aws-ssm(partial)"
+    echo "[octools] AWS SSM PARTIAL — ${ssm_n} secret(s) loaded, but REQUIRED secret(s) MISSING from the store: ${SSM_MISSING_ENVS:-<see the lines above>}"
+    echo "[octools]   This is NOT a healthy hydration. Trying Azure Key Vault for the remainder."
   else
-    echo "[octools] AWS SSM returned nothing; trying Azure Key Vault next."
+    echo "[octools] AWS SSM returned nothing (exit ${ssm_rc}); trying Azure Key Vault next."
   fi
 fi
 
@@ -330,17 +381,54 @@ fi
 # the vault.azure.net call can hit a cold-start blip. Without a retry, that one bad
 # beat leaves credentials.env fully blank (all secrets empty) for the rest of the
 # session, which is silent and easy to miss (only the fetch-time WARN reveals it).
-if [ -z "$FETCHED" ] && [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+#
+# GATED ON "IS ANYTHING STILL MISSING", NOT ON "IS $FETCHED EMPTY". A partial SSM hydration used to
+# short-circuit this block: the fallback that exists specifically to cover a missing secret was
+# skipped because SOME other secret had arrived.
+if { [ -z "$FETCHED" ] || [ "$SSM_PARTIAL" = "1" ]; } && [ -n "${AZURE_SP_CLIENT_ID:-}" ] && [ -n "${AZURE_SP_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SP_TENANT_ID:-}" ]; then
+  KV_FETCHED=""
   for attempt in 1 2 3; do
     echo "[octools] Fetching secrets from Azure Key Vault ($KEYVAULT), attempt $attempt/3..."
-    FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
+    KV_FETCHED="$(AZURE_KEYVAULT_NAME="$KEYVAULT" \
       node "${TOOLS_DIR}/setup/fetch-secrets-azure.mjs" 2>/dev/null || true)"
-    [ -n "$FETCHED" ] && break
+    [ -n "$KV_FETCHED" ] && break
     [ "$attempt" -lt 3 ] && sleep 2
   done
-  if [ -n "$FETCHED" ]; then
+  if [ -n "$KV_FETCHED" ] && [ -n "$FETCHED" ]; then
+    # MERGE, never replace. get_key() below takes the FIRST match for a name, so putting the SSM
+    # lines first keeps the primary store authoritative for every id it did serve and lets Key
+    # Vault fill only the gaps. Replacing would silently demote the live store to whatever the
+    # fallback happened to hold.
+    FETCHED="${FETCHED}
+${KV_FETCHED}"
+    SECRET_SOURCE="aws-ssm(partial)+azure-keyvault"
+    echo "[octools] Key Vault answered — $(printf '%s' "$KV_FETCHED" | grep -c '=' || true) secret(s) merged in behind the SSM values."
+  elif [ -n "$KV_FETCHED" ]; then
+    FETCHED="$KV_FETCHED"
     SECRET_SOURCE="azure-keyvault"
-    echo "[octools] Key Vault OK — $(printf '%s' "$FETCHED" | grep -c '=') secrets loaded."
+    echo "[octools] Key Vault OK — $(printf '%s' "$FETCHED" | grep -c '=' || true) secrets loaded."
+  fi
+fi
+
+# DID THE FALLBACK ACTUALLY CLOSE THE GAP? Reporting "AWS SSM PARTIAL" and then "Key Vault
+# answered" without checking would leave a reader to assume a recovery that may not have happened
+# -- the same shape of unearned reassurance as the success banner this whole block was fixed for.
+# The env names come from the hydrator (which owns the id -> env table), so this stays a lookup, not
+# a second copy of the map.
+if [ "$SSM_PARTIAL" = "1" ]; then
+  STILL_MISSING=""
+  for env_name in $SSM_MISSING_ENVS; do
+    printf '%s' "$FETCHED" | grep -q "^${env_name}=" || STILL_MISSING="${STILL_MISSING}${env_name} "
+  done
+  if [ -n "$STILL_MISSING" ]; then
+    echo "==================================================================================="
+    echo "[octools] WARN: REQUIRED fleet secret(s) still MISSING after every store: ${STILL_MISSING}"
+    echo "          The session IS hydrated, but incompletely — tools needing these will fail."
+    echo "          Fix: add them to AWS SSM under ${AWS_SSM_PREFIX:-/otchealth}/<id>, then re-run:"
+    echo "          bash setup/session-start.sh"
+    echo "==================================================================================="
+  else
+    echo "[octools] The SSM gap was covered by the fallback; all required secrets are present."
   fi
 fi
 
@@ -357,6 +445,7 @@ if [ -z "$FETCHED" ]; then
   echo "          Re-hydrate later in-session with: bash setup/session-start.sh"
   echo "==================================================================================="
 fi
+# >>> END fleet-secret hydration
 
 # ─── LEGACY FALLBACK: GCP Secret Manager (RETIRED; only if Azure gave nothing) ──
 # Kept for backward-compat on any Desktop still carrying the old SA env; GCP billing is

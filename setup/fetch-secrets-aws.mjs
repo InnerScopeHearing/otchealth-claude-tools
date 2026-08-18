@@ -77,7 +77,12 @@ for (const { id, env, required } of wanted) {
     process.stdout.write(`${env}=${safe}\n`);
     emitted += 1;
   } else if (required) {
-    console.error(`[fetch-secrets-aws] MISSING required secret '${id}' at ${PREFIX}/${id} (${REGION}).`);
+    // The env name is on this line ON PURPOSE. session-start.sh parses it back out to check, AFTER
+    // its Key Vault fallback has run, whether the gap actually got filled -- and the table that
+    // knows id -> env lives here, not in bash. Copying it into the shell would recreate exactly the
+    // drift bug secret-map.mjs was extracted to kill. Keep the `MISSING required secret '<id>'`
+    // prefix byte-for-byte: the shell's sed and tests/fetch-secrets-aws.test.mjs both match on it.
+    console.error(`[fetch-secrets-aws] MISSING required secret '${id}' (env ${env}) at ${PREFIX}/${id} (${REGION}).`);
     hadRequiredMiss = true;
   }
 }

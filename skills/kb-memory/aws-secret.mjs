@@ -129,12 +129,43 @@ export async function ssmAvailable() {
   return (await awsCreds()) !== null;
 }
 
-/** Read one secret from SSM Parameter Store. Returns the trimmed value or null. Never throws. */
-export async function ssmSecret(name) {
+/**
+ * Read one secret from SSM Parameter Store. Returns the value or null. Never throws.
+ *
+ * `{ raw: true }` returns the stored bytes EXACTLY: no trimming, no empty-to-null collapse.
+ *
+ * WHY RAW IS AN OPTION AND NOT THE DEFAULT (2026-08-18): the default `String(v).trim() || null` is
+ * load-bearing for the ~400 callers that paste a value straight into an Authorization header or a
+ * connection string, where a stray newline from a console paste is itself the bug. It is WRONG for
+ * a PEM. `asc-api-key-p8`, `apple-apns-key-p8` and `flatstick-apple-signin-key-p8` are EC private
+ * keys whose final byte is a newline, and setup/get-secret.mjs exists precisely to materialize
+ * those to a file. Trimming there silently drops the terminating newline -- measured: a 148-byte
+ * stored PEM written out as 147 bytes, exit 0, "wrote 147 bytes" printed as success. The same trim
+ * collapses a whitespace-only value to null, reporting a secret the store IS holding as a total
+ * miss. Both are failures returned as plausible values.
+ *
+ * So the trim stays the default (right for the overwhelming majority) and the byte-materializer
+ * asks for raw. Both behaviors are pinned by tests/get-secret-raw-bytes.test.mjs.
+ */
+export async function ssmSecret(name, { raw = false } = {}) {
   const res = await ssmCall("GetParameter", { Name: `${PREFIX}/${name}`, WithDecryption: true });
   if (res.status !== 200 || !res.json?.Parameter) return null;
   const v = res.json.Parameter.Value;
-  return v == null ? null : String(v).trim() || null;
+  if (v == null) return null;
+  return raw ? String(v) : String(v).trim() || null;
+}
+
+/**
+ * Delete one secret from SSM Parameter Store. Returns true on success, false otherwise. Never
+ * throws.
+ *
+ * Used by the write-path round-trip test to clean up its synthetic throwaway parameter. SSM has no
+ * soft-delete/purge-protection dance, so unlike the Key Vault teardown this single call really
+ * removes it and a test does not leave litter behind in the live store.
+ */
+export async function ssmSecretDelete(name) {
+  const res = await ssmCall("DeleteParameter", { Name: `${PREFIX}/${name}` });
+  return res.status === 200;
 }
 
 /**

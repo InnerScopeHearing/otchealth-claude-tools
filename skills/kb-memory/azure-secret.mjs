@@ -277,8 +277,8 @@ async function kvSecretSetAzure(name, value) {
  *  Resolution order is the ACTIVE PRIMARY store first (AWS SSM by default, see secretBackend()),
  *  then the other store on any failure of the first. Per-store credential behaviour is documented
  *  on keyVaultRead() and resolveSecret(). For which store answered, use kvSecretStatus(). */
-export async function kvSecret(name) {
-  return (await resolveSecret(name)).value;
+export async function kvSecret(name, opts) {
+  return (await resolveSecret(name, opts)).value;
 }
 
 /**
@@ -297,9 +297,21 @@ export async function kvSecret(name) {
  * with a different credential cannot fix either one and would mask a real, different bug. It now
  * returns from this helper, so the caller's cross-store fallback still runs.
  *
+ * EXPORTED (2026-08-18) so a caller that must compare the two STORES can address this leg directly
+ * instead of going through kvSecret() and hoping SECRET_BACKEND keeps it on the Azure side. That
+ * hope was misplaced: skills/kb-memory/secret-drift.mjs forced SECRET_BACKEND=keyvault for exactly
+ * that reason, but this helper's non-auth bail-out returns to resolveSecret(), whose cross-store
+ * fallback then answered from SSM -- so the drift check compared SSM against itself and reported
+ * perfect agreement. A checker must never reach the store it is checking AGAINST through a resolver
+ * whose whole job is to paper over which store answered.
+ *
+ * `attempts` is the honest half of the return: it separates "the vault answered and said 404" from
+ * "no auth path here could even reach a vault". Collapsing those two into a bare null is what lets
+ * an unreachable store masquerade as an empty one.
+ *
  * @returns {Promise<{ value: string|null, attempts: string[] }>}
  */
-async function keyVaultRead(name) {
+export async function keyVaultRead(name, { raw = false } = {}) {
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
   const attempts = [];
   for (const mode of ["identity", "sp", "azcli"]) {
@@ -319,7 +331,10 @@ async function keyVaultRead(name) {
           console.warn(`[kv-secret] note (once): READs are succeeding via the SP credential, not a managed identity (identity token rejected -- expected on a seat with no managed identity). This is informational, not a failure; suppressing further per-read notices.`);
         }
         const v = (await r.json()).value;
-        return { value: v == null ? null : String(v).trim() || null, attempts };
+        // raw: exact stored bytes (PEM materialization). See ssmSecret()'s header for why the trim
+        // is the default everywhere else and why it is wrong for a key file.
+        if (v == null) return { value: null, attempts };
+        return { value: raw ? String(v) : String(v).trim() || null, attempts };
       }
       attempts.push(`${mode}:http-${r.status}`);
       if (r.status !== 401 && r.status !== 403) return { value: null, attempts }; // 404/5xx: don't retry via the other AZURE credential
@@ -342,19 +357,19 @@ async function keyVaultRead(name) {
  * @returns {Promise<{ value: string|null, source: "ssm"|"keyvault"|null, backend: string,
  *                     keyVaultAttempts: string[], ssmTried: boolean }>}
  */
-async function resolveSecret(name) {
+async function resolveSecret(name, { raw = false } = {}) {
   const backend = secretBackend();
   const out = { value: null, source: null, backend, keyVaultAttempts: [], ssmTried: false };
 
   if (backend === "ssm") {
     out.ssmTried = true;
-    const v = await ssmSecret(name);
+    const v = await ssmSecret(name, { raw });
     if (v != null) { out.value = v; out.source = "ssm"; return out; }
     // Fall through to Key Vault rather than returning null: during the transition the mirror may
     // not yet carry a newly-created secret.
   }
 
-  const kv = await keyVaultRead(name);
+  const kv = await keyVaultRead(name, { raw });
   out.keyVaultAttempts = kv.attempts;
   if (kv.value != null) { out.value = kv.value; out.source = "keyvault"; return out; }
   if (kv.attempts.length) {
@@ -365,7 +380,7 @@ async function resolveSecret(name) {
   // the branch that runs during an Azure outage, when every attempt above fails on auth or network.
   if (!out.ssmTried) {
     out.ssmTried = true;
-    const v = await ssmSecret(name);
+    const v = await ssmSecret(name, { raw });
     if (v != null) {
       if (!_ssmFallbackNoted) {
         _ssmFallbackNoted = true;
@@ -394,8 +409,8 @@ async function resolveSecret(name) {
  * than an exception carries. kvSecretOrThrow() remains the throwing option for callers that want
  * one.
  */
-export async function kvSecretStatus(name) {
-  return resolveSecret(name);
+export async function kvSecretStatus(name, opts) {
+  return resolveSecret(name, opts);
 }
 
 // ── FAIL-LOUD startup guard (P0 stability, 2026-07-04) ──────────────────────
