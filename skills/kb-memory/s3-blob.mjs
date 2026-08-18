@@ -227,11 +227,19 @@ export async function putObjectToS3(account, container, path, body, contentType,
   return { etag: r.headers.get("etag") };
 }
 
-/** LIST objects under a prefix (relative to the mirror's own keyPrefix). Returns names RELATIVE to
- *  `prefix` is NOT stripped — names are relative to loc.keyPrefix, matching Azure's listing shape so
- *  callers need no branch. Throws on any non-2xx; an empty result set is a normal 200 with zero
- *  <Contents>, never confused with a failed call the way the old `if (!r.ok) break` pattern did. */
-export async function listBlobsFromS3(account, container, prefix) {
+/** LIST objects under a prefix (relative to the mirror's own keyPrefix), WITH metadata. Returns
+ *  `{name,size,lastModified}[]` — names relative to loc.keyPrefix, matching Azure's listing shape
+ *  (see azList() in skills/cfo-store/store.mjs / listAll() in skills/doc-indexer/indexer.mjs) so a
+ *  caller that switches backend needs no extra branch for size/mtime. `size` matters concretely: the
+ *  doc-indexer's oversize guard (MAX_INDEX_MB, indexer.mjs) decides whether to load a file into
+ *  memory for text extraction FROM THIS VALUE — a caller that silently treated every object as
+ *  size:0 would defeat that guard and re-open the exact OOM class it exists to prevent. Throws on
+ *  any non-2xx; an empty result set is a normal 200 with zero <Contents>, never confused with a
+ *  failed call the way the old `if (!r.ok) break` pattern did. `listBlobsFromS3` below is a thin
+ *  name-only projection of this, kept as its own export because mem.mjs's cList() already depends
+ *  on getting back a plain string[] to Set-merge against its Azure listing leg — changing that
+ *  return shape would silently break the dedupe there. */
+export async function listBlobsMetaFromS3(account, container, prefix) {
   const loc = locOrThrow(account, container);
   const out = [];
   let token = null;
@@ -245,15 +253,53 @@ export async function listBlobsFromS3(account, container, prefix) {
     const r = await fetch(`https://${host}/?${canonicalQueryString(query)}`, { headers });
     if (!r.ok) throw new Error(`s3 list ${r.status} (refusing to report a failed listing as empty): ${(await r.text()).slice(0, 200)}`);
     const xml = await r.text();
-    for (const m of xml.matchAll(/<Key>([^<]+)<\/Key>/g)) {
-      const full = m[1];
-      if (full.startsWith(loc.keyPrefix)) out.push(full.slice(loc.keyPrefix.length));
+    for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+      const block = m[1];
+      const full = (block.match(/<Key>([^<]+)<\/Key>/) || [])[1];
+      if (!full || !full.startsWith(loc.keyPrefix)) continue;
+      const size = +((block.match(/<Size>([^<]+)<\/Size>/) || [])[1] || 0);
+      const lastModified = (block.match(/<LastModified>([^<]+)<\/LastModified>/) || [])[1] || "";
+      out.push({ name: full.slice(loc.keyPrefix.length), size, lastModified });
     }
     const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
     token = isTruncated ? (xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/) || [])[1] || null : null;
     if (!token) break;
   }
   return out;
+}
+
+/** LIST objects under a prefix — NAMES ONLY, relative to the mirror's own keyPrefix. Kept as a
+ *  separate, stable-shape export: mem.mjs's cList() Set-merges this against a plain Azure name
+ *  array, so this must stay `string[]`, never `{name,...}[]` — see listBlobsMetaFromS3 above for the
+ *  metadata-carrying version a caller like the doc-indexer actually needs. */
+export async function listBlobsFromS3(account, container, prefix) {
+  return (await listBlobsMetaFromS3(account, container, prefix)).map((o) => o.name);
+}
+
+/** Fetch one object's raw bytes as a Buffer. null ONLY on a genuine 404 — same loud-on-403 contract
+ *  as getTextFromS3 (a permission failure must never read as "the file doesn't exist"). Binary-safe:
+ *  unlike getTextFromS3/getTextMetaFromS3 (which decode the body as UTF-8 text — correct for the
+ *  JSONL/Markdown ledger content those exist for, but silently corrupting for a PDF/xlsx/sqlite
+ *  catalog), this reads the raw ArrayBuffer, so it is the one to use for any object that is not known
+ *  to be text. */
+export async function getBufferFromS3(account, container, path) {
+  const loc = locOrThrow(account, container);
+  const r = await s3Request({ method: "GET", loc, path });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`s3 get ${r.status} (refusing to report a missing object as empty): ${(await r.text()).slice(0, 200)}`);
+  return Buffer.from(await r.arrayBuffer());
+}
+
+/** DELETE one object, unconditionally (no ETag precondition — matches the simplicity of the Azure
+ *  `rm` primitive this mirrors, skills/cfo-store/store.mjs's azDelete). Returns true if something was
+ *  actually deleted, false if the object was already absent (idempotent — a missing object is not an
+ *  error for a delete). Throws loud on any other non-2xx. */
+export async function deleteObjectFromS3(account, container, path) {
+  const loc = locOrThrow(account, container);
+  const r = await s3Request({ method: "DELETE", loc, path });
+  if (r.status === 404) return false;
+  if (!r.ok) throw new Error(`s3 delete ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return true;
 }
 
 /** True when the S3 credential chain resolves (ECS role / env / OTC_AWS_* — see aws-secret.mjs).
