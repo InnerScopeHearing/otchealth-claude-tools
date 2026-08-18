@@ -195,6 +195,34 @@ test("no source file in this skill (outside tests/) references the Xero write to
   }
 });
 
+// ============================ store.mjs backend: never force the write-blocked Azure path (2026-08-18) ============================
+//
+// WHY THIS TEST EXISTS. reconstruct.mjs's every touchpoint with the CFO data room shells out to
+// skills/cfo-store/store.mjs via execFileSync. Every one of those six call sites (defaultGetState,
+// defaultPutState, defaultGetManifest, defaultPutManifest, defaultSourceDocExists,
+// defaultPutStagedBatch) used to hardcode "--azure" -- and every Azure Blob storage account this
+// skill's data room lives in was placed into a WRITE-BLOCKED state on 2026-08-18 (every PUT ->
+// 403 AuthorizationPermissionMismatch; see skills/kb-memory/s3-blob.mjs's header for the full
+// evidence). The result was the exact live CloudWatch failure this test locks against a
+// regression: "cfo-reconstruction ERROR: Command failed: node .../store.mjs --azure put ...
+// ERROR: blob put 403 AuthorizationPermissionMismatch" on the 2026-08-18T08:10:46Z run, which froze
+// reconstruction-analysis/state/cursor.json at its last-successful (pre-lock) timestamp every night
+// since. A static source scan is the right tool here (not a DI-injected runSweep test): the bug was
+// never in the *logic* runSweep exercises with fakes, it was in the LITERAL FLAG baked into the
+// real execFileSync call sites those fakes replace in every other test in this file.
+test("reconstruct.mjs never forces --azure on any store.mjs call (the write-blocked backend)", () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "reconstruct.mjs"), "utf8");
+  assert.ok(!src.includes('"--azure"'), 'reconstruct.mjs must not hardcode "--azure" on any store.mjs invocation -- every Azure Blob write for this data room fails with 403 as of 2026-08-18');
+});
+test("reconstruct.mjs's store.mjs call sites explicitly select --s3 (the verified-working backend), not just an implicit default", () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "reconstruct.mjs"), "utf8");
+  const s3Calls = (src.match(/STORE_MJS,\s*"--s3"/g) || []).length;
+  // Six touchpoints: defaultGetState (get), defaultPutState (put), defaultGetManifest (get),
+  // defaultPutManifest (put), defaultSourceDocExists (get), defaultPutStagedBatch (put -- the
+  // authoritative write the whole nightly sweep exists to perform).
+  assert.equal(s3Calls, 6, `expected all 6 STORE_MJS execFileSync call sites to pass "--s3" explicitly, found ${s3Calls}`);
+});
+
 // ============================ runSweep: dependency-injected I/O (NO live gateway/Azure/Cosmos) ============================
 
 /** A cursor state where every entity already has a just-taken snapshot, so dueOrgsForSnapshot()

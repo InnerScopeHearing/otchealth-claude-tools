@@ -11,9 +11,52 @@ set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)"
 PROFILE="${1:-finance}"
 shift 2>/dev/null || true
-echo "[librarian] profile=$PROFILE $*"
-node "$ROOT/skills/doc-indexer/indexer.mjs" index --profile "$PROFILE" --azure "$@"
-node "$ROOT/skills/doc-indexer/indexer.mjs" understand --profile "$PROFILE" --azure "$@"
+
+# STORAGE BACKEND SELECTION (2026-08-18). Every Azure Blob storage account this job could target
+# is write-blocked (every PUT -> 403 AuthorizationPermissionMismatch; GET/LIST still work -- see
+# skills/kb-memory/s3-blob.mjs's header). This script used to force --azure unconditionally for
+# every profile, so the "index" step's final catalog write was silently failing for ALL FOUR
+# librarian profiles (finance/commerce/legal-company/legal-personal share this exact defect, not
+# just finance). The move to --s3 is per-room and evidence-gated, NOT a blanket flip:
+#   - finance                    -> --s3. Verified S3 mirror row + a 2026-08-18 completeness audit
+#                                   (runbooks/2026-08-18-azure-to-s3-completeness-audit.md) found
+#                                   71,142/71,155 objects already present (99.98%). Live-verified
+#                                   fixed this same session (a real `index` run against production
+#                                   flushed 269 pending docs to S3 with exit 0).
+#   - legal --container company  -> --s3. Same audit: 17,797/17,790 objects present, zero gap.
+#   - commerce                   -> STAYS --azure (still broken). otchealthcommerce/commerce-
+#                                   source-docs has NO row in s3-blob.mjs's MIRROR table -- the
+#                                   2026-08-18 audit explicitly left it out of scope ("no Azure
+#                                   credentials for it were requested or fetched") and recommended
+#                                   a dedicated follow-up audit before trusting any bucket for it.
+#                                   Guessing one here would violate "choose the bucket from an
+#                                   OBSERVED S3 listing, never inferred from IAM." Reported, not
+#                                   fixed; --s3 would fail loud anyway (s3LocationFor returns null)
+#                                   but reads would ALSO stop working, which --azure still allows.
+#   - legal --container personal -> STAYS --azure (still broken). otchealthlegalstore/personal IS
+#                                   in the S3 MIRROR table (its own dedicated bucket,
+#                                   otchealth-legal-personal-dr-55c84f6b), so this is not a missing-
+#                                   evidence problem the way commerce is. It is a RING decision: this
+#                                   room is attorney-privileged (a live CA family matter involving
+#                                   minors). Granting it a new write path is Matt/CLO's call, not a
+#                                   mechanical bug fix -- so it is deliberately left broken and
+#                                   reported here rather than silently repointed.
+CONTAINER_ARG=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--container" ]; then CONTAINER_ARG="$arg"; fi
+  prev="$arg"
+done
+if [ "$PROFILE" = "finance" ] || { [ "$PROFILE" = "legal" ] && [ "$CONTAINER_ARG" = "company" ]; }; then
+  BACKEND_FLAG="--s3"
+else
+  BACKEND_FLAG="--azure"
+  echo "[librarian] NOTE: profile=$PROFILE container=${CONTAINER_ARG:-<default>} stays on --azure (write-blocked) -- see the backend-selection comment at the top of this script for why."
+fi
+
+echo "[librarian] profile=$PROFILE backend=$BACKEND_FLAG $*"
+node "$ROOT/skills/doc-indexer/indexer.mjs" index --profile "$PROFILE" $BACKEND_FLAG "$@"
+node "$ROOT/skills/doc-indexer/indexer.mjs" understand --profile "$PROFILE" $BACKEND_FLAG "$@"
 # push-search writes FLAT docs (contentVector, key=id) to the room index. After the Phase-3 S1
 # cutover the doc rooms are CHUNKED (text_vector, key=chunk_id) and fed by native S1 pull-indexers,
 # so a flat push would be rejected (schema mismatch) and turn the job RED for nothing. Set
@@ -23,7 +66,7 @@ node "$ROOT/skills/doc-indexer/indexer.mjs" understand --profile "$PROFILE" --az
 if [ "$SKIP_PUSH_SEARCH" = "1" ]; then
   echo "[librarian] SKIP_PUSH_SEARCH=1 -> skipping push-search ($PROFILE is now S1 pull-indexer-fed)"
 else
-  node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile "$PROFILE" --azure "$@"
+  node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile "$PROFILE" $BACKEND_FLAG "$@"
 fi
 # METADATA ENRICHMENT (opt-in per room, default OFF; commerce is the 2026-07-21 proving ground -- see
 # skills/doc-indexer/enrich.mjs + skills/doc-indexer/metadata-schema.mjs). Universal-core + a
