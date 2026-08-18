@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { ddEmitMetric } from "../datadog/dd-emit.mjs";
 const INGEST = "https://us.i.posthog.com/capture/";
 // approx Claude pricing $/Mtok [input, output, cache-write, cache-read]
 const PRICE = {
@@ -50,7 +51,7 @@ export function resolveAgent() {
 // "not resolved" and surface it loudly rather than swallow it.
 async function sm(id) { return await kvSecret(id); }
 
-function parseTranscript(path) {
+export function parseTranscript(path) {
   const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
   let inTok = 0, outTok = 0, cacheW = 0, cacheR = 0, turns = 0, toolCalls = 0, errors = 0;
   const tools = {}; const models = {}; let firstTs = null, lastTs = null;
@@ -81,14 +82,45 @@ async function capture(key, events) {
   }
 }
 
-async function sessionEnd() {
-  let stdin = {}; try { stdin = JSON.parse(readStdin() || "{}"); } catch {}
-  const path = takeVal("--transcript", "") || stdin.transcript_path;
-  const sid = (stdin.session_id || takeVal("--session", "") || crypto.randomUUID()).slice(0, 64);
-  const agent = resolveAgent();
+// otc.fleet.agent_error (Datadog monitor 22893313, "AI Fleet — agent errors (1h)") has watched this
+// metric since 2026-06-27 with NOTHING ever emitting it (a fleet audit, and this session's own
+// repo-wide grep, both confirmed zero code emitters anywhere -- the monitor's own creation-time doc
+// even names the fix: "emit otc.fleet.agent_error from a real error path ... e.g. fleet-telemetry's
+// Stop-hook capture"). fleet-telemetry already computes the real per-session tool-error count from
+// the transcript (m.errors, sourced from real `tool_result.is_error` entries -- the same number
+// already sent to PostHog as agent_session.tool_errors), on every session-end, which is a genuine,
+// frequent, real trigger. This just mirrors that same real number to Datadog too. Thin wrapper so the
+// call site stays a one-liner and is independently testable without a live network stack.
+export async function emitAgentErrorMetric(agent, errorCount, emitFn = ddEmitMetric) {
+  return emitFn("otc.fleet.agent_error", errorCount, [`agent:${agent}`], { type: "count", source: "fleet-telemetry" });
+}
+
+// `overrides` exists so tests can exercise the real control flow (transcript parsing, the Datadog
+// emit call, the PostHog capture call) without touching a live network or Key Vault, and without
+// risking one of this function's `process.exit()` early-outs tearing down the whole test process.
+// Production callers (the CLI dispatch below) pass none, so behavior is unchanged.
+export async function sessionEnd(overrides = {}) {
+  // readStdin() does a BLOCKING readFileSync(0, ...): fine under the real Stop hook (stdin is a piped
+  // JSON payload that closes immediately) or the CLI, but it can hang forever against an unattached
+  // fd 0 (e.g. a test runner with no stdin redirection). Skip it entirely when the caller already
+  // supplied a transcript path directly -- the only thing stdin is for.
+  let stdin = {};
+  if (overrides.transcriptPath === undefined) { try { stdin = JSON.parse(readStdin() || "{}"); } catch {} }
+  const path = overrides.transcriptPath || takeVal("--transcript", "") || stdin.transcript_path;
+  const sid = (overrides.sessionId || stdin.session_id || takeVal("--session", "") || crypto.randomUUID()).slice(0, 64);
+  const agent = overrides.agent || resolveAgent();
   if (!path) { console.error("no transcript_path"); process.exit(0); } // never block session end
   let m; try { m = parseTranscript(path); } catch (e) { console.error("parse: " + e.message); process.exit(0); }
-  const key = await sm("posthog-fleet-ingest-key");
+
+  // Datadog agent-error signal: deliberately attempted BEFORE, and independent of, the PostHog
+  // ingest-key resolution below -- separate system, separate secret, so a PostHog outage (the
+  // 2026-07-02 blackout class) must not also silently take the Datadog signal down with it, and
+  // vice versa. Never gates or blocks the rest of session-end; its own honesty (loud failure, never
+  // a false success) is ddEmitMetric's job, not this call site's.
+  const emitAgentError = overrides.emitAgentError || emitAgentErrorMetric;
+  await emitAgentError(agent, m.errors);
+
+  const key = overrides.ingestKey !== undefined ? overrides.ingestKey : await sm("posthog-fleet-ingest-key");
   if (!key) {
     // LOUD + distinctive (not the old terse "no posthog-fleet-ingest-key"): an unresolvable ingest
     // key is the silent-failure CLASS that caused the 2026-07-02 blackout. We still exit 0 (a Stop
@@ -105,7 +137,8 @@ async function sessionEnd() {
   const callsiteId = (takeVal("--callsite", "") || agent);
   const aiProps = { "$ai_trace_id": sid, "$ai_model": m.model, "$ai_provider": "anthropic", "$ai_input_tokens": m.inTok + m.cacheW + m.cacheR, "$ai_output_tokens": m.outTok, "$ai_latency": Math.round(m.durMs / 1000), "$ai_total_cost_usd": +m.cost.toFixed(4), agent, callsite_id: callsiteId, session_id: sid };
   const sessProps = { agent, callsite_id: callsiteId, session_id: sid, model: m.model, models: m.models, turns: m.turns, tool_calls: m.toolCalls, tools_used: Object.keys(m.tools), top_tools: Object.entries(m.tools).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`), tool_errors: m.errors, input_tokens: m.inTok, output_tokens: m.outTok, cache_read_tokens: m.cacheR, total_tokens: m.totalTok, est_cost_usd: +m.cost.toFixed(4), duration_s: Math.round(m.durMs / 1000), outcome: m.errors > 0 ? "had_tool_errors" : "clean" };
-  await capture(key, [{ event: "$ai_generation", properties: { ...aiProps }, ...base }, { event: "agent_session", properties: { ...sessProps }, ...base }]);
+  const doCapture = overrides.capture || capture;
+  await doCapture(key, [{ event: "$ai_generation", properties: { ...aiProps }, ...base }, { event: "agent_session", properties: { ...sessProps }, ...base }]);
   console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} tools=${m.toolCalls} tok=${m.totalTok} ~$${m.cost.toFixed(3)} -> PostHog Fleet Agents`);
 }
 
