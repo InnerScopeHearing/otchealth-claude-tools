@@ -1,8 +1,8 @@
 {
   "report_path": "tests/evidence/customer-service-harness-report.json",
-  "report_sha256": "674799fa74e8f1276d708901b7a3e2993a189a5d4ea6b7086d242e820082cf0d",
+  "report_sha256": "bbe3eefdf7cd85c8acad7b4f2d130453b281f708882ce6a14518dabe342b3fa4",
   "matrix_file_sha256": "1ec0c09152dc69f7b87d079040d2638f5675dd693d97a03c5dd9324ee4134a4d",
-  "runner_file_sha256": "d14ede766f4c886ee3f0bcaf89a07f8d6d4d40c98b3b08cd3c0187c90b3b1bd9",
+  "runner_file_sha256": "ec6a38bc56ea824f20bba4c62fed316fc7642926c8549347faa94a92d59f2e3b",
   "overall": "PASS_SYNTHETIC_EVIDENCE_ONLY",
   "launch_decision": "HOLD_NO_GO_UNCHANGED",
   "test_summary": {

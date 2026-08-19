@@ -21,6 +21,14 @@ const report = runMatrix(matrix, { repeat });
 report.matrix_path = path.relative(process.cwd(), matrixPath);
 report.matrix_file_sha256 = sha256(matrixBytes);
 report.runner_file_sha256 = sha256(fs.readFileSync(fileURLToPath(import.meta.url)));
+report.rollback = {
+  production_mutations: 0,
+  rollback_required: false,
+  code_rollback: 'Close the draft PR or revert its feature-branch commits before merge; no production state was changed.',
+  staging_rollback: 'If a future adapter test creates a temporary staging workflow, unpublish that temporary workflow only; preserve the canonical error router and protected production paths.',
+  rerun_command: 'node scripts/customer-service-harness.mjs --repeat=3 --out=tests/evidence/customer-service-harness-report.json',
+  rerun_result: `${report.test_summary.passed}/${report.test_summary.executions} executions passed across ${report.repeat} repeats`
+};
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 const canonical = `${JSON.stringify(report, null, 2)}\n`;

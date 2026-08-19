@@ -77,3 +77,13 @@ This harness is not a live-channel certification. It does not prove:
 - any customer-facing or production launch gate
 
 The next safe step is a separate staging adapter suite with pinned inputs and explicit receipts. It must remain inactive/no-send and use synthetic recipients only.
+
+## Rerun and rollback
+
+Rerun the exact offline evidence with:
+
+```bash
+node scripts/customer-service-harness.mjs --repeat=3 --out=tests/evidence/customer-service-harness-report.json
+```
+
+The verified rerun result is 177/177 executions passed across three repeats. Rollback is not required because the harness has no production side effects. Before merge, the code rollback is simply closing the draft PR or reverting its feature branch. If a later staging adapter suite creates temporary test workflows, unpublish only those temporary workflows. Do not restore superseded unauthenticated versions or repoint any production path as a test rollback.
