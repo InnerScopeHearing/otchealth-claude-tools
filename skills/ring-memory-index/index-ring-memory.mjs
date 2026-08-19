@@ -306,6 +306,16 @@ export async function readRingLedger(ring, tok) {
   return rr.text();
 }
 
+/** Pure incremental planner. OpenSearch runs embed only rows missing from at least one target;
+ * Azure legacy mode retains the historical full-upsert behavior. */
+export function planIncremental(prep, ringExisting, fleetExisting, toFleet, incremental = true) {
+  return prep.map((c) => ({
+    ...c,
+    needRing: !incremental || !ringExisting.has(c.id),
+    needFleet: Boolean(toFleet && (!incremental || !fleetExisting.has(c.fleetId))),
+  })).filter((c) => c.needRing || c.needFleet);
+}
+
 /** Index one ring's ledger into its index. Returns {label, indexed, total} or {label, error}. Fail-safe. */
 export async function indexRing(ring, azure, tok) {
   try {
@@ -327,20 +337,26 @@ export async function indexRing(ring, azure, tok) {
     // Non-privileged rings ALSO feed the shared fleet-learning index (agent-faceted). Privileged rings
     // (private:true) never do — their content stays walled to their own index.
     const toFleet = !ring.private;
-    let indexed = 0, buf = [], fleetBuf = [];
-    for (let i = 0; i < prep.length; i += EMBED_BATCH) {
-      const chunk = prep.slice(i, i + EMBED_BATCH);
+    // OpenSearch-only incremental mode: source ledgers can be large, and re-embedding rows already
+    // present in both targets wastes paid API calls and can introduce avoidable vector churn.
+    const ringExisting = BACKEND === "opensearch" ? await OS.existingIds(ring.index) : new Set();
+    const fleetExisting = BACKEND === "opensearch" && toFleet ? await OS.existingIds(FLEET_INDEX) : new Set();
+    const pending = planIncremental(prep, ringExisting, fleetExisting, toFleet, BACKEND === "opensearch");
+    let indexed = 0, fleetIndexed = 0, buf = [], fleetBuf = [];
+    for (let i = 0; i < pending.length; i += EMBED_BATCH) {
+      const chunk = pending.slice(i, i + EMBED_BATCH);
       let vecs;
       try { vecs = await embedTexts(azure, chunk.map((c) => c.text)); } catch { continue; }
       chunk.forEach((c, j) => {
-        buf.push({ "@search.action": "mergeOrUpload", id: c.id, type: c.type, ts: c.ts, tags: c.tags, text: c.text.slice(0, 16000), contentVector: vecs[j] });
-        if (toFleet) fleetBuf.push({ "@search.action": "mergeOrUpload", id: c.fleetId, agent: ring.label, type: c.type, ts: c.ts, tags: c.tags, text: c.rawText, contentVector: vecs[j] });
+        if (c.needRing) buf.push({ "@search.action": "mergeOrUpload", id: c.id, type: c.type, ts: c.ts, tags: c.tags, text: c.text.slice(0, 16000), contentVector: vecs[j] });
+        if (c.needFleet) fleetBuf.push({ "@search.action": "mergeOrUpload", id: c.fleetId, agent: ring.label, type: c.type, ts: c.ts, tags: c.tags, text: c.rawText, contentVector: vecs[j] });
       });
-      if (buf.length >= PUSH_BATCH) { await pushBatch(azure, ring.index, buf); indexed += buf.length; buf = []; if (toFleet) { await pushBatch(azure, FLEET_INDEX, fleetBuf); fleetBuf = []; } }
+      if (buf.length >= PUSH_BATCH) { await pushBatch(azure, ring.index, buf); indexed += buf.length; buf = []; }
+      if (fleetBuf.length >= PUSH_BATCH) { await pushBatch(azure, FLEET_INDEX, fleetBuf); fleetIndexed += fleetBuf.length; fleetBuf = []; }
     }
     await pushBatch(azure, ring.index, buf); indexed += buf.length;
-    if (toFleet) await pushBatch(azure, FLEET_INDEX, fleetBuf);
-    return { label: ring.label, index: ring.index, indexed, total: rows.length, fleet: toFleet };
+    if (toFleet) { await pushBatch(azure, FLEET_INDEX, fleetBuf); fleetIndexed += fleetBuf.length; }
+    return { label: ring.label, index: ring.index, indexed, fleetIndexed, pending: pending.length, total: rows.length, fleet: toFleet };
   } catch (e) {
     return { label: ring.label, error: String((e && e.message) || e) };
   }
