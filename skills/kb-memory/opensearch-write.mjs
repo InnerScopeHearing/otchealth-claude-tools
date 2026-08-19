@@ -426,7 +426,10 @@ function extractHits(json) {
 export async function hybridSearch(index, { queryText, vector, top, agent, type } = {}) {
   const cfg = await resolveOpenSearchConfig();
   const filters = [];
-  if (agent) filters.push({ term: { "agent.keyword": agent } });
+  // memory-exec maps `agent` directly as keyword (not text+keyword). Filtering `agent.keyword`
+  // therefore matches nothing and makes every `semantic recall --agent <lane>` return 0 hits even
+  // when the exact document exists. Use the field's actual live mapping.
+  if (agent) filters.push({ term: { agent } });
   if (type) filters.push({ term: { type } });
   const fetchTop = Math.min(50, Math.max(top * 3, top));
 

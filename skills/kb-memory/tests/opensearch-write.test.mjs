@@ -406,6 +406,25 @@ test("hybridSearch: merges BM25 + kNN results via RRF and returns hits shaped li
   );
 });
 
+test("hybridSearch: lane filter targets the live keyword field `agent`, never nonexistent `agent.keyword`", async () => {
+  let bm25Body, knnBody;
+  await withStubbedFetch(
+    async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      if (body.query?.bool) bm25Body = body;
+      else knnBody = body;
+      return jsonRes({ hits: { hits: [] } });
+    },
+    () =>
+      withEnv({ OPENSEARCH_ENDPOINT: "unit.us-east-1.es.amazonaws.com", OPENSEARCH_REGION: "us-east-1", AWS_ACCESS_KEY_ID: "AKIAEXAMPLE00000000", AWS_SECRET_ACCESS_KEY: "sekrit" }, async () => {
+        await hybridSearch("memory-exec", { queryText: "probe", vector: [0.1, 0.2], top: 5, agent: "cto" });
+      }),
+  );
+  assert.deepEqual(bm25Body.query.bool.filter, [{ term: { agent: "cto" } }]);
+  assert.deepEqual(knnBody.query.knn.contentVector.filter, { bool: { filter: [{ term: { agent: "cto" } }] } });
+  assert.doesNotMatch(JSON.stringify(bm25Body), /agent\.keyword/);
+});
+
 test("hybridSearch: no vector supplied -> BM25-only, still returns hits (fail-open on a failed/absent embed)", async () => {
   await withStubbedFetch(
     async () => jsonRes({ hits: { hits: [{ _id: "cto__a", _score: 1, _source: { agent: "cto", type: "status", ts: "t1", text: "hi", tags: "" } }] } }),
