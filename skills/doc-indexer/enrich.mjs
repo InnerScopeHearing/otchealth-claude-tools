@@ -216,6 +216,18 @@ async function resolveStorage() {
     // fleet (mcp-server #248, and an earlier version of s3-blob.mjs's own commons row), because
     // IAM grants cover several buckets in one statement and cannot discriminate between them.
     if (!s3LocationFor(ACCT, CONTAINER)) {
+      // CodeQL js/clear-text-logging fires on the interpolation below (alert 71), because ACCT can
+      // originate from process.env.AZURE_STORAGE_ACCOUNT and the rule treats any AZURE_STORAGE_*
+      // env var as sensitive by name. Reviewed and dismissed as a false positive:
+      //   - ACCT is a storage ACCOUNT NAME, not a credential. It is a public DNS label
+      //     (<acct>.blob.core.windows.net), and the exact same strings are plaintext literals in
+      //     STORAGE_PROFILES above and throughout s3-blob.mjs's MIRROR table.
+      //   - the real credential is AKEY (AZURE_STORAGE_KEY), which is never logged anywhere in this
+      //     file: the only place it is mentioned in output logs its SECRET NAME, not its value.
+      // Do NOT "fix" this by dropping the interpolation. Naming the exact unmapped (account,
+      // container) pair is the entire point of this message -- it is what an operator needs to add
+      // the MIRROR row, and --azure-account can override the account so the profile alone is not
+      // enough to identify it.
       console.error(`no S3 mirror mapping for ${ACCT}/${CONTAINER} (refusing to guess a bucket). ` +
         `Add a verified row to skills/kb-memory/s3-blob.mjs's MIRROR table, with the bucket taken ` +
         `from an OBSERVED S3 listing rather than inferred from IAM, before targeting this room on ` +
