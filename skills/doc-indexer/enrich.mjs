@@ -140,6 +140,7 @@ import crypto from "node:crypto";
 // (no Azure managed identity) every one of these resolved null. See fleet-secret.mjs.
 import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
+import { isPipelineInternal } from "./pipeline-paths.mjs";
 import * as MS from "./metadata-schema.mjs";
 import { osSearch, osBulkUpdate, osRefresh } from "./opensearch-client.mjs";
 // STORAGE_BACKEND (2026-08-19): the same S3 mirror layer indexer.mjs already uses. See the
@@ -193,6 +194,9 @@ const FULL_RESET = flags.has("--full-reset");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TEXT_PREFIX = "_TEXT/";
 const CATALOG = "_CATALOG/catalog.jsonl";
+
+// isPipelineInternal lives in pipeline-paths.mjs (pure, no side effects) so it can be unit
+// tested without importing this file, which parses argv and dispatches a CLI command on import.
 const AIS_API = "2024-07-01";
 
 // ============================ storage profile (mirrors indexer.mjs's PROFILES; storage only) ============================
@@ -746,7 +750,7 @@ async function cmdRun() {
   let llmCalls = 0, llmFailed = 0, firstLlmErr = "";
   try {
     const rows = await loadCatalog();
-    let todo = rows.filter((r) => r.path && !r.path.startsWith("_") && r.sidecar && !r.err && (needsEnrich(r) || needsOsSync(r)));
+    let todo = rows.filter((r) => r.path && !isPipelineInternal(r.path) && r.sidecar && !r.err && (needsEnrich(r) || needsOsSync(r)));
     if (LIMIT) todo = todo.slice(0, LIMIT);
     console.error(`[enrich] domain=${DOMAIN} | search-backend=${BACKEND} | ${rows.length} catalog rows | ${todo.length} to (re)enrich/sync | model=${MODEL} conc=${CONCURRENCY}${MAX_MIN ? ` budget=${MAX_MIN}m` : ""}`);
     if (!todo.length) { console.log("[enrich] nothing to enrich (all caught up)."); return; }
