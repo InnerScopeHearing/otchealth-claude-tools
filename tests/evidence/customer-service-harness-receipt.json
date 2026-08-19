@@ -1,6 +1,6 @@
 {
-  "report_path": "customer-service-harness/repo/tests/evidence/customer-service-harness-report.json",
-  "report_sha256": "b885c65951941e9b6e1239e85caa861de93c7b1005fbb28ab15aed9b8cbc9262",
+  "report_path": "tests/evidence/customer-service-harness-report.json",
+  "report_sha256": "674799fa74e8f1276d708901b7a3e2993a189a5d4ea6b7086d242e820082cf0d",
   "matrix_file_sha256": "1ec0c09152dc69f7b87d079040d2638f5675dd693d97a03c5dd9324ee4134a4d",
   "runner_file_sha256": "d14ede766f4c886ee3f0bcaf89a07f8d6d4d40c98b3b08cd3c0187c90b3b1bd9",
   "overall": "PASS_SYNTHETIC_EVIDENCE_ONLY",

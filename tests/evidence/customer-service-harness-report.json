@@ -2,8 +2,8 @@
   "program": "OTCHealth synthetic customer-service harness",
   "version": "1.0.0",
   "mode": "synthetic_offline_only",
-  "started_at": "2026-08-19T05:56:34.410Z",
-  "completed_at": "2026-08-19T05:56:34.413Z",
+  "started_at": "2026-08-19T05:57:18.888Z",
+  "completed_at": "2026-08-19T05:57:18.891Z",
   "matrix_sha256": "ed6ee4b863db572029d6a69a15bba738ed772ceb5752e0702dd856dbad19a320",
   "repeat": 3,
   "scenario_count": 59,
@@ -6581,7 +6581,7 @@
   "overall": "PASS_SYNTHETIC_EVIDENCE_ONLY",
   "launch_decision": "HOLD_NO_GO_UNCHANGED",
   "statement": "This harness proves only deterministic offline control behavior. It does not prove live channel delivery, provider configuration, human response time, named-owner availability, customer resolution, or production readiness.",
-  "matrix_path": "customer-service-harness/repo/tests/fixtures/customer-service-scenarios.json",
+  "matrix_path": "tests/fixtures/customer-service-scenarios.json",
   "matrix_file_sha256": "1ec0c09152dc69f7b87d079040d2638f5675dd693d97a03c5dd9324ee4134a4d",
   "runner_file_sha256": "d14ede766f4c886ee3f0bcaf89a07f8d6d4d40c98b3b08cd3c0187c90b3b1bd9"
 }
