@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ring-memory-index — keep each RING-ISOLATED agent memory ledger semantically recallable.
 //
-// WHY: the shared exec brain (_MEMORY/_exec/*) is indexed into Azure AI Search `memory-exec`, so every
+// WHY: the shared exec brain (_MEMORY/_exec/*) is indexed into Amazon OpenSearch `memory-exec`, so every
 // agent recalls SHARED memory by meaning. But every agent also keeps its real work in a PRIVATE ledger,
 // which the shared reindex never touches:
 //   - CLO (legal ring):    otchealthlegalstore / personal        / _MEMORY/clo-personal.jsonl -> legal-personal-memory
@@ -9,16 +9,15 @@
 //   - COO/CCO/CRO/CPO/developer (non-privileged, commons store): otchealthcommons / company-journal /
 //     _MEMORY/<agent>.jsonl -> commons-<agent>-memory (one index per agent, even though they share a store)
 // Those ledgers were only FLAT-readable (slow keyword scan over a large growing jsonl). This embeds each
-// agent's ledger into its own AI Search index (BM25 + text-embedding-3-large vector + semantic ranker), so
-// the agent recalls its OWN decisions/status/facts by meaning, fast — the same upgrade memory-exec gave
-// the shared brain, applied per agent. The DOCUMENT corpora (legal-personal, finance-cfo-source-docs) are
-// indexed separately by doc-indexer; this is specifically the agent's memory ledger.
+// agent's ledger into its own OpenSearch index (BM25 + text-embedding-3-large vector), so the agent recalls
+// its OWN decisions/status/facts by meaning, fast — the same upgrade memory-exec gave the shared brain,
+// applied per agent. The DOCUMENT corpora are indexed separately by doc-indexer; this is specifically the
+// agent's memory ledger.
 //
-// RING SAFETY: each row is embedded ONLY into its own index — never crosses into another agent's index,
-// even when two rows share a store (the commons agents share otchealthcommons/company-journal, but each
-// still gets its own commons-<agent>-memory index). Content is never printed. Creds self-resolve per row
-// from Secret Manager via the claude-driver SA. Idempotent (mergeOrUpload by stable id) and fail-safe PER
-// ROW — one row's failure never blocks the others. Safe to run on a schedule.
+// RING SAFETY: each row is read from an explicit allow-listed S3 mapping and embedded ONLY into its own
+// index — never crosses into another agent's index, even when commons agents share a bucket. Content is
+// never printed. S3/OpenSearch credentials resolve through the AWS task role or approved environment
+// credential chain. Idempotent (upsert by stable id) and fail-safe PER ROW.
 //
 // DUAL-WRITER CONVERGENCE (defect-1 fix, 2026-07-21): `memory-exec` (FLEET_INDEX below) has a SECOND
 // writer -- kb-memory/semantic.mjs's reindex(), which indexes the curated shared exec feed
@@ -37,15 +36,9 @@
 // ledger) is preserved -- no fact coverage is lost, only the duplicate rows are. See
 // `planFleetDupeCleanup` / `reconcileFleetDupes` below for cleaning the pre-fix `fleet__*` leftovers.
 //
-// SEARCH_BACKEND=azure|opensearch (env, default azure; SAME name/values as kb-memory/semantic.mjs, the
-// gateway's src/search/index.ts dispatcher, and doc-indexer's enrich.mjs --search-backend flag): 'azure'
-// is byte-identical to every prior run of this file. 'opensearch' routes ensureIndex/ensureFleetIndex/
-// the bulk pushes/reconcileFleetDupes through kb-memory/opensearch-write.mjs instead -- the fix for the
-// defect where an Azure outage silently froze every one of these 7 ring indexes (measured 2026-08-16:
-// all 7 stuck at their 2026-08-13 doc counts). EMBEDDINGS_PROVIDER=foundry|openai (default foundry) is
-// an INDEPENDENT switch (mirrors semantic.mjs/otchealth-mcp-server's foundry.ts) -- a real Azure outage
-// takes Azure Foundry down too, so EMBEDDINGS_PROVIDER=openai is also needed for a genuinely Azure-free
-// run. See opensearch-write.mjs's header for the full credential-resolution chain.
+// Runtime selectors are shared with kb-memory/semantic.mjs. The active AWS configuration is
+// BLOB_BACKEND=s3, SEARCH_BACKEND=opensearch, EMBEDDINGS_PROVIDER=openai. Azure branches remain only as
+// explicit historical compatibility paths and must never be selected for the retired fleet estate.
 import crypto from "node:crypto";
 import { mergeSchemaAdditive } from "../doc-indexer/schema-merge.mjs";
 import { readFileSync } from "node:fs";
@@ -53,6 +46,7 @@ import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { docId as sharedDocId } from "../kb-memory/semantic.mjs";
+import { getTextFromS3 } from "../kb-memory/s3-blob.mjs";
 import * as OS from "../kb-memory/opensearch-write.mjs";
 
 const SM = "otchealth-shared-prod";
@@ -61,6 +55,7 @@ const DIMS = 3072;
 const EMBED_BATCH = 16;
 const BACKEND = (process.env.SEARCH_BACKEND || "azure").toLowerCase(); // 'azure' | 'opensearch'
 const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "foundry").toLowerCase(); // 'foundry' | 'openai'
+const BLOB_BACKEND = (process.env.BLOB_BACKEND || "s3").toLowerCase(); // 's3' is authoritative after Azure retirement
 const PUSH_BATCH = 48;
 
 // The ring registry. Add a row to onboard a new ring-isolated agent memory ledger. `storeAcctSecret`/
@@ -69,6 +64,7 @@ const PUSH_BATCH = 48;
 export const RINGS = [
   {
     label: "clo-personal",
+    account: "otchealthlegalstore",
     storeAcctSecret: "azure-legal-storage-account",
     storeKeySecret: "azure-legal-storage-key",
     container: "personal",
@@ -79,6 +75,7 @@ export const RINGS = [
   },
   {
     label: "cfo",
+    account: "otchealthcfodata",
     storeAcctSecret: "azure-cfo-storage-account",
     storeKeySecret: "azure-cfo-storage-key",
     container: "cfo-source-docs",
@@ -93,6 +90,7 @@ export const RINGS = [
   // private ledger is ever embedded into another agent's index.
   {
     label: "coo",
+    account: "otchealthcommons",
     storeAcctSecret: "azure-commons-storage-account",
     storeKeySecret: "azure-commons-storage-key",
     container: "company-journal",
@@ -102,6 +100,7 @@ export const RINGS = [
   },
   {
     label: "cco",
+    account: "otchealthcommons",
     storeAcctSecret: "azure-commons-storage-account",
     storeKeySecret: "azure-commons-storage-key",
     container: "company-journal",
@@ -111,6 +110,7 @@ export const RINGS = [
   },
   {
     label: "cro",
+    account: "otchealthcommons",
     storeAcctSecret: "azure-commons-storage-account",
     storeKeySecret: "azure-commons-storage-key",
     container: "company-journal",
@@ -120,6 +120,7 @@ export const RINGS = [
   },
   {
     label: "cpo",
+    account: "otchealthcommons",
     storeAcctSecret: "azure-commons-storage-account",
     storeKeySecret: "azure-commons-storage-key",
     container: "company-journal",
@@ -129,6 +130,7 @@ export const RINGS = [
   },
   {
     label: "developer",
+    account: "otchealthcommons",
     storeAcctSecret: "azure-commons-storage-account",
     storeKeySecret: "azure-commons-storage-key",
     container: "company-journal",
@@ -138,11 +140,8 @@ export const RINGS = [
   },
 ];
 
-// GCP Secret Manager is retired (billing off, 2026-07). Key Vault (kvSecret) is the fleet secret
-// store now and is tried FIRST for every id in sm(). The GCP path below is a legacy fallback only —
-// it must never throw or block the Key Vault path when GCP creds are absent (fresh containers have
-// neither GCP_CLAUDE_DRIVER_SA_JSON nor the old ~/.gcp_claude_driver_sa.json file). Fail-open: if
-// there's no GCP SA available, gtoken() resolves to null and sm() just skips the GCP fallback.
+// RETIRED compatibility code below supports an explicit BLOB_BACKEND=azure historical run only.
+// Active AWS runs never call gtoken()/sm() for ring-ledger source reads.
 function saRaw() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
   try { try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; } } catch { return null; }
@@ -237,13 +236,8 @@ async function ensureFleetIndex(AIS, AK) {
 }
 
 // ============================ backend dispatch (SEARCH_BACKEND / EMBEDDINGS_PROVIDER) ============================
-// Thin wrappers so indexRing()/run()/reconcileFleetDupes() below read the same either way; BACKEND is a
-// module-level const (read once, like AGENT_FILTER/TYPE_FILTER in semantic.mjs), so no extra parameter
-// threading is needed at any call site beyond what already exists for the azure case. Exported (unlike
-// the Azure-only functions they wrap) so a test can exercise the dispatch decision in isolation, without
-// needing to mock the ring-ledger Key Vault/Blob reads indexRing() also does — those are a SEPARATE,
-// unrelated concern (the ledger's source-of-truth location, out of scope for this port; see this file's
-// header) and stay on Azure regardless of SEARCH_BACKEND.
+// Thin destination/embedding wrappers keep indexRing()/run()/reconcileFleetDupes() backend-neutral.
+// The ledger source is dispatched independently by BLOB_BACKEND through readRingLedger().
 export async function ensureIdx(azure, index) {
   if (BACKEND === "opensearch") { await OS.ensureIndex(index); return; }
   await ensureIndex(azure.AIS, azure.AK, index);
@@ -300,15 +294,24 @@ export function fleetKeyFor(ring, eR, k) {
   return sharedDocId(ring.label, fallbackRowId(ring, eR, k));
 }
 
+/** Read one ring ledger from the selected source backend. S3 is authoritative after Azure retirement;
+ * Azure remains an explicit legacy mode only. Returns text|null and throws loud on non-404 S3 errors. */
+export async function readRingLedger(ring, tok) {
+  if (BLOB_BACKEND !== "azure") return getTextFromS3(ring.account, ring.container, ring.ledger);
+  const [acct, key] = await Promise.all([sm(ring.storeAcctSecret, tok), sm(ring.storeKeySecret, tok)]);
+  if (!acct || !key) throw new Error("ring store creds missing");
+  const sas = blobSas(acct, key);
+  const rr = await fetch(`https://${acct}.blob.core.windows.net/${ring.container}/${ring.ledger.split("/").map(encodeURIComponent).join("/")}?${sas}`);
+  if (!rr.ok) throw new Error(`ledger read ${rr.status}`);
+  return rr.text();
+}
+
 /** Index one ring's ledger into its index. Returns {label, indexed, total} or {label, error}. Fail-safe. */
 export async function indexRing(ring, azure, tok) {
   try {
-    const [acct, key] = await Promise.all([sm(ring.storeAcctSecret, tok), sm(ring.storeKeySecret, tok)]);
-    if (!acct || !key) return { label: ring.label, error: "ring store creds missing" };
-    const sas = blobSas(acct, key);
-    const rr = await fetch(`https://${acct}.blob.core.windows.net/${ring.container}/${ring.ledger.split("/").map(encodeURIComponent).join("/")}?${sas}`);
-    if (!rr.ok) return { label: ring.label, error: `ledger read ${rr.status}` };
-    const rows = (await rr.text()).split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    const text = await readRingLedger(ring, tok);
+    if (text == null) return { label: ring.label, error: "ledger missing" };
+    const rows = text.split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
     await ensureIdx(azure, ring.index);
     const prep = rows.map((eR, k) => ({
       id: docId(fallbackRowId(ring, eR, k)),
@@ -344,7 +347,7 @@ export async function indexRing(ring, azure, tok) {
 }
 
 export async function run(filterLabel) {
-  const tok = await gtoken();
+  const tok = BLOB_BACKEND === "azure" ? await gtoken() : null;
   // Skip resolving Azure Search/Foundry secrets entirely when BOTH the index destination and the
   // embeddings provider are already off Azure -- the genuine emergency case (Azure billing-blocked)
   // this dispatch exists for. Harmless either way (indexRing()'s dispatch helpers never reference
