@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { RINGS, indexRing, readRingLedger, run } from "../index-ring-memory.mjs";
+import { RINGS, indexRing, planIncremental, readRingLedger, run } from "../index-ring-memory.mjs";
 
 const COMMONS_AGENTS = ["coo", "cco", "cro", "cpo", "developer"];
 
@@ -83,6 +83,25 @@ test("ring source defaults to the allow-listed S3 reader; Azure Blob is explicit
 });
 
 import { FLEET_INDEX } from "../index-ring-memory.mjs";
+
+test("planIncremental embeds only rows missing from at least one OpenSearch target", () => {
+  const prep = [
+    { id: "a", fleetId: "cro__a" },
+    { id: "b", fleetId: "cro__b" },
+    { id: "c", fleetId: "cro__c" },
+  ];
+  const planned = planIncremental(prep, new Set(["a", "b"]), new Set(["cro__a", "cro__c"]), true, true);
+  assert.deepEqual(planned.map((x) => ({ id: x.id, needRing: x.needRing, needFleet: x.needFleet })), [
+    { id: "b", needRing: false, needFleet: true },
+    { id: "c", needRing: true, needFleet: false },
+  ]);
+});
+
+test("planIncremental never sends privileged ring rows to the shared fleet target", () => {
+  const [planned] = planIncremental([{ id: "p", fleetId: "clo-personal__p" }], new Set(), new Set(), false, true);
+  assert.equal(planned.needRing, true);
+  assert.equal(planned.needFleet, false);
+});
 
 test("fleet-learning safety: privileged rings are private (excluded from fleet), non-privileged are not", () => {
   const clo = RINGS.find((r) => r.label === "clo-personal");
