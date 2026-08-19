@@ -1,0 +1,51 @@
+{
+  "program": "OTCHealth synthetic customer-service harness",
+  "generated_at": "2026-08-19",
+  "status": "environment_and_coverage_gaps",
+  "defects": [
+    {
+      "id": "ENV-001",
+      "severity": "S2",
+      "status": "OPEN",
+      "title": "n8n MCP test surface unavailable in this run",
+      "observed": "The connected n8n MCP search_workflows and test paths returned fetch failed.",
+      "impact": "No live n8n execution receipt can be claimed from this run.",
+      "reproduction": "Execute the n8n MCP search_workflows action from the Hyperagent developer lane.",
+      "next_action": "Restore or re-verify the n8n MCP transport, then run pinned tests against inactive or dedicated staging workflows only.",
+      "customer_impact": "unknown_not_tested"
+    },
+    {
+      "id": "ENV-002",
+      "severity": "S2",
+      "status": "OPEN",
+      "title": "Company-brain wrapper could not clone the current toolkit",
+      "observed": "The credentialed kb-memory wrapper exited before returning a brain or ledger result and left no /tmp/octools checkout.",
+      "impact": "This run uses repository-grounded architecture receipts rather than claiming a successful company-brain recall.",
+      "reproduction": "Run the current kb-memory wrapper with a read-only company-brain query in this runtime.",
+      "next_action": "Re-run the wrapper when its repository fetch path is healthy; do not treat this offline harness report as a substitute for the brain ledger.",
+      "customer_impact": "none_observed"
+    },
+    {
+      "id": "COVERAGE-001",
+      "severity": "S1",
+      "status": "OPEN",
+      "title": "Live channel receipts are not covered by offline evidence",
+      "observed": "The current run proves 59 synthetic scenarios and zero external effects only.",
+      "impact": "Email delivery, phone ingress, SMS ingress, Intercom ticket creation, n8n routing, provider callbacks, and response-time SLOs remain unproven.",
+      "reproduction": "Run the staged channel adapter suite with pinned data and receipt capture after n8n transport is restored.",
+      "next_action": "Create a dedicated staging receipt plan with synthetic recipients, pinned n8n inputs, and provider test endpoints; never use a real customer or a mass-send path.",
+      "customer_impact": "unknown_not_tested"
+    },
+    {
+      "id": "COVERAGE-002",
+      "severity": "S1",
+      "status": "OPEN",
+      "title": "Human resolution, queue ownership, and CSAT timing remain unmeasured",
+      "observed": "The harness checks routing decisions but does not create live Intercom objects or measure staff response.",
+      "impact": "A control can be logically correct yet operationally abandoned without a named owner and receipt.",
+      "reproduction": "Run a bounded synthetic case through the staging Intercom/n8n path and capture assignment, acknowledgment, resolution, and CSAT records.",
+      "next_action": "Add a receipt schema for owner, queue, timestamps, resolution evidence, and no-customer-action guarantees before any live cohort.",
+      "customer_impact": "unknown_not_tested"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "report_path": "tests/evidence/customer-service-harness-report.json",
+  "report_sha256": "cda29d89370594a59268de3c7ccc2440e4bfcde1fe19f62d120dfd5c8e5c677a",
+  "matrix_file_sha256": "1ec0c09152dc69f7b87d079040d2638f5675dd693d97a03c5dd9324ee4134a4d",
+  "runner_file_sha256": "ec6a38bc56ea824f20bba4c62fed316fc7642926c8549347faa94a92d59f2e3b",
+  "overall": "PASS_SYNTHETIC_EVIDENCE_ONLY",
+  "launch_decision": "HOLD_NO_GO_UNCHANGED",
+  "test_summary": {
+    "scenarios": 59,
+    "executions": 177,
+    "passed": 177,
+    "failed": 0,
+    "assertions": 558
+  },
+  "no_effect_counters": {
+    "network_calls": 0,
+    "customer_contacts": 0,
+    "provider_calls": 0,
+    "refunds_or_credits": 0,
+    "inventory_mutations": 0,
+    "shipments_created": 0,
+    "orders_created": 0,
+    "authorization_consumptions": 0,
+    "canonical_state_mutations": 0,
+    "production_dns_changes": 0
+  },
+  "defect_count": 0
+}
