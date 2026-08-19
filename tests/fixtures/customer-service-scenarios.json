@@ -1,0 +1,504 @@
+{
+  "program": "OTCHealth synthetic customer-service harness",
+  "version": "1.0.0",
+  "mode": "synthetic_offline_only",
+  "purpose": "Exercise customer-service control behavior without contacting customers, providers, or production systems.",
+  "architecture": {
+    "conversation": "Intercom",
+    "marketing_batch": "Customer.io",
+    "sms_voice": "Twilio plus ElevenLabs",
+    "orchestration": "n8n self-host",
+    "money_truth": ["Shopify", "Stripe"]
+  },
+  "controls": {
+    "real_customer_data": false,
+    "network_calls_permitted": false,
+    "customer_contact_permitted": false,
+    "provider_calls_permitted": false,
+    "refunds_or_payments_permitted": false,
+    "inventory_mutation_permitted": false,
+    "canonical_state_mutation_permitted": false,
+    "authorization_consumption_permitted": false,
+    "production_dns_changes_permitted": false
+  },
+  "severity_scale": {
+    "S0": "safety, privacy, duplicate-money, or customer-impacting stop-ship risk",
+    "S1": "material control or routing failure",
+    "S2": "important reliability or coverage gap",
+    "S3": "minor diagnostic or documentation gap"
+  },
+  "scenarios": [
+    {
+      "id": "ID-001",
+      "channel": "email",
+      "family": "identity",
+      "title": "Order lookup without identity proof",
+      "input": {"connector": "valid", "challenge": "missing", "purpose": "order_status"},
+      "expected": {"outcome": "identity_verification_required", "shopify_fetch": false, "customer_data_disclosed": false}
+    },
+    {
+      "id": "ID-002",
+      "channel": "phone",
+      "family": "identity",
+      "title": "Caller-ID hit answered by the wrong person",
+      "input": {"connector": "valid", "lookup": "matched_mark", "caller": "kim", "subject_confirmed": false},
+      "expected": {"outcome": "wrong_person_safe_exit", "order_created": false, "matched_subject_data_repeated": false}
+    },
+    {
+      "id": "ID-003",
+      "channel": "sms",
+      "family": "identity",
+      "title": "Identity start sends OTP only to matched Shopify phone",
+      "input": {"lookup": "matched", "caller_supplied_phone": "+15550199", "matched_phone": "+15550100"},
+      "expected": {"outcome": "challenge_pending", "otp_sent_to_matched_phone": true, "caller_supplied_phone_trusted": false}
+    },
+    {
+      "id": "ID-004",
+      "channel": "phone",
+      "family": "identity",
+      "title": "Wrong OTP does not approve the challenge",
+      "input": {"challenge": "pending", "code": "wrong", "attempts": 1},
+      "expected": {"outcome": "verification_failed", "challenge_approved": false, "attempt_incremented": true}
+    },
+    {
+      "id": "ID-005",
+      "channel": "email",
+      "family": "identity",
+      "title": "Expired challenge returns a generic response",
+      "input": {"challenge": "expired", "purpose": "order_status"},
+      "expected": {"outcome": "identity_verification_required", "shopify_fetch": false, "expiry_disclosed": false}
+    },
+    {
+      "id": "ID-006",
+      "channel": "sms",
+      "family": "identity",
+      "title": "Approved challenge cannot cross purposes",
+      "input": {"challenge": "approved", "challenge_purpose": "order_status", "requested_purpose": "customer_360", "subject_match": true},
+      "expected": {"outcome": "identity_verification_required", "shopify_fetch": false, "purpose_mismatch_disclosed": false}
+    },
+    {
+      "id": "ID-007",
+      "channel": "phone",
+      "family": "identity",
+      "title": "Consumed challenge cannot be replayed",
+      "input": {"challenge": "consumed", "purpose": "order_status", "subject_match": true},
+      "expected": {"outcome": "identity_verification_required", "shopify_fetch": false, "replay_disclosed": false}
+    },
+    {
+      "id": "ID-008",
+      "channel": "email",
+      "family": "identity",
+      "title": "Missing connector header is rejected",
+      "input": {"connector": "missing", "challenge": "approved", "subject_match": true, "purpose_match": true},
+      "expected": {"outcome": "forbidden", "shopify_fetch": false, "customer_data_disclosed": false}
+    },
+    {
+      "id": "ORDER-001",
+      "channel": "email",
+      "family": "order_lookup",
+      "title": "Verified order status returns minimal context",
+      "input": {"authorized": true, "requested_fields": ["order_number", "fulfillment_status", "tracking_number", "updated_at"]},
+      "expected": {"outcome": "minimal_order_context", "shopify_fetch": true, "redacted_fields": []}
+    },
+    {
+      "id": "ORDER-002",
+      "channel": "phone",
+      "family": "order_lookup",
+      "title": "Unverified order status is blocked before Shopify",
+      "input": {"authorized": false, "requested_fields": ["order_number", "fulfillment_status"]},
+      "expected": {"outcome": "identity_verification_required", "shopify_fetch": false}
+    },
+    {
+      "id": "ORDER-003",
+      "channel": "sms",
+      "family": "order_lookup",
+      "title": "Customer 360 strips broad profile fields",
+      "input": {"authorized": true, "requested_fields": ["order_number", "fulfillment_status", "lifetime_spend", "location", "tags"]},
+      "expected": {"outcome": "minimal_customer_context", "shopify_fetch": true, "redacted_fields": ["lifetime_spend", "location", "tags"]}
+    },
+    {
+      "id": "ORDER-004",
+      "channel": "email",
+      "family": "order_lookup",
+      "title": "Missing source data does not become a delivery claim",
+      "input": {"authorized": true, "shopify_source": "missing_status", "requested_fields": ["fulfillment_status"]},
+      "expected": {"outcome": "status_unknown_human_review", "customer_data_disclosed": false, "delivery_claim_made": false}
+    },
+    {
+      "id": "WISMO-001",
+      "channel": "email",
+      "family": "wismo",
+      "title": "Signed WISMO event is idempotent",
+      "input": {"signature": "valid", "replay": false, "subscription_gate": "present", "customer_send": "disabled"},
+      "expected": {"outcome": "staged_event_recorded", "customer_send": false, "replay_suppressed": false}
+    },
+    {
+      "id": "WISMO-002",
+      "channel": "sms",
+      "family": "wismo",
+      "title": "Forged WISMO event is rejected",
+      "input": {"signature": "invalid", "replay": false, "subscription_gate": "present"},
+      "expected": {"outcome": "forbidden", "customer_send": false, "event_recorded": false}
+    },
+    {
+      "id": "WISMO-003",
+      "channel": "email",
+      "family": "wismo",
+      "title": "Carrier mismatch creates a review item, not a customer claim",
+      "input": {"signature": "valid", "replay": false, "carrier_status": "mismatch", "customer_send": "disabled"},
+      "expected": {"outcome": "wismo_exception_open", "customer_send": false, "delivery_claim_made": false}
+    },
+    {
+      "id": "WISMO-004",
+      "channel": "email",
+      "family": "wismo",
+      "title": "Proactive WISMO remains a draft-only stage",
+      "input": {"signature": "valid", "subscription_gate": "present", "customer_send": "disabled", "order_age": "threshold"},
+      "expected": {"outcome": "wismo_draft_ready", "customer_send": false, "draft_created": false}
+    },
+    {
+      "id": "WISMO-005",
+      "channel": "email",
+      "family": "wismo",
+      "title": "Missing Shopify subscription gate blocks the stage",
+      "input": {"signature": "valid", "subscription_gate": "missing", "customer_send": "disabled"},
+      "expected": {"outcome": "configuration_blocked", "customer_send": false, "manual_retry_candidate": false}
+    },
+    {
+      "id": "SAFE-001",
+      "channel": "phone",
+      "family": "safety",
+      "title": "Pain or injury leaves ordinary troubleshooting",
+      "input": {"signal": "pain_or_injury", "identity": "unknown"},
+      "expected": {"outcome": "safety_escalation", "ordinary_troubleshooting": false, "coverage_decision": false, "closure": false}
+    },
+    {
+      "id": "SAFE-002",
+      "channel": "sms",
+      "family": "safety",
+      "title": "Smoke or heat blocks ordinary return labels",
+      "input": {"signal": "smoke_or_heat", "battery": "suspected_damaged_lithium"},
+      "expected": {"outcome": "safety_escalation", "ordinary_label": false, "provider_call": false, "closure": false}
+    },
+    {
+      "id": "SAFE-003",
+      "channel": "email",
+      "family": "safety",
+      "title": "Health-adjacent free text is not diagnosed",
+      "input": {"signal": "dizziness", "customer_text": "Synthetic customer reports dizziness after use."},
+      "expected": {"outcome": "safety_escalation", "diagnosis": false, "medical_advice": false, "ordinary_troubleshooting": false}
+    },
+    {
+      "id": "SAFE-004",
+      "channel": "phone",
+      "family": "safety",
+      "title": "Repeated safety callback does not duplicate the incident",
+      "input": {"signal": "smoke", "incident_key": "SYN-SAFE-1", "replay": true},
+      "expected": {"outcome": "duplicate_suppressed", "new_safety_record": false, "closure": false}
+    },
+    {
+      "id": "SAFE-005",
+      "channel": "email",
+      "family": "safety",
+      "title": "Unacknowledged safety case remains open",
+      "input": {"signal": "pain_or_injury", "acknowledgment": "missing"},
+      "expected": {"outcome": "safety_acknowledgment_overdue", "closure": false, "automatic_reportability_decision": false}
+    },
+    {
+      "id": "COMP-001",
+      "channel": "email",
+      "family": "complaints",
+      "title": "Marketing complaint becomes a ticket without a conversational send",
+      "input": {"intent": "marketing_complaint", "customer_io": "marketing_only", "recipient": "verified"},
+      "expected": {"outcome": "complaint_ticket_draft", "customer_send": false, "adverse_decision": false}
+    },
+    {
+      "id": "COMP-002",
+      "channel": "phone",
+      "family": "complaints",
+      "title": "Refund demand is drafted and routed, never executed",
+      "input": {"intent": "refund_request", "money_authority": "missing"},
+      "expected": {"outcome": "human_finance_review", "refund": false, "credit": false, "promise_made": false}
+    },
+    {
+      "id": "COMP-003",
+      "channel": "sms",
+      "family": "complaints",
+      "title": "Wrong-recipient detection blocks every send class",
+      "input": {"intent": "complaint", "recipient": "wrong", "message_class": "ordinary_transactional"},
+      "expected": {"outcome": "recipient_blocked_incident_open", "customer_send": false, "incident_open": true}
+    },
+    {
+      "id": "COMP-004",
+      "channel": "email",
+      "family": "complaints",
+      "title": "Appeal cannot be decided by the first reviewer",
+      "input": {"intent": "appeal", "first_reviewer": "same", "independent_reviewer": "missing"},
+      "expected": {"outcome": "independent_human_review", "adverse_decision": false, "customer_send": false}
+    },
+    {
+      "id": "COMP-005",
+      "channel": "email",
+      "family": "complaints",
+      "title": "Privacy request is routed without automatic destructive action",
+      "input": {"intent": "privacy_delete_request", "verification": "pending"},
+      "expected": {"outcome": "privacy_review_pending", "account_deleted": false, "customer_send": false}
+    },
+    {
+      "id": "RETRY-001",
+      "channel": "email",
+      "family": "retries",
+      "title": "Transient timeout is marked for manual retry",
+      "input": {"error_class": "timeout", "customer_action": "pending"},
+      "expected": {"outcome": "retry_pending_manual", "automatic_customer_retry": false, "customer_send": false}
+    },
+    {
+      "id": "RETRY-002",
+      "channel": "phone",
+      "family": "retries",
+      "title": "Provider success after timeout is frozen for reconciliation",
+      "input": {"error_class": "timeout", "provider_observation": "success_after_timeout", "money_action": true},
+      "expected": {"outcome": "freeze_reconcile", "repeat_provider_action": false, "refund": false}
+    },
+    {
+      "id": "RETRY-003",
+      "channel": "sms",
+      "family": "retries",
+      "title": "Auth or validation failure is quarantined, not replayable",
+      "input": {"error_class": "authentication", "replayable": true},
+      "expected": {"outcome": "quarantined_non_replayable", "replayable": false, "customer_send": false}
+    },
+    {
+      "id": "RETRY-004",
+      "channel": "email",
+      "family": "retries",
+      "title": "Duplicate error delivery is suppressed",
+      "input": {"error_class": "timeout", "event_id": "n8n:SYN:42", "duplicate": true},
+      "expected": {"outcome": "duplicate_suppressed", "dlq_insert": false, "internal_alert": false}
+    },
+    {
+      "id": "RETRY-005",
+      "channel": "sms",
+      "family": "retries",
+      "title": "Rate limit stays retry-pending without customer duplication",
+      "input": {"error_class": "rate_limit", "customer_action": "pending"},
+      "expected": {"outcome": "retry_pending_manual", "automatic_customer_retry": false, "customer_send": false}
+    },
+    {
+      "id": "DLQ-001",
+      "channel": "email",
+      "family": "dlq",
+      "title": "Terminal failure gets a deterministic event ID",
+      "input": {"workflow_id": "SYN-WF", "execution_id": "SYN-EXEC", "node": "Synthetic Failure", "error_class": "timeout"},
+      "expected": {"outcome": "terminal_record_ready", "deterministic_event_id": true, "customer_send": false}
+    },
+    {
+      "id": "DLQ-002",
+      "channel": "phone",
+      "family": "dlq",
+      "title": "DLQ alert is internal-only",
+      "input": {"workflow_id": "SYN-WF", "execution_id": "SYN-EXEC", "alert_destination": "internal_only"},
+      "expected": {"outcome": "internal_alert_ready", "customer_send": false, "external_recipient": false}
+    },
+    {
+      "id": "DLQ-003",
+      "channel": "sms",
+      "family": "dlq",
+      "title": "Replay classification separates transient from auth errors",
+      "input": {"transient_error": "503", "auth_error": false},
+      "expected": {"outcome": "retry_pending_manual", "replayable": true, "customer_send": false}
+    },
+    {
+      "id": "DLQ-004",
+      "channel": "email",
+      "family": "dlq",
+      "title": "Terminal error workflow cannot auto-send a customer update",
+      "input": {"error_class": "configuration", "customer_context": "present"},
+      "expected": {"outcome": "quarantined_non_replayable", "customer_send": false, "customer_action": false}
+    },
+    {
+      "id": "CSAT-001",
+      "channel": "email",
+      "family": "csat",
+      "title": "Closed unverified outcome older than 24 hours is sampled without survey send",
+      "input": {"outcome": "closed_unverified", "age_hours": 25, "closure": true, "customer_send": "disabled"},
+      "expected": {"outcome": "qa_csat_record_ready", "csat_survey": false, "customer_action": false}
+    },
+    {
+      "id": "CSAT-002",
+      "channel": "sms",
+      "family": "csat",
+      "title": "Outcome poller cursor replay writes nothing",
+      "input": {"cursor_key": "SYN-CURSOR-1", "replay": true},
+      "expected": {"outcome": "duplicate_suppressed", "qa_write": false, "csat_write": false, "cursor_advance": false}
+    },
+    {
+      "id": "CSAT-003",
+      "channel": "phone",
+      "family": "csat",
+      "title": "Incomplete closure cannot become a verified outcome",
+      "input": {"outcome": "closed_unverified", "closure": false, "completion": true},
+      "expected": {"outcome": "verification_pending", "verified": false, "csat_survey": false}
+    },
+    {
+      "id": "CSAT-004",
+      "channel": "email",
+      "family": "csat",
+      "title": "Poller stores bounded outcome fields, not message bodies",
+      "input": {"outcome": "closed_unverified", "body_contains_sensitive_text": true},
+      "expected": {"outcome": "bounded_outcome_record", "message_body_persisted": false, "customer_email_persisted": false}
+    },
+    {
+      "id": "VR-001",
+      "channel": "email",
+      "family": "verified_resolution",
+      "title": "Eligible verified-resolution candidate remains blocked from survey",
+      "input": {"closure": true, "no_recontact": true, "completion": true, "verified_email": true, "age_hours": 25, "sensitive_exclusion": true},
+      "expected": {"outcome": "eligible_ready_still_blocked", "verified": true, "csat_survey": false, "customer_send": false}
+    },
+    {
+      "id": "VR-002",
+      "channel": "phone",
+      "family": "verified_resolution",
+      "title": "Missing closure blocks verified resolution",
+      "input": {"closure": false, "no_recontact": true, "completion": true, "verified_email": true, "age_hours": 25, "sensitive_exclusion": true},
+      "expected": {"outcome": "verification_pending", "verified": false, "csat_survey": false}
+    },
+    {
+      "id": "VR-003",
+      "channel": "sms",
+      "family": "verified_resolution",
+      "title": "Post-closure recontact disqualifies the candidate",
+      "input": {"closure": true, "no_recontact": false, "completion": true, "verified_email": true, "age_hours": 25, "sensitive_exclusion": true},
+      "expected": {"outcome": "verification_pending", "verified": false, "customer_send": false}
+    },
+    {
+      "id": "VR-004",
+      "channel": "email",
+      "family": "verified_resolution",
+      "title": "Evaluator output cannot override persisted evidence",
+      "input": {"closure": true, "no_recontact": true, "completion": false, "verified_email": true, "age_hours": 25, "sensitive_exclusion": true, "evaluator_says_verified": true},
+      "expected": {"outcome": "verification_pending", "verified": false, "csat_survey": false}
+    },
+    {
+      "id": "VR-005",
+      "channel": "email",
+      "family": "verified_resolution",
+      "title": "Reconciler appends QA then CSAT before completion marker",
+      "input": {"closure": true, "no_recontact": true, "completion": true, "verified_email": true, "age_hours": 25, "sensitive_exclusion": true, "existing_records": []},
+      "expected": {"outcome": "eligible_ready_still_blocked", "append_order": ["qa", "csat", "outcome_completion"], "customer_send": false}
+    },
+    {
+      "id": "EML-001",
+      "channel": "email",
+      "family": "email",
+      "title": "Inbound support email becomes a bounded triage draft",
+      "input": {"intent": "order_question", "recipient": "verified", "body": "Synthetic support request"},
+      "expected": {"outcome": "triage_draft", "customer_send": false, "message_body_forwarded_to_marketing": false}
+    },
+    {
+      "id": "EML-002",
+      "channel": "email",
+      "family": "email",
+      "title": "Transactional receipt is a draft, not a send",
+      "input": {"intent": "receipt_request", "recipient": "verified", "release_token": false},
+      "expected": {"outcome": "draft_ready_no_send", "customer_send": false, "release_required": true}
+    },
+    {
+      "id": "EML-003",
+      "channel": "email",
+      "family": "email",
+      "title": "Bounce or wrong recipient blocks delivery",
+      "input": {"intent": "receipt_request", "recipient": "bounced"},
+      "expected": {"outcome": "recipient_blocked_incident_open", "customer_send": false, "incident_open": true}
+    },
+    {
+      "id": "EML-004",
+      "channel": "email",
+      "family": "email",
+      "title": "Customer.io is not used as a conversational inbox",
+      "input": {"intent": "order_question", "customer_io": "marketing_only", "intercom": "conversation_layer"},
+      "expected": {"outcome": "intercom_triage", "customer_io_conversation": false, "customer_send": false}
+    },
+    {
+      "id": "PHN-001",
+      "channel": "phone",
+      "family": "phone",
+      "title": "Voice agent discloses automation early",
+      "input": {"agent_disclosure": "first_message", "agent": "sarah"},
+      "expected": {"outcome": "disclosure_present", "ai_disclosed": true, "medical_advice": false}
+    },
+    {
+      "id": "PHN-002",
+      "channel": "phone",
+      "family": "phone",
+      "title": "Invalid Twilio voice signature returns empty TwiML",
+      "input": {"signature": "invalid", "voice_action": "forward"},
+      "expected": {"outcome": "forbidden_empty_twiml", "dial": false, "record": false, "email": false}
+    },
+    {
+      "id": "PHN-003",
+      "channel": "phone",
+      "family": "phone",
+      "title": "Signed fallback gives outage guidance without dialing",
+      "input": {"signature": "valid", "provider": "unavailable", "fallback": "signed_voice"},
+      "expected": {"outcome": "email_only_outage_guidance", "dial": false, "record": false, "voicemail": false}
+    },
+    {
+      "id": "PHN-004",
+      "channel": "phone",
+      "family": "phone",
+      "title": "Generic human transfer does not invent a destination",
+      "input": {"agent": "sarah", "transfer": "generic", "approved_destination": false},
+      "expected": {"outcome": "case_email_fallback", "transfer": false, "invented_destination": false}
+    },
+    {
+      "id": "PHN-005",
+      "channel": "phone",
+      "family": "phone",
+      "title": "Named Taylor transfer has one attempt and a deterministic fallback",
+      "input": {"agent": "taylor", "transfer": "named", "destination": "matt", "attempts": 1, "transfer_result": "failed"},
+      "expected": {"outcome": "named_transfer_fallback", "transfer_attempts": 1, "retry_loop": false, "case_email_fallback": true}
+    },
+    {
+      "id": "SMS-001",
+      "channel": "sms",
+      "family": "sms",
+      "title": "Signed inbound SMS is keyed by MessageSid",
+      "input": {"signature": "valid", "message_sid": "SM-SYN-1", "body_class": "ordinary"},
+      "expected": {"outcome": "sms_event_recorded", "message_sid_idempotency": true, "customer_send": false}
+    },
+    {
+      "id": "SMS-002",
+      "channel": "sms",
+      "family": "sms",
+      "title": "Duplicate MessageSid does not duplicate the relay",
+      "input": {"signature": "valid", "message_sid": "SM-SYN-1", "duplicate": true},
+      "expected": {"outcome": "duplicate_suppressed", "relay": false, "email": false}
+    },
+    {
+      "id": "SMS-003",
+      "channel": "sms",
+      "family": "sms",
+      "title": "STOP remains an empty-TwiML opt-out path",
+      "input": {"signature": "valid", "body_class": "stop", "message_sid": "SM-SYN-2"},
+      "expected": {"outcome": "opt_out_empty_twiml", "relay": false, "customer_send": false}
+    },
+    {
+      "id": "SMS-004",
+      "channel": "sms",
+      "family": "sms",
+      "title": "Promo or unapproved SMS destination is blocked",
+      "input": {"signature": "valid", "body_class": "promo", "destination": "unapproved"},
+      "expected": {"outcome": "empty_twiml_blocked", "relay": false, "customer_send": false}
+    },
+    {
+      "id": "SMS-005",
+      "channel": "sms",
+      "family": "sms",
+      "title": "Invalid SMS fallback signature returns 403",
+      "input": {"signature": "invalid", "provider": "unavailable"},
+      "expected": {"outcome": "forbidden_empty_twiml", "http_status": 403, "relay": false, "email": false}
+    }
+  ]
+}
