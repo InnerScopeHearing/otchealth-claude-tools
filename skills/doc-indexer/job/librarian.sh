@@ -24,15 +24,17 @@ shift 2>/dev/null || true
 #                                   fixed this same session (a real `index` run against production
 #                                   flushed 269 pending docs to S3 with exit 0).
 #   - legal --container company  -> --s3. Same audit: 17,797/17,790 objects present, zero gap.
-#   - commerce                   -> STAYS --azure (still broken). otchealthcommerce/commerce-
-#                                   source-docs has NO row in s3-blob.mjs's MIRROR table -- the
-#                                   2026-08-18 audit explicitly left it out of scope ("no Azure
-#                                   credentials for it were requested or fetched") and recommended
-#                                   a dedicated follow-up audit before trusting any bucket for it.
-#                                   Guessing one here would violate "choose the bucket from an
-#                                   OBSERVED S3 listing, never inferred from IAM." Reported, not
-#                                   fixed; --s3 would fail loud anyway (s3LocationFor returns null)
-#                                   but reads would ALSO stop working, which --azure still allows.
+#   - commerce                   -> --s3 as of 2026-08-19 (RESOLVED; this entry used to read
+#                                   "STAYS --azure, no MIRROR row, do not guess a bucket"). The
+#                                   follow-up audit that entry asked for was done: a paginated
+#                                   ListObjectsV2 found the room at otchealth-brain-dr-55c84f6b
+#                                   under otchealthcommerce/commerce-source-docs/ (32 objects: 12
+#                                   source docs, their 12 _TEXT/ sidecars, 6 _CATALOG/ files, 2
+#                                   _REVIEW/ csvs), and the same listing against the other
+#                                   candidate bucket, otchealth-finance-legal-dr-55c84f6b, returned
+#                                   ZERO under "otchealthcommerce/". Observed, and disambiguated
+#                                   against the alternative -- not inferred from IAM. Row added to
+#                                   s3-blob.mjs's MIRROR table with that evidence recorded inline.
 #   - legal --container personal -> STAYS --azure (still broken). otchealthlegalstore/personal IS
 #                                   in the S3 MIRROR table (its own dedicated bucket,
 #                                   otchealth-legal-personal-dr-55c84f6b), so this is not a missing-
@@ -47,7 +49,8 @@ for arg in "$@"; do
   if [ "$prev" = "--container" ]; then CONTAINER_ARG="$arg"; fi
   prev="$arg"
 done
-if [ "$PROFILE" = "finance" ] || { [ "$PROFILE" = "legal" ] && [ "$CONTAINER_ARG" = "company" ]; }; then
+if [ "$PROFILE" = "finance" ] || [ "$PROFILE" = "commerce" ] || [ "$PROFILE" = "commons" ] \
+   || { [ "$PROFILE" = "legal" ] && [ "$CONTAINER_ARG" = "company" ]; }; then
   BACKEND_FLAG="--s3"
 else
   BACKEND_FLAG="--azure"
@@ -75,10 +78,29 @@ fi
 # + the skillset's index projections. Incremental (skips docs already enriched at the same sha256) and
 # gpt-4.1-mini only. Finance/legal/commons roll out ONE ROOM AT A TIME by setting ENRICH=1 on that
 # room's job env after a parity check against the live index -- do not flip it fleet-wide blind.
+#
+# TWO BACKENDS, TWO AXES (2026-08-19). This block used to pass a hardcoded `--azure`, which after
+# the Azure lockdown meant BOTH of enrich.mjs's backends pointed at dead infrastructure: it could
+# not read the source text (storage) and could not write the enriched fields (search). That is why
+# entity/graph coverage sat at ~0% and why "just flip ENRICH=1" was never going to work.
+#   storage -> $BACKEND_FLAG, the SAME per-room, evidence-gated choice the steps above use, so
+#              enrichment can never read from a different place than indexing wrote to.
+#   search  -> $ENRICH_SEARCH_BACKEND (default opensearch, the live brain). Override per job only
+#              if a room is genuinely still on Azure AI Search.
+# ensure-schema is skipped on the opensearch path BY DESIGN, not as a shortcut: it provisions an
+# Azure AI Search index schema, and OpenSearch accepts new domain-pack fields through ordinary
+# dynamic mapping (no `dynamic:strict` on any doc room). Running it would just fail against a
+# search service this room does not use.
+ENRICH_SEARCH_BACKEND="${ENRICH_SEARCH_BACKEND:-opensearch}"
 if [ "$ENRICH" = "1" ]; then
-  echo "[librarian] ENRICH=1 -> ensuring the metadata schema + enriching $PROFILE"
-  node "$ROOT/skills/doc-indexer/enrich.mjs" ensure-schema --profile "$PROFILE" --azure "$@"
-  node "$ROOT/skills/doc-indexer/enrich.mjs" run --profile "$PROFILE" --azure "$@"
+  echo "[librarian] ENRICH=1 -> enriching $PROFILE (storage=$BACKEND_FLAG search=$ENRICH_SEARCH_BACKEND)"
+  if [ "$ENRICH_SEARCH_BACKEND" = "azure" ]; then
+    node "$ROOT/skills/doc-indexer/enrich.mjs" ensure-schema --profile "$PROFILE" $BACKEND_FLAG "$@"
+  else
+    echo "[librarian] search=$ENRICH_SEARCH_BACKEND -> skipping ensure-schema (Azure-AI-Search-only; OpenSearch uses dynamic mapping)"
+  fi
+  node "$ROOT/skills/doc-indexer/enrich.mjs" run --profile "$PROFILE" $BACKEND_FLAG \
+    --search-backend "$ENRICH_SEARCH_BACKEND" "$@"
 else
   echo "[librarian] ENRICH not set -> skipping the metadata-enrichment pass for $PROFILE (opt-in per room; see skills/doc-indexer/enrich.mjs)"
 fi

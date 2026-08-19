@@ -76,10 +76,43 @@
 // MNPI can be gated on it); the legal `personal` container is privileged/confidential.
 //
 // Usage:
-//   node enrich.mjs ensure-schema --profile commerce --azure [--domain-pack commerce]
-//   node enrich.mjs run           --profile commerce --azure [--limit n] [--concurrency 4] [--reindex]
-//   node enrich.mjs reindex-room  --profile commerce --azure [--full-reset] [--wait-minutes 3]
-//   node enrich.mjs verify        --profile commerce --azure --path "shopify-library/00-index.md"
+//   node enrich.mjs ensure-schema --profile commerce [--domain-pack commerce]
+//   node enrich.mjs run           --profile commerce [--limit n] [--concurrency 4] [--reindex]
+//   node enrich.mjs reindex-room  --profile commerce [--full-reset] [--wait-minutes 3]
+//   node enrich.mjs verify        --profile commerce --path "shopify-library/00-index.md"
+//
+// ============================================================================================
+// TWO INDEPENDENT BACKEND AXES. Do not confuse them -- they were conflated once already and it
+// cost a wrong diagnosis ("the backfill just needs a flag flip", 2026-08-19).
+//
+//   --storage-backend  WHERE THE SOURCE BYTES LIVE   (s3 | azure)   -- the catalog, the _TEXT/
+//                      sidecars this file reads to enrich, the lock, the review queue.
+//   --search-backend   WHERE THE ENRICHED FIELDS GO  (opensearch | azure)
+//
+// A room can be read from S3 and written to OpenSearch, which is in fact the only combination
+// that works today, and is why both defaults are what they are.
+//
+// STORAGE_BACKEND (2026-08-19, default `s3`): every Azure Blob storage account this file can
+// target became unreachable when the Azure estate locked down (2026-08-18 ~00:55Z). This file
+// still resolved its source text exclusively from `https://<acct>.blob.core.windows.net/...`,
+// so `--search-backend opensearch` -- added 2026-08-16 to fix 0% entity coverage -- could not
+// actually run: it would authenticate to OpenSearch correctly and then fail to read a single
+// source document. That is the real blocker behind "the entity/graph backfill is not a flag
+// flip, it needs a source-text port". This is that port.
+//
+// It deliberately reuses skills/kb-memory/s3-blob.mjs, the SAME mirror layer indexer.mjs uses,
+// rather than introducing a second S3 path: a room targeted by indexer.mjs and the same room
+// targeted here resolve to the same physical objects. That module fails CLOSED on an unmapped
+// (account, container) pair rather than guessing a bucket -- buckets come from an observed
+// listing, never inferred from IAM, because one IAM statement covers several buckets at once and
+// so can only ever say a write is permitted, never where the data is.
+//
+// `--storage-backend azure` remains selectable for read-only inspection of pre-lockdown history;
+// writes on it still throw loud rather than being silently swallowed. Also settable via the
+// STORAGE_BACKEND env var. NOTE the flag-vs-env precedence trap: an explicit flag always wins
+// over the env var, so a job spec that sets STORAGE_BACKEND=s3 while still passing --azure on the
+// command line stays on Azure. Check the argv, not just the environment.
+// ============================================================================================
 //
 // SEARCH_BACKEND (2026-08-16, closes a real gap: 0% entity-field coverage across all 66,668 documents
 // on the live OpenSearch brain, because this file only ever resolved AZURE_SEARCH_ENDPOINT /
@@ -109,6 +142,9 @@ import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
 import * as MS from "./metadata-schema.mjs";
 import { osSearch, osBulkUpdate, osRefresh } from "./opensearch-client.mjs";
+// STORAGE_BACKEND (2026-08-19): the same S3 mirror layer indexer.mjs already uses. See the
+// STORAGE_BACKEND note in this file's header for why this exists and why the default flipped.
+import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
 
 // ============================ CLI ============================
 const argv = process.argv.slice(2);
@@ -121,7 +157,15 @@ const KEYSECRET_OV = takeVal("--key-secret");
 const LIMIT = parseInt(takeVal("--limit", "0"), 10) || 0;
 const CONCURRENCY = Math.max(1, parseInt(takeVal("--concurrency", process.env.ENRICH_CONCURRENCY || "4"), 10) || 4);
 const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.ENRICH_MAX_MINUTES || "0"), 10) || 0;
-const MODEL = takeVal("--model", process.env.ENRICH_MODEL || "gpt-4.1-mini");
+// LLM provider + model. The default model follows the provider, because a deployment name that is
+// valid on one is meaningless on the other ("gpt-4.1-mini" is an Azure DEPLOYMENT name; OpenAI wants
+// a real model id). An explicit --model still wins over both.
+const LLM_PROVIDER = (takeVal("--llm-provider", process.env.ENRICH_LLM_PROVIDER || "openai") || "openai").toLowerCase();
+if (LLM_PROVIDER !== "openai" && LLM_PROVIDER !== "azure") {
+  console.error(`--llm-provider must be "openai" or "azure" (got "${LLM_PROVIDER}").`);
+  process.exit(2);
+}
+const MODEL = takeVal("--model", process.env.ENRICH_MODEL || (LLM_PROVIDER === "openai" ? "gpt-4o-mini" : "gpt-4.1-mini"));
 const VERIFY_PATH = takeVal("--path");
 const WAIT_MIN = parseInt(takeVal("--wait-minutes", "0"), 10) || 0;
 const BACKEND = (takeVal("--search-backend", process.env.SEARCH_BACKEND || "azure") || "azure").toLowerCase();
@@ -130,6 +174,17 @@ if (BACKEND !== "azure" && BACKEND !== "opensearch") {
   process.exit(2);
 }
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
+// STORAGE backend (see the header). Bare `--s3` / `--azure` are accepted as aliases so this file
+// takes the SAME flags indexer.mjs does and job/librarian.sh can pass one spelling to both.
+const STORAGE = (
+  takeVal("--storage-backend", null) ||
+  (flags.has("--s3") ? "s3" : flags.has("--azure") ? "azure" : null) ||
+  process.env.STORAGE_BACKEND || "s3"
+).toLowerCase();
+if (STORAGE !== "azure" && STORAGE !== "s3") {
+  console.error(`--storage-backend must be "s3" or "azure" (got "${STORAGE}").`);
+  process.exit(2);
+}
 const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help";
 const REINDEX = flags.has("--reindex");
@@ -151,8 +206,24 @@ const STORAGE_PROFILES = {
 let ACCT, CONTAINER, AKEY, SAS;
 async function resolveStorage() {
   const P = STORAGE_PROFILES[PROFILE] || STORAGE_PROFILES.commerce;
+  // ACCT/CONTAINER resolve IDENTICALLY for both backends, so `--storage-backend s3` and
+  // `--storage-backend azure` name the SAME logical room; only the wire protocol differs.
   ACCT = ACCT_OV || process.env.AZURE_STORAGE_ACCOUNT || P.azAccount || (await fleetSecret(P.azAccountSecret));
   CONTAINER = containerOverride || P.azContainer;
+  if (STORAGE === "s3") {
+    // Fail CLOSED, before any network call, on a room with no audited mirror row. The alternative
+    // -- guessing a bucket -- is the specific mistake that has already been made twice in this
+    // fleet (mcp-server #248, and an earlier version of s3-blob.mjs's own commons row), because
+    // IAM grants cover several buckets in one statement and cannot discriminate between them.
+    if (!s3LocationFor(ACCT, CONTAINER)) {
+      console.error(`no S3 mirror mapping for ${ACCT}/${CONTAINER} (refusing to guess a bucket). ` +
+        `Add a verified row to skills/kb-memory/s3-blob.mjs's MIRROR table, with the bucket taken ` +
+        `from an OBSERVED S3 listing rather than inferred from IAM, before targeting this room on ` +
+        `S3. --storage-backend azure is read-only-inspection of pre-lockdown history in the meantime.`);
+      process.exit(2);
+    }
+    return; // no storage key and no SAS on the S3 path: credentials resolve inside s3-blob.mjs
+  }
   AKEY = (KEYSECRET_OV ? await fleetSecret(KEYSECRET_OV) : null) || process.env.AZURE_STORAGE_KEY || (await fleetSecret(P.azKeySecret));
   if (!AKEY) { console.error(`Missing storage key for profile ${PROFILE} (secret ${KEYSECRET_OV || P.azKeySecret}).`); process.exit(2); }
   SAS = buildSas();
@@ -174,16 +245,61 @@ const enc = (n) => n.split("/").map(encodeURIComponent).join("/");
 // double-unescape e.g. `&amp;lt;` -> `<`). Best-effort fallback for HTML-entity-encoded blob names only.
 const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'" };
 const htmlEnt = (s) => s.replace(/&(amp|lt|gt|quot|#39|apos);/g, (_, e) => ENT[e]);
-async function getBuf(n) {
+// ---- storage dispatch -------------------------------------------------------------------
+// getBuf/putBuf/delBuf keep their original names and signatures so every call site below is
+// backend-agnostic and unchanged. Only these three functions know which backend is in play.
+//
+// The null-vs-throw contract is IDENTICAL on both paths and is load-bearing: null means 404 and
+// ONLY 404. A 403 (which is exactly what the locked-down Azure estate now returns, and what a
+// missing S3 grant would return) must throw, never read as "this document is empty" -- that is
+// the silent-success shape that made the 2026-08-18 job-fleet failure invisible for a day.
+// s3-blob.mjs guarantees the same contract on its side, which is why it is a drop-in here.
+async function getBufAzure(n) {
   let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`);
   if (r.status === 404 && /&(amp|lt|gt|quot|#39|apos);/.test(n)) { const d = htmlEnt(n); if (d !== n) r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(d)}?${SAS}`); }
   if (r.status === 404) return null; if (!r.ok) throw new Error("get " + r.status); return Buffer.from(await r.arrayBuffer());
 }
+async function getBuf(n) {
+  if (STORAGE === "azure") return getBufAzure(n);
+  let b = await getBufferFromS3(ACCT, CONTAINER, n);
+  // Same HTML-entity fallback the Azure path has. Catalog rows can carry entity-encoded names
+  // from the original crawl, and those objects were mirrored to S3 under the decoded name.
+  if (b == null && /&(amp|lt|gt|quot|#39|apos);/.test(n)) {
+    const d = htmlEnt(n);
+    if (d !== n) b = await getBufferFromS3(ACCT, CONTAINER, d);
+  }
+  return b;
+}
 async function putBuf(n, buf, ct) {
+  if (STORAGE === "s3") {
+    await putObjectToS3(ACCT, CONTAINER, n, buf, ct || "application/octet-stream");
+    return;
+  }
   const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "application/octet-stream" }, body: buf });
   if (!r.ok) throw new Error("put " + r.status + " " + (await r.text()).slice(0, 160));
 }
+async function delBuf(n) {
+  if (STORAGE === "s3") { await deleteObjectFromS3(ACCT, CONTAINER, n); return; }
+  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`, { method: "DELETE" });
+  if (!r.ok && r.status !== 404) throw new Error("delete " + r.status);
+}
+// Azure blob CUSTOM METADATA. Reachable only on the `--search-backend azure` path, which is also
+// the only path that writes back to storage at all (the OpenSearch path reads source text and
+// writes enriched fields straight to the search index, never back onto the document).
+//
+// It is NOT ported to S3, deliberately. Azure sets metadata with a cheap `?comp=metadata` PUT;
+// S3 has no equivalent, and changing metadata on an existing object requires a full CopyObject
+// with MetadataDirective=REPLACE -- a different operation with different failure and cost
+// characteristics. Rather than write an untested emulation of it that no live path exercises,
+// this throws loud if the combination is ever requested. If Azure-search-on-S3-storage ever
+// becomes real, implement it here properly instead of discovering a silent no-op later.
 async function setBlobMetadata(n, metaObj) {
+  if (STORAGE !== "azure") {
+    throw new Error(
+      `setBlobMetadata is Azure-storage-only (asked for storage=${STORAGE}). It is only reached ` +
+      `by --search-backend azure; use --search-backend opensearch, which writes enriched fields ` +
+      `to the search index and never writes back to the document.`);
+  }
   const headers = {};
   for (const [k, v] of Object.entries(metaObj)) { if (v == null || v === "") continue; headers["x-ms-meta-" + k] = v; }
   let r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?comp=metadata&${SAS}`, { method: "PUT", headers });
@@ -205,17 +321,46 @@ const LOCK_TTL = 15 * 60 * 1000;
 const LOCK_ID = crypto.randomBytes(6).toString("hex");
 async function acquireLock() { try { const b = await getBuf(LOCK); if (b) { const j = JSON.parse(b.toString("utf8")); if (Date.now() - (j.ts || 0) < LOCK_TTL) return false; } } catch {} try { await putBuf(LOCK, Buffer.from(JSON.stringify({ ts: Date.now(), id: LOCK_ID })), "application/json"); } catch {} return true; }
 async function refreshLock() { try { await putBuf(LOCK, Buffer.from(JSON.stringify({ ts: Date.now(), id: LOCK_ID })), "application/json"); } catch {} }
-async function releaseLock() { try { await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(LOCK)}?${SAS}`, { method: "DELETE" }); } catch {} }
+async function releaseLock() { try { await delBuf(LOCK); } catch {} }
 
 // ============================ Azure OpenAI (Foundry) chat, gpt-4.1-mini only ============================
 let FEP, FKEY;
-async function resolveFoundry() {
-  FEP = (process.env.AZURE_FOUNDRY_OPENAI_ENDPOINT || (await fleetSecret("azure-foundry-openai-endpoint")) || "").replace(/\/$/, "");
-  FKEY = process.env.AZURE_FOUNDRY_KEY || (await fleetSecret("azure-foundry-key"));
-  if (!FKEY) { console.error("Missing azure-foundry-key"); process.exit(2); }
+// LLM PROVIDER (2026-08-19). The Azure Foundry deployment this file used exclusively now returns
+// HTTP 401 ("invalid subscription key or wrong API endpoint") -- verified by direct probe, the same
+// Azure-estate lockdown that killed blob storage. So the source-text port alone does NOT unblock a
+// backfill: enrichment needs a MODEL as well as its documents, and both lived on Azure.
+//
+// `openai` is the default because it is the one that answers. Probed live before this was written:
+// OpenAI direct HTTP 200, and AWS Bedrock reachable too (44 models). OpenAI was chosen over Bedrock
+// because Azure OpenAI and OpenAI share the request/response schema, including
+// `response_format: {type:"json_object"}`, which this prompt depends on -- so this is a genuine
+// drop-in rather than a rewrite. Bedrock's Converse API would need its own request shaping and a
+// separate JSON-mode strategy; it stays the documented fallback if OpenAI is ever the dead one.
+//
+// `azure` remains selectable so the old path is one flag away if the estate ever returns.
+async function resolveLlm() {
+  if (LLM_PROVIDER === "azure") {
+    FEP = (process.env.AZURE_FOUNDRY_OPENAI_ENDPOINT || (await fleetSecret("azure-foundry-openai-endpoint")) || "").replace(/\/$/, "");
+    FKEY = process.env.AZURE_FOUNDRY_KEY || (await fleetSecret("azure-foundry-key"));
+    if (!FKEY) { console.error("Missing azure-foundry-key"); process.exit(2); }
+    return;
+  }
+  FKEY = process.env.OPENAI_API_KEY || (await fleetSecret("openai-api-key"));
+  if (!FKEY) { console.error("Missing openai-api-key (env OPENAI_API_KEY or the fleet secret)."); process.exit(2); }
 }
 async function chatJson(messages, max_tokens) {
   const body = { messages, max_tokens, temperature: 0, response_format: { type: "json_object" } };
+  if (LLM_PROVIDER === "openai") {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${FKEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, model: MODEL }),
+    });
+    if (r.status === 429) { const ra = parseInt(r.headers.get("retry-after") || "0", 10); await sleep((ra > 0 ? ra * 1000 : 4000) + Math.floor(Math.random() * 1200)); return chatJson(messages, max_tokens); }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error("chat " + r.status + " " + JSON.stringify(j).slice(0, 160));
+    return { text: j.choices?.[0]?.message?.content || "", usage: j.usage || {} };
+  }
   for (const host of [FEP, "https://otchealth-foundry.cognitiveservices.azure.com"]) {
     if (!host) continue;
     try {
@@ -229,7 +374,15 @@ async function chatJson(messages, max_tokens) {
   throw new Error("enrich chat: no working Foundry endpoint");
 }
 const J = (t) => { try { return JSON.parse(t); } catch { try { return JSON.parse(String(t).slice(String(t).indexOf("{"), String(t).lastIndexOf("}") + 1)); } catch { return null; } } };
-function estCost(tin, tout) { return (tin / 1e6) * 0.4 + (tout / 1e6) * 1.6; } // gpt-4.1-mini illustrative rate, same as indexer.mjs's costFromUsage
+// Rates follow the PROVIDER, because the default model now does too. Reporting Azure gpt-4.1-mini
+// prices ($0.40/$1.60 per 1M) for an OpenAI gpt-4o-mini run ($0.15/$0.60) would overstate a backfill
+// by ~2.6x, and a cost line that quietly prices a different model than the one that ran is its own
+// small version of reporting something untrue. Illustrative either way -- confirm against live
+// pricing before committing real budget to a large backfill.
+function estCost(tin, tout) {
+  const [rin, rout] = LLM_PROVIDER === "openai" ? [0.15, 0.60] : [0.4, 1.6];
+  return (tin / 1e6) * rin + (tout / 1e6) * rout;
+}
 
 // ============================ room name (shared by every Azure AI Search AND OpenSearch call) ============================
 // Both backends use the IDENTICAL room/index-name convention (verified live on OpenSearch 2026-08-16:
@@ -382,7 +535,13 @@ ${text.slice(0, 7000)}`;
     parsed._usage = { tin: res.usage.prompt_tokens || 0, tout: res.usage.completion_tokens || 0 };
     return parsed;
   } catch (e) {
-    return { _parseFailed: true, _usage: { tin: 0, tout: 0 }, _err: String(e.message).slice(0, 140) };
+    // A THROW here is the model being UNREACHABLE (dead endpoint, 401, network), which is a
+    // categorically different thing from the model answering with unparseable text. Both used to
+    // collapse into `_parseFailed`, and the run then reported "flagged low-confidence" with exit 0
+    // and ~$0.000 -- so a totally dead LLM looked like a mild quality problem. That is how a
+    // backfill can appear to run to completion having enriched nothing. Keep them distinct: this
+    // sets _callFailed (with the real error preserved), and the caller counts and reports it.
+    return { _callFailed: true, _usage: { tin: 0, tout: 0 }, _err: String(e.message).slice(0, 200) };
   }
 }
 
@@ -524,10 +683,23 @@ async function enrichOne(r) {
     Object.assign(fields, MS.buildSegmentFields(llm.sensitive_segments));
   }
 
-  const lowConf = extraction_confidence === "low" || !!llm._parseFailed;
+  const lowConf = extraction_confidence === "low" || !!llm._parseFailed || !!llm._callFailed;
+  // A doc whose LLM call never completed is NOT enriched, and must not be recorded as if it were.
+  // Setting `enriched: true` with a matching sha256 makes needsEnrich() skip it forever, so a
+  // transient outage would permanently poison those rows: they would be "done" having learned
+  // nothing, and no future run would revisit them. Leave the enriched marker OFF on that path so
+  // the work is simply retried once the model is reachable again.
   const patch = {
-    enriched: true, enriched_sha256: r.sha256 || "", enriched_at: new Date().toISOString(), enrich_engine: MODEL,
-    enrich_review: lowConf, enrich_reasons: lowConf ? [llm._parseFailed ? "LLM JSON parse failed" : "low extraction confidence"] : [],
+    enriched: !llm._callFailed,
+    enriched_sha256: llm._callFailed ? "" : (r.sha256 || ""),
+    enriched_at: new Date().toISOString(),
+    enrich_engine: MODEL,
+    enrich_review: lowConf,
+    enrich_reasons: lowConf
+      ? [llm._callFailed
+          ? `LLM call failed (model unreachable, not a parse problem): ${llm._err || "unknown error"}`
+          : llm._parseFailed ? "LLM JSON parse failed" : "low extraction confidence"]
+      : [],
     ...fields,
   };
 
@@ -547,17 +719,19 @@ async function enrichOne(r) {
   const { pairs: metaTrimmed, bytes, overBudget } = MS.fitMetadataBudget(metaPairs);
   if (overBudget) console.error(`  [enrich] WARN ${r.path.slice(-60)}: metadata still ~${bytes}B after trim (Azure caps at 8000B) -- Azure may reject or truncate.`);
 
-  return { patch, usage: llm._usage || { tin: 0, tout: 0 }, meta: metaTrimmed };
+  return { patch, usage: llm._usage || { tin: 0, tout: 0 }, meta: metaTrimmed, callFailed: !!llm._callFailed, callErr: llm._err || "" };
 }
 
 // ============================ run command ============================
 async function cmdRun() {
   await resolveStorage();
-  await resolveFoundry();
+  await resolveLlm();
   if (BACKEND === "opensearch") await resolveOpenSearch();
   if (!(await acquireLock())) { console.error("[enrich] another execution holds a fresh lock for this room; exiting 0 (cron-safe, no double-run)."); return; }
   let n = 0, flagged = 0, tin = 0, tout = 0, budgetHit = false;
   let osSynced = 0, osChunks = 0, osErrors = 0;
+  // Counted separately from `flagged` so a dead model can never hide inside a quality statistic.
+  let llmCalls = 0, llmFailed = 0, firstLlmErr = "";
   try {
     const rows = await loadCatalog();
     let todo = rows.filter((r) => r.path && !r.path.startsWith("_") && r.sidecar && !r.err && (needsEnrich(r) || needsOsSync(r)));
@@ -578,8 +752,10 @@ async function cmdRun() {
           // see buildFieldsFromRow's doc comment).
           let fieldsForWrite;
           if (needsEnrich(r)) {
-            const { patch, usage, meta: azureMeta } = await enrichOne(r);
+            const { patch, usage, meta: azureMeta, callFailed, callErr } = await enrichOne(r);
             tin += usage.tin || 0; tout += usage.tout || 0;
+            llmCalls++;
+            if (callFailed) { llmFailed++; if (!firstLlmErr) firstLlmErr = callErr || "unknown"; }
             Object.assign(r, patch);
             if (patch.enrich_review) flagged++;
             fieldsForWrite = buildFieldsFromRow(r);
@@ -634,7 +810,26 @@ async function cmdRun() {
     const out = ["path,doc_type,extraction_confidence,reasons", ...flaggedRows.map((r) => [csv(r.path), csv(r.doc_type), csv(r.extraction_confidence), csv((r.enrich_reasons || []).join("; "))].join(","))].join("\n");
     await putBuf("_REVIEW/metadata-review-queue.csv", Buffer.from(out, "utf8"), "text/csv");
     const osSummary = BACKEND === "opensearch" ? `, opensearch: ${osSynced} doc(s) synced (${osChunks} chunk writes), ${osErrors} error(s)` : "";
-    console.log(`[enrich] +${n} docs processed (${flagged} flagged low-confidence -> _REVIEW/metadata-review-queue.csv), ~$${estCost(tin, tout).toFixed(3)}${osSummary}${budgetHit ? " (time budget hit -- resumable, rerun for the tail)" : ""}.`);
+    const llmSummary = llmCalls ? `, llm: ${llmCalls - llmFailed}/${llmCalls} calls ok` : "";
+    console.log(`[enrich] +${n} docs processed (${flagged} flagged low-confidence -> _REVIEW/metadata-review-queue.csv), ~$${estCost(tin, tout).toFixed(3)}${llmSummary}${osSummary}${budgetHit ? " (time budget hit -- resumable, rerun for the tail)" : ""}.`);
+
+    // EXIT NON-ZERO WHEN EVERY LLM CALL FAILED. Without this the run reports "+N docs processed"
+    // and exits 0 having enriched nothing, because each failure is caught per-document to stop one
+    // bad doc from killing a long batch. That per-doc tolerance is correct; what was missing is the
+    // AGGREGATE check. A scheduled job that cannot reach its model must go RED -- a green tick on a
+    // job that did nothing is exactly how the 2026-08-18 fleet outage stayed invisible for a day.
+    //
+    // Deliberately "all failed", not "any failed": one unreachable document in a 36,000-doc room is
+    // worth a warning but not worth failing the batch, whereas a 0% success rate is never anything
+    // but a broken dependency.
+    if (llmCalls > 0 && llmFailed === llmCalls) {
+      console.error(`[enrich] FATAL: all ${llmCalls} LLM call(s) failed -- the model is unreachable, ` +
+        `so nothing was actually enriched. provider=${LLM_PROVIDER} model=${MODEL}. First error: ${firstLlmErr}`);
+      process.exitCode = 1;
+    } else if (llmFailed > 0) {
+      console.error(`[enrich] WARN: ${llmFailed}/${llmCalls} LLM call(s) failed; those rows were NOT ` +
+        `marked enriched and will be retried on the next run. First error: ${firstLlmErr}`);
+    }
   } finally {
     await releaseLock();
   }

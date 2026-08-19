@@ -65,6 +65,19 @@ const MIRROR = Object.freeze({
   // can only ever say a write is PERMITTED, never WHERE the data is. Pick the bucket from an
   // observed object listing; use IAM only to confirm the access you need already exists.
   "otchealthcommons/company-journal":      { bucket: "otchealth-brain-dr-55c84f6b", keyPrefix: "otchealthcommons/company-journal/" },
+  // ALSO OBSERVED, NOT INFERRED (2026-08-19, added so enrich.mjs can read this room's source text
+  // on S3). Paginated ListObjectsV2 on otchealth-brain-dr-55c84f6b under the prefix below returned
+  // 32 objects: 12 real source documents (shopify-library/*, shopify/*, checkpoints/*,
+  // video-production/*), their 12 matching _TEXT/ sidecars, 6 _CATALOG/ files including
+  // catalog.jsonl, and 2 _REVIEW/ csvs. Newest object 2026-08-13.
+  //
+  // The disambiguating check matters as much as the positive one: the SAME listing against
+  // otchealth-finance-legal-dr-55c84f6b under prefix "otchealthcommerce/" returned ZERO objects,
+  // so this is not a case of the data existing in both places and the row picking one arbitrarily.
+  //
+  // Sizing note, because an earlier ledger entry of mine overstated it as roughly 3,000 objects:
+  // this room is TINY. Do not size an enrichment or backfill estimate off it.
+  "otchealthcommerce/commerce-source-docs": { bucket: "otchealth-brain-dr-55c84f6b", keyPrefix: "otchealthcommerce/commerce-source-docs/" },
 });
 
 /** Resolve (account, container) to its S3 mirror location, or null when unmapped. Never guesses. */
