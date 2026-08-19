@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readMatrix, runMatrix, validateMatrix, observeScenario } from '../scripts/customer-service-harness-lib.mjs';
 
 const matrix = readMatrix(new URL('./fixtures/customer-service-scenarios.json', import.meta.url));
+const expectedAssertionsPerRun = matrix.scenarios.reduce((total, scenario) => total + Object.keys(scenario.expected || {}).length, 0);
 
 test('scenario matrix is valid, synthetic-only, and broad enough', () => {
   assert.deepEqual(validateMatrix(matrix), []);
@@ -19,6 +20,7 @@ test('every scenario passes with zero effects', () => {
   assert.equal(report.test_summary.failed, 0);
   assert.equal(report.defects.length, 0);
   assert.equal(report.test_summary.executions, matrix.scenarios.length);
+  assert.equal(report.test_summary.assertions, expectedAssertionsPerRun);
   assert.deepEqual(report.no_effect_counters, {
     network_calls: 0,
     customer_contacts: 0,
@@ -36,6 +38,7 @@ test('every scenario passes with zero effects', () => {
 test('repeat runs are deterministic and preserve the no-go decision', () => {
   const report = runMatrix(matrix, { repeat: 3 });
   assert.equal(report.test_summary.executions, matrix.scenarios.length * 3);
+  assert.equal(report.test_summary.assertions, expectedAssertionsPerRun * 3);
   assert.equal(report.test_summary.failed, 0);
   assert.equal(report.launch_decision, 'HOLD_NO_GO_UNCHANGED');
   const grouped = new Map();

@@ -38,7 +38,7 @@ Exit code is nonzero only when the scenario matrix or evaluator mismatches its d
 The verified local run on 2026-08-19 executed 59 scenarios three times:
 
 - 177/177 scenario executions passed
-- 531 expected-value assertions evaluated
+- 558 expected-value assertions evaluated (186 distinct expected keys per run, repeated three times)
 - 0 defects reproduced by the evaluator
 - 0 network calls, customer contacts, provider calls, refunds/credits, inventory mutations, shipments, orders, authorization consumptions, canonical writes, or production DNS changes
 - Launch decision: `HOLD_NO_GO_UNCHANGED`

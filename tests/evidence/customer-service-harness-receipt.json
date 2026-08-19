@@ -1,6 +1,6 @@
 {
   "report_path": "tests/evidence/customer-service-harness-report.json",
-  "report_sha256": "bbe3eefdf7cd85c8acad7b4f2d130453b281f708882ce6a14518dabe342b3fa4",
+  "report_sha256": "cda29d89370594a59268de3c7ccc2440e4bfcde1fe19f62d120dfd5c8e5c677a",
   "matrix_file_sha256": "1ec0c09152dc69f7b87d079040d2638f5675dd693d97a03c5dd9324ee4134a4d",
   "runner_file_sha256": "ec6a38bc56ea824f20bba4c62fed316fc7642926c8549347faa94a92d59f2e3b",
   "overall": "PASS_SYNTHETIC_EVIDENCE_ONLY",
@@ -10,7 +10,7 @@
     "executions": 177,
     "passed": 177,
     "failed": 0,
-    "assertions": 531
+    "assertions": 558
   },
   "no_effect_counters": {
     "network_calls": 0,

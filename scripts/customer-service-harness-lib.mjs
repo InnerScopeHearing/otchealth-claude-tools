@@ -303,8 +303,10 @@ export function runMatrix(matrix, { repeat = 1 } = {}) {
   const startedAt = new Date().toISOString();
   const results = [];
   const defects = [];
+  let assertions = 0;
   for (let round = 1; round <= repeat; round += 1) {
     for (const scenario of matrix.scenarios) {
+      assertions += Object.keys(scenario.expected || {}).length;
       const observation = observeScenario(scenario);
       const mismatches = compareExpected(observation, scenario.expected);
       const passed = mismatches.length === 0 && observation.effects && EFFECT_KEYS.every((key) => observation.effects[key] === 0);
@@ -347,7 +349,7 @@ export function runMatrix(matrix, { repeat = 1 } = {}) {
       executions: results.length,
       passed: passCount,
       failed: results.length - passCount,
-      assertions: results.length * Object.keys(matrix.scenarios[0]?.expected || {}).length
+      assertions
     },
     authority_floor: matrix.controls,
     no_effect_counters: Object.fromEntries(EFFECT_KEYS.map((key) => [key, 0])),
