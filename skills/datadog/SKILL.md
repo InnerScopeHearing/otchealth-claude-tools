@@ -45,6 +45,17 @@ or directly from Secret Manager via the claude-driver SA. Keys are flagged ROTAT
   Azure infra are fine to instrument now.
 - FourVault is COPPA: no kid-screen telemetry to Datadog.
 
+## Importable metric helper: `dd-emit.mjs` (2026-08-18)
+`datadog.mjs` is a CLI entrypoint (top-level side effects on import — do not `import` it from another
+script, shell out to it via `node datadog.mjs metric ...` instead, or use `dd-emit.mjs`). For a script
+that wants to submit its OWN metrics programmatically (an emitter job, not an interactive CLI use),
+import `ddMetric(name, value, {tags, type, attempts})` from `skills/datadog/dd-emit.mjs`: it retries
+transient failures and ALWAYS returns `{ok, error?}` — it never throws and never silently drops a
+failed submission (the exact bug both `dd-fleet.mjs` and the old `xero-token.mjs` local `ddEmit()`
+have; a monitor watching a metric that silently stopped emitting looks like healthy silence). Used by
+`skills/token-keeper/token-age-metrics.mjs` and `skills/fleet-medic/medic.mjs`'s
+`emitAgentErrorMetrics()`.
+
 ## APM / logs rollout (per non-PHI backend, follow-on)
 Install `dd-trace` in the backend (Flatstick API, the gateway, etc.), set `DD_API_KEY`,
 `DD_SITE`, `DD_ENV`, `DD_SERVICE`, `DD_VERSION`, enable log collection. Tag everything
