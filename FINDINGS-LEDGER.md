@@ -377,13 +377,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-21T04:32:16.951Z
 - **Closed:** 2026-08-21T06:28:22.311Z
 
-### finding:FND-20260821-b74d severity:high status:open | eval-runner.mjs writes the gateway bearer token into CloudWatch: failing curl commands are echoed with the Authorization header intact
+### finding:FND-20260821-b74d severity:high status:fixed | eval-runner.mjs writes the gateway bearer token into CloudWatch: failing curl commands are echoed with the Authorization header intact
 
 - **Source audit doc:** CTO fleet sweep 2026-08-21
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T05:37:57.534Z
-- **Closed:** (open)
+- **Closed:** 2026-08-21T06:32:42.647Z
 
 ### finding:FND-20260821-97e9 severity:high status:open | 3 deep-* jobs (deep-finance, deep-legal-company, deep-legal-personal) show State=ENABLED but carry cron(0 5 1 1 ? *) = 05:00 on Jan 1, i.e. fire once a year
 
