@@ -369,13 +369,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-21T00:26:22.486Z
 - **Closed:** 2026-08-21T03:10:16.559Z
 
-### finding:FND-20260821-0b59 severity:medium status:open | flatstick iOS MinimumOSVersion is 13.0; Apple rejects uploads below 15.0 from Spring 2027 (altool warning 90068)
+### finding:FND-20260821-0b59 severity:medium status:fixed | flatstick iOS MinimumOSVersion is 13.0; Apple rejects uploads below 15.0 from Spring 2027 (altool warning 90068)
 
 - **Source audit doc:** flatstick ios-depot run 32446496110, CTO session 2026-08-21
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T04:32:16.951Z
-- **Closed:** (open)
+- **Closed:** 2026-08-21T06:28:22.311Z
 
 ### finding:FND-20260821-b74d severity:high status:open | eval-runner.mjs writes the gateway bearer token into CloudWatch: failing curl commands are echoed with the Authorization header intact
 
