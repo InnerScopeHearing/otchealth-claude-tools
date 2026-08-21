@@ -425,10 +425,10 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-21T06:17:58.714Z
 - **Closed:** (open)
 
-### finding:FND-20260821-5934 severity:critical status:open | Live PERPLEXITY_CONNECTOR_TOKEN (production credential, authenticates the real Perplexity connector) was leaked into CloudWatch daily via FND-20260821-b74d, because eval-runner.mjs's GATEWAY_BEARER was an undocumented byte-identical copy of it, not a dedicated eval credential -- decoupling fix built (otchealth-mcp-server PR #256, EVAL_AGENT_TOKEN) but the already-exposed Perplexity value itself is NOT yet rotated and remains a live, valid credential exposed in retained logs
+### finding:FND-20260821-5934 severity:critical status:fixed | Live PERPLEXITY_CONNECTOR_TOKEN (production credential, authenticates the real Perplexity connector) was leaked into CloudWatch daily via FND-20260821-b74d, because eval-runner.mjs's GATEWAY_BEARER was an undocumented byte-identical copy of it, not a dedicated eval credential -- decoupling fix built (otchealth-mcp-server PR #256, EVAL_AGENT_TOKEN) but the already-exposed Perplexity value itself is NOT yet rotated and remains a live, valid credential exposed in retained logs
 
 - **Source audit doc:** CTO fleet sweep 2026-08-21, subagent 'Investigate and rotate the eval gateway bearer' + independent CTO verification (SHA-256 hash match confirmed between /otchealth/job/otchealth-mcp-eval/GATEWAY_BEARER and /otchealth/gw/PERPLEXITY_CONNECTOR_TOKEN; confirmed the live otchealth-gateway:21 ECS task definition sources that exact SSM parameter for its real Perplexity auth)
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T06:23:39.854Z
-- **Closed:** (open)
+- **Closed:** 2026-08-21T06:32:45.291Z
