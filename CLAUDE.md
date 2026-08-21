@@ -298,3 +298,63 @@ makes our AI OS special is turned on and working properly." Findings + fixes, al
   first, then every diff reviewed line-by-line and independently tested before merge -- caught
   zero errors across all batches, but the review step is not optional even when a subagent's own
   report looks clean.
+
+## Fleet-wide durable lessons from the Azure retirement + AWS migration (2026-08-19/21)
+
+This file was itself 8 days stale against its own 7-day continuity-canary SLO when this entry was
+written -- flagging that plainly rather than quietly fixing it, since a stale operating-facts file
+is exactly the failure class this section exists to prevent. The lessons below are the ones worth
+carrying to ANY repo or script in the portfolio, not just the ones they were found in; per-app/
+per-workstream detail lives in `otchealth-cto/CLAUDE.md`'s dated log and the regression-ledger, not
+duplicated here.
+
+- **Azure Foundry is a dead dependency wherever it still appears, not just in the two places
+  already fixed.** `enrich.mjs` (the entity/graph backfill) and `skills/doc-indexer/deep-pass.mjs`
+  both called Azure Foundry for their LLM step; Foundry now returns HTTP 401. `enrich.mjs` is
+  fixed (ported to OpenAI direct, see `otchealth-cto/CLAUDE.md`'s 2026-08-19 entry).
+  `FND-20260819-c9bb` (open) lists SIX more fleet skills with the identical hard-dependency:
+  `critic-pass`, `agent-evals` (run + selfrepair), `focus-group-loop`, `recall-evals`
+  (mine-cases + mine-hard-negatives). Symptom is a silent-success class, not a loud failure: the
+  auto critic posted "could not run cleanly (fail-safe approve)" and reported its own check
+  SUCCESS on real PRs, so a review appears to have happened and did not. Before adding or trusting
+  ANY quality-LLM caller in this toolkit, grep it for `azure-foundry`/`AZURE_FOUNDRY` first.
+- **An ECR repository lifecycle policy with `tagStatus: "any"` expires TAGGED images too, not
+  only untagged ones.** `{"keep last N, tagStatus: any"}` puts every pinned image tag anywhere in
+  the fleet on an N-deploy fuse -- the Nth deploy after a tag was pinned silently deletes it from
+  the registry. This killed `otchealth-job-otchealth-mcp-eval` for at least 3 days: EventBridge
+  Scheduler fired correctly, `ecs:RunTask` returned SUCCESS in CloudTrail (the API call genuinely
+  succeeds), and the task then failed at image pull before the container ever started, writing
+  ZERO lines to CloudWatch. Schedule-liveness monitoring (`nightly-schedule-canary`) cannot catch
+  this -- the schedule DID fire. Prefer pinning by immutable digest over mutable tag where the
+  caller supports it; where a tag must be used, check `aws-image-canary` (built 2026-08-21,
+  `skills/aws-image-canary/`) before trusting an old pinned reference is still live.
+- **The RDS "master" user is not a Postgres superuser, and PG16 role membership is not the same
+  as privilege.** Creating a role as the RDS master only grants `ADMIN OPTION` on it (PG16 split
+  membership into INHERIT/SET/ADMIN), which confers the ABILITY to administer the role, not the
+  ability to act with its privileges. `GRANT ... TO role; SET ROLE role;` (then `RESET ROLE`) is
+  required before `ALTER DEFAULT PRIVILEGES` or any other privileged statement will actually take
+  effect as that role. Hit on Flatstick's first real `bootstrap-db` run; will bite any other app's
+  first RDS bootstrap identically.
+- **A permissive IaC default sitting beside a restrictive rule WINS, because security-group rules
+  are a union, not an override chain.** CDK's `addListener()` defaults `open: true`, which adds
+  `0.0.0.0/0` regardless of whatever narrower rule you also attach. Always pass `open: false`
+  explicitly and verify the resulting rule set by reading it back (a direct curl against the
+  restricted resource, expecting a timeout, plus a control host that should succeed) rather than
+  trusting the code you wrote expresses the restriction you intended.
+- **Never let a raw `Error.message` (or an `execFile`/curl failure) reach a log or a stored
+  artifact unredacted.** `execFile`'s rejection embeds the ENTIRE command line it tried to run --
+  including any `-H 'Authorization: Bearer <token>'` header -- in `.message`. `eval-runner.mjs`
+  printed that straight to stdout and persisted it into a baseline JSON artifact on every timeout,
+  so a scheduled job pointed at a dead host wrote a live gateway bearer into CloudWatch once per
+  failing case, every day, for days. Fixed via `src/eval/redact.mjs` (otchealth-mcp-server PR
+  #256) -- redact at the point of OUTPUT (never trust that a secret can be kept off argv), apply
+  both an exact-value pattern AND a shape pattern (`Bearer <...>`) so a rotated or different
+  credential is still caught, and add a source-scanning regression test that fails if a future
+  edit reintroduces a raw `${err.message}` interpolation next to it.
+- **"RunTask succeeded" and "the task did something" are different claims, and the gap between
+  them is invisible from the outside by default.** This is the general form of the ECR-fuse
+  lesson above, but it is not specific to ECR -- any scheduled-task failure mode that happens
+  AFTER the orchestrator's own API call succeeds (image pull, secret resolution, a crash before
+  the first log line) looks identical to a healthy job from CloudTrail/EventBridge's point of
+  view. Don't infer "it ran" from "the API said success"; check the actual downstream artifact or
+  log-stream freshness.
