@@ -360,3 +360,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T00:14:59.698Z
 - **Closed:** (open)
+
+### finding:FND-20260821-ed47 severity:high status:open | flatstick: unused GitHubActions-Flatstick-NonProd OIDC role gives ANY branch a path to AdministratorAccess on account 301001539500, bypassing the production reviewer gate
+
+- **Source audit doc:** CTO session 2026-08-21, flatstick AWS deploy
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-21T00:26:22.486Z
+- **Closed:** (open)
