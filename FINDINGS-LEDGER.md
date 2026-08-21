@@ -376,3 +376,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T04:32:16.951Z
 - **Closed:** (open)
+
+### finding:FND-20260821-b74d severity:high status:open | eval-runner.mjs writes the gateway bearer token into CloudWatch: failing curl commands are echoed with the Authorization header intact
+
+- **Source audit doc:** CTO fleet sweep 2026-08-21
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-21T05:37:57.534Z
+- **Closed:** (open)
