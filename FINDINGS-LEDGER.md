@@ -416,3 +416,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T06:16:25.323Z
 - **Closed:** (open)
+
+### finding:FND-20260821-e303 severity:medium status:open | Gateway Content Safety Prompt Shields (auto-guard.ts inboundShield) never actually run despite SHIELD_MODE=report since 2026-07-02; endpoint IS reachable (not the dead-Azure-subscription class), so root cause is auth/config on the gateway's own client, fail-open masks it silently
+
+- **Source audit doc:** CTO fleet sweep 2026-08-21 (subagent investigation of FND-20260821-12b0, correlated with a live reachability check: cs-otchealth.cognitiveservices.azure.com returns HTTP 200 base / 401 real-API-without-key, confirmed live by CTO)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-21T06:17:58.714Z
+- **Closed:** (open)
