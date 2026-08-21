@@ -384,3 +384,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T05:37:57.534Z
 - **Closed:** (open)
+
+### finding:FND-20260821-97e9 severity:high status:open | 3 deep-* jobs (deep-finance, deep-legal-company, deep-legal-personal) show State=ENABLED but carry cron(0 5 1 1 ? *) = 05:00 on Jan 1, i.e. fire once a year
+
+- **Source audit doc:** CTO fleet sweep 2026-08-21
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-21T05:37:59.928Z
+- **Closed:** (open)
