@@ -400,3 +400,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T05:38:02.410Z
 - **Closed:** (open)
+
+### finding:FND-20260821-12b0 severity:medium status:open | mcp-eval guardrail-01/02/03 FAIL ('attack content may have leaked through'); score sits exactly on the 70% threshold so one more regression trips the gate
+
+- **Source audit doc:** CTO fleet sweep 2026-08-21
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-21T05:38:04.792Z
+- **Closed:** (open)
