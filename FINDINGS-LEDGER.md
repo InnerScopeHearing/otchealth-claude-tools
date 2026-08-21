@@ -353,13 +353,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-19T07:31:57.288Z
 - **Closed:** (open)
 
-### finding:FND-20260821-7eb1 severity:low status:open | flatstick infra/aws (CDK) is outside the pnpm workspace, so CI never typechecks it
+### finding:FND-20260821-7eb1 severity:low status:fixed | flatstick infra/aws (CDK) is outside the pnpm workspace, so CI never typechecks it
 
 - **Source audit doc:** flatstick PR #248 / CTO session 2026-08-21
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T00:14:59.698Z
-- **Closed:** (open)
+- **Closed:** 2026-08-21T06:28:24.887Z
 
 ### finding:FND-20260821-ed47 severity:high status:fixed | flatstick: unused GitHubActions-Flatstick-NonProd OIDC role gives ANY branch a path to AdministratorAccess on account 301001539500, bypassing the production reviewer gate
 
