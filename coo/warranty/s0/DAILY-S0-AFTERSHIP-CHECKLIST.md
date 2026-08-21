@@ -31,6 +31,8 @@ node coo/warranty/s0/aftership-s0-probe.mjs \
 
 The command exits nonzero on HOLD. `--allow-hold` is for evidence capture only and must not be used by a production monitor.
 
+The launch-blocking automation is `.github/workflows/warranty-aftership-s0.yml`. It runs deterministic tests plus the live anonymous probe on relevant pull requests, a daily schedule, and manual dispatch; uploads JSON even when the probe fails; and then fails the job if live state is not clean. A successful run is required evidence but grants no automatic launch authority.
+
 ## Public endpoints checked
 
 1. `https://hearingassist.aftership.com/`
@@ -46,10 +48,12 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 |---|---|---|---|
 | Visible public access | Page visibly says Page not found; no order lookup or return action | S0 launch hold | Warranty Operations Lead |
 | Runtime access | `returns_page_status=unpublished`, access status `denied`, code `returns_page_not_published` | S0 launch hold | Care Team admin 11167146 |
+| Runtime projection timestamp | `returns_page_setting_updated_at` exists and parses; evidence is newer than the last Admin/vendor change | S0 launch hold | Warranty Operations Lead |
+| Cross-domain projection parity | Both default domains and both paths expose one identical normalized runtime projection fingerprint | S0 launch hold | Warranty Operations Lead |
 | Delivery-date dependency | Authorized delivery-date source exists and its procurement/scope gate is signed; for current vendor this means approved AfterShip Tracking or an approved least-privilege alternative | S0 launch hold | Matt + Operations + Privacy/Security + Finance |
 | Window basis | Public runtime equals Admin-approved `delivery_date`; `order_date` is never accepted as a fallback | S0 launch hold | Care Team admin 11167146 |
 | Window duration | Public/runtime eligibility and policy consistently use 75 days from delivery | S0 launch hold | Care + Counsel + Operations |
-| Policy summary | Approved claims-checked 75-day summary is present | S0 launch hold | Care/Communications |
+| Policy summary | Runtime translation exactly equals the approved claims-checked 75-day summary; extra editor instructions or suffixes fail | S0 launch hold | Care/Communications |
 | Forbidden copy | No 30-day, unused/undamaged, original-packaging, resellable, discounted-item, seven-day or other superseded condition | S0 launch hold | Care/Communications + Legal |
 | Policy URL | Exact `https://otchealthmart.com/policies/refund-policy`, no punctuation or redirect drift | S0 launch hold | Care Team admin 11167146 |
 | Search indexing | Unpublished portal blocks search indexing | S1 before pilot; S0 before launch | Care Team admin 11167146 |
@@ -68,7 +72,8 @@ Any custom hostname, app proxy or new vendor domain must be added before it can 
 6. Do not correct drift automatically. Draft the exact bounded change, obtain the named authorization, apply once, and re-read all five planes.
 7. If Delivery date requires a new app or paid dependency, stop at `AFTERSHIP-TRACKING-PROCUREMENT-SCOPE-GATE.md`; no install, trial, scope grant or spend occurs without explicit owner approval.
 8. Never substitute order date for delivery date. Missing dependency or delivery data is HOLD, not approximation.
-9. Require two consecutive clean daily readbacks after the final correction before a launch packet may cite this gate as ready.
+9. Record the `warranty-aftership-s0` workflow run ID and retained receipt in the launch packet; missing, skipped, stale or failed is HOLD.
+10. Require two consecutive clean daily readbacks after the final correction before a launch packet may cite this gate as ready.
 
 ## Current baseline, 2026-08-08
 

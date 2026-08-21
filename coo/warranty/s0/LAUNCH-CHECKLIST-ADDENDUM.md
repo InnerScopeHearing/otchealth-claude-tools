@@ -14,9 +14,11 @@ AfterShip Returns cannot persist Delivery date basis without AfterShip Tracking.
 - [ ] Inventory every AfterShip public hostname, default domain, custom hostname, app proxy and policy path.
 - [x] Anonymous readback of each domain/path shows Page not found and no order lookup, gift return, policy action or return-start action.
 - [x] Runtime returns page status is unpublished and access is denied with `returns_page_not_published`.
+- [x] Runtime `returns_page_setting_updated_at` is parseable and newer than the dependency/policy change.
+- [x] Both default domains and both checked paths expose one identical normalized runtime projection fingerprint.
 - [x] An authorized Delivery-date data source exists. AfterShip Tracking was scope-reviewed and installed under Matt authorization on Free 50 Monthly at $0 with auto-upgrade OFF.
 - [x] Runtime `return_window_base_on` equals Admin-approved `delivery_date`; no order-date approximation or fulfillment fallback exists.
-- [x] Runtime translated policy uses 75 days from delivery.
+- [x] Runtime translated policy exactly equals the approved 75-days-from-delivery summary, with no editor suffix or stale variation.
 - [ ] No stale 30-day, purchase-date, unused/undamaged, original-packaging, resellable, discounted-item or seven-day condition survives in any runtime field, translation, FAQ, template or link.
 - [x] Policy URL exactly equals `https://otchealthmart.com/policies/refund-policy` without punctuation drift.
 - [ ] Unpublished portal blocks search indexing.
@@ -26,6 +28,7 @@ AfterShip Returns cannot persist Delivery date basis without AfterShip Tracking.
 - [x] Seven requested notification routes are assigned under solo-operator correction: CRO S0, CTO independent-channel backup, COO/Care content, COO ordinary release, Matt-only adverse and Safety/recall authority with two-channel alerts and no agent decision/closure, CTO/Security wrong-recipient incident owner.
 - [ ] Substantive Safety, legal, staffing, Finance and Appeals authority evidence remains open; role routing does not close those gates.
 - [x] Post-Tracking probe evidence is newer than 24 hours and newer than the dependency/policy change.
+- [ ] The `warranty-aftership-s0` workflow has a successful exact-head run and retained JSON artifact; missing or failed is HOLD.
 - [ ] Two consecutive clean daily readbacks exist after the final correction.
 
 ## Additional evidence before public launch

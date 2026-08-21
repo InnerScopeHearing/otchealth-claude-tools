@@ -1,0 +1,63 @@
+name: warranty-aftership-s0
+
+on:
+  pull_request:
+    paths:
+      - 'coo/warranty/s0/**'
+      - '.github/workflows/warranty-aftership-s0.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 15 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warranty-aftership-s0
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: launch-blocking public-domain and runtime smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install Node 24
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24.14.0'
+
+      - name: Run deterministic probe tests
+        run: node --test coo/warranty/s0/aftership-s0.test.mjs
+
+      - name: Run live anonymous launch smoke
+        id: live
+        continue-on-error: true
+        run: |
+          node coo/warranty/s0/aftership-s0-probe.mjs \
+            --output coo/warranty/s0/evidence/aftership-s0-workflow.json
+
+      - name: Preserve smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: warranty-aftership-s0-${{ github.run_id }}
+          path: coo/warranty/s0/evidence/aftership-s0-workflow.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce launch block
+        if: always()
+        env:
+          LIVE_OUTCOME: ${{ steps.live.outcome }}
+        run: |
+          if [ "$LIVE_OUTCOME" != "success" ]; then
+            echo "AfterShip launch smoke is not clean. Publication and customer traffic remain blocked."
+            exit 1
+          fi
+          echo "AfterShip launch smoke is clean, but this workflow grants no automatic launch authority."
