@@ -392,3 +392,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T05:37:59.928Z
 - **Closed:** (open)
+
+### finding:FND-20260821-29e2 severity:medium status:open | otchealth-mcp-gateway ECR lifecycle is 'keep last 10, tagStatus any', so every pinned image tag is on a 10-deploy fuse; this already silently killed otchealth-mcp-eval
+
+- **Source audit doc:** CTO fleet sweep 2026-08-21
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-21T05:38:02.410Z
+- **Closed:** (open)
