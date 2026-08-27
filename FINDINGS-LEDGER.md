@@ -576,3 +576,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T19:24:26.015Z
 - **Closed:** (open)
+
+### finding:FND-20260827-98d2 severity:high status:open | FourVault restore path: restore pg-dumps/fourvault-2026-08-04.sql.gz (15KB gz) into the FourVault backend rebuild target, assess the Aug 4-13 tail loss window (worst case 9 days), and inventory row counts in the restore environment (kids-app data: counts only, never content in logs). Read access to the DR bucket needs the DR-writer identity or a scoped grant
+
+- **Source audit doc:** live S3 listing 2026-08-27 (probe4/probe6), supersedes FND-20260827-02c2
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:49:31.673Z
+- **Closed:** (open)
