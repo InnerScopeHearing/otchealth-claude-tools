@@ -488,3 +488,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T19:00:12.839Z
 - **Closed:** (open)
+
+### finding:FND-20260827-d47b severity:high status:open | Gateway tail: legal_blob_put('personal') writes to dead Azure; heygen artifact-store Azure-only while HeyGen writes enabled; HEYGEN_APPROVAL_BROKER_URL dead (approval lane fail-closed); 37 n8n_* + 13 azure_* tools dead surface; prune dead AZURE_*/FOUNDRY_*/COSMOS_* env at next deploy
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:16.109Z
+- **Closed:** (open)
