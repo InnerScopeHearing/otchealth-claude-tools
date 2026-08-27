@@ -512,3 +512,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T19:00:21.836Z
 - **Closed:** (open)
+
+### finding:FND-20260827-e4e3 severity:high status:open | doc-indexer push-search still requires dead Azure Search: librarian ECS jobs run but room freshness rides on enrich-only; add first-class OpenSearch push-search backend and make it default
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:24.807Z
+- **Closed:** (open)
