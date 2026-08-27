@@ -552,3 +552,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T19:00:36.840Z
 - **Closed:** (open)
+
+### finding:FND-20260827-2ed6 severity:medium status:open | apps/otchealth-os-chat + m365-agent-bridge + heygen approval broker: Azure-native services, retire-or-rebuild decision needed (os.otchealth.app DNS already removed)
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:39.620Z
+- **Closed:** (open)
