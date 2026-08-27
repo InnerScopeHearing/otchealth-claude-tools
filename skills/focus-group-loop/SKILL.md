@@ -38,9 +38,9 @@ agent, BEFORE the round:
 3. Runs the automated checks that catch what humans miss: broken links + console errors + `axe-core`
    a11y + layout overflow/wrapping (use the `web-qa` / Playwright skills) and append the findings to
    the pitch so the panel reacts to them too.
-Pass that dir as `--screens`. gpt-4o (vision) then critiques actual alignment, typography, spacing,
-contrast, wrapping/overflow, and cheap-looking elements. (Fully-autonomous click-through is the
-computer-use extension, initiative #4; screenshots + automated checks are the strong v1.)
+Pass that dir as `--screens`. A gpt-4o-class vision model then critiques actual alignment, typography,
+spacing, contrast, wrapping/overflow, and cheap-looking elements. (Fully-autonomous click-through is
+the computer-use extension, initiative #4; screenshots + automated checks are the strong v1.)
 
 ## The AUTO LOOP (run until 90%)
 1. **Round N:** `fgl.mjs round ... --round N --prior <N-1> --catalog`.
@@ -61,5 +61,7 @@ not just this one app. (Heavy artifacts can also be staged to a `focus-group` da
 librarians; the kb-memory channel is the default.)
 
 ## Cost / model
-Azure OpenAI **gpt-4o** (vision, credit-funded), 20 calls/round. Set `FGL_MODEL` to override. Point
-at Claude when an `anthropic-api-key` is added for higher-fidelity personas.
+A gpt-4o-class vision model, credit-funded, 20 calls/round. Provider defaults to OpenAI-direct
+(`LLM_PROVIDER=openai`; Azure Foundry is permanently retired — `LLM_PROVIDER=foundry` selects the
+original Foundry-then-legacy path if that estate ever returns). Set `FGL_MODEL` to override the
+model, or point at Claude when an `anthropic-api-key` is added for higher-fidelity personas.

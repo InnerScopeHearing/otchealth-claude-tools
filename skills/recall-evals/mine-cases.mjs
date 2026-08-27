@@ -11,6 +11,13 @@
 // (a meaningful tripwire, not noise). Non-PHI: any fact/query/expect matching the PHI/MNPI deny regex
 // is skipped. Re-runnable to grow the set; merges with (never drops) the existing golden set.
 //
+// LLM_PROVIDER (2026-08-27, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
+// Foundry estate callChat() called exclusively) is permanently deleted -- verified 401 forever, not a
+// transient outage. Default flips to 'openai' (api.openai.com, model ids from
+// setup/model-routing.mjs's OPENAI_TIERS -- same 'standard' tier key, so MINE_MODEL still means the
+// same override regardless of provider). LLM_PROVIDER=foundry/azure keeps the original Foundry path
+// selectable, one env var away, if that estate is ever re-provisioned.
+//
 // Usage (creds via kvSecret / AZURE_SP or run.sh):
 //   node mine-cases.mjs --agent commons --target 100 --out golden-set.json
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -18,10 +25,12 @@ import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { TIERS, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, chatBody, resolveTier } from "../../setup/model-routing.mjs";
 import { hitAtK, groupHitLines } from "./scoring.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 const MEM = join(HERE, "..", "kb-memory", "mem.mjs");
 const SEMANTIC = join(HERE, "..", "kb-memory", "semantic.mjs");
 const argv = process.argv.slice(2);
@@ -57,12 +66,22 @@ function corpus() {
 }
 
 async function callChat(system, user) {
-  // Foundry, not the legacy azure-openai resource: TIERS.standard.deployment ('gpt-4.1') only exists on
-  // Foundry (2,000K TPM GlobalStandard); the legacy resource's gpt-4o deployment is capped at 50K TPM
-  // with zero headroom (see setup/model-routing.mjs LEGACY_STANDARD).
+  if (LLM_PROVIDER === "openai") {
+    const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+    if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
+    const dep = process.env.MINE_MODEL || resolveTier("standard", "openai").deployment;
+    const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 1500, jsonMode: true }), model: dep };
+    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    return (await r.json()).choices?.[0]?.message?.content || "";
+  }
+  // Azure/Foundry path, unchanged, selectable via LLM_PROVIDER=foundry|azure. Foundry, not the legacy
+  // azure-openai resource: TIERS.standard.deployment ('gpt-4.1') only exists on Foundry (2,000K TPM
+  // GlobalStandard); the legacy resource's gpt-4o deployment is capped at 50K TPM with zero headroom
+  // (see setup/model-routing.mjs LEGACY_STANDARD).
   const ep = (await kvSecret("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
   const key = await kvSecret("azure-foundry-key");
-  const dep = process.env.MINE_MODEL || TIERS.standard.deployment;
+  const dep = process.env.MINE_MODEL || resolveTier("standard", "azure").deployment;
   if (!ep || !key) throw new Error("missing azure-foundry endpoint/key");
   const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 1500, jsonMode: true });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-08-01-preview`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });

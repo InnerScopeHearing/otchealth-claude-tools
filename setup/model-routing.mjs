@@ -41,6 +41,26 @@ export const TIERS = {
 // name, NOT TIERS.standard.deployment (the legacy resource has no 'gpt-4.1' deployment).
 export const LEGACY_STANDARD = { deployment: 'gpt-4o', modelFamily: 'chat' };
 
+// OPENAI_TIERS (2026-08-27, Azure Foundry retirement port): the OpenAI-provider counterpart to TIERS
+// above. Azure subscription 55c84f6b (the whole Foundry estate) is permanently deleted, so every
+// caller that resolved a tier for a Foundry deployment needs an OpenAI model id instead. This reuses
+// the SAME deployment-name strings as the Foundry tiers wherever OpenAI serves an identical model id
+// -- 'gpt-4.1' and 'gpt-5.1' are both real OpenAI models, not just Azure deployment aliases -- which is
+// the exact bet skills/company-brain/brain.mjs already makes and has proven live in production. Putting
+// it here, once, means every quality-LLM caller (critic-pass, agent-evals, focus-group-loop,
+// recall-evals, and company-brain before them) resolves "which model, on OpenAI" from ONE place
+// instead of a hardcoded literal re-typed per file -- the exact drift class that let a stale
+// gpt-4.1-mini fallback linger across three skills before setup/model-routing.mjs existed (see this
+// file's own header). 'cheap' does NOT reuse TIERS.cheap ('gpt-4.1-mini', an Azure deployment name):
+// OpenAI's equivalent commodity model for bulk extraction/classification is 'gpt-4o-mini'. The
+// gpt-4.1-mini-for-quality-summarization ban this file documents applies to 'quality'/'standard' only;
+// it never applied to 'cheap' on either provider.
+export const OPENAI_TIERS = {
+  quality: { deployment: TIERS.quality.deployment, modelFamily: TIERS.quality.modelFamily },   // gpt-5.1
+  standard: { deployment: TIERS.standard.deployment, modelFamily: TIERS.standard.modelFamily }, // gpt-4.1
+  cheap: { deployment: 'gpt-4o-mini', modelFamily: 'chat' },
+};
+
 // Reasoning-family deployments (gpt-5.x, o-series) reject max_tokens + a non-default temperature;
 // they require max_completion_tokens and no temperature override. Chat-family (gpt-4o, gpt-4.1-mini,
 // etc.) keeps the classic max_tokens + temperature shape. Mirrors otchealth-mcp-server's foundry.ts.
@@ -53,14 +73,19 @@ export function modelFamilyOf(deployment) {
 
 /**
  * Resolve a tier name (or a raw deployment string) to { deployment, modelFamily }.
- * - A known tier key ('quality' | 'standard' | 'cheap') returns that tier's default deployment.
+ * - A known tier key ('quality' | 'standard' | 'cheap') returns that tier's default deployment, from
+ *   TIERS (provider omitted or 'azure'/'foundry') or OPENAI_TIERS (provider 'openai').
  * - Anything else is treated as an explicit deployment override (e.g. an env-var value a caller
- *   already resolved, such as BRAIN_MODEL / FGL_MODEL / AGENT_MODEL); its family is inferred.
+ *   already resolved, such as BRAIN_MODEL / FGL_MODEL / AGENT_MODEL / CRITIC_MODEL); its family is
+ *   inferred and `provider` has no effect.
+ * `provider` defaults to 'azure' so every pre-existing single-argument call site (resolveTier('standard'))
+ * is byte-for-byte unchanged; pass 'openai' explicitly to resolve against OPENAI_TIERS instead.
  */
-export function resolveTier(tierOrDeployment) {
-  const known = TIERS[tierOrDeployment];
+export function resolveTier(tierOrDeployment, provider = 'azure') {
+  const table = String(provider || 'azure').toLowerCase() === 'openai' ? OPENAI_TIERS : TIERS;
+  const known = table[tierOrDeployment];
   if (known) return { deployment: known.deployment, modelFamily: known.modelFamily };
-  const deployment = tierOrDeployment || TIERS.standard.deployment;
+  const deployment = tierOrDeployment || table.standard.deployment;
   return { deployment, modelFamily: modelFamilyOf(deployment) };
 }
 
@@ -84,4 +109,4 @@ export function chatBody(deployment, { messages, maxTokens = 900, temperature, j
   return body;
 }
 
-export default { TIERS, modelFamilyOf, resolveTier, chatBody };
+export default { TIERS, OPENAI_TIERS, LEGACY_STANDARD, modelFamilyOf, resolveTier, chatBody };

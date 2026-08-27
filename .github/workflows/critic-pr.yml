@@ -4,13 +4,19 @@
 # autonomous-run session (autonomous-run.yml) opens DRAFT PRs from claude/* branches but is deliberately
 # LEAST-PRIVILEGE (only CLAUDE_CODE_OAUTH_TOKEN + the repo GITHUB_TOKEN, NO Secret Manager), so it cannot
 # run the real critic model call itself. This workflow runs that critic HERE, on the credentialed
-# ubuntu-latest CI runner (Azure via secretless OIDC: azure/login + repo VARIABLES AZURE_CLIENT_ID/
-# TENANT_ID/SUBSCRIPTION_ID + id-token: write, the claude-tools Azure auth pattern; run.mjs resolves
-# azure-openai-* from Key Vault via kvSecret()'s az-CLI/OIDC path), automatically on the draft PR BEFORE a
-# human finalizes (marks ready / merges) it. The unattended agent gains no new powers; the model call
-# lives where creds already legitimately live. (2026-07-13: was wired to the retired
-# GCP_CLAUDE_DRIVER_SA_JSON so kvSecret had no token and the critic reported "missing azure-openai
-# endpoint/key" on every PR; same GCP-exit family as the nightly monitors.)
+# ubuntu-latest CI runner, automatically on the draft PR BEFORE a human finalizes (marks ready / merges)
+# it. The unattended agent gains no new powers; the model call lives where creds already legitimately
+# live. (2026-07-13: was wired to the retired GCP_CLAUDE_DRIVER_SA_JSON so kvSecret had no token and the
+# critic reported "missing azure-openai endpoint/key" on every PR; same GCP-exit family as the nightly
+# monitors.)
+#
+# LLM_PROVIDER (2026-08-27): run.mjs now DEFAULTS to LLM_PROVIDER=openai (Azure subscription 55c84f6b,
+# the whole Foundry estate this critic used exclusively, is permanently deleted -- verified 401 forever).
+# The azure/login OIDC step below is KEPT, unchanged: it is what lets kvSecret()'s az-CLI/OIDC path read
+# `openai-api-key` from Key Vault when the runner has no AWS credentials for the SSM-primary path (see
+# skills/kb-memory/azure-secret.mjs) -- so it now serves the OpenAI key lookup, not a Foundry key lookup.
+# If Foundry is ever re-provisioned, LLM_PROVIDER=foundry (set as a workflow env or repo variable) routes
+# run.mjs back through the original azure-foundry-*/legacy path with no other change here.
 #
 # Scope (job-level `if`): only DRAFT PRs, or PRs from claude/* branches (the autonomous runner's + the
 # fleet-dispatch --spawn safety-net branches). A normal non-draft feature PR triggers the workflow but
@@ -92,7 +98,7 @@ jobs:
             --draft-file /tmp/diff.txt \
             --context-file /tmp/context.txt \
             --min-severity medium > /tmp/verdict.json \
-          || printf '{"ran":true,"verdict":"approve","malformed":true,"shouldRevise":false,"error":"critic step could not run"}' > /tmp/verdict.json
+          || printf '{"ran":true,"verdict":null,"malformed":false,"unreachable":true,"shouldRevise":false,"error":"critic step failed to execute","note":"critic did not run (LLM unreachable)"}' > /tmp/verdict.json
           cat /tmp/verdict.json
 
       - name: Post (or update) the critic verdict PR comment
@@ -102,14 +108,23 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            // Unreachable-by-default fallback: no verdict.json means the critic step itself failed to
+            // execute (crashed before producing any JSON) — report that LOUDLY too, never as a silent
+            // approve. See skills/critic-pass/run.mjs's own unreachable/malformed distinction.
             let v = {};
-            try { v = JSON.parse(fs.readFileSync('/tmp/verdict.json', 'utf8')); } catch { v = { ran: true, verdict: 'approve', malformed: true, error: 'no verdict produced' }; }
+            try { v = JSON.parse(fs.readFileSync('/tmp/verdict.json', 'utf8')); } catch { v = { ran: true, verdict: null, malformed: false, unreachable: true, error: 'no verdict produced', note: 'critic did not run (LLM unreachable)' }; }
             const marker = '<!-- critic-pass-gate -->';
             const lines = [marker, '### 🧪 Auto critic pass (report-only)', ''];
             if (v.ran === false) {
               lines.push(`Skipped: \`${v.skipped || 'not run'}\` — the allocator did not flag this as needing a critic pass.`);
+            } else if (v.unreachable) {
+              // Distinct from `malformed` on purpose: the model was NEVER REACHED (no creds, network,
+              // or exhausted throttle), so nothing was reviewed and nothing was approved. This must
+              // read as "no review happened", never as a green checkmark.
+              lines.push(`🔴 **CRITIC DID NOT RUN** (LLM unreachable). ${v.error ? '`' + v.error + '`' : ''}`.trim());
+              lines.push('', '**No review was performed.** This is not an approval — treat this PR as unreviewed by the auto critic until the credentials/model issue is fixed.');
             } else if (v.malformed) {
-              lines.push(`⚠️ The critic could not run cleanly (fail-safe **approve**). ${v.error ? '`' + v.error + '`' : ''}`.trim());
+              lines.push(`⚠️ The critic ran but its response could not be parsed (fail-safe **approve**). ${v.error ? '`' + v.error + '`' : ''}`.trim());
               lines.push('', 'A broken critic never blocks — this is informational only.');
             } else {
               const badge = v.verdict === 'revise' ? '🔴 **REVISE**' : '🟢 **APPROVE**';
