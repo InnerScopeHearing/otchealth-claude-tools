@@ -496,3 +496,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T19:00:16.109Z
 - **Closed:** (open)
+
+### finding:FND-20260827-558b severity:high status:open | PlantID backend rebuild: Azure Functions app gone; port functions/ to Lambda/ECS + OpenAI-direct/Bedrock + DynamoDB, then ship build 2 (shipped build 1 is dead)
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:18.954Z
+- **Closed:** (open)
