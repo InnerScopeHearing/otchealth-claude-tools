@@ -6,24 +6,44 @@
  * refresh_token grant on EVERY invocation, so two processes (CFO + CTO + cron) refreshing the same org
  * concurrently => one gets invalid_grant and the org's token DIES (forcing a manual re-consent).
  *
- * FIX: an access-token CACHE (Xero access tokens live ~30 min) + a cross-process refresh LOCK, both in
- * Azure Blob (migrated 2026-07-05, was GCS) so they are shared across engines and jobs:
- *   - getAccessContext(org) returns a cached access token if one is still valid (NO refresh, NO rotation).
- *   - Only when the cache is stale does ONE process (lock holder) refresh + rotate-persist + re-cache;
- *     everyone else reads the freshly-written cache. Rotations drop from per-call to ~1 per 30 min/org.
- *   - On refresh, /connections is checked: an empty list => the org was DISCONNECTED (a thrown
- *     XERO_DISCONNECTED:<org> that callers/monitor surface) rather than a confusing downstream "no tenant".
+ * FIX: a cross-process refresh LOCK serializes the single-use rotation. The durable refresh-token
+ * store of record is AWS SSM Parameter Store (`/otchealth/xero-refresh-token-<org>`, via
+ * kvSecret/kvSecretSet in azure-secret.mjs, which defaults to SSM) — that leg already works and is
+ * untouched by this file. What this file owns is: (1) the LOCK that stops two processes from calling
+ * Xero's single-use refresh_token grant at the same instant, and (2) an IN-PROCESS-ONLY access-token
+ * cache (Xero access tokens live ~30 min) so repeated calls within the SAME process do not re-refresh.
+ * There is deliberately no durable CROSS-process access-token cache: a fresh process always earns its
+ * own access token via a lock-guarded refresh, and refreshAndPersist() always re-reads the refresh
+ * token fresh from SSM at call time, so a process that had to wait for the lock still gets the
+ * correctly-rotated value once it is its turn — never the stale one it observed before waiting.
  *
- * Fail-open: any error in the cache/lock layer degrades to a direct refresh so posting is never blocked.
- * INCIDENT NOTE (2026-07-05): while this lock's backend was silently on dead GCS, every call fell
- * through the fail-open path (direct refresh, no lock) — reintroducing the exact concurrent-refresh
- * race this file exists to prevent, and root-causing the "refresh token has been consumed" failures
- * across all 4 orgs that day. Now on Azure Blob (If-None-Match: * gives the same atomic
- * create-only-if-absent lock semantics GCS's ifGenerationMatch=0 provided).
+ * LOCK (2026-08-27, ported off Azure Blob — the Azure subscription holding kv-otc-55c84f6bef and every
+ * Azure Blob account was PERMANENTLY DELETED 2026-08-13, so every call through this file's old Azure
+ * Blob lock/cache was silently failing every fetch and falling through to fail-open direct refresh —
+ * reintroducing the exact concurrent-refresh race this file exists to prevent, the same failure SHAPE
+ * as the 2026-07-05 GCS incident below, just a different dead backend). Now an S3 conditional-create
+ * lock via skills/kb-memory/s3-blob.mjs's createObjectIfAbsentInS3() (`If-None-Match: '*'` — S3's
+ * native conditional-write, the same atomic create-only-if-absent semantics the old GCS
+ * ifGenerationMatch=0 / Azure If-None-Match provided). The lock record carries an `expiresAt` (TTL
+ * ~120s) so a crashed holder's lock is detected as stale and broken by a waiter, rather than blocking
+ * forever; a holder whose refresh runs long renews the TTL on an interval so it is never mistaken for
+ * stale while genuinely still working. The lock object lives in the SAME (account, container) the old
+ * Azure Blob cache/lock used (the CFO source-docs room) via s3-blob.mjs's existing MIRROR table entry
+ * — not a new bucket.
+ *
+ * HISTORICAL INCIDENT NOTE (2026-07-05, preserved — the failure CLASS recurred verbatim on a different
+ * dead backend, see above): while this lock's backend was silently on dead GCS, every call fell
+ * through to fail-open (direct refresh, no lock) — root-causing "refresh token has been consumed"
+ * failures across all 4 orgs that day.
+ *
+ * Fail-open: any error in the LOCK layer itself (not "someone else holds it" — a genuine infra
+ * failure) degrades to a direct, unlocked refresh so posting is never blocked by the lock layer being
+ * unavailable. This is an intentional, pre-existing tradeoff (kept byte-for-byte from before this
+ * port), not a new gap: the common case is fully serialized; only a broken lock layer forgoes it.
  *
  * Library:  import { getAccessContext } from "./xero-token.mjs"  ->  { access_token, tenantId, source }
  * CLI:      node xero-token.mjs check <org>        # one org, prints health, exit!=0 if unhealthy
- *           node xero-token.mjs monitor [orgs...]  # all (or listed) orgs; writes Azure Blob health snapshot + alerts
+ *           node xero-token.mjs monitor [orgs...]  # all (or listed) orgs; writes an S3 health snapshot + alerts
  *
  * HEALTH CHECK ARCHITECTURE (2026-08-01, post GATEWAY SOLE-CONSUMER GUARD below): `check`/`monitor`
  * no longer read or refresh org tokens directly (that IS the fork-the-chain failure this guard
@@ -40,21 +60,28 @@
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
 import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import { mintToken as mintGatewayToken, GATEWAY_MCP } from "../gateway-connect/connect.mjs";
+import { createObjectIfAbsentInS3, getTextFromS3, putObjectToS3, deleteObjectFromS3 } from "../kb-memory/s3-blob.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
-const BUCKET = "otchealth-cfo-source-docs"; // legacy GCS name, kept as the object-path namespace
-const BUCKET_CONTAINER = "cfo-source-docs"; // Azure Blob container (account azure-cfo-storage-account)
-const CACHE = (org) => `xero-token-cache/${org}.json`;
+// S3 lock/health location (2026-08-27 port off dead Azure Blob). Reuses the SAME (account, container)
+// the old Azure Blob cache/lock lived in — the CFO source-docs room — via s3-blob.mjs's existing,
+// tested MIRROR entry ("otchealthcfodata"/"cfo-source-docs" -> bucket otchealth-finance-legal-dr-55c84f6b),
+// NOT a new bucket. keyPrefix stays "xero-token-cache/" for 1:1 path parity with the pre-migration names.
+const S3_ACCOUNT = "otchealthcfodata";
+const S3_CONTAINER = "cfo-source-docs";
 const LOCK = (org) => `xero-token-cache/${org}.lock`;
 const HEALTH = "xero-token-cache/health.json";
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const CONN_URL = "https://api.xero.com/connections";
 const ORGS_ALL = ["otchealth", "innd", "hearingassist", "personal"];
-const SKEW_MS = 120000;     // treat the access token as stale 2 min before its real expiry
-const LOCK_TTL_MS = 60000;  // a lock older than this is considered abandoned and reclaimed
-const LOCK_WAIT_MS = 20000; // max time to wait for another process's refresh before forcing our own
+const SKEW_MS = 120000;       // treat the access token as stale 2 min before its real expiry
+const LOCK_TTL_MS = 120000;   // a lock older than this is considered abandoned and reclaimed (stale-holder recovery)
+const LOCK_REFRESH_MS = Math.floor((LOCK_TTL_MS * 2) / 3); // renew the lock's TTL if the held refresh runs long
+const LOCK_WAIT_MS = 20000;   // max time to wait for another process's refresh before forcing our own (fail-open)
 const b64url = (b) => Buffer.from(b).toString("base64url");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// IN-PROCESS-ONLY access-token cache (see header comment: deliberately not durable/cross-process).
+const _memCache = new Map(); // org -> { access_token, tenantId, exp_ms, scope }
 
 // GATEWAY SOLE-CONSUMER GUARD (2026-07-16). The gateway (otchealth-mcp-server, src/tools/xero) is now
 // the SOLE consumer of the live rotate-on-use Xero chain for all 4 orgs: it maintains the live token in
@@ -105,42 +132,12 @@ async function smWrite(id, val) { const _ok = await kvSecretSet(id, val); if (_o
   const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT}/secrets/${id}:addVersion`, { method: "POST", headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" }, body: JSON.stringify({ payload: { data: Buffer.from(val, "utf8").toString("base64") } }) });
   return r.status;
 }
-// ---- Blob cache/lock primitives (migrated off GCS 2026-07-05 — root cause of today's
-// "refresh token has been consumed" incident: this file's WHOLE cross-process lock, the mechanism
-// that exists specifically to PREVENT concurrent refreshes, was silently degrading to "fail-open:
-// direct refresh" on every call once GCS went dead, because the lock/cache backend itself was
-// unreachable. That reintroduced the exact race this file was built to eliminate. Azure Blob's
-// `If-None-Match: *` on PUT gives the same atomic create-only-if-absent semantics GCS's
-// ifGenerationMatch=0 provided, so the lock is a true fix, not just a credential swap. Same
-// account+container as xero-run's migration (azure-cfo-storage-account / cfo-source-docs — 1:1 path
-// parity with the old GCS bucket otchealth-cfo-source-docs). ----
-let _bAcct, _bKey;
-async function blobCreds() { if (_bAcct && _bKey) return; _bAcct = await smRead("azure-cfo-storage-account"); _bKey = await smRead("azure-cfo-storage-key"); if (!_bAcct || !_bKey) throw new Error("missing azure-cfo-storage-account/key"); }
-function buildBlobSas(acct, key) { const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co"; const st = new Date(Date.now() - 3e5).toISOString().slice(0, 19) + "Z"; const se = new Date(Date.now() + 36e5).toISOString().slice(0, 19) + "Z"; const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n"; const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64"); return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString(); }
-const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-async function gcsGetJson(name) {
-  await blobCreds(); const sas = buildBlobSas(_bAcct, _bKey);
-  const r = await fetch(`https://${_bAcct}.blob.core.windows.net/${BUCKET_CONTAINER}/${encPath(name)}?${sas}`);
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error("blobGet " + r.status);
-  try { return JSON.parse(await r.text()); } catch { return null; }
-}
-async function gcsPutJson(name, obj) {
-  await blobCreds(); const sas = buildBlobSas(_bAcct, _bKey);
-  const r = await fetch(`https://${_bAcct}.blob.core.windows.net/${BUCKET_CONTAINER}/${encPath(name)}?${sas}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/json" }, body: JSON.stringify(obj) });
-  if (!r.ok) throw new Error("blobPut " + r.status);
-}
-async function gcsCreateIfAbsent(name, obj) { // returns true if WE created it (lock acquired), false if it already exists
-  await blobCreds(); const sas = buildBlobSas(_bAcct, _bKey);
-  const r = await fetch(`https://${_bAcct}.blob.core.windows.net/${BUCKET_CONTAINER}/${encPath(name)}?${sas}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/json", "If-None-Match": "*" }, body: JSON.stringify(obj) });
-  if (r.status === 201) return true;
-  if (r.status === 409) return false; // BlobAlreadyExists — already locked by someone else
-  throw new Error("blobCreate " + r.status);
-}
-async function gcsDelete(name) {
-  await blobCreds(); const sas = buildBlobSas(_bAcct, _bKey);
-  await fetch(`https://${_bAcct}.blob.core.windows.net/${BUCKET_CONTAINER}/${encPath(name)}?${sas}`, { method: "DELETE" }).catch(() => {});
-}
+// ---- S3 conditional-create lock (ported off Azure Blob 2026-08-27 — see header comment for why).
+// createObjectIfAbsentInS3/getTextFromS3/putObjectToS3/deleteObjectFromS3 come from
+// skills/kb-memory/s3-blob.mjs, which already carries the (account, container) -> S3 bucket mapping,
+// SigV4 signing, and the 404/403-vs-loud-failure contracts this file used to hand-roll for Azure Blob.
+// No local blob-credential/SAS plumbing is needed here anymore -- s3-blob.mjs resolves AWS credentials
+// itself (ECS task role / env / OTC_AWS_* -- see aws-secret.mjs). ----
 // ---- Xero refresh (single source of truth for rotation + persist + disconnect detection) ----
 async function clientBasic() {
   let id = process.env.XERO_CLIENT_ID, sec = process.env.XERO_CLIENT_SECRET;
@@ -170,47 +167,80 @@ async function refreshAndPersist(org) {
   const tenantId = conns[0].tenantId;
   return { access_token: j.access_token, tenantId, exp_ms: Date.now() + ((+j.expires_in || 1800) * 1000), scope: j.scope || "" };
 }
-// ---- public: cached + locked access context ----
+// ---- lock helpers (S3 conditional-create; see header + block comment above) --------------------
+/** Try to acquire the org's lock. Returns {acquired:true, holder} on success (a fresh 201-equivalent
+ *  create), or {acquired:false} when it is already held (S3 answered If-None-Match:'*' with 412 —
+ *  createObjectIfAbsentInS3 turns that into created:false rather than throwing). Any OTHER failure
+ *  (auth/network/5xx) THROWS, so the caller can tell "someone else holds the lock" (expected, not an
+ *  error) apart from "the lock layer itself is broken" (the caller's fail-open path). */
+async function tryAcquireLock(org) {
+  const holder = `${os.hostname()}:${process.pid}:${crypto.randomUUID()}`;
+  const body = JSON.stringify({ holder, acquiredAt: Date.now(), expiresAt: Date.now() + LOCK_TTL_MS });
+  const res = await createObjectIfAbsentInS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org), body, "application/json");
+  return res.created ? { acquired: true, holder } : { acquired: false };
+}
+/** Best-effort: read the current lock record (null if absent or unreadable — never throws). */
+async function readLock(org) {
+  try { const text = await getTextFromS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org)); return text ? JSON.parse(text) : null; }
+  catch { return null; }
+}
+/** Best-effort renew (fire-and-forget from an interval timer) — extends the TTL so a holder whose
+ *  refresh is running long is never mistaken for a crashed/stale holder by a waiter. */
+async function renewLock(org, holder) {
+  const body = JSON.stringify({ holder, acquiredAt: Date.now(), expiresAt: Date.now() + LOCK_TTL_MS });
+  await putObjectToS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org), body, "application/json");
+}
+/** Best-effort release/break — never throws (a failed delete just lets the lock expire on its own TTL). */
+async function dropLock(org) {
+  try { await deleteObjectFromS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org)); } catch {}
+}
+
+// ---- public: locked access context (see header comment for the full cache/lock design) ----
 export async function getAccessContext(org, opts = {}) {
   guardGatewayOwnedOrg(org); // library entry: steer all skill data-ops to the gateway xero_* tools
   await requireSecrets(["xero-client-id", "xero-client-secret"]);
   const now = Date.now();
-  // 1) fast path: a still-valid cached access token
-  try {
-    if (!opts.forceRefresh) {
-      const c = await gcsGetJson(CACHE(org));
-      if (c && c.access_token && c.tenantId && (c.exp_ms - now) > SKEW_MS) return { access_token: c.access_token, tenantId: c.tenantId, source: "cache" };
-    }
-  } catch {}
-  // 2) need a refresh — serialize via the lock
+  // 1) fast path: a still-valid access token cached IN THIS PROCESS ONLY (see header comment — there
+  //    is deliberately no durable cross-process cache anymore).
+  if (!opts.forceRefresh) {
+    const c = _memCache.get(org);
+    if (c && c.access_token && c.tenantId && (c.exp_ms - now) > SKEW_MS) return { access_token: c.access_token, tenantId: c.tenantId, source: "cache" };
+  }
+  // 2) need a refresh — serialize via the S3 conditional-create lock so two processes never call
+  //    Xero's single-use refresh_token grant for the same org at the same time.
   const deadline = now + LOCK_WAIT_MS;
   try {
     while (Date.now() < deadline) {
-      let got = false;
-      try { got = await gcsCreateIfAbsent(LOCK(org), { ts: Date.now(), holder: `${os.hostname()}:${process.pid}` }); } catch { break; } // lock infra error -> fail open
-      if (got) {
+      let lock;
+      try { lock = await tryAcquireLock(org); } catch { break; } // lock infra error -> fail open (step 3)
+      if (lock.acquired) {
+        let renewTimer = null;
         try {
-          // double-checked: someone may have refreshed just before we got the lock
-          const c2 = await gcsGetJson(CACHE(org)).catch(() => null);
-          if (c2 && c2.access_token && c2.tenantId && (c2.exp_ms - Date.now()) > SKEW_MS) return { access_token: c2.access_token, tenantId: c2.tenantId, source: "cache" };
+          renewTimer = setInterval(() => { renewLock(org, lock.holder).catch((e) => { console.error(`[xero-token] lock renew failed for ${org}: ${e.message} (TTL is the backstop)`); }); }, LOCK_REFRESH_MS);
           const ctx = await refreshAndPersist(org);
-          await gcsPutJson(CACHE(org), { ...ctx, updated: new Date().toISOString() }).catch(() => {});
+          _memCache.set(org, ctx);
           return { ...ctx, source: "refresh" };
-        } finally { await gcsDelete(LOCK(org)); }
+        } finally {
+          if (renewTimer) clearInterval(renewTimer);
+          await dropLock(org);
+        }
       }
-      // locked by someone else: reclaim if stale, else wait then re-check cache
-      const lk = await gcsGetJson(LOCK(org)).catch(() => null);
-      if (lk && (Date.now() - (lk.ts || 0)) > LOCK_TTL_MS) { await gcsDelete(LOCK(org)); continue; }
+      // locked by someone else: break it if the embedded expiry is in the past (stale-holder
+      // recovery — a crashed process's lock must not block every future caller forever), else wait
+      // and retry acquiring (there is no durable cache to re-check here; the next holder to acquire
+      // the lock does its OWN refresh, reading the refresh token fresh from SSM at that time, so it
+      // always gets the correctly-rotated value even though it could not observe the prior rotation).
+      const lk = await readLock(org);
+      if (lk && typeof lk.expiresAt === "number" && Date.now() > lk.expiresAt) { await dropLock(org); continue; }
       await sleep(1500);
-      const c3 = await gcsGetJson(CACHE(org)).catch(() => null);
-      if (c3 && c3.access_token && c3.tenantId && (c3.exp_ms - Date.now()) > SKEW_MS) return { access_token: c3.access_token, tenantId: c3.tenantId, source: "cache-after-wait" };
     }
   } catch (e) {
     if (String(e.message || "").startsWith("XERO_DISCONNECTED")) throw e; // propagate the real signal
   }
-  // 3) fail-open: do a direct refresh so posting is never blocked by the cache/lock layer
+  // 3) fail-open: the lock layer itself could not serialize us within the wait window (or is
+  //    genuinely broken) — do a direct, unlocked refresh so posting is never blocked by it.
   const ctx = await refreshAndPersist(org);
-  await gcsPutJson(CACHE(org), { ...ctx, updated: new Date().toISOString() }).catch(() => {});
+  _memCache.set(org, ctx);
   return { ...ctx, source: "fail-open" };
 }
 // best-effort Datadog metric (no-op if no key); keeps the monitor self-contained
@@ -355,7 +385,7 @@ async function main() {
     const orgs = rest.length ? rest : ORGS_ALL;
     const r = await cliCheck(orgs);
     const snapshot = { ts: new Date().toISOString(), results: r, unhealthy: r.filter((x) => !x.ok).map((x) => x.org) };
-    try { await gcsPutJson(HEALTH, snapshot); } catch {}
+    try { await putObjectToS3(S3_ACCOUNT, S3_CONTAINER, HEALTH, JSON.stringify(snapshot), "application/json"); } catch {}
     if (snapshot.unhealthy.length) console.error(`ALERT xero connections unhealthy: ${snapshot.unhealthy.join(", ")}`);
     else console.log("all xero connections healthy");
     process.exit(snapshot.unhealthy.length ? 1 : 0);
