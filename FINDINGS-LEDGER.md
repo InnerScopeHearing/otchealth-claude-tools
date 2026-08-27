@@ -569,13 +569,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:42.311Z
 - **Closed:** (open)
 
-### finding:FND-20260827-f61b severity:medium status:open | fourvault osv-scan red on main since 2026-08-12: nanoid 3.3.17 (GHSA-2v37-7h3g-55p8, High 8.2) and uuid 7.0.3 (GHSA-w5hq-g745-h8pq, High 7.5) in pnpm-lock.yaml; fix = pnpm override nanoid>=3.3.18 + trace parent pinning uuid@7; queued as its own supply-chain PR with Guardian lockfile-delta review
+### finding:FND-20260827-f61b severity:medium status:fixed | fourvault osv-scan red on main since 2026-08-12: nanoid 3.3.17 (GHSA-2v37-7h3g-55p8, High 8.2) and uuid 7.0.3 (GHSA-w5hq-g745-h8pq, High 7.5) in pnpm-lock.yaml; fix = pnpm override nanoid>=3.3.18 + trace parent pinning uuid@7; queued as its own supply-chain PR with Guardian lockfile-delta review
 
 - **Source audit doc:** fourvault PR #96 CI + guardian.yml run history on main
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T19:24:26.015Z
-- **Closed:** (open)
+- **Closed:** 2026-08-27T20:05:34.913Z
 
 ### finding:FND-20260827-98d2 severity:high status:open | FourVault restore path: restore pg-dumps/fourvault-2026-08-04.sql.gz (15KB gz) into the FourVault backend rebuild target, assess the Aug 4-13 tail loss window (worst case 9 days), and inventory row counts in the restore environment (kids-app data: counts only, never content in logs). Read access to the DR bucket needs the DR-writer identity or a scoped grant
 
