@@ -441,13 +441,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T18:59:53.397Z
 - **Closed:** (open)
 
-### finding:FND-20260827-02c2 severity:critical status:open | FourVault potential customer data loss: prod DB was on deleted Azure Postgres, NO dump found in master-account S3 (4 buckets, live-listed); full inventory of all AWS accounts/stores required before concluding
+### finding:FND-20260827-02c2 severity:critical status:fixed | FourVault potential customer data loss: prod DB was on deleted Azure Postgres, NO dump found in master-account S3 (4 buckets, live-listed); full inventory of all AWS accounts/stores required before concluding
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T18:59:56.473Z
-- **Closed:** (open)
+- **Closed:** 2026-08-27T19:49:28.476Z
 
 ### finding:FND-20260827-dbb9 severity:critical status:open | n8n recovery incomplete: cs-n8n.otchealthmart.com (Lightsail) answers 502; ~34 CS workflows offline since 2026-08-13; finish aws-n8n-recovery lane then re-run the webhook/security batteries
 
