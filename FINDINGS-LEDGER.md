@@ -432,3 +432,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T06:23:39.854Z
 - **Closed:** 2026-08-21T06:32:45.291Z
+
+### finding:FND-20260827-1503 severity:critical status:open | Twilio prod numbers (Sarah/Taylor/Helen) + ElevenLabs post-call webhook still target the dead n8n host (now NXDOMAIN); repoint the moment cs-n8n recovery validates (template: runbooks/scripts/apply-twilio-postwave.mjs)
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T18:59:53.397Z
+- **Closed:** (open)
