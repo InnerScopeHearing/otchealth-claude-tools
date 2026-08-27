@@ -504,3 +504,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T19:00:18.954Z
 - **Closed:** (open)
+
+### finding:FND-20260827-d074 severity:high status:open | FourVault backend rebuild on Flatstick pattern (own account, ECS+CloudFront+RDS+S3 provider, persisted-URL rewrite) + re-register SIWA redirect, eBay deletion endpoint, RevenueCat webhook
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:21.836Z
+- **Closed:** (open)
