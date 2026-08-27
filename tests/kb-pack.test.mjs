@@ -78,14 +78,29 @@ test("pack with no agent marker yields a one-line OFF beacon, never throws", () 
   assert.match(out, /MEMORY: OFF \(no agent\)/);
 });
 
-// --- hot-path SEMANTIC tier gating (Wave 2b follow-on). Safety-critical property: it must NEVER fire
-// without a read-only query-key cred-cache, and never reach the network on a credless box.
-test("semantic tier stays OFF without a cred-cache (thin pack reaches the gate, still no RELATED, no hang)", () => {
+// --- hot-path SEMANTIC tier gating (Wave 2b follow-on; contract updated 2026-08-27 for the
+// OpenSearch default). Safety-critical property, unchanged in spirit: on a CREDLESS box the tier
+// must produce no RELATED section and no hang — under the OpenSearch default it fails open fast
+// when no AWS credentials resolve, and under the legacy azure backend it must never fire at all
+// without the read-only query-key cred-cache.
+test("semantic tier fails open on a credless box (thin pack reaches the gate, still no RELATED, no hang)", () => {
   // the query matches nothing in the seeded ledger -> the local pack is THIN -> the semantic gate is
-  // REACHED -> with no ~/.claude/kb-cache/.sem-creds.json and no SA it must no-op (no fetch, no section).
+  // REACHED -> with no AWS creds resolvable (scrubbed below) the OpenSearch path must fail open.
   const out = pack(home([
     { id: "2026-01-01", ts: "2026-01-01T00:00:00Z", type: "fact", text: "the office plant is watered on tuesdays" },
-  ]), ["--query", "quantum chromodynamics lattice gauge theory"]);
+  ]), ["--query", "quantum chromodynamics lattice gauge theory"], {
+    AWS_ACCESS_KEY_ID: "", AWS_SECRET_ACCESS_KEY: "", AWS_SESSION_TOKEN: "",
+    OTC_AWS_ACCESS_KEY_ID: "", OTC_AWS_SECRET_ACCESS_KEY: "", OTC_AWS_SESSION_TOKEN: "",
+    AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "", AWS_CONTAINER_CREDENTIALS_FULL_URI: "",
+  });
+  assert.doesNotMatch(out, /RELATED \(shared brain/, "must not emit a RELATED section without resolvable AWS creds");
+  assert.match(out, /<<<END>>>/, "block still closes");
+});
+
+test("legacy azure backend: semantic tier stays OFF without a cred-cache", () => {
+  const out = pack(home([
+    { id: "2026-01-01", ts: "2026-01-01T00:00:00Z", type: "fact", text: "the office plant is watered on tuesdays" },
+  ]), ["--query", "quantum chromodynamics lattice gauge theory"], { SEARCH_BACKEND: "azure" });
   assert.doesNotMatch(out, /RELATED \(shared brain/, "must not fire without the read-only query-key cred-cache");
   assert.match(out, /<<<END>>>/, "block still closes");
 });
