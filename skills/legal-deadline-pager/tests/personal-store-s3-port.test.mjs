@@ -226,13 +226,15 @@ test("scrubErrorMessage leaves ordinary diagnostic text untouched (env var NAMES
 // ---- statusToken: the console lines log ONLY this extraction (leak-proof by construction) --------
 import { statusToken } from "../personal-store.mjs";
 
-test("statusToken uses ONLY the structured numeric .status (never any substring of the message), else a fixed label", () => {
-  const withStatus = new Error("s3 put 500: <AWSAccessKeyId>AKIAIOSFODNN7EXAMPLE</AWSAccessKeyId>");
-  withStatus.status = 500;
-  assert.equal(statusToken(withStatus), "HTTP 500");
+test("statusToken returns only LITERALS selected by the structured numeric .status -- never anything derived from the error", () => {
+  const mk = (status) => { const e = new Error("s3 put x: <AWSAccessKeyId>AKIAIOSFODNN7EXAMPLE</AWSAccessKeyId>"); if (status !== undefined) e.status = status; return e; };
+  assert.equal(statusToken(mk(403)), "HTTP 403");
+  assert.equal(statusToken(mk(404)), "HTTP 404");
+  assert.equal(statusToken(mk(412)), "HTTP 412");
+  assert.equal(statusToken(mk(500)), "HTTP 5xx");
+  assert.equal(statusToken(mk(429)), "HTTP 4xx");
   // A 3-digit number in the MESSAGE alone must NOT surface -- the token is never message-derived.
   assert.equal(statusToken(new Error("s3 get 500 (refusing...)")), "no structured status");
-  assert.equal(statusToken(new Error("fetch failed")), "no structured status");
   assert.equal(statusToken(undefined), "no structured status");
   const nonInt = new Error("x"); nonInt.status = "500";
   assert.equal(statusToken(nonInt), "no structured status", "a string status is not trusted");

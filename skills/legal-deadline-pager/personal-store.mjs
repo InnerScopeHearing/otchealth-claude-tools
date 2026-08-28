@@ -69,16 +69,24 @@ export function scrubErrorMessage(msg) {
     .replace(/\b[A-Za-z0-9/+=]{40}\b/g, "<redacted-40char-token>");
 }
 
-/** Log token for this module's console lines, built ONLY from the error's structured NUMERIC
- *  `.status` property (s3-blob's putObjectToS3 attaches it) behind an Number.isInteger guard --
- *  never from any string derived from `e.message`, however constrained: a regex match of a tainted
- *  string is still a substring of tainted data (and CodeQL's clear-text-logging model rightly keeps
- *  flagging it), while a guarded integer structurally cannot carry text from env, an echoed key id,
- *  or a response body. Errors without a numeric status (e.g. getTextFromS3's message-only throws,
- *  network failures) log the fixed label -- a small diagnosability trade accepted on purpose; the
- *  full SCRUBBED detail still travels in the write path's rejection. Exported for tests. */
+/** Log token for this module's console lines. Every return value is a string LITERAL selected by
+ *  comparing the error's structured numeric `.status` (s3-blob's putObjectToS3 attaches it) --
+ *  there is deliberately NO data flow from the error object into the returned string, only control
+ *  flow. That is the strongest possible posture for a log line in this attorney-privileged ring
+ *  (nothing upstream -- env, an echoed key id, a response body -- can appear in a literal), and it
+ *  is also the only shape CodeQL's clear-text-logging taint model accepts: it (reasonably) keeps
+ *  taint through a denylist scrub, through a regex extraction of the message, and even through a
+ *  guarded read of a numeric property of the error object. Errors without a matching status log
+ *  the fixed label -- a small diagnosability trade accepted on purpose; the full SCRUBBED detail
+ *  still travels in the write path's rejection. Exported for tests. */
 export function statusToken(e) {
-  return Number.isInteger(e?.status) ? `HTTP ${e.status}` : "no structured status";
+  const s = e?.status;
+  if (s === 403) return "HTTP 403";
+  if (s === 404) return "HTTP 404";
+  if (s === 412) return "HTTP 412";
+  if (Number.isInteger(s) && s >= 500) return "HTTP 5xx";
+  if (Number.isInteger(s) && s >= 400) return "HTTP 4xx";
+  return "no structured status";
 }
 
 /** Read the personal cooldown map ({ [opaqueRowKey]: { last_paged_at: ISOString } }). Returns {} if the
