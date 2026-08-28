@@ -664,3 +664,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:36:05.089Z
 - **Closed:** (open)
+
+### finding:FND-20260828-5ca1 severity:medium status:open | Cross-spec dependency DAG + SigV4 sprawl: 5 hand-rolled SigV4 impls with 2 contradictory encoding conventions; extract shared helper (or record why not) BEFORE bedrock-client lands; publish merge-order epic
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:36:07.572Z
+- **Closed:** (open)
