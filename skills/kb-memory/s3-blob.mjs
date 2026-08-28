@@ -240,6 +240,26 @@ export async function putObjectToS3(account, container, path, body, contentType,
   return { etag: r.headers.get("etag") };
 }
 
+/** Atomic "create if absent" using S3's native conditional-write support (`If-None-Match: '*'` — the
+ *  same feature putObjectToS3's `extraHeaders` already forwards). Returns {created:true, etag} when
+ *  THIS call created the object, or {created:false} when it already existed (S3 answers a failed
+ *  If-None-Match:'*' with 412 Precondition Failed, which putObjectToS3 throws with `.status` set —
+ *  this wrapper turns that ONE specific status into a clean boolean instead of an exception). Throws
+ *  on every OTHER failure (auth/network/5xx/an unmapped account-container pair), so a caller building
+ *  a cross-process lock (see skills/xero/xero-token.mjs) can tell "someone else holds the lock"
+ *  (created:false — a normal, expected outcome, never worth logging) apart from "the lock layer
+ *  itself is broken" (a thrown error — the caller's fail-open path, never silently treated as a held
+ *  lock, which would wrongly make an infra outage look like healthy contention). */
+export async function createObjectIfAbsentInS3(account, container, path, body, contentType) {
+  try {
+    const { etag } = await putObjectToS3(account, container, path, body, contentType, { "If-None-Match": "*" });
+    return { created: true, etag };
+  } catch (e) {
+    if (e && e.status === 412) return { created: false };
+    throw e;
+  }
+}
+
 /** LIST objects under a prefix (relative to the mirror's own keyPrefix), WITH metadata. Returns
  *  `{name,size,lastModified}[]` — names relative to loc.keyPrefix, matching Azure's listing shape
  *  (see azList() in skills/cfo-store/store.mjs / listAll() in skills/doc-indexer/indexer.mjs) so a
@@ -307,11 +327,18 @@ export async function getBufferFromS3(account, container, path) {
  *  `rm` primitive this mirrors, skills/cfo-store/store.mjs's azDelete). Returns true if something was
  *  actually deleted, false if the object was already absent (idempotent — a missing object is not an
  *  error for a delete). Throws loud on any other non-2xx. */
-export async function deleteObjectFromS3(account, container, path) {
+export async function deleteObjectFromS3(account, container, path, extraHeaders) {
   const loc = locOrThrow(account, container);
-  const r = await s3Request({ method: "DELETE", loc, path });
+  const r = await s3Request({ method: "DELETE", loc, path, extraHeaders });
   if (r.status === 404) return false;
-  if (!r.ok) throw new Error(`s3 delete ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) {
+    // `.status` is preserved so a caller sending `If-Match` (S3 conditional DELETE — the lock
+    // owner-scoping in skills/xero/xero-token.mjs) can tell 412 "not your object anymore" apart
+    // from a genuine infra failure, exactly like putObjectToS3's conditional-write contract.
+    const err = new Error(`s3 delete ${r.status}: ${(await r.text().catch(() => "")).slice(0, 200)}`);
+    err.status = r.status;
+    throw err;
+  }
   return true;
 }
 
