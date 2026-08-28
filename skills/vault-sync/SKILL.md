@@ -30,11 +30,12 @@ node skills/vault-sync/vault-sync.mjs
 VAULT_DB_ID=<db-id> node skills/vault-sync/vault-sync.mjs
 ```
 
-## Off-Notion: the Azure brain registry (vault-registry.mjs) — the canonical path as Notion retires
+## Off-Notion: the company-brain registry (vault-registry.mjs) — the canonical path as Notion retires
 As part of the Notion retirement, the registry is now ALSO (and going forward, primarily) regenerated
-from Secret Manager into the **Azure brain**, so "what credentials exist / by service / by ring / added
-when" is answerable WITHOUT Notion. Same classifier (`infer()`), same rule (names + metadata only,
-VALUES never leave Secret Manager).
+from the live secret store (AWS SSM Parameter Store, `/otchealth/*` — 2026-08-28: was Azure Key Vault,
+which died with the permanently deleted Azure subscription, 2026-08-13) into the **commons** (the
+company brain), so "what credentials exist / by service / by ring / added when" is answerable WITHOUT
+Notion. Same classifier (`infer()`), same rule (names + metadata only, VALUES never leave the store).
 ```
 node skills/vault-sync/vault-registry.mjs            # write otchealthcommons/company-journal/_VAULT/registry.{md,jsonl}
 node skills/vault-sync/vault-registry.mjs --print    # also print the table

@@ -91,10 +91,35 @@ function loadScorecard(path) {
 // The `primary` repair is the file whose revert recovers the single biggest drop (most-negative delta)
 // — the drafter acts on primary first (largest-drop-with-a-known-file, matching the design).
 // ---------------------------------------------------------------------------
-export function planRepairs(base, head) {
+// FND-20260814-bcbc SAFETY FIX (2026-08-28): a proposed revert must never target a file the PR itself
+// never touched. Before this fix, `repairable` depended ONLY on whether the regressed golden task
+// carried a `prompt_file` tag -- a static label on the task, not a fact about what THIS PR's diff
+// contains. If that tag named a file the PR's own base..head diff never touched (a stale/wrong tag, or
+// a shared file that changed on `main` via unrelated commits that happen to also be reachable from
+// base_sha/head_sha), `draftCmd`'s revert steps would `git checkout base_sha -- <file>` regardless --
+// silently discarding whatever UNRELATED content landed on that path between those two shas, with no
+// connection to the PR under review. `opts.prFiles` closes this: when supplied, a regression is
+// `repairable` only if its `prompt_file` is a member of the PR's own changed-file set.
+//
+// opts.prFiles is intentionally three-valued, not boolean:
+//   - undefined (the default; every existing call in this file's own test suite that predates this
+//     fix uses this) -- NO PR-diff context was supplied at all (a bare scorecard-vs-scorecard
+//     comparison with nothing to intersect against). Behaves exactly as before this fix: unconstrained.
+//   - a Set<string>  -- the PR's actual changed-file paths (computed by prDiffFiles() below, from a
+//     real base_sha/head_sha). A regression's prompt_file is repairable only if it is IN this set.
+//   - null           -- a real PR context was expected but the diff could NOT be computed (missing
+//     base ref, git failure). FAILS CLOSED: every prompt_file is treated as out-of-diff, so NOTHING is
+//     proposed, matching the fleet's rotate-on-uncertainty convention (see fleet-secret-custodian's
+//     "any uncertainty -> do not rotate") rather than silently falling back to the unconstrained,
+//     pre-fix behavior. See planCmd()/draftCmd() for how prFiles is actually resolved and threaded in.
+export function planRepairs(base, head, opts = {}) {
+  const { prFiles } = opts;
+  const constrained = prFiles !== undefined; // a Set OR null both constrain; only "not supplied" does not.
   const { regressions } = base && head ? diffScorecards(base, head) : { regressions: [] };
   const annotated = regressions.map((r) => {
     const prompt_file = r.head?.prompt_file || r.base?.prompt_file || null;
+    const hasFile = !!prompt_file;
+    const inDiff = !constrained || (prFiles !== null && prFiles.has(prompt_file));
     return {
       id: r.id,
       agent: r.agent,
@@ -103,13 +128,22 @@ export function planRepairs(base, head) {
       base_score: r.base?.score ?? null,
       head_score: r.head?.score ?? null,
       prompt_file,
-      repairable: !!prompt_file,
+      repairable: hasFile && inDiff,
+      out_of_pr_diff: hasFile && constrained && !inDiff,
     };
   });
   const repairable = annotated.filter((a) => a.repairable);
   const skipped = annotated
     .filter((a) => !a.repairable)
-    .map((a) => ({ id: a.id, agent: a.agent, callsite_id: a.callsite_id, delta: a.delta, reason: "no prompt_file tag on the golden task; tag it to make this regression auto-repairable" }));
+    .map((a) => ({
+      id: a.id,
+      agent: a.agent,
+      callsite_id: a.callsite_id,
+      delta: a.delta,
+      reason: a.out_of_pr_diff
+        ? "regression source is outside this PR's diff; no self-repair proposed"
+        : "no prompt_file tag on the golden task; tag it to make this regression auto-repairable",
+    }));
 
   const byFile = new Map();
   for (const a of repairable) {
@@ -333,7 +367,12 @@ function planCmd() {
   const base = loadScorecard(val("--base", ""));
   const head = loadScorecard(val("--head", ""));
   const baseSha = val("--base-sha", "");
-  const plan = planRepairs(base, head);
+  const headSha = val("--head-sha", "HEAD"); // defaults to HEAD -- `plan` normally runs from inside the PR-head checkout in CI (see promptcheck.yml), so HEAD already IS the PR head commit.
+  // Constrain reverts to the PR's own diff whenever we have a base ref to diff against at all
+  // (FND-20260814-bcbc). Without --base-sha there is no PR to diff against (e.g. an ad hoc local
+  // comparison of two scorecards with no git context) -- planRepairs runs unconstrained in that one
+  // case, unchanged from before this fix. Every real caller (promptcheck.yml) always passes --base-sha.
+  const plan = baseSha ? planRepairs(base, head, { prFiles: prDiffFiles(baseSha, headSha) }) : planRepairs(base, head);
   const md = renderMarkdown(plan, { baseSha });
   const outPath = val("--out", "");
   const jsonPath = val("--json", "");
@@ -351,6 +390,29 @@ function sh(cmd, args, opts = {}) { return execFileSync(cmd, args, { encoding: "
 function fileAtRef(ref, file) {
   if (!ref || !file) return null;
   try { return sh("git", ["show", `${ref}:${file}`]); } catch { return null; }
+}
+
+// Compute the PR's own changed-file set (FND-20260814-bcbc) -- exported to planRepairs()'s opts.prFiles
+// so a proposed revert can never touch a file the PR itself never changed. Returns a Set<string> of
+// paths on success, or null when the diff genuinely could not be computed (missing baseRef, unresolvable
+// ref, git unavailable) -- null is NOT "unrestricted"; planRepairs treats a supplied-but-null prFiles as
+// "every prompt_file is out of diff" (fail closed on uncertainty, never fall back to the pre-fix
+// unconstrained behavior).
+//
+// Uses `-C HERE` (this script's OWN directory), not the caller's CWD: `plan` is invoked from
+// promptcheck.yml with CWD at the top-level runner workspace, which is a plain directory containing the
+// `head/` and `base/` checkouts as subdirectories, not itself a git repo -- `HERE` (this file's own
+// directory) is always inside whichever checkout is actually running the script, so it resolves
+// correctly regardless of the caller's CWD.
+function prDiffFiles(baseRef, headRef) {
+  if (!baseRef) return null;
+  try {
+    const out = sh("git", ["-C", HERE, "diff", "--name-only", baseRef, headRef || "HEAD"]);
+    return new Set(out.split("\n").map((l) => l.trim()).filter(Boolean));
+  } catch (e) {
+    console.error(`selfrepair: could not compute the PR's changed-file set (${baseRef}..${headRef || "HEAD"}): ${e.message}; treating every prompt_file as outside the PR's diff (fail closed, FND-20260814-bcbc)`);
+    return null;
+  }
 }
 
 // Pull the SPECIFIC rubric criteria the head answer FAILED for a given task id, from the head scorecard.
@@ -488,7 +550,10 @@ function draftCmd() {
   const pr = val("--pr", "");
   const baseRef = val("--base-ref", "main");
   const mode = (val("--mode", "revert") || "revert").toLowerCase(); // "revert" (item #1) | "rewrite" (item #3)
-  const plan = planRepairs(base, head);
+  // Same PR-diff constraint as planCmd() (FND-20260814-bcbc) -- this is the path that ACTUALLY runs
+  // `git checkout` against real files when armed, so it matters here even more than in the report-only
+  // `plan` command above.
+  const plan = baseSha ? planRepairs(base, head, { prFiles: prDiffFiles(baseSha, headSha || "HEAD") }) : planRepairs(base, head);
   if (!plan.primary) { console.log("no auto-repairable regression; nothing to draft."); process.exit(0); }
 
   const files = plan.repairs.map((r) => r.prompt_file);
@@ -547,5 +612,5 @@ if (isMain) {
   if (cmd === "plan") planCmd();
   else if (cmd === "rewrite") rewriteCmd();
   else if (cmd === "draft") draftCmd();
-  else { console.error("usage: selfrepair.mjs plan --base <b.json> --head <h.json> [--base-sha <sha>] [--out md] [--json plan.json]\n       selfrepair.mjs rewrite --base <b.json> --head <h.json> [--base-sha <sha>] [--head-sha <sha>] [--offline] [--out md] [--json proposal.json]\n       selfrepair.mjs draft ... [--mode rewrite] --execute  (HARD-GATED; SELFREPAIR_EXECUTE=1 required; rewrite requires a full-suite re-run with no new regression)"); process.exit(0); }
+  else { console.error("usage: selfrepair.mjs plan --base <b.json> --head <h.json> [--base-sha <sha>] [--head-sha <sha>] [--out md] [--json plan.json]\n       selfrepair.mjs rewrite --base <b.json> --head <h.json> [--base-sha <sha>] [--head-sha <sha>] [--offline] [--out md] [--json proposal.json]\n       selfrepair.mjs draft ... [--mode rewrite] --execute  (HARD-GATED; SELFREPAIR_EXECUTE=1 required; rewrite requires a full-suite re-run with no new regression)\n       (--base-sha, when passed, also constrains any proposed revert to files actually in the PR's own diff -- FND-20260814-bcbc)"); process.exit(0); }
 }

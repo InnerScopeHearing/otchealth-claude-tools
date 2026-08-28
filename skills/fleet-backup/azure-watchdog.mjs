@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SUPERSEDED 2026-08-28: Azure is now permanently gone (not merely unreachable), so this watchdog's core premise -- detect a live Azure outage -- is moot; its .github/workflows/azure-watchdog.yml caller is deleted, and it is kept here only for history. See skills/azure-canary/SKILL.md's banner for the fuller picture and the AWS-era successors (aws-dr-canary, aws-image-canary, nightly-schedule-canary).
 /**
  * azure-watchdog.mjs — the "wake up and Azure is off" self-trigger Matt asked for (2026-07-28).
  *
