@@ -337,13 +337,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-18T00:43:05.379Z
 - **Closed:** 2026-08-18T00:43:05.379Z
 
-### finding:FND-20260818-cc78 severity:high status:open | fleet-medic alerts silently NOT delivered: its GitHub log issue passed the 2500-comment cap, so every alert is dropped after a warn-level fleet_medic_alert_route_failed line
+### finding:FND-20260818-cc78 severity:high status:fixed | fleet-medic alerts silently NOT delivered: its GitHub log issue passed the 2500-comment cap, so every alert is dropped after a warn-level fleet_medic_alert_route_failed line
 
 - **Source audit doc:** CloudWatch /ecs/otchealth 2026-08-18T23:05:03Z (post-deploy log read, PR otchealth-mcp-server#253)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** issue #258 + gateway rev 24 env + rev 23 SNS fallback
+- **Verified by:** successor log issue otchealth-mcp-server#258 created; FLEET_MEDIC_LOG_ISSUE=258 live on rev 24 (health reports taskdef 24); SNS_ALERT_TOPIC_ARN wired since rev 23 with confirmed lambda subscription as failure backstop
 - **Opened:** 2026-08-18T23:12:11.685Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:44:17.333Z
 
 ### finding:FND-20260819-c9bb severity:high status:fixed | 6 fleet skills dark: quality-LLM callers still hard-depend on the dead Azure Foundry (critic-pass reports SUCCESS while doing nothing)
 
