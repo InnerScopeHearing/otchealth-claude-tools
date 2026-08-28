@@ -624,3 +624,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:35:52.204Z
 - **Closed:** (open)
+
+### finding:FND-20260828-4f85 severity:high status:open | otchealth-cto CLAUDE.md 2026-08-27 entry still says FourVault dump NOT found (POTENTIAL DATA LOSS) contradicting ground truth (dump EXISTS in otchealth-brain-dr pg-dumps/fourvault-2026-08-04.sql.gz); correct the doc; otchealth-pgrestore targets wrong tenancy (shared RDS) for COPPA kids data - restore target must be isolated/Neon; label flatstick-2026-08-04 dump PRE-cutover stale
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:35:54.711Z
+- **Closed:** (open)
