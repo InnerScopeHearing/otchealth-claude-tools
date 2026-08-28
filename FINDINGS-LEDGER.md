@@ -704,3 +704,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T03:45:55.990Z
 - **Closed:** (open)
+
+### finding:FND-20260828-cf13 severity:medium status:open | plantid-app carries 70 dependabot vulns (14 critical, 26 high) on main - triage pass needed, likely concentrated in the migration/legacy tree
+
+- **Source audit doc:** session:2026-08-28 PlantID PR #61 push output
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T03:45:58.649Z
+- **Closed:** (open)
