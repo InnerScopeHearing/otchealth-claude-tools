@@ -545,13 +545,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:33.658Z
 - **Closed:** 2026-08-28T22:41:25.534Z
 
-### finding:FND-20260827-e7c7 severity:medium status:open | Legal store on dead Azure (legal.mjs, legal-deadline-pager personal-store): repoint at S3 legal buckets, ring-gated, CLO/Matt sign-off for personal
+### finding:FND-20260827-e7c7 severity:medium status:fixed | Legal store on dead Azure (legal.mjs, legal-deadline-pager personal-store): repoint at S3 legal buckets, ring-gated, CLO/Matt sign-off for personal
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** otchealth-claude-tools#486 squash 38773f11e7f064bf58f733e44893102dd58e50c7
+- **Verified by:** CTO line-by-line diff review + local runs: new suites 38/38, pager/docket/deadline 60/60, kb-memory s3 layer green. Ring pinned by test: company->otchealth-finance-legal-dr, personal->otchealth-legal-personal-dr (never shared); personal writes reach S3 and reject LOUD with PERSONAL_WRITE_IAM_GATE_MESSAGE (IAM stays ReadOnly per standing Matt gate); getBlob 403 throws (never reads as absent-matter)
 - **Opened:** 2026-08-27T19:00:36.840Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:57:22.303Z
 
 ### finding:FND-20260827-2ed6 severity:medium status:open | apps/otchealth-os-chat + m365-agent-bridge + heygen approval broker: Azure-native services, retire-or-rebuild decision needed (os.otchealth.app DNS already removed)
 
