@@ -273,13 +273,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-16T20:33:37.126Z
 - **Closed:** 2026-08-28T03:45:40.786Z
 
-### finding:FND-20260816-e81a severity:high status:open | PG_SSL_VERIFY defaults false: gateway->RDS is encrypted but UNVERIFIED, and became load-bearing today when STATE_BACKEND=postgres went live; RDS CA bundle already exists inline in task-definitions-jobs.json so the fix is available now
+### finding:FND-20260816-e81a severity:high status:fixed | PG_SSL_VERIFY defaults false: gateway->RDS is encrypted but UNVERIFIED, and became load-bearing today when STATE_BACKEND=postgres went live; RDS CA bundle already exists inline in task-definitions-jobs.json so the fix is available now
 
 - **Source audit doc:** session:2026-08-16 push security review
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** otchealth-mcp-server 011c5d68 (rev 23)
+- **Verified by:** live /health/deep postgres_tls_verify:true on mcp.otchealth.app 2026-08-28
 - **Opened:** 2026-08-16T20:53:52.156Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:17:59.312Z
 
 ### finding:FND-20260816-c68c severity:medium status:open | pg-sql.ts interpolates table name into SQL; add an identifier regex guard at the top of translate() so the injection boundary is self-enforcing rather than caller-dependent
 
