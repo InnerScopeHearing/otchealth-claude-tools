@@ -14,10 +14,10 @@
 //   echo "<one-paragraph pitch>" | node shark-round.mjs pitch --app <name>
 import crypto from "node:crypto";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { TIERS } from "../../setup/model-routing.mjs";
+import { TIERS, resolveTier } from "../../setup/model-routing.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const argv = process.argv.slice(2);
@@ -31,14 +31,44 @@ async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return 
   if (!process.env.GCP_CLAUDE_DRIVER_SA_JSON) return null; // no GCP SA post-exit -> Key Vault only (via kvSecret above); skip the retired SM fallback
   const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 let EP, KEY, DEP;
-// Primary on Foundry (2026-08-01: the legacy azure-openai resource's gpt-4o deployment is 50K TPM
-// regional-Standard, already 100% subscribed, zero headroom - a hard capacity ceiling that kept
-// tripping the fleet-wide Datadog "Azure OpenAI throttled (blocked_calls)" monitor). No fallback chain
-// here (lower-frequency caller than the signal-radar detectors); a simple repoint is sufficient.
-async function initModel() { EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.SHARK_MODEL || TIERS.standard.deployment; if (!EP || !KEY) throw new Error("missing azure-foundry-openai endpoint/key"); }
-async function ask(system, user, maxTokens = 700) {
+// LLM_PROVIDER (2026-08-28, Azure Foundry retirement port): Azure subscription 55c84f6b (the Foundry
+// estate this called exclusively) is permanently deleted since 2026-08-13 -- verified HTTP 401 forever,
+// not a transient outage (the same dead-dependency class as skills/doc-indexer/enrich.mjs's 2026-08-19
+// finding). Default flips to 'openai' (api.openai.com); LLM_PROVIDER=foundry/azure keeps the original
+// Foundry path selectable, one env var away, if that estate is ever re-provisioned; it is not removed.
+// Mirrors skills/critic-pass/run.mjs's identical dispatch shape.
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
+
+// Exported (2026-08-28) so tests can drive the real network path directly (mocking global.fetch)
+// without going through the CLI's stdin/file-based pitch() argument plumbing.
+export async function initModel() {
+  if (LLM_PROVIDER === "openai") {
+    KEY = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+    DEP = resolveTier(process.env.SHARK_MODEL || "standard", "openai").deployment;
+    if (!KEY) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret) -- cannot pitch without an LLM");
+    return;
+  }
+  // ---- Foundry (LLM_PROVIDER=foundry/azure opt-in; original code, unchanged) ----
+  // Primary on Foundry (2026-08-01: the legacy azure-openai resource's gpt-4o deployment is 50K TPM
+  // regional-Standard, already 100% subscribed, zero headroom - a hard capacity ceiling that kept
+  // tripping the fleet-wide Datadog "Azure OpenAI throttled (blocked_calls)" monitor). No fallback chain
+  // here (lower-frequency caller than the signal-radar detectors); a simple repoint is sufficient.
+  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
+  KEY = await sm("azure-foundry-key");
+  DEP = process.env.SHARK_MODEL || TIERS.standard.deployment;
+  if (!EP || !KEY) throw new Error("missing azure-foundry-openai endpoint/key");
+}
+export async function ask(system, user, maxTokens = 700) {
+  const openai = LLM_PROVIDER === "openai";
+  const url = openai ? OPENAI_CHAT_URL : `${EP}/openai/deployments/${DEP}/chat/completions?api-version=2024-06-01`;
+  const headers = openai
+    ? { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" }
+    : { "api-key": KEY, "Content-Type": "application/json" };
+  const body = { messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.7 };
+  if (openai) body.model = DEP;
   for (let a = 0; a < 5; a++) {
-    const r = await fetch(`${EP}/openai/deployments/${DEP}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": KEY, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.7 }) });
+    const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     if (r.status === 429) { await new Promise(s => setTimeout(s, 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 140));
     return (await r.json()).choices[0].message.content;
@@ -48,7 +78,7 @@ async function ask(system, user, maxTokens = 700) {
 const parseJson = (s) => { try { return JSON.parse(s.match(/\{[\s\S]*\}/)[0]); } catch { return null; } };
 const fmt$ = (n) => (typeof n === "number" ? "$" + n.toLocaleString() : "n/a");
 
-async function pitch() {
+export async function pitch() {
   let idea = ""; const f = val("--idea", "");
   if (f && existsSync(f)) idea = readFileSync(f, "utf8");
   else { try { idea = readFileSync(0, "utf8"); } catch {} idea = idea || val("--text", ""); }
@@ -86,5 +116,11 @@ async function pitch() {
   if (CATALOG) { try { const { execFileSync } = await import("node:child_process"); execFileSync("node", [join(HERE, "..", "kb-memory", "mem.mjs"), "remember", `Shark Round "${APP}": ${ins.length}/${out.length} in, avg ${avg.toFixed(1)}/10. Sharks' top concerns: ${out.flatMap(o => o.concerns || []).slice(0, 5).join("; ")}`, "--agent", "shark-tank", "--tags", `shark-tank,${APP},investment`, "--share"], { stdio: "ignore" }); console.log("\ncataloged to shared brain: yes"); } catch { } }
   console.log(`\nsaved: skills/shark-tank/rounds/`);
 }
-try { if (cmd === "pitch") await pitch(); else { console.error('usage: shark-round.mjs pitch --idea <file> [--app <name>] [--panel ids] [--catalog]'); process.exit(2); } }
-catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+// Guarded (2026-08-28, alongside the OpenAI port) so importing this module from a test does not
+// auto-execute the CLI against process.argv -- mirrors skills/critic-pass/run.mjs's identical isMain
+// guard. Direct `node shark-round.mjs pitch ...` invocation is byte-for-byte unchanged.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  try { if (cmd === "pitch") await pitch(); else { console.error('usage: shark-round.mjs pitch --idea <file> [--app <name>] [--panel ids] [--catalog]'); process.exit(2); } }
+  catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+}
