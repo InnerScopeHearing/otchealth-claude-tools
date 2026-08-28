@@ -608,3 +608,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:35:46.158Z
 - **Closed:** (open)
+
+### finding:FND-20260828-8b41 severity:high status:open | Privileged DR buckets otchealth-finance-legal-dr + otchealth-legal-personal-dr are now PRIMARY stores with NO versioning/lifecycle/object-lock; n8n Lightsail Postgres has no snapshots; enable versioning+protection, add to canary
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:35:49.600Z
+- **Closed:** (open)
