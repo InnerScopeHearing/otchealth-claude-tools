@@ -712,3 +712,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T03:45:58.649Z
 - **Closed:** (open)
+
+### finding:FND-20260828-47ef severity:low status:open | 3 ECR repos (os-chat, fourvault-api, pressgolf-api) had tagStatus:any keep-last-10 lifecycle fuse; fixed LIVE 2026-08-28 to safe 3-rule pattern. IaC reconcile: if any lifecycle policy is defined in CDK/terraform, update source or a future deploy re-arms the fuse.
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md#2026-08-28
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T06:30:52.837Z
+- **Closed:** (open)
