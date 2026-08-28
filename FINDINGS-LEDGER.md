@@ -616,3 +616,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:35:49.600Z
 - **Closed:** (open)
+
+### finding:FND-20260828-f1ca severity:high status:open | n8n pre-activation PHI-residue scan: recovered execution tables may hold historical WF02/WF03 PHI rows on non-BAA host; scan + counsel-gated purge BEFORE Phase-1 activation (legal wall)
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:35:52.204Z
+- **Closed:** (open)
