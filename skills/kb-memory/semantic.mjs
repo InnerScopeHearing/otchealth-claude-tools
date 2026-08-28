@@ -52,8 +52,8 @@ const AIS_API = "2023-11-01";
 const EMB_DIMS = 3072;
 // Read ONCE at module load (matches this file's existing AGENT_FILTER/TYPE_FILTER/N convention, and
 // otchealth-mcp-server's own dispatcher, which reads SEARCH_BACKEND once via loadEnv()).
-const SEARCH_BACKEND = (process.env.SEARCH_BACKEND || "azure").toLowerCase(); // 'azure' | 'opensearch'
-const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "foundry").toLowerCase(); // 'foundry' | 'openai'
+const SEARCH_BACKEND = (process.env.SEARCH_BACKEND || "opensearch").toLowerCase(); // 'opensearch' (default since 2026-08-27; Azure AI Search died with sub 55c84f6b) | 'azure'
+const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "openai").toLowerCase(); // 'openai' (default since 2026-08-27; Azure Foundry died with sub 55c84f6b) | 'foundry'
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];

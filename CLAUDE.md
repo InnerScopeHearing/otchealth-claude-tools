@@ -14,6 +14,41 @@ Voice: decisive, precise, security-first; lead with what is true now, then the r
 Read this first. It is the standing context every Claude Code session should
 assume unless the user says otherwise.
 
+## CORRECTION, 2026-08-27: Azure is permanently gone, GCP is retired, AWS is the estate
+
+This supersedes every "Azure-default", "Azure first", "store it in GCP Secret Manager", and
+"n8n self-host is LIVE on Azure" statement below and in any other fleet doc. Do not restore
+that framing, and do not follow older sections of this file where they conflict with this one.
+
+- **Azure subscription `55c84f6b-ef90-4259-a58b-50835cc4cab4` was PERMANENTLY DELETED on
+  2026-08-13** (Microsoft denied further credit). Everything that lived on it is unreachable
+  forever: the Container Apps gateway and jobs, Azure Key Vault `kv-otc-55c84f6bef`, Azure AI
+  Search (`otchealth-dataroom-s1`), Azure OpenAI/Foundry, Azure Blob accounts
+  (`otchealthcommons`, `otchealthcfodata`, `otchealthlegalstore`, ...), the n8n VM behind
+  `automation.otchealth.app` (its dangling DNS record was removed 2026-08-27), and the
+  `os.otchealth.app` chat app. An emergency evacuation moved secrets and object storage to AWS
+  before the account closed. Nothing may target an Azure resource as a current dependency.
+- **GCP is retired for everything non-PHI** (Secret Manager billing intentionally disabled
+  fleet-wide, 2026-07). The ONE standing GCP exception is the MedReview/Companion PHI ring on
+  the GCP BAA (Vertex, Cloud Run, Cloud Vision): that is a LEGAL WALL, not a migration target —
+  moving it requires an AWS BAA + counsel + Matt, never a silent repoint.
+- **The estate is AWS**: fleet master account `900915535335` (gateway on ECS behind
+  `mcp.otchealth.app`, OpenSearch domain `otchealth-brain`, S3 ledger/DR buckets, EventBridge
+  Scheduler jobs) and Flatstick's own account `301001539500` (ECS behind
+  `https://dhpdikcla0tbg.cloudfront.net`, RDS, `/flatstick/*` SSM). New infra defaults to AWS.
+- **Secrets: AWS SSM Parameter Store `/otchealth/*` is the store of record** (~455 params).
+  Read via `setup/get-secret-aws.mjs` / kb-memory's `kvSecret()` (which now defaults
+  `SECRET_BACKEND=ssm`); write via `setup/set-secret.mjs` (SSM leg is authoritative). Key Vault
+  and GCP SM references in older sections are historical.
+- **Backends every seat should assume**: `SECRET_BACKEND=ssm`, `BLOB_BACKEND=s3`,
+  `SEARCH_BACKEND=opensearch`, `EMBEDDINGS_PROVIDER=openai` (session-start.sh now pins these).
+  The company brain is the OpenSearch domain `otchealth-brain` via the gateway's `brain_search`;
+  `docs/OS-MIGRATION.md` describes the retired Azure process and must not be followed.
+- **n8n is DOWN, not moved**: the Azure self-host died with the subscription. The ~34
+  customer-service workflows (Twilio/ElevenLabs/Shopify) are offline pending the Lightsail
+  recovery lane (`cs-n8n.otchealthmart.com`, otchealth-cto `aws-n8n-recovery.yml`). Never point
+  anything at `automation.otchealth.app` or `otchealth.app.n8n.cloud` again.
+
 ## Environment / host facts (do not suggest workflows that violate these)
 - **Operator host is a Windows PC. There is NO Mac.** Never propose a local macOS
   or local Xcode workflow.

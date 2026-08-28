@@ -403,11 +403,20 @@ GREPTILE_TOKEN_V="$(get_key GREPTILE_TOKEN)"
 REPLICATE_TOKEN_V="$(get_key REPLICATE_API_TOKEN)"
 N8N_API_KEY_V="$(get_key N8N_API_KEY)"
 N8N_BASE_URL_V="$(get_key N8N_BASE_URL)"
-# Pin the n8n SELF-HOST as the default (COO-21, 2026-06-11). n8n Cloud
-# (otchealth.app.n8n.cloud) is decommissioned; never let CLI/skill use fall back
-# to it. The first-party n8n MCP connection is repointed separately in the Claude
-# Code env settings (base URL + self-host API key from the Notion vault).
-N8N_BASE_URL_V="${N8N_BASE_URL_V:-https://automation.otchealth.app}"
+# n8n STATUS (2026-08-27): the Azure self-host at automation.otchealth.app died with the
+# permanently deleted subscription 55c84f6b (2026-08-13), and its dangling DNS record has been
+# removed. n8n Cloud was already decommissioned. There is NO live n8n today: the AWS Lightsail
+# recovery target (cs-n8n.otchealthmart.com, otchealth-cto/.github/workflows/aws-n8n-recovery.yml)
+# answers 502 until recovery completes. Do NOT default to any dead host -- a session that needs n8n
+# must get a loud warning, not a silently-exported URL that times out. The SSM-mirrored
+# n8n-base-url secret still HOLDS the dead value, so filter it here too, not just the default.
+case "${N8N_BASE_URL_V:-}" in
+  *automation.otchealth.app*|*otchealth.app.n8n.cloud*) N8N_BASE_URL_V="" ;;
+esac
+if [ -z "${N8N_BASE_URL_V:-}" ]; then
+  echo "[octools] WARN: n8n is DOWN (Azure self-host died with sub 55c84f6b, 2026-08-13; recovery pending)." >&2
+  echo "[octools]       N8N_BASE_URL is intentionally UNSET. Set it explicitly once the recovered instance is live." >&2
+fi
 SENTRY_AUTH_TOKEN_V="$(get_key SENTRY_AUTH_TOKEN)"
 CLOUDFLARE_TOKEN_V="$(get_key CLOUDFLARE_API_TOKEN)"
 NETLIFY_TOKEN_V="$(get_key NETLIFY_TOKEN)"
@@ -465,6 +474,17 @@ FOURVAULT_NEON_DIRECT_V="$(get_key FOURVAULT_NEON_DATABASE_URL_DIRECT)"
 # ─── Append platform/service tokens that are actually provisioned ───
 # Kept out of the block above so credentials.env only carries what exists.
 append_if() { [ -n "$2" ] && echo "$1=$2" >> "$CRED"; }
+# ─ AWS-era backend posture (2026-08-27) ─
+# Azure subscription 55c84f6b is permanently deleted; pin every seat to the live AWS backends so
+# even a stale skill checkout (whose code defaults may predate the flip) resolves SSM secrets, the
+# S3 ledger, and the OpenSearch brain instead of burning timeouts against the dead estate. These
+# respect a pre-set environment override.
+{
+  echo "SECRET_BACKEND=${SECRET_BACKEND:-ssm}"
+  echo "BLOB_BACKEND=${BLOB_BACKEND:-s3}"
+  echo "SEARCH_BACKEND=${SEARCH_BACKEND:-opensearch}"
+  echo "EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-openai}"
+} >> "$CRED"
 echo "# ─ Platform / service tokens (non-PHI; present only when provisioned) ─" >> "$CRED"
 append_if DEPOT_TOKEN "$DEPOT_TOKEN_V"
 append_if DEPOT_PROJECT_ID "$DEPOT_PROJECT_ID_V"
@@ -602,19 +622,14 @@ bash "${TOOLS_DIR}/skills/gateway-connect/session-connect.sh" 2>/dev/null || tru
 echo "[octools] Done. Designer skill + Dream Team agents ready."
 echo "[octools] Credentials: $CRED"
 
-# ─── OTCHealth AI OS migration notice ────────────────────────────────
-# The Azure AI Foundry agent "otchealth-os" (project otchealth-os, gpt-5.4) is now the unified,
-# company-wide brain: every fleet ledger/data-room is being consolidated into its 13 Azure AI Search
-# indexes. Point new sessions at the reconciliation process so this session's knowledge lands in the
-# shared brain instead of staying siloed. Fail-open (best-effort only): never blocks session start.
-if [ -f "${TOOLS_DIR}/docs/OS-MIGRATION.md" ]; then
-  echo "───────────────────────────────────────────────────────────────────"
-  echo "[octools] OTCHealth AI OS is now the unified company brain (Foundry project otchealth-os, gpt-5.4)."
-  echo "[octools] To reconcile THIS session's knowledge into it, follow ${TOOLS_DIR}/docs/OS-MIGRATION.md"
-  echo "[octools]   (and runbooks/agent-gateway-connectivity.md once published) — the 8-step migration"
-  echo "[octools]   process for the global doc 'OTCHealth AI OS — Session Migration & Reconciliation Prompt'."
-  echo "───────────────────────────────────────────────────────────────────"
-fi
+# ─── Company brain notice (AWS, 2026-08-27) ─────────────────────────
+# The former Azure AI Foundry "otchealth-os" agent and its Azure AI Search indexes died with the
+# permanently deleted subscription 55c84f6b (2026-08-13). The unified company brain now lives on the
+# AWS OpenSearch domain otchealth-brain, reached through the fleet gateway at mcp.otchealth.app
+# (brain_search / memory_* / checkpoint tools) and the kb-memory skill (BLOB_BACKEND=s3,
+# SEARCH_BACKEND=opensearch). docs/OS-MIGRATION.md describes the RETIRED Azure process -- do not
+# follow it; use the gateway tools and kb-memory write-through instead.
+echo "[octools] Company brain: AWS OpenSearch otchealth-brain via mcp.otchealth.app (Azure Foundry/AI Search are gone)."
 
 # Always succeed: skills + agents are installed. Missing secrets are warned above,
 # not fatal — a session must be able to start without the GCP SA / Secret Manager.

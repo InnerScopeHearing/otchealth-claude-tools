@@ -57,7 +57,12 @@ esac
 # `claude mcp list` each prompt is a cheap local read; the costly mint only runs when actually needed.
 # Fail-open, never blocks a prompt. Opt-out: OCTOOLS_NO_GATEWAY_SYNC=1.
 if [ -z "${OCTOOLS_NO_GATEWAY_SYNC:-}" ] && command -v claude >/dev/null 2>&1 \
-   && { [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ] || [ -f "${HOME}/.gcp_claude_driver_sa.json" ]; }; then
+   && { [ -n "${OTC_AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_ACCESS_KEY_ID:-}" ] \
+        || [ -n "${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}" ] \
+        || [ -n "${GCP_CLAUDE_DRIVER_SA_JSON:-}" ] || [ -f "${HOME}/.gcp_claude_driver_sa.json" ]; }; then
+  # Gate widened 2026-08-27: current seats bootstrap with OTC_AWS_*/task-role credentials only (GCP
+  # is retired), so the old GCP-SA-presence check silently disabled the mid-session gateway
+  # self-heal on every modern seat. The legacy GCP check is kept last for any straggler.
   GW_STAMP="${HOME}/.claude/.gateway-connect-last"
   GW_THROTTLE="${OCTOOLS_GATEWAY_THROTTLE:-3000}"
   gw_now="$(date +%s 2>/dev/null || echo 0)"

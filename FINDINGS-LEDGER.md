@@ -432,3 +432,163 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T06:23:39.854Z
 - **Closed:** 2026-08-21T06:32:45.291Z
+
+### finding:FND-20260827-1503 severity:critical status:open | Twilio prod numbers (Sarah/Taylor/Helen) + ElevenLabs post-call webhook still target the dead n8n host (now NXDOMAIN); repoint the moment cs-n8n recovery validates (template: runbooks/scripts/apply-twilio-postwave.mjs)
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T18:59:53.397Z
+- **Closed:** (open)
+
+### finding:FND-20260827-02c2 severity:critical status:fixed | FourVault potential customer data loss: prod DB was on deleted Azure Postgres, NO dump found in master-account S3 (4 buckets, live-listed); full inventory of all AWS accounts/stores required before concluding
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T18:59:56.473Z
+- **Closed:** 2026-08-27T19:49:28.476Z
+
+### finding:FND-20260827-dbb9 severity:critical status:open | n8n recovery incomplete: cs-n8n.otchealthmart.com (Lightsail) answers 502; ~34 CS workflows offline since 2026-08-13; finish aws-n8n-recovery lane then re-run the webhook/security batteries
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T18:59:59.400Z
+- **Closed:** (open)
+
+### finding:FND-20260827-bcfc severity:high status:open | Toolkit Azure-blob cluster still writes to dead estate: heartbeat.mjs, fleet-dispatch, fleet-search, fleet-medic notes, sunset-protocol, memory-librarian, ledger-archive, notion-export, innd-stock -- port to S3 (s3-blob.mjs pattern)
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:02.382Z
+- **Closed:** (open)
+
+### finding:FND-20260827-4288 severity:high status:open | xero-token.mjs + xero-run.mjs token cache/lock on dead Azure Blob: the proven org-lockout race is re-armed whenever concurrent Xero use resumes; port lock to S3 If-None-Match or DynamoDB
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:05.975Z
+- **Closed:** (open)
+
+### finding:FND-20260827-4131 severity:high status:open | DR chain is dead: no working nightly backup of SSM secrets or the OpenSearch brain (old chain enumerated Azure); rebuild AWS-native (SSM export + OpenSearch snapshots to S3)
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:09.592Z
+- **Closed:** (open)
+
+### finding:FND-20260827-dd78 severity:high status:open | Foundry LLM callers still dead (extends FND-20260819-c9bb): critic-pass (reports SUCCESS on fail-safe approve on every PR), agent-evals, focus-group-loop, recall-evals, doc-indexer deep-pass; port per enrich.mjs pattern; make critic-pr report neutral until then
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:12.839Z
+- **Closed:** (open)
+
+### finding:FND-20260827-d47b severity:high status:open | Gateway tail: legal_blob_put('personal') writes to dead Azure; heygen artifact-store Azure-only while HeyGen writes enabled; HEYGEN_APPROVAL_BROKER_URL dead (approval lane fail-closed); 37 n8n_* + 13 azure_* tools dead surface; prune dead AZURE_*/FOUNDRY_*/COSMOS_* env at next deploy
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:16.109Z
+- **Closed:** (open)
+
+### finding:FND-20260827-558b severity:high status:open | PlantID backend rebuild: Azure Functions app gone; port functions/ to Lambda/ECS + OpenAI-direct/Bedrock + DynamoDB, then ship build 2 (shipped build 1 is dead)
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:18.954Z
+- **Closed:** (open)
+
+### finding:FND-20260827-d074 severity:high status:open | FourVault backend rebuild on Flatstick pattern (own account, ECS+CloudFront+RDS+S3 provider, persisted-URL rewrite) + re-register SIWA redirect, eBay deletion endpoint, RevenueCat webhook
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:21.836Z
+- **Closed:** (open)
+
+### finding:FND-20260827-e4e3 severity:high status:open | doc-indexer push-search still requires dead Azure Search: librarian ECS jobs run but room freshness rides on enrich-only; add first-class OpenSearch push-search backend and make it default
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:24.807Z
+- **Closed:** (open)
+
+### finding:FND-20260827-acce severity:medium status:open | 12 SSM /otchealth/* params hold dead-Azure VALUES (azure-search/foundry/cosmos/docintel/contentsafety endpoints, n8n-base-url, cfo-legal-store-sas-ro, brain-search-endpoint): retire or repoint each as consumers are ported
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:28.013Z
+- **Closed:** (open)
+
+### finding:FND-20260827-b308 severity:medium status:open | innd.com Netlify env: N8N_SHAREHOLDER_WEBHOOK forwards shareholder signups to a dead n8n destination and soft-succeeds; unset or repoint at deploy of innd-website PR #11
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:30.765Z
+- **Closed:** (open)
+
+### finding:FND-20260827-2740 severity:medium status:open | Vendor webhook registries never enumerated (Stripe, RevenueCat, Customer.io, Intercom, Shopify, PostHog, Sentry): sweep each for Azure/n8n callback URLs once MCPs are authorized
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:33.658Z
+- **Closed:** (open)
+
+### finding:FND-20260827-e7c7 severity:medium status:open | Legal store on dead Azure (legal.mjs, legal-deadline-pager personal-store): repoint at S3 legal buckets, ring-gated, CLO/Matt sign-off for personal
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:36.840Z
+- **Closed:** (open)
+
+### finding:FND-20260827-2ed6 severity:medium status:open | apps/otchealth-os-chat + m365-agent-bridge + heygen approval broker: Azure-native services, retire-or-rebuild decision needed (os.otchealth.app DNS already removed)
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:39.620Z
+- **Closed:** (open)
+
+### finding:FND-20260827-5b15 severity:medium status:open | Datadog monitor fleet + Notion vault registry + Hyperagent saved skills/schedules still carry Azure-era config; sweep once respective access is available
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:00:42.311Z
+- **Closed:** (open)
+
+### finding:FND-20260827-f61b severity:medium status:fixed | fourvault osv-scan red on main since 2026-08-12: nanoid 3.3.17 (GHSA-2v37-7h3g-55p8, High 8.2) and uuid 7.0.3 (GHSA-w5hq-g745-h8pq, High 7.5) in pnpm-lock.yaml; fix = pnpm override nanoid>=3.3.18 + trace parent pinning uuid@7; queued as its own supply-chain PR with Guardian lockfile-delta review
+
+- **Source audit doc:** fourvault PR #96 CI + guardian.yml run history on main
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:24:26.015Z
+- **Closed:** 2026-08-27T20:05:34.913Z
+
+### finding:FND-20260827-98d2 severity:high status:open | FourVault restore path: restore pg-dumps/fourvault-2026-08-04.sql.gz (15KB gz) into the FourVault backend rebuild target, assess the Aug 4-13 tail loss window (worst case 9 days), and inventory row counts in the restore environment (kids-app data: counts only, never content in logs). Read access to the DR bucket needs the DR-writer identity or a scoped grant
+
+- **Source audit doc:** live S3 listing 2026-08-27 (probe4/probe6), supersedes FND-20260827-02c2
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:49:31.673Z
+- **Closed:** (open)
+
+### finding:FND-20260827-3a32 severity:low status:open | SSM netlify-token is STALE (Netlify API returns 401 Access Denied) -- blocks the N8N_SHAREHOLDER_WEBHOOK env unset (FND-20260827-b308) and any Netlify automation from the seat; needs a fresh PAT from app.netlify.com/user/applications (Matt) or Netlify MCP auth, then unset the var on the innd site (function then logs each signup email to Netlify function logs = recoverable, vs today's silent deferred loss)
+
+- **Source audit doc:** live Netlify API probe 2026-08-27
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-27T19:59:42.033Z
+- **Closed:** (open)

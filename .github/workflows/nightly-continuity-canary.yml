@@ -25,8 +25,12 @@
 name: Nightly Continuity Canary
 
 on:
-  schedule:
-    - cron: '35 8 * * *'   # daily 08:35 UTC (after nightly-azure-canary at 08:20, same paging convention)
+  # SCHEDULE DISARMED 2026-08-27: this workflow authenticates to / exercises the Azure estate
+  # on subscription 55c84f6b, which was PERMANENTLY DELETED 2026-08-13 -- every scheduled run
+  # since then has failed or produced noise against dead resources. workflow_dispatch is kept.
+  # Re-arm only as part of an AWS-native rebuild (see the 2026-08-27 migration-audit report).
+  # schedule:
+  #   - cron: '35 8 * * *'   # daily 08:35 UTC (after nightly-azure-canary at 08:20, same paging convention)
   workflow_dispatch: {}
 
 permissions:

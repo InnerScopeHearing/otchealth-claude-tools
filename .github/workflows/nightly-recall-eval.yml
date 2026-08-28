@@ -42,8 +42,12 @@
 name: Nightly Recall-Quality Eval
 
 on:
-  schedule:
-    - cron: '45 6 * * *'    # daily 06:45 UTC (after the 06:30 agent-eval nightly, before the 08:00 medic)
+  # SCHEDULE DISARMED 2026-08-27: this workflow authenticates to / exercises the Azure estate
+  # on subscription 55c84f6b, which was PERMANENTLY DELETED 2026-08-13 -- every scheduled run
+  # since then has failed or produced noise against dead resources. workflow_dispatch is kept.
+  # Re-arm only as part of an AWS-native rebuild (see the 2026-08-27 migration-audit report).
+  # schedule:
+  #   - cron: '45 6 * * *'    # daily 06:45 UTC (after the 06:30 agent-eval nightly, before the 08:00 medic)
   workflow_dispatch: {}      # manual trigger for testing
 
 permissions:
