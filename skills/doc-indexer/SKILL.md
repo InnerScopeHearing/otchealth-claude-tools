@@ -44,11 +44,16 @@ is ~80% cheaper than gpt-4.1. `cu-calibrate` reads CU's `usage` object for the r
 ## Two retrieval layers
 - **Free portable core (always built):** `_TEXT/` sidecars + `node:sqlite` FTS5 index -> the `search`
   command (keyword/phrase), plus `rg` over sidecars. Zero infra, offline, lives in the room.
-- **Azure AI Search brain (the managed upgrade, 2026-06-19 decision):** `push-search` ships the corpus
-  (metadata + content + embeddings) into an Azure AI Search index with **hybrid keyword + vector +
-  semantic** ranking; `cloud-search` queries it. Agents get meaning-based retrieval via one API; a
-  query-time Azure OpenAI vectorizer means callers just pass text. People browse the reorg'd taxonomy
-  on **OneDrive** (`cfo-onedrive`) + `catalog.csv`.
+- **Amazon OpenSearch brain (DEFAULT since 2026-08-27; Azure AI Search died with subscription
+  55c84f6b):** `push-search` ships the corpus (metadata + content + embeddings) into the
+  `otchealth-brain` OpenSearch domain with **BM25 keyword + k-NN vector** hybrid ranking (client-side
+  RRF merge, OpenSearch has no built-in semantic reranker); `cloud-search` queries it. Room/index names
+  are identical to the old Azure ones (`${profile}-${container}`). A room already CHUNKED (fed by
+  `enrich.mjs`'s OpenSearch write path or the migration bulk loader -- the 5 main knowledge rooms) is
+  detected automatically and `push-search` skips it cleanly rather than attempting an invalid flat
+  write. `--search-backend azure` remains selectable for a genuinely still-Azure room and fails loud
+  (never silently) when unconfigured. `--embeddings-provider openai|foundry` (default openai) is an
+  independent axis. People browse the reorg'd taxonomy on **OneDrive** (`cfo-onedrive`) + `catalog.csv`.
 
 ## Commands
 ```
@@ -59,10 +64,11 @@ node skills/doc-indexer/indexer.mjs status        --profile <p> [--azure|--gcs] 
 node skills/doc-indexer/indexer.mjs build-index   --profile <p> [--azure|--gcs]   # rebuild index.sqlite from sidecars
 node skills/doc-indexer/indexer.mjs build-csv     --profile <p> [--azure|--gcs]   # _CATALOG/catalog.csv
 node skills/doc-indexer/indexer.mjs propose-mapping --profile <p> [--azure|--gcs] # old->taxonomy mapping CSV
-# Azure AI Search brain (needs azure-search-endpoint/-admin-key + an Azure OpenAI embedding deployment)
-node skills/doc-indexer/indexer.mjs search-init   --profile <p> [--azure|--gcs] [--index name]   # create the index
-node skills/doc-indexer/indexer.mjs push-search   --profile <p> [--azure|--gcs] [--index name]   # embed + push corpus
-node skills/doc-indexer/indexer.mjs cloud-search "<query>" --profile <p> [--azure|--gcs] [--limit n]  # hybrid+semantic
+# Search brain (default OpenSearch via AWS creds + OPENSEARCH_ENDPOINT; --search-backend azure needs
+# azure-search-endpoint/-admin-key + an Azure OpenAI embedding deployment instead)
+node skills/doc-indexer/indexer.mjs search-init   --profile <p> [--s3|--azure|--gcs] [--index name] [--search-backend opensearch|azure]
+node skills/doc-indexer/indexer.mjs push-search   --profile <p> [--s3|--azure|--gcs] [--index name] [--search-backend opensearch|azure] [--embeddings-provider openai|foundry]
+node skills/doc-indexer/indexer.mjs cloud-search "<query>" --profile <p> [--s3|--azure|--gcs] [--limit n] [--search-backend opensearch|azure]  # hybrid (BM25+kNN, RRF-merged)
 ```
 
 ## Profiles (storage + taxonomy)

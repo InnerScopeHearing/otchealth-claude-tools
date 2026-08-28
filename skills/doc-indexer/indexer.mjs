@@ -58,6 +58,12 @@ import { join, basename, extname } from "node:path";
 import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
 import { getBufferFromS3, putObjectToS3, listBlobsMetaFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { osFetch, osGetMapping, osSearch } from "./opensearch-client.mjs";
+// The proven Amazon OpenSearch writer (Wave-2b port): SigV4 signing, credential resolution
+// (ECS task role -> env -> Key Vault), the OpenAI-direct embedding call, and the bulk
+// update+doc_as_upsert primitive. Reused verbatim rather than reimplemented -- see this file's own
+// SEARCH_BACKEND section below for why push-search now targets it by default.
+import * as OS from "../kb-memory/opensearch-write.mjs";
 
 const argv = process.argv.slice(2);
 function takeVal(name, def = null) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return def; }
@@ -74,6 +80,28 @@ const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
 const FLUSH_EVERY = parseInt(takeVal("--flush", "150"), 10) || 150;
 const CONCURRENCY = Math.max(1, parseInt(takeVal("--concurrency", process.env.CU_CONCURRENCY || "8"), 10) || 8);
 const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.CU_MAX_MINUTES || "0"), 10) || 0; // soft time budget for understand; 0 = no budget
+// SEARCH_BACKEND / EMBEDDINGS_PROVIDER (2026-08-27): governs search-init / push-search / cloud-search
+// ONLY -- a completely separate axis from BACKEND (STORAGE_BACKEND) above, exactly like enrich.mjs's
+// header distinguishes "where the source bytes live" from "where the enriched/searchable fields go".
+// SEARCH_BACKEND default is now "opensearch" (Azure AI Search died with subscription 55c84f6b on
+// 2026-08-13; every azure-search-* secret in SSM/Key Vault now points at dead infrastructure, so an
+// invocation that forgets to pick a search backend must land on the one that actually works, not the
+// one that fails loud at PUT time after a full room's worth of embedding cost is already spent).
+// --search-backend azure remains fully selectable (e.g. for a genuinely still-Azure room) and still
+// fails LOUD (aisInit()'s pre-existing "Missing azure-search-endpoint" guard) when unconfigured --
+// this flag never silently falls through to OpenSearch instead. EMBEDDINGS_PROVIDER mirrors
+// semantic.mjs/index-one.mjs's own independent switch (a genuine Azure outage takes Foundry down too,
+// so SEARCH_BACKEND=opensearch alone is not sufficient for an Azure-free embed step).
+const SEARCH_BACKEND = (takeVal("--search-backend", process.env.SEARCH_BACKEND || "opensearch") || "opensearch").toLowerCase();
+if (SEARCH_BACKEND !== "opensearch" && SEARCH_BACKEND !== "azure") {
+  console.error(`--search-backend must be "opensearch" or "azure" (got "${SEARCH_BACKEND}").`);
+  process.exit(2);
+}
+const EMBEDDINGS_PROVIDER = (takeVal("--embeddings-provider", process.env.EMBEDDINGS_PROVIDER || "openai") || "openai").toLowerCase();
+if (EMBEDDINGS_PROVIDER !== "openai" && EMBEDDINGS_PROVIDER !== "foundry") {
+  console.error(`--embeddings-provider must be "openai" or "foundry" (got "${EMBEDDINGS_PROVIDER}").`);
+  process.exit(2);
+}
 const flags = new Set(argv.filter((a) => a.startsWith("--")));
 const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help"; // require an explicit command; no-arg must NOT silently start a run
@@ -529,19 +557,37 @@ async function runBuildCsv() {
 const AIS_API = "2024-07-01";
 const EMB_DIMS = parseInt(process.env.AZURE_OPENAI_EMBEDDING_DIMS || "3072", 10); // text-embedding-3-large=3072, -small=1536
 let AIS_EP, AIS_KEY, AOAI_EP, AOAI_KEY, AOAI_DEP, AOAI_MODEL, IDXNAME;
+// Shared by BOTH backends (Azure AI Search index name AND OpenSearch room/index name): "identical to
+// the Azure rooms by design" -- see otchealth-mcp-server/src/search/opensearch.ts's own file header
+// and enrich.mjs's roomName(), which use this exact same `${PROFILE}-${container}` convention. Factored
+// out so aisInit() and the new OpenSearch path below compute the SAME name from the SAME inputs rather
+// than risk two copies drifting apart.
+function computeIndexName() {
+  return (idxOverride || `${PROFILE}-${targetContainer()}`).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
+}
+let _foundryEmbedReady = false;
+/** Resolve the Azure Foundry embedding endpoint/key/deployment (AOAI_*), independent of whether the
+ *  SEARCH backend is Azure or OpenSearch -- extracted out of aisInit() so --embeddings-provider
+ *  foundry works on the OpenSearch push-search path too (EMBEDDINGS_PROVIDER is an axis independent
+ *  of SEARCH_BACKEND, mirroring semantic.mjs/index-one.mjs). Idempotent; fails loud exactly once. */
+async function ensureFoundryEmbedConfig() {
+  if (_foundryEmbedReady) return;
+  AOAI_EP = (process.env.AZURE_FOUNDRY_OPENAI_ENDPOINT || (await sm("azure-foundry-openai-endpoint")) || process.env.AZURE_OPENAI_ENDPOINT || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
+  AOAI_KEY = process.env.AZURE_FOUNDRY_KEY || (await sm("azure-foundry-key")) || process.env.AZURE_OPENAI_API_KEY || (await sm("azure-openai-key"));
+  AOAI_DEP = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
+  AOAI_MODEL = process.env.AZURE_OPENAI_EMBEDDING_MODEL || AOAI_DEP;
+  if (!AOAI_EP || !AOAI_KEY) { console.error("Missing azure-openai-endpoint / azure-openai-key (needed for --embeddings-provider foundry)."); process.exit(2); }
+  _foundryEmbedReady = true;
+}
 async function aisInit() {
   await initStorage(); // sets GBUCKET / CONTAINER for the derived index name
   AIS_EP = (process.env.AZURE_SEARCH_ENDPOINT || (await sm("azure-search-endpoint")) || "").replace(/\/$/, "");
   AIS_KEY = process.env.AZURE_SEARCH_KEY || (await sm("azure-search-admin-key"));
   // Embeddings live on the Foundry resource (text-embedding-3-large). Prefer the foundry
   // openai endpoint + foundry key; fall back to the designer azure-openai resource.
-  AOAI_EP = (process.env.AZURE_FOUNDRY_OPENAI_ENDPOINT || (await sm("azure-foundry-openai-endpoint")) || process.env.AZURE_OPENAI_ENDPOINT || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
-  AOAI_KEY = process.env.AZURE_FOUNDRY_KEY || (await sm("azure-foundry-key")) || process.env.AZURE_OPENAI_API_KEY || (await sm("azure-openai-key"));
-  AOAI_DEP = process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
-  AOAI_MODEL = process.env.AZURE_OPENAI_EMBEDDING_MODEL || AOAI_DEP;
-  IDXNAME = (idxOverride || `${PROFILE}-${targetContainer()}`).toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 128);
+  await ensureFoundryEmbedConfig();
+  IDXNAME = computeIndexName();
   if (!AIS_EP || !AIS_KEY) { console.error("Missing azure-search-endpoint / azure-search-admin-key (provision the Azure AI Search resource)."); process.exit(2); }
-  if (!AOAI_EP || !AOAI_KEY) { console.error("Missing azure-openai-endpoint / azure-openai-key (needed for embeddings)."); process.exit(2); }
 }
 async function embed(texts) {
   for (let attempt = 0; attempt < 9; attempt++) {
@@ -609,7 +655,7 @@ async function aisPushRetry(batch) {
     catch (e) { const m = String(e.message); if (a < 7 && /(429|503|500|408|throttl|timeout|ECONNRESET|fetch failed|resolve_no_records|private\/reserved IP|Host resolves|EAI_AGAIN|ENOTFOUND)/i.test(m)) { await sleep(3000 * (a + 1)); continue; } throw e; }
   }
 }
-async function runSearchInit() { await aisInit(); await aisCreateIndex(); console.log(`Azure AI Search index ready: ${IDXNAME} (dims ${EMB_DIMS}, vectorizer ${AOAI_DEP})`); }
+async function runSearchInitAzure() { await aisInit(); await aisCreateIndex(); console.log(`Azure AI Search index ready: ${IDXNAME} (dims ${EMB_DIMS}, vectorizer ${AOAI_DEP})`); }
 async function aisExistingIds() {
   // Resumability: collect ids already in the index so re-runs only push NEW docs. Without this,
   // push-search re-embeds ALL docs every run, so a room too big to finish push-search in one
@@ -627,7 +673,7 @@ async function aisExistingIds() {
   }
   return ids;
 }
-async function runPushSearch() {
+async function runPushSearchAzure() {
   await aisInit();
   // CHUNKED-ROOM GUARD (2026-07-21): after the Phase-3 S1 cutover the doc rooms are CHUNKED
   // (key=chunk_id, text_vector) and fed by native S1 pull-indexers -- a flat push (key=id,
@@ -680,7 +726,7 @@ async function runPushSearch() {
   await pushReady(true);
   console.log(`pushed ${n} new docs (${skipped} already present${embErr ? `, ${embErr} embed-failed` : ""}) to Azure AI Search index ${IDXNAME}`);
 }
-async function runCloudSearch(q) {
+async function runCloudSearchAzure(q) {
   if (!q) { console.error('usage: cloud-search "<query>"'); process.exit(2); }
   await aisInit();
   const body = { search: q, top: LIMIT || 15, queryType: "semantic", semanticConfiguration: "sem", vectorQueries: [{ kind: "text", text: q, fields: "contentVector", k: 50 }], select: "path,entity,category,title" };
@@ -690,6 +736,230 @@ async function runCloudSearch(q) {
   for (const d of j.value || []) console.log(`[${(d.category || "?").padEnd(30)}] ${d.entity}  ${d.path}`);
   console.log(`(${(j.value || []).length} hits for: ${q}  via ${IDXNAME})`);
 }
+
+// ---------------- Amazon OpenSearch (default push-search / search-init / cloud-search backend, 2026-08-27) ----------------
+// Writes/queries the SAME room/index name as the Azure path above (computeIndexName()) into the
+// `otchealth-brain` OpenSearch domain, via skills/kb-memory/opensearch-write.mjs's already-proven
+// credential resolution + bulk-update primitive (REUSED, not reimplemented -- see that file's own
+// header for the SigV4 signer + the ECS-task-role/env/Key-Vault credential chain).
+//
+// ROOM SHAPE: a doc room on OpenSearch is either FLAT (one document per record, vector field
+// `contentVector` -- exactly what push-search has always built) or CHUNKED (child-doc-per-source-
+// chunk, vector field `text_vector`, populated by enrich.mjs's OpenSearch write path / the migration
+// bulk loader, never by this file). This mirrors the Azure CHUNKED-ROOM GUARD above field-for-field:
+// the registry is a property of the DATA (per otchealth-mcp-server/src/azure/search.ts's
+// CHUNKED_ROOMS / src/search/opensearch.ts's vectorFieldFor, reused here by detecting the live
+// mapping's vector field rather than duplicating that TypeScript list into a second, driftable copy)
+// not of which search engine serves it, so a flat push has nothing valid to do against a chunked
+// room and must SKIP cleanly, exactly like the Azure path already does.
+const OS_VECTOR_FIELD_FLAT = "contentVector";
+const OS_VECTOR_FIELD_CHUNKED = "text_vector";
+
+/** The OpenSearch mapping for a freshly-created FLAT doc room. Field-for-field the same fields (and
+ *  the same names) aisCreateIndex()'s Azure schema carries -- `content`/`summary`/`title` are exactly
+ *  the gateway's own BM25_FIELDS for a flat room (see otchealth-mcp-server/src/search/opensearch.ts),
+ *  and `contentVector` is exactly what vectorFieldFor() expects for a non-chunked index. Pure,
+ *  exported for a direct unit test of the shape (mirrors opensearch-write.mjs's own
+ *  memoryIndexMapping() convention). */
+export function flatRoomMapping(dims = EMB_DIMS) {
+  return {
+    settings: { index: { knn: true } },
+    mappings: {
+      properties: {
+        id: { type: "keyword" },
+        path: { type: "text", fields: { keyword: { type: "keyword" } } },
+        entity: { type: "keyword" },
+        category: { type: "keyword" },
+        title: { type: "text" },
+        summary: { type: "text" },
+        content: { type: "text" },
+        material: { type: "boolean" },
+        execution_status: { type: "keyword" },
+        signed: { type: "boolean" },
+        indexed_at: { type: "date" },
+        [OS_VECTOR_FIELD_FLAT]: { type: "knn_vector", dimension: dims, method: { name: "hnsw", engine: "nmslib", space_type: "cosinesimil" } },
+      },
+    },
+  };
+}
+
+/** Classify a room's live shape from its `_mapping` response body (the SAME REST shape osGetMapping()
+ *  returns): 'chunked' (carries text_vector -- fed by enrich.mjs / the migration bulk loader, never by
+ *  push-search), 'flat' (carries contentVector -- what push-search itself creates/maintains), or
+ *  'unknown' (the index exists but neither vector field is mapped yet -- a room created but never
+ *  written to under either shape). Pure -- no network -- so the decision is directly unit-testable
+ *  without a live cluster. `index` is the index name (OpenSearch nests the mapping response under it). */
+export function classifyRoomShape(mappingJson, index) {
+  const props = mappingJson?.[index]?.mappings?.properties || {};
+  if (props[OS_VECTOR_FIELD_CHUNKED]) return "chunked";
+  if (props[OS_VECTOR_FIELD_FLAT]) return "flat";
+  return "unknown";
+}
+
+/** Build the exact document `push-search` writes for one catalog row on OpenSearch -- field-for-field
+ *  the Azure schema's non-`@search.action` fields (id/path/entity/category/title/summary/content/
+ *  material/execution_status/signed/indexed_at/contentVector), so a room migrated between backends
+ *  carries identical documents either way. Pure (no I/O; `vector` and `nowIso` are passed in) so the
+ *  exact field names/shape are directly assertable in a unit test, incl. that the vector field is
+ *  named `contentVector` -- matching vectorFieldFor()'s flat-room expectation and pickText()'s/
+ *  BM25_FIELDS's `content` text field on the query side (see otchealth-mcp-server/src/azure/search.ts
+ *  and src/search/opensearch.ts). */
+export function buildFlatSearchDoc(row, txt, vector, nowIso = new Date().toISOString()) {
+  const summary = row.summary || "";
+  return {
+    id: crypto.createHash("sha1").update(row.path).digest("hex"),
+    indexed_at: nowIso,
+    path: row.path,
+    entity: row.entity || "",
+    category: row.category || "",
+    title: row.title || basename(row.path),
+    summary: summary.slice(0, 16000),
+    content: txt.slice(0, 32000),
+    material: !!row.material,
+    execution_status: row.execution_status || "",
+    signed: !!row.has_signature,
+    [OS_VECTOR_FIELD_FLAT]: vector,
+  };
+}
+
+/** GET the room's live mapping and classify it, or 'absent' on a clean 404. Throws loud on any other
+ *  non-2xx (a genuine outage/permissions problem must never read as "safe to create"). */
+async function osRoomShape(cfg, index) {
+  const m = await osGetMapping(cfg, index);
+  if (m.status === 404) return "absent";
+  if (!m.ok) throw new Error(`opensearch: mapping GET for ${index} failed: ${m.status} ${(m.text || "").slice(0, 200)}`);
+  return classifyRoomShape(m.json, index);
+}
+
+/** Ensure the room is ready for a flat push: create it (flat schema) if genuinely absent, extend an
+ *  existing-but-unmapped index's mapping additively if it exists with neither vector field yet, or
+ *  report its real shape ('flat'/'chunked') if it already carries one. Never touches a chunked room's
+ *  mapping -- the caller skips cleanly on 'chunked' before ever reaching a write. */
+async function osEnsureRoomIndex(cfg, index) {
+  const shape = await osRoomShape(cfg, index);
+  if (shape === "chunked" || shape === "flat") return shape;
+  if (shape === "absent") {
+    const r = await osFetch(cfg, { method: "PUT", path: `/${encodeURIComponent(index)}`, body: JSON.stringify(flatRoomMapping()) });
+    if (r.ok) return "flat";
+    // Benign race: another writer created the index between our GET and this PUT.
+    const recheck = await osRoomShape(cfg, index);
+    if (recheck === "flat" || recheck === "chunked") return recheck;
+    throw new Error(`opensearch: create index ${index} failed: ${r.status} ${(await r.text()).slice(0, 220)}`);
+  }
+  // 'unknown': index exists but has never been written to under either vector field. Settings
+  // (index.knn) cannot be changed post-creation, but field ADDITIONS to a live mapping are allowed --
+  // extend it with the flat schema's properties so the first real write lands on a correctly-typed
+  // knn_vector field instead of a wrong type OpenSearch's own dynamic mapping would infer from a raw
+  // float array.
+  const r = await osFetch(cfg, { method: "PUT", path: `/${encodeURIComponent(index)}/_mapping`, body: JSON.stringify(flatRoomMapping().mappings) });
+  if (!r.ok) throw new Error(`opensearch: extend mapping for ${index} failed: ${r.status} ${(await r.text()).slice(0, 220)}`);
+  return "flat";
+}
+
+/** Embed a batch of texts for the search index, dispatching on EMBEDDINGS_PROVIDER -- the SAME
+ *  independent-of-SEARCH_BACKEND switch semantic.mjs/index-one.mjs already use. 'openai' (default)
+ *  reuses opensearch-write.mjs's embedOpenAI(); 'foundry' reuses this file's own pre-existing Azure
+ *  embed() (resolving its config on first use, so choosing foundry embeddings does not require the
+ *  rest of the Azure search path to be configured). */
+async function embedForSearch(texts) {
+  if (EMBEDDINGS_PROVIDER === "openai") return OS.embedOpenAI(texts);
+  await ensureFoundryEmbedConfig();
+  return embed(texts);
+}
+
+async function runSearchInitOpenSearch() {
+  await initStorage();
+  const cfg = await OS.resolveOpenSearchConfig();
+  IDXNAME = computeIndexName();
+  const shape = await osEnsureRoomIndex(cfg, IDXNAME);
+  console.log(`OpenSearch index ready: ${IDXNAME} (shape=${shape}, dims ${EMB_DIMS})`);
+}
+
+async function runPushSearchOpenSearch() {
+  await initStorage();
+  const cfg = await OS.resolveOpenSearchConfig();
+  IDXNAME = computeIndexName();
+  const shape = await osEnsureRoomIndex(cfg, IDXNAME);
+  if (shape === "chunked") {
+    console.error(`[push-search] SKIP: index ${IDXNAME} is CHUNKED on OpenSearch (${OS_VECTOR_FIELD_CHUNKED} field present). A flat push does not apply to this room; it is fed by enrich.mjs's OpenSearch write path / the migration bulk loader instead.`);
+    return;
+  }
+  let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
+  const existing = REINDEX ? new Set() : await OS.existingIds(IDXNAME); // --reindex forces a full re-push
+  console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME} (opensearch)`);
+  // Same batching shape as the Azure path: embed 16 at a time, push 64 at a time, one bad doc/batch
+  // never stalls the whole room.
+  const EMB_BATCH = 16, PUSH_BATCH = 64;
+  let n = 0, skipped = 0, embErr = 0, pushErr = 0, ready = [], pend = [], texts = [];
+  async function pushReady(force) {
+    while (ready.length >= PUSH_BATCH || (force && ready.length)) {
+      const b = ready.splice(0, PUSH_BATCH);
+      const r = await OS.pushDocs(IDXNAME, b);
+      if (!r.ok) { pushErr += r.errors.length; console.error(`  bulk push had ${r.errors.length} error(s): ${JSON.stringify(r.errors.slice(0, 3))}`); }
+      n += b.length - r.errors.length;
+      console.error(`  pushed ${n} (skip ${skipped}${embErr ? `, embErr ${embErr}` : ""}${pushErr ? `, pushErr ${pushErr}` : ""})`);
+    }
+  }
+  async function flushEmb() {
+    if (!texts.length) return;
+    let vecs;
+    try { vecs = await embedForSearch(texts); }
+    catch (e) { embErr += pend.length; console.error(`  embed batch fail (${pend.length}): ${e.message}`); pend = []; texts = []; return; }
+    for (let i = 0; i < pend.length; i++) { pend[i][OS_VECTOR_FIELD_FLAT] = vecs[i]; ready.push(pend[i]); }
+    pend = []; texts = [];
+    await pushReady(false);
+  }
+  for (const r of rows) {
+    const id = crypto.createHash("sha1").update(r.path).digest("hex");
+    if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
+    const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
+    pend.push(buildFlatSearchDoc(r, txt, null));
+    texts.push(((r.title || "") + "\n" + (r.summary || "") + "\n" + txt).slice(0, 8000));
+    if (texts.length >= EMB_BATCH) await flushEmb();
+  }
+  await flushEmb();
+  await pushReady(true);
+  if (n > 0) { try { await OS.refresh(IDXNAME); } catch { /* best-effort -- docs are already durably written; a refresh failure only delays search-visibility */ } }
+  const failNote = pushErr ? `, ${pushErr} push-failed` : "";
+  console.log(`pushed ${n} new docs (${skipped} already present${embErr ? `, ${embErr} embed-failed` : ""}${failNote}) to OpenSearch index ${IDXNAME}`);
+  if (pushErr > 0) process.exitCode = 1; // a partial bulk failure must not read as a clean run
+}
+
+async function runCloudSearchOpenSearch(q) {
+  if (!q) { console.error('usage: cloud-search "<query>"'); process.exit(2); }
+  await initStorage();
+  const cfg = await OS.resolveOpenSearchConfig();
+  IDXNAME = computeIndexName();
+  const shape = await osRoomShape(cfg, IDXNAME);
+  if (shape === "absent") { console.error(`cloud-search: index ${IDXNAME} does not exist on OpenSearch yet (run push-search first)`); process.exit(1); }
+  const vecField = shape === "chunked" ? OS_VECTOR_FIELD_CHUNKED : OS_VECTOR_FIELD_FLAT;
+  let vector = null;
+  try { vector = (await embedForSearch([q]))[0]; } catch { /* degrade to keyword-only, matching the gateway's own fail-open contract */ }
+  const top = LIMIT || 15;
+  const fetchTop = Math.min(50, Math.max(top * 3, top));
+  // BM25_FIELDS, matching otchealth-mcp-server/src/search/opensearch.ts's own field list exactly
+  // (title/content/chunk/summary): a chunked room carries chunk/title/path, a flat room carries
+  // content/summary/title -- requesting the union is harmless (an absent field just never matches).
+  const bmRes = await osSearch(cfg, IDXNAME, { size: fetchTop, _source: { excludes: [vecField] }, query: { multi_match: { query: q, fields: ["title^2", "content", "chunk", "summary", "path"] } } });
+  if (!bmRes.ok) { console.error("cloud-search " + bmRes.status + " " + (bmRes.text || "").slice(0, 220)); process.exit(1); }
+  let vecHits = [];
+  if (vector) {
+    const knnRes = await osSearch(cfg, IDXNAME, { size: fetchTop, _source: { excludes: [vecField] }, query: { knn: { [vecField]: { vector, k: fetchTop } } } });
+    if (knnRes.ok) vecHits = (knnRes.json?.hits?.hits || []).map((h) => ({ id: String(h._id), source: h._source || {} }));
+  }
+  const bmHits = (bmRes.json?.hits?.hits || []).map((h) => ({ id: String(h._id), source: h._source || {} }));
+  const rrf = OS.reciprocalRankFusion(vector ? [bmHits, vecHits] : [bmHits]);
+  const bySource = new Map();
+  for (const h of [...bmHits, ...vecHits]) if (h.id && !bySource.has(h.id)) bySource.set(h.id, h.source);
+  const hits = [...rrf.entries()].sort((a, b) => b[1] - a[1]).slice(0, top).map(([id]) => bySource.get(id) || {});
+  for (const d of hits) console.log(`[${(d.category || "?").toString().padEnd(30)}] ${d.entity || ""}  ${d.path || d.parent_id || ""}`);
+  console.log(`(${hits.length} hits for: ${q}  via ${IDXNAME}, opensearch/${shape})`);
+}
+
+async function runSearchInit() { return SEARCH_BACKEND === "azure" ? runSearchInitAzure() : runSearchInitOpenSearch(); }
+async function runPushSearch() { return SEARCH_BACKEND === "azure" ? runPushSearchAzure() : runPushSearchOpenSearch(); }
+async function runCloudSearch(q) { return SEARCH_BACKEND === "azure" ? runCloudSearchAzure(q) : runCloudSearchOpenSearch(q); }
 
 // ============================ Azure Content Understanding (the "understand" tier) ============================
 // CU = the generative understanding engine (2026-06-19 decision). Per doc it returns clean Markdown
@@ -852,6 +1122,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     else if (cmd === "cu-init") { await cuInit(); await cuEnsureAnalyzer(); console.log("CU analyzer ready: " + CU_ANALYZER); }
     else if (cmd === "understand") await runUnderstand();
     else if (cmd === "cu-calibrate") await runCuCalibrate();
-    else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --s3|--azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex'); process.exit(2); }
+    else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --s3|--azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex\nsearch-init/push-search/cloud-search only: --search-backend opensearch|azure (default opensearch; env SEARCH_BACKEND) --embeddings-provider openai|foundry (default openai; env EMBEDDINGS_PROVIDER)'); process.exit(2); }
   } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
 }
