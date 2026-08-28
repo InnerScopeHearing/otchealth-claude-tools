@@ -155,7 +155,9 @@ async function edgar(q) {
 // specifically for this "report what's missing without a network round trip" case.
 export function ensureStore() {
   if (!awsCredsPresent().any) {
-    console.error(`Missing AWS credentials for the legal matter/docket store (S3, account ${ACCT}). Checked the ECS task role, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and OTC_AWS_ACCESS_KEY_ID/OTC_AWS_SECRET_ACCESS_KEY.`);
+    // Static text on purpose (CodeQL clear-text-logging hygiene): no env-derived value -- not even
+    // the harmless mirror-account NAME -- is interpolated into a log line in this ring.
+    console.error("Missing AWS credentials for the legal matter/docket store (S3, mirror account otchealthlegalstore). Checked the ECS task role, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and OTC_AWS_ACCESS_KEY_ID/OTC_AWS_SECRET_ACCESS_KEY.");
     process.exit(2);
   }
 }
