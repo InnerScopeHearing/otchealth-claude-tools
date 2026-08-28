@@ -537,13 +537,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:30.765Z
 - **Closed:** (open)
 
-### finding:FND-20260827-2740 severity:medium status:open | Vendor webhook registries never enumerated (Stripe, RevenueCat, Customer.io, Intercom, Shopify, PostHog, Sentry): sweep each for Azure/n8n callback URLs once MCPs are authorized
+### finding:FND-20260827-2740 severity:medium status:fixed | Vendor webhook registries never enumerated (Stripe, RevenueCat, Customer.io, Intercom, Shopify, PostHog, Sentry): sweep each for Azure/n8n callback URLs once MCPs are authorized
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 2026-08-28 enumeration sweep
+- **Verified by:** Shopify: 3 found, 2 order webhooks repointed to live cs-n8n router (repaired+verified), WISMO deferred to CS rebuild. Customer.io reporting: none. Stripe: 2 endpoints, both MedReview PHI-ring custom domains (GCP, not Azure; health = PHI-ring owner item). Sentry: 0 webhook integrations/app installs. PostHog (3 key projects): 0 enabled destinations. Gumroad: not enumerable, token never provisioned (FND-20260828-8823). Intercom/RevenueCat: callback config is UI-side not API-listable; RC's known dead FourVault target rides the FourVault rebuild decision
 - **Opened:** 2026-08-27T19:00:33.658Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:41:25.534Z
 
 ### finding:FND-20260827-e7c7 severity:medium status:open | Legal store on dead Azure (legal.mjs, legal-deadline-pager personal-store): repoint at S3 legal buckets, ring-gated, CLO/Matt sign-off for personal
 
