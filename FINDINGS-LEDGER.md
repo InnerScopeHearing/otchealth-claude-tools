@@ -281,13 +281,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-16T20:53:52.156Z
 - **Closed:** 2026-08-28T22:17:59.312Z
 
-### finding:FND-20260816-c68c severity:medium status:open | pg-sql.ts interpolates table name into SQL; add an identifier regex guard at the top of translate() so the injection boundary is self-enforcing rather than caller-dependent
+### finding:FND-20260816-c68c severity:medium status:fixed | pg-sql.ts interpolates table name into SQL; add an identifier regex guard at the top of translate() so the injection boundary is self-enforcing rather than caller-dependent
 
 - **Source audit doc:** session:2026-08-16 push security review
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** otchealth-mcp-server#257 squash 011c5d68 (deployed gateway rev 23, still live through rev 25)
+- **Verified by:** Source on main: src/agentstate/pg-sql.ts line 53 TABLE_RE=/^[a-z_][a-z0-9_]{0,62}$/ + line 111 throws 'unsupported table name' before any interpolation into translate() - the injection boundary is now self-enforcing, not caller-dependent. Ledger close was missed when the PR merged; recorded now
 - **Opened:** 2026-08-16T20:53:54.812Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T23:18:22.626Z
 
 ### finding:FND-20260817-64f5 severity:high status:open | Intercom /conversations/search endpoint has a demonstrated reliability gap for safety-escalation monitoring: two real safety-escalation-tagged conversations (215475453670200 created Aug 12, 215475494095106 created Aug 14) fell within the exact 24h window checked by that morning's daily digest but were NOT returned by the search call (digest reported 0 conversations both days) -- only surfaced 5-6 days later via a 7-day-window search during this calibration. Separately, conversation 215475357819316 (the long-open real customer escalation) is NOT returned by /conversations/search under ANY tested filter including since=creation-60s and since=0, despite total_count reporting 109 on the broad query while data array returned empty. Direct GET by conversation ID always works correctly and was the only reason 215475357819316's status stayed accurately tracked. Daily digest 24h-window search-based monitoring cannot be trusted alone to catch new safety escalations same-day; recommend switching primary detection to the tag-based webhook/Safety Monitor n8n workflow D8NH3ITNIhvPyjfP path (already tags in real time) plus a periodic direct-GET reconciliation against known IDs, rather than relying on conversations/search for discovery.
 
