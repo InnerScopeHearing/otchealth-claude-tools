@@ -728,3 +728,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T21:36:46.992Z
 - **Closed:** (open)
+
+### finding:FND-20260828-8823 severity:low status:open | Gateway gumroad_* tool family (39 tools) is dark: GUMROAD_ACCESS_TOKEN never provisioned on the AWS task def and no gumroad param exists in SSM (never evacuated from Azure KV). Fix needs Matt: re-mint the access token in Gumroad settings -> store as /otchealth/gw/GUMROAD_ACCESS_TOKEN -> add secret ref in next gateway task-def rev. Digital-products lane dormant, low urgency.
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md#2026-08-28
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T21:43:02.043Z
+- **Closed:** (open)
