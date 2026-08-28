@@ -697,13 +697,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T03:45:53.120Z
 - **Closed:** (open)
 
-### finding:FND-20260828-121c severity:medium status:open | Recovered Taylor frontdesk-graph workflow (jJsq) answers action-routing errors BEFORE its X-Taylor-Tool-Key auth check (live: unauthenticated POST got unknown-action not 403) - imported version predates the auth-first hardening
+### finding:FND-20260828-121c severity:medium status:fixed | Recovered Taylor frontdesk-graph workflow (jJsq) answers action-routing errors BEFORE its X-Taylor-Tool-Key auth check (live: unauthenticated POST got unknown-action not 403) - imported version predates the auth-first hardening
 
 - **Source audit doc:** session:2026-08-28 n8n restore review
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** n8n live config change (no repo commit): webhook node jJsqx9P15WBPjg6P gated with headerAuth credential lQqaL2sVOiiIrPlZ; 3 EL tools swapped to new workspace secret taylor-tool-key-aws-20260828; key at SSM /otchealth/n8n-cs/taylor-tool-key
+- **Verified by:** live probes 2026-08-28: unauth POST /webhook/frontdesk-graph = 403 'Authorization data is wrong!' pre-routing; auth POST with benign unknown action = 200 routed; EL sender + n8n checker aligned on one minted value
 - **Opened:** 2026-08-28T03:45:55.990Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:54:59.332Z
 
 ### finding:FND-20260828-cf13 severity:medium status:open | plantid-app carries 70 dependabot vulns (14 critical, 26 high) on main - triage pass needed, likely concentrated in the migration/legacy tree
 
