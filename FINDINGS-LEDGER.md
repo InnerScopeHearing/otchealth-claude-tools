@@ -385,13 +385,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-21T05:37:57.534Z
 - **Closed:** 2026-08-21T06:32:42.647Z
 
-### finding:FND-20260821-97e9 severity:high status:open | 3 deep-* jobs (deep-finance, deep-legal-company, deep-legal-personal) show State=ENABLED but carry cron(0 5 1 1 ? *) = 05:00 on Jan 1, i.e. fire once a year
+### finding:FND-20260821-97e9 severity:high status:fixed | 3 deep-* jobs (deep-finance, deep-legal-company, deep-legal-personal) show State=ENABLED but carry cron(0 5 1 1 ? *) = 05:00 on Jan 1, i.e. fire once a year
 
 - **Source audit doc:** CTO fleet sweep 2026-08-21
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T05:37:59.928Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T02:21:25.633Z
 
 ### finding:FND-20260821-29e2 severity:medium status:fixed | otchealth-mcp-gateway ECR lifecycle is 'keep last 10, tagStatus any', so every pinned image tag is on a 10-deploy fuse; this already silently killed otchealth-mcp-eval
 
