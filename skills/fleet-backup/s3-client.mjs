@@ -118,6 +118,13 @@ function sigv4(creds, { method, key, headers, payloadHashHex }) {
 export async function s3Put(creds, key, buf, sha256HexStr, metadata = {}) {
   const payloadHash = sha256HexStr || sha256Hex(buf);
   const headers = { "content-type": "application/octet-stream" };
+  // Content-MD5 is REQUIRED for any PUT into a bucket with Object Lock default retention (S3
+  // rejects it 400 "Content-MD5 OR x-amz-checksum- HTTP header is required for Put Object
+  // requests with Object Lock parameters" -- hit live on the first real export into
+  // otchealth-secrets-dr-*, run 33139136802). Harmless everywhere else: it is just an extra
+  // integrity check on buckets without lock config, so it is sent unconditionally rather than
+  // trying to detect lock state per bucket.
+  headers["content-md5"] = crypto.createHash("md5").update(buf).digest("base64");
   for (const [k, v] of Object.entries(metadata || {})) headers[`x-amz-meta-${k}`] = String(v);
   headers["x-amz-meta-sha256"] = payloadHash;
   const { url, headers: signed } = sigv4(creds, { method: "PUT", key, headers, payloadHashHex: payloadHash });
