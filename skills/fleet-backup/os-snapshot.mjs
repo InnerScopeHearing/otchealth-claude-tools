@@ -128,8 +128,14 @@ async function domainCfg() {
   return { ...creds, host };
 }
 
-async function osJsonCall(cfg, method, path, bodyObj) {
-  const r = await osFetch(cfg, { method, path, body: bodyObj ? JSON.stringify(bodyObj) : undefined });
+async function osJsonCall(cfg, method, path, bodyObj, query) {
+  // `query` MUST be passed separately, never embedded in `path`: osFetch signs the query string
+  // through SigV4 canonicalization, so a literal "?format=json" inside `path` gets signed as part
+  // of the URI while the wire request carries it as a query -- SignatureDoesNotMatch 403. This is
+  // exactly how the canary reported "NO successful snapshot" against a repo holding a SUCCESS
+  // snapshot (run 33139432174): the _cat call 403'd and the old `snaps.ok ? ... : []` fallback
+  // swallowed it into an empty listing.
+  const r = await osFetch(cfg, { method, path, query, body: bodyObj ? JSON.stringify(bodyObj) : undefined });
   const text = await r.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave null */ }
@@ -140,7 +146,7 @@ async function osJsonCall(cfg, method, path, bodyObj) {
  *  stdout with a second, redundant listing every time they need the index set. */
 async function fetchIndexRows() {
   const cfg = await domainCfg();
-  const r = await osJsonCall(cfg, "GET", "/_cat/indices?format=json");
+  const r = await osJsonCall(cfg, "GET", "/_cat/indices", undefined, { format: "json" });
   if (!r.ok) throw new Error(`_cat/indices failed: HTTP ${r.status} ${r.text.slice(0, 300)}`);
   return (r.json || []).map((row) => ({ index: row.index, docs: row["docs.count"], lane: classifyIndexLane(row.index) }));
 }
@@ -235,8 +241,13 @@ async function fetchSnapshotStatus(repo) {
   const cfg = await domainCfg();
   const repoInfo = await osJsonCall(cfg, "GET", `/_snapshot/${encodeURIComponent(repo)}`);
   const registered = repoInfo.ok;
-  const snaps = await osJsonCall(cfg, "GET", `/_cat/snapshots/${encodeURIComponent(repo)}?format=json`);
-  const rows = snaps.ok ? snaps.json || [] : [];
+  const snaps = await osJsonCall(cfg, "GET", `/_cat/snapshots/${encodeURIComponent(repo)}`, undefined, { format: "json" });
+  // Fail LOUD on a non-ok listing: the old `snaps.ok ? ... : []` fallback turned a signing/authz
+  // failure into "0 snapshots", which reads exactly like a broken backup chain (and, worse, would
+  // read as a fine-but-empty one to anything only checking exit codes). Same silent-success class
+  // the fleet keeps hunting; see CLAUDE.md's durable-lessons section.
+  if (!snaps.ok) throw new Error(`_cat/snapshots/${repo} failed: HTTP ${snaps.status} ${snaps.text.slice(0, 300)}`);
+  const rows = snaps.json || [];
   const newest = newestSuccessfulSnapshot(rows);
   return { repo, registered, snapshotCount: rows.length, newestSuccessful: newest ? { id: newest.id, endEpoch: Number(newest.end_epoch), ageHours: (Date.now() / 1000 - Number(newest.end_epoch)) / 3600 } : null };
 }
