@@ -721,13 +721,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T06:30:52.837Z
 - **Closed:** 2026-08-28T22:45:45.763Z
 
-### finding:FND-20260828-13be severity:high status:open | Recovered n8n workflows report active:true but their production webhooks are NOT registered (node-version mismatch, activate 400 'reading execute'). Shopify order router iix5KWSp9EtUlh6k confirmed broken; order webhooks repointed to cs-n8n but flow not live until node-repaired. Audit all 14 'active' recovered workflows for real webhook registration; fold into CS rebuild.
+### finding:FND-20260828-13be severity:high status:fixed | Recovered n8n workflows report active:true but their production webhooks are NOT registered (node-version mismatch, activate 400 'reading execute'). Shopify order router iix5KWSp9EtUlh6k confirmed broken; order webhooks repointed to cs-n8n but flow not live until node-repaired. Audit all 14 'active' recovered workflows for real webhook registration; fold into CS rebuild.
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md#2026-08-28
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** n8n live workflow repairs 2026-08-28 (httpRequest typeVersion 4.4->4.2 + toggle)
+- **Verified by:** Full-instance registration audit run twice: after repairing router iix5KWSp9EtUlh6k (19 nodes, 15 httpRequest downgrades, CIO Track credentialized RjiIqrIiA8z39slL) + 5 more workflows (St2Q/a5Ef/aK7H/xLkm/xnsD), all 13 active webhook workflows probe as genuinely REGISTERED (method-correct probes; unknown-topic routes safely). Shopify orders/create+orders/paid webhooks repointed to the now-functional router. End-to-end order->CIO verification happens on the next real order (no synthetic order injected into production CIO by design)
 - **Opened:** 2026-08-28T21:36:46.992Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T23:03:50.544Z
 
 ### finding:FND-20260828-8823 severity:low status:open | Gateway gumroad_* tool family (39 tools) is dark: GUMROAD_ACCESS_TOKEN never provisioned on the AWS task def and no gumroad param exists in SSM (never evacuated from Azure KV). Fix needs Matt: re-mint the access token in Gumroad settings -> store as /otchealth/gw/GUMROAD_ACCESS_TOKEN -> add secret ref in next gateway task-def rev. Digital-products lane dormant, low urgency.
 
