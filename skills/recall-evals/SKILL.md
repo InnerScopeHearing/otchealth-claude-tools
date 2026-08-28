@@ -251,8 +251,11 @@ into results. That is exactly the failure mode this eval pages on.
 
 ## Guardrails
 - **No ledger writes, ever.** Only mutates its own `baseline*.json` files, and only with
-  `--update-baseline`. `mine-hard-negatives.mjs` reads the shared exec feed with a **READ-ONLY** SAS
-  (`sp=rl`) -- it can never write to the ledger it mines from.
+  `--update-baseline`. `mine-hard-negatives.mjs` reads the shared exec feed via the S3-backed
+  `commons-store.mjs` facade (ported 2026-08-28 off a hand-rolled, READ-ONLY `sp=rl` Azure Blob SAS
+  after that storage account died with the Azure subscription deletion) and imports only its `cList`/
+  `cGet`/`commonsConfigured` reads, never `cPut`/`cPutCond`/`cDel` -- it can never write to the ledger
+  it mines from.
 - **Report-only by default; a pager with `--strict`.** Pair with `agent-evals` (the task-quality judge
   harness) for a broader quality signal; this harness is specifically about RETRIEVAL, not answer quality.
 - **PHI-excluded** (all four eval scripts + both miners). The hard-negative mining path is ALSO
