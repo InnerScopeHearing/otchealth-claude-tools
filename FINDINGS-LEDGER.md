@@ -57,13 +57,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-07-24T02:26:10.085Z
 - **Closed:** 2026-07-24T02:26:10.085Z
 
-### finding:FND-20260724-764f severity:medium status:open | XERO_CLEANUP_TASKLIST.md self-declares 'read before any Xero posting' but is stale since 2026-06-20/21, still tracks the Phase 0-9 plan superseded by the 2026-06-29 Option-B directive - risks misdirecting a future session's next-step choice into the wrong workstream
+### finding:FND-20260724-764f severity:medium status:fixed | XERO_CLEANUP_TASKLIST.md self-declares 'read before any Xero posting' but is stale since 2026-06-20/21, still tracks the Phase 0-9 plan superseded by the 2026-06-29 Option-B directive - risks misdirecting a future session's next-step choice into the wrong workstream
 
 - **Source audit doc:** OneDrive CFO Incoming/XERO_CLEANUP_TASKLIST.md
-- **Fix commit:** (none yet)
-- **Verified by:** Hyperagent CFO seat 2026-07-23 - flagged in Master Living Document section 17, document itself not yet retired/corrected
+- **Fix commit:** OneDrive doc edit (no repo commit): SUPERSEDED banner prepended to CFO Incoming/XERO_CLEANUP_TASKLIST.md, uploaded 2026-08-28 (12703 bytes), append-only rule honored (nothing deleted)
+- **Verified by:** Readback shows banner at top: names the 2026-06-29 Option-B supersession, warns against picking next-open-items, points at kb-memory ledger + CFO_PROJECT_MEMORY.md + newest dated handoff, notes AWS/gateway-sole-holder reality. Side proof: OneDrive delegated-token rotation PERSISTED twice through the ported SSM write path during this fix
 - **Opened:** 2026-07-24T02:26:12.309Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T23:05:40.891Z
 
 ### finding:FND-20260724-c89c severity:high status:wontfix | FY2021 GS Capital derivative methodology churned across 3 different totals over multiple sessions with no documented final determination, causing repeated re-litigation - Matt explicit stated frustration
 
