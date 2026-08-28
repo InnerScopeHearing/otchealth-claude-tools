@@ -265,13 +265,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-16T19:18:17.585Z
 - **Closed:** (open)
 
-### finding:FND-20260816-c789 severity:high status:open | 15 of 32 AWS job task definitions cannot authenticate: Azure managed identity + zero injected secrets; code fix in PR #443 but doc-indexer image NOT yet rebuilt
+### finding:FND-20260816-c789 severity:high status:fixed | 15 of 32 AWS job task definitions cannot authenticate: Azure managed identity + zero injected secrets; code fix in PR #443 but doc-indexer image NOT yet rebuilt
 
 - **Source audit doc:** session:2026-08-16 azure-retirement scheduled-jobs audit
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-16T20:33:37.126Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T03:45:40.786Z
 
 ### finding:FND-20260816-e81a severity:high status:open | PG_SSL_VERIFY defaults false: gateway->RDS is encrypted but UNVERIFIED, and became load-bearing today when STATE_BACKEND=postgres went live; RDS CA bundle already exists inline in task-definitions-jobs.json so the fix is available now
 
