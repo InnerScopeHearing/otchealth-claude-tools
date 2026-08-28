@@ -131,8 +131,14 @@ export function awsCredsPresent() {
   return { ecs, env, otc, any: ecs || env || otc };
 }
 
-/** Signed SSM JSON-1.1 call. Returns { status, json } and never throws. */
-async function ssmCall(target, body) {
+/** Signed SSM JSON-1.1 call. Returns { status, json } and never throws.
+ *
+ *  Exported (2026-08-28, for the AWS-native secrets-DR export) so a caller needing an SSM action this
+ *  file does not already wrap one-off (GetParameter with WithDecryption for the passphrase-exists
+ *  check, PutParameter with Tier/KeyId for a faithful restore) reuses THIS SigV4 implementation
+ *  instead of a fifth reimplementation of "how does this seat sign an SSM call" — the exact
+ *  duplication class this file's own header (awsCredsPresent()'s comment) already calls out. */
+export async function ssmCall(target, body) {
   const creds = await awsCreds();
   if (!creds) return { status: 0, json: null, reason: "no-aws-credentials" };
   const host = `ssm.${REGION}.amazonaws.com`;
@@ -310,4 +316,110 @@ export async function ssmList() {
     token = res.json?.NextToken || null;
   } while (token);
   return names;
+}
+
+// ── AWS-native secrets-DR export primitives (2026-08-28) ──────────────────────────────────────────
+// These three exports exist ONLY for the disaster-recovery export role (a dedicated GitHub Actions
+// OIDC role with ssm:DescribeParameters granted — see skills/fleet-backup/ssm-dr-export.mjs and its
+// provisioning doc). The ordinary Fargate task role does NOT have ssm:DescribeParameters (see
+// ssmListDetailed()'s own comment above), so nothing else in the toolkit should call
+// ssmDescribeParametersAll() and expect it to work — it will legitimately AccessDenied there, by
+// design, not by bug.
+
+/** Every parameter's VALUE (decrypted) + declared Type, via GetParametersByPath?WithDecryption=true.
+ *  Returns `[{ name, value, type }]`, name WITHOUT the /otchealth prefix. Same partial-list safety as
+ *  ssmListDetailed()/ssmList() above: a first-page failure (no creds resolvable) returns [] so a
+ *  caller with no AWS access degrades cleanly; a failure mid-pagination THROWS rather than silently
+ *  handing back a partial export that could overwrite last night's complete recovery point. */
+export async function ssmGetParametersByPathAllWithValues() {
+  const out = [];
+  let token = null;
+  let page = 0;
+  do {
+    const res = await ssmCall("GetParametersByPath", {
+      Path: `${PREFIX}/`,
+      MaxResults: 10,
+      Recursive: true,
+      WithDecryption: true,
+      ...(token ? { NextToken: token } : {}),
+    });
+    if (res.status !== 200) {
+      if (page === 0) return [];
+      throw new Error(`ssmGetParametersByPathAllWithValues: pagination failed on page ${page + 1} after ${out.length} parameters (HTTP ${res.status}) -- refusing to return a partial export`);
+    }
+    page += 1;
+    for (const p of res.json?.Parameters || []) {
+      out.push({ name: p.Name.slice(PREFIX.length + 1), value: p.Value, type: p.Type || "String" });
+    }
+    token = res.json?.NextToken || null;
+  } while (token);
+  return out;
+}
+
+/** Every parameter's Tier + KMS KeyId (never the value — DescribeParameters does not return one),
+ *  via DescribeParameters filtered to this prefix's path. Returns `[{ name, tier, keyId }]`, name
+ *  WITHOUT the /otchealth prefix. Needed because GetParametersByPath's response (above) carries Type
+ *  but NOT Tier or KeyId — restoring a >4KB parameter (a service-account JSON, a .p8 key) without its
+ *  real Tier="Advanced" silently fails the restore PutParameter call, and restoring a
+ *  customer-CMK-encrypted parameter under the default AWS-managed key changes which principals can
+ *  decrypt it. Same partial-list safety as the sibling functions in this file. */
+export async function ssmDescribeParametersAll() {
+  const out = [];
+  let token = null;
+  let page = 0;
+  do {
+    const res = await ssmCall("DescribeParameters", {
+      ParameterFilters: [{ Key: "Path", Option: "Recursive", Values: [PREFIX] }],
+      MaxResults: 50,
+      ...(token ? { NextToken: token } : {}),
+    });
+    if (res.status !== 200) {
+      if (page === 0) return [];
+      throw new Error(`ssmDescribeParametersAll: pagination failed on page ${page + 1} after ${out.length} parameters (HTTP ${res.status}) -- refusing to return partial metadata`);
+    }
+    page += 1;
+    for (const p of res.json?.Parameters || []) {
+      out.push({ name: p.Name.slice(PREFIX.length + 1), tier: p.Tier || "Standard", keyId: p.KeyId || null });
+    }
+    token = res.json?.NextToken || null;
+  } while (token);
+  return out;
+}
+
+/** Write one SecureString parameter back with its ORIGINAL Type/Tier/KeyId (the restore-fidelity
+ *  fix: a blanket `Type: SecureString, Tier: Standard` on every restored parameter (a) silently
+ *  corrupts any parameter whose real Type was String/StringList (a consumer reading it WITHOUT
+ *  WithDecryption then receives ciphertext instead of the plaintext it expects) and (b) fails
+ *  outright, with no data loss but a confusing error, for any value over 4KB unless Tier=Advanced is
+ *  set explicitly. `meta` is optional (an archive restored from before this field existed has none) —
+ *  absent Type/Tier fall back to the safe SecureString/Standard defaults exactly like the original
+ *  export always assumed, so an old archive still restores, just without this fidelity improvement.
+ *
+ *  BACKOFF (2026-08-28 design review finding): a full restore is ~450+ sequential PutParameter calls
+ *  in a tight loop, which is exactly the shape that trips SSM's default (low) TPS limit for
+ *  PutParameter. A ThrottlingException/TooManyUpdates on this call is retried with jittered
+ *  exponential backoff (capped) rather than treated as a hard failure; any OTHER error propagates
+ *  immediately (never retry-loop over a real AccessDenied or a malformed name).  */
+export async function ssmPutParameterFull(name, value, meta = {}) {
+  const type = meta.type === "String" || meta.type === "StringList" ? meta.type : "SecureString";
+  const body = { Name: `${PREFIX}/${name}`, Value: String(value), Type: type, Overwrite: true };
+  if (meta.tier === "Advanced" || meta.tier === "Intelligent-Tiering") body.Tier = meta.tier;
+  // KeyId only applies to SecureString, and only when it names a CUSTOMER key -- passing the
+  // AWS-managed alias back is harmless but unnecessary; omit it there so a restore never has to guess
+  // whether the account's default alias is still named identically post-recovery.
+  if (type === "SecureString" && meta.keyId && meta.keyId !== "alias/aws/ssm") body.KeyId = meta.keyId;
+
+  const MAX_ATTEMPTS = 6;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const res = await ssmCall("PutParameter", body);
+    if (res.status === 200) return { ok: true };
+    const errType = res.json?.__type || "";
+    const throttled = res.status === 400 && /Throttl|TooManyUpdates/i.test(errType);
+    if (!throttled || attempt === MAX_ATTEMPTS) {
+      return { ok: false, reason: res.reason || `http-${res.status}`, errType };
+    }
+    const backoffMs = Math.min(8000, 250 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 200);
+    await new Promise((r) => setTimeout(r, backoffMs));
+  }
+  return { ok: false, reason: "unreachable" }; // never hit; satisfies control-flow analysis
 }

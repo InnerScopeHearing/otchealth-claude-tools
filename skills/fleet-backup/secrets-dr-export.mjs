@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 /**
+ * SUPERSEDED 2026-08-28: Key Vault kv-otc-55c84f6bef this file targets died permanently with Azure
+ * subscription 55c84f6b on 2026-08-13 (see otchealth-claude-tools/CLAUDE.md's 2026-08-27 correction).
+ * fetchAllSecrets() below can never succeed again. Left in place UNMODIFIED (its own tests still pass,
+ * and hasRotatePersistFailure() is reused by the new script) as a historical/documentation artifact
+ * only. The live, scheduled successor is ssm-dr-export.mjs (AWS SSM -> S3 + OneDrive, ambient OIDC
+ * creds, no Key Vault touchpoint at all); .github/workflows/nightly-secrets-dr-export.yml now
+ * dispatches that script instead of this one.
+ *
  * secrets-dr-export.mjs — off-Azure encrypted backup of every secret in Key Vault (kv-otc-55c84f6bef).
  *
  * WHY THIS EXISTS: backup.mjs + s3-mirror.mjs (Phase 6) give the fleet an off-Azure copy of the

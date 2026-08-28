@@ -201,3 +201,25 @@ export async function osRefresh(cfg, index) {
 export async function osCount(cfg, index, query) {
   return osJson(cfg, { method: "POST", path: `/${encodeURIComponent(index)}/_count`, body: JSON.stringify({ query }) });
 }
+
+// ── AWS OpenSearch Service CONTROL PLANE (2026-08-28, for skills/fleet-backup/os-snapshot.mjs and
+// skills/aws-dr-canary) -- a DIFFERENT endpoint from everything above this line. Every function above
+// talks to the DOMAIN's own DATA-plane endpoint (search/bulk/mapping -- the cluster itself). This talks
+// to `es.<region>.amazonaws.com`, the CONTROL plane that manages the domain resource (its endpoint,
+// its config). Same SigV4 service name ("es") and the same signOpenSearchRequest()/osFetch() this file
+// already implements, just a different host and REST-JSON (not JSON-RPC) path shape -- reused rather
+// than re-signed, since the signing mechanics are identical.
+/** Resolve a live domain's data-plane endpoint hostname (no hardcoding it anywhere else in the
+ *  toolkit -- a domain recreated after a disaster gets a NEW endpoint hostname, so every caller that
+ *  needs one calls this instead of reading a stale constant). Returns the bare hostname (no scheme). */
+export async function osResolveDomainEndpoint(cfg, domainName) {
+  const r = await osJson({ ...cfg, host: `es.${cfg.region}.amazonaws.com` }, { method: "GET", path: `/2021-01-01/opensearch/domain/${encodeURIComponent(domainName)}` });
+  if (!r.ok || !r.json?.DomainStatus) {
+    throw new Error(`osResolveDomainEndpoint(${domainName}): control-plane DescribeDomain failed (HTTP ${r.status}): ${r.text?.slice(0, 300) || "(no body)"}`);
+  }
+  const ds = r.json.DomainStatus;
+  // VPC domains expose Endpoints{} (one per AZ-set); public domains expose a single Endpoint string.
+  const endpoint = ds.Endpoint || Object.values(ds.Endpoints || {})[0];
+  if (!endpoint) throw new Error(`osResolveDomainEndpoint(${domainName}): DescribeDomain succeeded but returned no Endpoint/Endpoints`);
+  return endpoint;
+}

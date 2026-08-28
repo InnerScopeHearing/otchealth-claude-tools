@@ -1,0 +1,83 @@
+# Nightly verification canary for the AWS-native DR chain (SSM secrets export, OpenSearch off-domain
+# snapshot, RDS automated snapshot). See skills/aws-dr-canary/SKILL.md for the full design ("AGE not a
+# doc-count floor" -- a frozen/stalled backup never trips a floor, only its age can catch it).
+#
+# Runs AFTER both nightly-secrets-dr-export.yml (07:00 UTC) and whatever hour OpenSearch's own
+# Snapshot Management policy is configured for (see runbooks/aws-dr-provisioning.md -- the design uses
+# the SAME 07:00 UTC as the SSM export), giving both legs time to land before this checks their
+# freshness.
+#
+# GATING (2026-08-28): kept dispatch-only, matching nightly-secrets-dr-export.yml's own gate, so every
+# new-DR-chain workflow arms together once Matt/CTO confirm the underlying provisioning
+# (runbooks/aws-dr-provisioning.md) is actually done. Unlike the export workflow, THIS one is safe to
+# arm independently at any time even before provisioning finishes -- it is entirely read-only (except
+# the weekly drill's bounded restore+delete of a throwaway drill-* index) and a missing resource just
+# reports as a normal STALE/ERROR row, never a destructive action or a spend risk. Left disarmed here
+# anyway for a single, uniform "the DR chain is armed" decision point rather than a partial one.
+
+name: Nightly AWS DR Canary
+
+on:
+  # schedule:
+  #   - cron: '45 8 * * *'   # daily 08:45 UTC, after the secrets export + the OpenSearch SM policy's own 07:00 UTC run
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: nightly-aws-dr-canary
+  cancel-in-progress: false
+
+jobs:
+  aws-dr-canary:
+    name: SSM + OpenSearch + RDS backup freshness, weekly restore-proof drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Configure AWS credentials (OIDC, secretless, read-only role)
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+        with:
+          role-to-assume: ${{ vars.AWS_DR_CANARY_ROLE_ARN || 'arn:aws:iam::900915535335:role/otchealth-aws-dr-canary' }}
+          aws-region: ${{ vars.SECRETS_DR_S3_REGION || 'us-east-1' }}
+
+      - name: Run the canary (--strict pages on any anomaly)
+        env:
+          SECRETS_DR_S3_BUCKET: ${{ vars.SECRETS_DR_S3_BUCKET || 'otchealth-secrets-dr-900915535335' }}
+          SECRETS_DR_S3_REGION: ${{ vars.SECRETS_DR_S3_REGION || 'us-east-1' }}
+          OS_DOMAIN_NAME: ${{ vars.OS_DOMAIN_NAME || 'otchealth-brain' }}
+          OS_SNAPSHOT_REPO: ${{ vars.OS_SNAPSHOT_REPO || 'otchealth-brain-s3' }}
+          RDS_DB_INSTANCE_ID: ${{ vars.RDS_DB_INSTANCE_ID || 'otchealth-pg' }}
+          SECRETS_DR_PASSPHRASE: ${{ secrets.SECRETS_DR_PASSPHRASE }}
+        run: |
+          set -o pipefail
+          timeout 480 node skills/aws-dr-canary/canary.mjs --strict 2>&1 | tee "${GITHUB_WORKSPACE}/aws-dr-canary.log"
+
+      - name: Upload canary log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aws-dr-canary-log
+          path: aws-dr-canary.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Page on failure (email, PostHog fallback)
+        if: failure()
+        run: timeout 60 node setup/page-on-failure.mjs --workflow "Nightly AWS DR Canary" --log "${GITHUB_WORKSPACE}/aws-dr-canary.log"
+
+      - name: "Heartbeat: mark this workflow's schedule as alive"
+        if: always()
+        continue-on-error: true
+        run: |
+          timeout 20 node setup/heartbeat.mjs beat nightly-aws-dr-canary ok \
+            || echo "::warning::heartbeat beat did not land (heartbeat.mjs's Azure Blob backend has not been ported to AWS yet -- this workflow's own pass/fail above is unaffected)"
