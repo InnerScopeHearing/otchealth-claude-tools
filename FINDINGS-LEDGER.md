@@ -521,13 +521,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:24.807Z
 - **Closed:** 2026-08-28T22:17:56.760Z
 
-### finding:FND-20260827-acce severity:medium status:open | 12 SSM /otchealth/* params hold dead-Azure VALUES (azure-search/foundry/cosmos/docintel/contentsafety endpoints, n8n-base-url, cfo-legal-store-sas-ro, brain-search-endpoint): retire or repoint each as consumers are ported
+### finding:FND-20260827-acce severity:medium status:fixed | 12 SSM /otchealth/* params hold dead-Azure VALUES (azure-search/foundry/cosmos/docintel/contentsafety endpoints, n8n-base-url, cfo-legal-store-sas-ro, brain-search-endpoint): retire or repoint each as consumers are ported
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 2026-08-28 SSM cleanup (26 params deleted post-DR-archive) + n8n-base-url v2 repoint
+- **Verified by:** full GetParametersByPath sweep of all 433 /otchealth/* values 2026-08-28: ZERO params reference azure/windows.net/cognitiveservices/azurewebsites/cosmos/vault.azure/dead-n8n hosts
 - **Opened:** 2026-08-27T19:00:28.013Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:41:00.181Z
 
 ### finding:FND-20260827-b308 severity:medium status:open | innd.com Netlify env: N8N_SHAREHOLDER_WEBHOOK forwards shareholder signups to a dead n8n destination and soft-succeeds; unset or repoint at deploy of innd-website PR #11
 
