@@ -77,15 +77,30 @@ human confirms it with `docket verify`). Free without a token; set `LEGAL_COURTL
 for reliable production polling (rate limits + PACER-backed dockets).
 
 ## Storage + confidentiality (HARD)
-- Store: **Azure Blob** (off Google), dedicated storage account `otchealthlegalstore` with
-  two containers, `company` and `personal`, each holding `matters/<id>.json`. SharedKey auth
-  via `AZURE_LEGAL_STORAGE_ACCOUNT` + `AZURE_LEGAL_STORAGE_KEY` (hydrated from Secret Manager
-  `azure-legal-storage-account` / `azure-legal-storage-key`). The dedicated account keeps the
-  legal record off the shared CFO storage and on the funded Azure lane.
-- **Personal matters (divorce, civil) live in the SEPARATE `personal` container** and are
-  confidential + privileged. They are never committed to git, never echoed into shared agent
-  context, and never co-mingled with company records. Only the CLO (and Matt) should touch
-  them. A separately-keyed personal account + at-rest encryption is the recommended harden.
+- Store: **AWS S3** (2026-08-28 port; Azure Blob is dead -- Azure subscription 55c84f6b was
+  permanently deleted 2026-08-13). The mirror account NAME `otchealthlegalstore` (still read from
+  `AZURE_LEGAL_STORAGE_ACCOUNT`, no longer a credential -- just the historical lookup-key name kept
+  for continuity with the gateway's own S3 port) with two containers, `company` and `personal`,
+  each holding `matters/<id>.json`, is routed through `skills/kb-memory/s3-blob.mjs`'s MIRROR
+  table -- the SAME (account, container) -> (bucket, keyPrefix) allow-list
+  `otchealth-mcp-server`'s `src/legal/s3-blob-store.ts` uses in production, so this toolkit and the
+  gateway read/write the EXACT SAME physical S3 objects, never a parallel copy. `company` lands in
+  the shared bucket `otchealth-finance-legal-dr-55c84f6b`; company reads/writes use the standard
+  toolkit AWS credential chain (ECS task role / `AWS_*`/`OTC_AWS_*` env).
+- **Personal matters (divorce, civil) live in the SEPARATE `personal` container**, which resolves
+  to its OWN dedicated bucket `otchealth-legal-personal-dr-55c84f6b` and is confidential +
+  privileged. They are never committed to git, never echoed into shared agent context, and never
+  co-mingled with company records. Only the CLO (and Matt) should touch them.
+- **PERSONAL WRITES ARE CURRENTLY IAM-GATED READ-ONLY, and that is intentional, not a bug.** The
+  live IAM grant on the personal-legal DR bucket is GetObject+ListBucket ONLY for every
+  toolkit/job identity ("PersonalLegalRingReadOnly"), pending an explicit Matt approval to widen
+  it. A `--personal` write (`matter new`, `docket add`, `note`) therefore reaches AWS for real and
+  gets a genuine 403 AccessDenied, which propagates uncaught out of `putBlob`/`putMatter` -- every
+  CLI command's existing try/catch already prints the error and exits non-zero, so this is never a
+  silent no-op. Reads (`matter show`, `matters --personal`, `docket due`) work normally. The
+  sibling `legal-deadline-pager` skill's own personal cooldown store hits the identical gate and
+  surfaces it with a distinct named message (`PERSONAL_WRITE_IAM_GATE_MESSAGE` in that skill's
+  `personal-store.mjs`) -- see that skill's SKILL.md for the full read/write asymmetry writeup.
 
 ## Guardrails
 - Citation-verify before relying on any case; "unverified" beats a confident fake.

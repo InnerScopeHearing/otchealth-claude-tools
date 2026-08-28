@@ -10,8 +10,31 @@
 // divorce + civil case) live under personal/ and are confidential, access-controlled, and
 // NEVER committed to git or shared into other agents' context.
 //
-// Store: Azure Blob (off Google), account otchealthlegalstore, containers `company` and
-// `personal`, SharedKey auth via AZURE_LEGAL_STORAGE_ACCOUNT + AZURE_LEGAL_STORAGE_KEY.
+// Store: AWS S3 (2026-08-28 port; Azure Blob is dead -- Azure subscription 55c84f6b was
+// permanently deleted 2026-08-13). Routed through ../kb-memory/s3-blob.mjs's MIRROR table, a
+// faithful, line-for-line port of the SAME (account, container) -> (bucket, keyPrefix) allow-list
+// otchealth-mcp-server's src/legal/s3-blob-store.ts uses in production -- this toolkit and the
+// gateway therefore read/write the EXACT SAME physical S3 objects, never a parallel copy.
+// `company` -> bucket otchealth-finance-legal-dr-55c84f6b. `personal` -> its OWN dedicated bucket
+// otchealth-legal-personal-dr-55c84f6b (attorney-privileged; see that MIRROR row's own comments in
+// s3-blob.mjs for why it must never resolve anywhere else). Company reads/writes use the standard
+// toolkit AWS credential chain (ECS task role / AWS_*/OTC_AWS_* env -- see
+// ../kb-memory/aws-secret.mjs's awsCreds()).
+//
+// PERSONAL WRITES ARE EXPECTED TO FAIL as of this port: the live IAM grant on the personal-legal DR
+// bucket is intentionally GetObject+ListBucket ONLY for every toolkit/job identity
+// ("PersonalLegalRingReadOnly"), pending an explicit Matt approval to widen it -- see
+// s3-blob-store.ts's own header for the full history (a Terraform-only rename to
+// "PersonalLegalRingReadWrite" describes a PROPOSED grant, never yet applied to the live account).
+// A personal write (`matter new --personal`, `docket add ... --personal`, `note ... --personal`)
+// therefore reaches AWS for real and gets a genuine 403 AccessDenied, which this file lets propagate
+// UNCAUGHT out of putBlob/putMatter. That is the intended, correct behavior, not a bug to route
+// around: never add a try/catch here that turns a personal-write 403 into a quiet no-op. (The
+// legal-deadline-pager's own private cooldown store, skills/legal-deadline-pager/personal-store.mjs,
+// hits the identical gate and surfaces it with a distinct named message; this file does not need its
+// own copy of that wrapping because a bare thrown 403 already satisfies "never silently swallow" for
+// every CLI command's existing try/catch, which prints e.message and exits non-zero.)
+//
 // Dependency-free (Node 18+).
 //
 // DOCKET ROW SCHEMA (Phase 7b/7d): every row is { date, what, added, source, verified }.
@@ -40,15 +63,15 @@
 //   buildDocketRow({date,what,source,verified,added}) / dueRow(ns,matterId,docketRow,{cutoff,today}) /
 //   dueWindow(days,now) / ensureStore() / getBlob/putBlob/listMatterNames/matterBlob
 
-import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { getTextFromS3, putObjectToS3, listBlobsFromS3 } from "../kb-memory/s3-blob.mjs";
+import { awsCredsPresent } from "../kb-memory/aws-secret.mjs";
 
-// Store lives on AZURE (off Google): dedicated storage account otchealthlegalstore, with
-// separate `company` and `personal` blob containers. The personal container holds the
-// confidential divorce + civil matters. SharedKey auth.
+// `ACCT` is no longer a credential (Azure SharedKey is dead) -- it is HALF of the (account,
+// container) lookup key into s3-blob.mjs's MIRROR allow-list, kept as the SAME env var name +
+// default the gateway's own s3-blob-store.ts uses for the identical reason (see that file's
+// `readCreds()`: "The account NAME is still needed ... but the Azure secret is not").
 const ACCT = process.env.AZURE_LEGAL_STORAGE_ACCOUNT || "otchealthlegalstore";
-const AKEY = process.env.AZURE_LEGAL_STORAGE_KEY;
-const AVER = "2021-06-08";
 
 // ---- args ----
 const argv = process.argv.slice(2);
@@ -121,40 +144,42 @@ async function edgar(q) {
   console.log("Use for securities precedent + comparables: find prior disclosure/risk-factor/agreement language across 20+ years of public filings.");
 }
 
-// ---- Azure Blob store (SharedKey; container = company | personal) ----
+// ---- S3 object store (container = company | personal; see the header above for the bucket
+// mapping and the "personal writes are expected to fail" posture) ----
+
+// Presence-only, synchronous, no-network check (mirrors the old "is the auth material present at
+// all" contract exactly -- never a live connectivity probe). Kept synchronous deliberately: every
+// call site below (`main()`, `getMatter`, `putMatter`) calls this WITHOUT awaiting it, and making it
+// async would require threading `await` through deadline-extract.mjs and courtlistener-watch.mjs's
+// own un-awaited `ensureStore()` calls too -- awsCredsPresent() (kb-memory/aws-secret.mjs) exists
+// specifically for this "report what's missing without a network round trip" case.
 export function ensureStore() {
-  if (!AKEY) { console.error(`Missing AZURE_LEGAL_STORAGE_KEY (hydrated from secret azure-legal-storage-key). The legal matter/docket store is on Azure (account ${ACCT}, containers company/personal).`); process.exit(2); }
-}
-function azSig(method, container, blob, xms, query, contentLength, contentType) {
-  const canonHeaders = Object.keys(xms).sort().map((k) => `${k.toLowerCase()}:${xms[k]}`).join("\n") + "\n";
-  let canonResource = `/${ACCT}/${container}` + (blob ? `/${blob}` : "");
-  if (query) for (const k of Object.keys(query).sort()) canonResource += `\n${k.toLowerCase()}:${query[k]}`;
-  const sts = [method, "", "", contentLength || "", "", contentType || "", "", "", "", "", "", "", canonHeaders + canonResource].join("\n");
-  return `SharedKey ${ACCT}:${crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64")}`;
+  if (!awsCredsPresent().any) {
+    console.error(`Missing AWS credentials for the legal matter/docket store (S3, account ${ACCT}). Checked the ECS task role, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and OTC_AWS_ACCESS_KEY_ID/OTC_AWS_SECRET_ACCESS_KEY.`);
+    process.exit(2);
+  }
 }
 export async function putBlob(container, name, str) {
-  const xms = { "x-ms-blob-type": "BlockBlob", "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
-  const ct = "application/json";
-  const auth = azSig("PUT", container, name, xms, null, String(Buffer.byteLength(str)), ct);
-  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${container}/${name}`, { method: "PUT", headers: { ...xms, "Content-Type": ct, Authorization: auth }, body: str });
-  if (!r.ok) throw new Error("blob put " + r.status + " " + (await r.text()).slice(0, 160));
+  // No overwrite guard, matching the original Azure putBlob's unconditional-PUT behavior exactly
+  // (this store has never used conditional writes; a matter/docket save is always a blind
+  // overwrite of the whole JSON document). For `container:"personal"` this reaches AWS for real and
+  // is EXPECTED to throw a genuine `s3 put 403: ...` (see the header comment above) -- that error
+  // propagates uncaught, on purpose.
+  await putObjectToS3(ACCT, container, name, str, "application/json");
 }
 export async function getBlob(container, name) {
-  const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
-  const auth = azSig("GET", container, name, xms, null, "", "");
-  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${container}/${name}`, { headers: { ...xms, Authorization: auth } });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error("blob get " + r.status);
-  return r.json();
+  // getTextFromS3 returns null ONLY on a genuine 404 and throws loud on anything else (including a
+  // 403), so a storage failure can never be misread as "this matter does not exist" -- the exact
+  // fail-loud contract this store needs (a permissions error must never read as an empty docket).
+  const text = await getTextFromS3(ACCT, container, name);
+  return text === null ? null : JSON.parse(text);
 }
 export async function listMatterNames(container) {
-  const xms = { "x-ms-date": new Date().toUTCString(), "x-ms-version": AVER };
-  const auth = azSig("GET", container, "", xms, { comp: "list", prefix: "matters/", restype: "container" }, "", "");
-  const r = await fetch(`https://${ACCT}.blob.core.windows.net/${container}?restype=container&comp=list&prefix=${encodeURIComponent("matters/")}`, { headers: { ...xms, Authorization: auth } });
-  if (r.status === 404) return [];
-  if (!r.ok) throw new Error("blob list " + r.status + " " + (await r.text()).slice(0, 120));
-  const xml = await r.text();
-  return [...xml.matchAll(/<Name>([^<]+)<\/Name>/g)].map((m) => m[1]); // matters/<id>.json
+  // listBlobsFromS3 returns names relative to the mirror's own keyPrefix, so with prefix "matters/"
+  // this yields the SAME "matters/<id>.json" shape the old Azure XML parsing produced -- no caller
+  // (main()'s "matters"/"docket due" commands) needs to change. Throws loud on a real listing
+  // failure; a genuinely empty prefix is a normal 200 with zero results, never confused with one.
+  return listBlobsFromS3(ACCT, container, "matters/");
 }
 export const matterBlob = (id) => `matters/${id}.json`;
 export async function getMatter(ns, id) { ensureStore(); return getBlob(ns, matterBlob(id)); }
