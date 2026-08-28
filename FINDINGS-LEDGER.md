@@ -257,13 +257,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-16T18:30:02.634Z
 - **Closed:** (open)
 
-### finding:FND-20260816-b38b severity:medium status:open | index-one.mjs (kb-memory's detached write-through single-entry indexer, Wave 2b) is a THIRD Azure-AI-Search-only memory writer, not ported to SEARCH_BACKEND=opensearch in this pass -- explicitly out of scope (FILE OWNERSHIP was semantic.mjs + ring-memory-index/ only), so a real Azure outage still silently blocks instant per-entry indexing even after this port lands
+### finding:FND-20260816-b38b severity:medium status:fixed | index-one.mjs (kb-memory's detached write-through single-entry indexer, Wave 2b) is a THIRD Azure-AI-Search-only memory writer, not ported to SEARCH_BACKEND=opensearch in this pass -- explicitly out of scope (FILE OWNERSHIP was semantic.mjs + ring-memory-index/ only), so a real Azure outage still silently blocks instant per-entry indexing even after this port lands
 
 - **Source audit doc:** skills/kb-memory/opensearch-write.mjs (AWS memory-writer port, 2026-08-16)
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-16T19:18:17.585Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T03:45:43.539Z
 
 ### finding:FND-20260816-c789 severity:high status:fixed | 15 of 32 AWS job task definitions cannot authenticate: Azure managed identity + zero injected secrets; code fix in PR #443 but doc-indexer image NOT yet rebuilt
 
