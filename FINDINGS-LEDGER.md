@@ -680,3 +680,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:36:10.307Z
 - **Closed:** (open)
+
+### finding:FND-20260828-fe09 severity:medium status:open | deep-pass selectTodo still uses the blanket _-prefix eligibility filter that #463 replaced in enrich.mjs with isPipelineInternal(); legal-company alone lost +183 real docs to this bug class -- port selectTodo to the explicit prefix list (accepted, documented gap in PR #472)
+
+- **Source audit doc:** PR #472 deep-pass port (builder report + CTO review)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T02:17:50.650Z
+- **Closed:** (open)
