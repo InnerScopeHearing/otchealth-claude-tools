@@ -1,7 +1,35 @@
 #!/usr/bin/env node
-// notion-export: ring-routed, resumable export of Notion content to Azure Blob (the brain substrate).
-// Part of the Notion -> Azure retirement (Matt directive 2026-06-22). Reuses the kb-memory storage
-// pattern: claude-driver SA -> Secret Manager -> account SAS -> Blob REST.
+// notion-export: ring-routed, resumable export of Notion content to the brain substrate. Originally
+// the one-time engine of the Notion -> Azure retirement (Matt directive 2026-06-22).
+//
+// STORAGE STATE (2026-08-28, FND-20260827-bcfc): RING=OPERATIONAL is ported to S3 via the shared
+// skills/kb-memory/commons-store.mjs facade -- the same one heartbeat.mjs / fleet-dispatch /
+// fleet-medic / sunset-protocol / fleet-search / memory-librarian already use. The old target,
+// otchealthcommons's Azure Blob account, died with the Azure subscription deletion on 2026-08-13,
+// exactly like theirs did.
+//
+// RING=MNPI-INND and RING=PERSONAL-PRIVILEGED are NOT ported here. Their target is the separate
+// LEGAL store (otchealthlegalstore), and that store's own S3 port is a distinct, still-open finding
+// (FND-20260827-e7c7) needing its own ring-gated design plus a CLO/Matt sign-off on the personal
+// container specifically (the personal-legal S3 WRITE IAM grant is still ReadOnly pending approval,
+// per otchealth-cto CLAUDE.md's 2026-08-28 entry) -- out of scope for this pass. Selecting either
+// ring now FAILS LOUD immediately (see the RING gate below), before any Notion crawl or network call,
+// instead of hanging/DNS-failing against a permanently dead Azure host or reporting a false success.
+// The old Azure account-SAS code for those two rings (buildSas/bUrl/bPut/bList below) is left in
+// place, unused by the live path, as a working reference for whoever builds the e7c7 port.
+//
+// NOTE ON skills/notion-export/SKILL.md: it carries a 2026-08-27 "SUPERSEDED -- do not run or port"
+// banner from a sibling audit (PR #473 / commit a642c45) that judged this whole tool a zero-caller,
+// migration-already-complete dead end not worth touching at all. Those specific factual claims (zero
+// callers anywhere in the repo, no job/workflow/cron; the one-time migration already completed) were
+// independently re-checked during this fix and still hold. This fix was dispatched separately anyway,
+// to close a real residual bug the SUPERSEDED banner does not itself fix: even a zero-caller "do not
+// run" tool can still be invoked by hand from this file's own USAGE comment or from SKILL.md's history
+// section, and before this fix, doing so with the OPERATIONAL ring would silently exit 0 ("DONE ...
+// errors N") even when every single upload failed against the dead Azure host -- see the `errs > 0`
+// check near the bottom. The two documents now visibly disagree on whether this tool should be
+// touched; that tension is deliberately left FOR THE CTO TO RECONCILE (keep both, revert this fix, or
+// update the banner), not resolved unilaterally in this commit.
 //
 // Usage:
 //   GCP_CLAUDE_DRIVER_SA_JSON="$(cat ~/.gcp_claude_driver_sa.json)" \
@@ -12,6 +40,7 @@
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { cPut, cList, commonsConfigured } from "../kb-memory/commons-store.mjs";
 
 const SMPROJ = "otchealth-shared-prod";
 const RING = (process.argv[2] || "OPERATIONAL").toUpperCase();
@@ -32,15 +61,30 @@ const NOSCRUB = flag("--no-scrub");
 // indexed store, even an internal one.
 const NO_CONF_SCRUB = flag("--no-confidential-scrub");
 
-// Ring -> destination. Operational goes to the shared commons (indexed into the brain). MNPI + personal
-// go to the legal store's restricted/personal containers (ring-correct; NOT the shared commons).
+// Ring -> destination. Operational goes to the shared commons (indexed into the brain, now S3-backed
+// via commons-store.mjs, backend:"s3"). MNPI + personal go to the legal store's restricted/personal
+// containers (ring-correct; NOT the shared commons) -- backend:"azure-pending" because that store's S3
+// port (FND-20260827-e7c7) is not built yet; acctSecret/keySecret are kept only as documentation of
+// what the eventual port replaces, and for the refusal message below (RING gate).
 const DEST = {
-  OPERATIONAL:           { acctSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal", prefix: "_NOTION/operational" },
-  "MNPI-INND":           { acctSecret: "azure-legal-storage-account",   keySecret: "azure-legal-storage-key",   container: "company",         prefix: "_NOTION/innd-mnpi"  },
-  "PERSONAL-PRIVILEGED": { acctSecret: "azure-legal-storage-account",   keySecret: "azure-legal-storage-key",   container: "personal",        prefix: "_NOTION/personal"  },
+  OPERATIONAL:           { backend: "s3",           container: "company-journal", prefix: "_NOTION/operational" },
+  "MNPI-INND":           { backend: "azure-pending", acctSecret: "azure-legal-storage-account", keySecret: "azure-legal-storage-key", container: "company",  prefix: "_NOTION/innd-mnpi"  },
+  "PERSONAL-PRIVILEGED": { backend: "azure-pending", acctSecret: "azure-legal-storage-account", keySecret: "azure-legal-storage-key", container: "personal", prefix: "_NOTION/personal"  },
 };
 if (!DEST[RING]) { console.error(`RING must be one of ${Object.keys(DEST).join(", ")} (PHI-HOLD/CREDENTIALS are handled separately).`); process.exit(2); }
 const D = DEST[RING];
+
+// FND-20260827-e7c7 (open, separate finding): the legal store's own S3 port is not built yet -- it
+// needs its own ring-gated design plus a CLO/Matt sign-off (the personal-legal S3 WRITE IAM grant is
+// still ReadOnly pending approval). Refuse IMMEDIATELY, before touching the manifest, Notion, or any
+// network call, rather than let a run against MNPI-INND / PERSONAL-PRIVILEGED hang or DNS-fail deep
+// into a paced Notion crawl, or -- worse -- silently no-op and report a false "DONE" success the way
+// a bare per-item try/catch would (see the errs>0 check near the bottom for the OPERATIONAL half of
+// this same fail-loud requirement).
+if (D.backend !== "s3") {
+  console.error(`[notion-export] RING=${RING} is not runnable: its S3 replacement is not built yet (FND-20260827-e7c7, open). Its old Azure Blob target (${D.acctSecret}/${D.container}) is permanently dead -- the Azure subscription was deleted 2026-08-13. Only RING=OPERATIONAL is live right now (ported to S3, FND-20260827-bcfc). Refusing rather than attempting a call against a dead host or silently no-op'ing.`);
+  process.exit(3);
+}
 
 // SECURITY: scrub relaxations are GATED BY RING so a relaxation can never fail-open into a
 // brain-indexed store. --no-scrub (drops the secret-value scrub too) is allowed ONLY for the legal
@@ -79,7 +123,13 @@ async function sm(id) {
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
 }
 
-// ---- Azure Blob (account SAS) ----
+// ---- Azure Blob (account SAS) -- DEAD PATH, kept only as a reference for the pending legal-store S3
+// port (FND-20260827-e7c7). RING=OPERATIONAL no longer calls any of this (it uses commons-store.mjs's
+// cPut/cList above instead); RING=MNPI-INND / RING=PERSONAL-PRIVILEGED exit via the RING gate above
+// before ever reaching it. Every function below targets an Azure Blob account permanently deleted with
+// the Azure subscription on 2026-08-13 -- do not "fix" anything in here to make it reach Azure again;
+// the fix is to port the caller to S3 the way OPERATIONAL was (see s3-blob.mjs's MIRROR table for the
+// (account,container) -> (bucket,keyPrefix) mapping the legal store would need).
 const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
 function buildSas(acct, key) {
   const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co";
@@ -218,11 +268,11 @@ async function exportDb(o) {
   if (LIMIT) items = items.slice(0, LIMIT);
   NKEY = KEYFILE ? readFileSync(KEYFILE, "utf8").trim() : await sm("notion-api-key");
   if (!NKEY) throw new Error("no notion key");
-  ACCT = await sm(D.acctSecret); const akey = await sm(D.keySecret);
-  if (!ACCT || !akey) throw new Error(`missing storage creds (${D.acctSecret}/${D.keySecret})`);
-  SAS = buildSas(ACCT, akey);
-  console.log(`[notion-export] RING=${RING} -> ${ACCT}/${D.container}/${D.prefix}  items=${items.length}${DRY ? "  (DRY)" : ""}`);
-  const done = FORCE || DRY ? new Set() : await bList(D.prefix + "/");
+  // RING is guaranteed OPERATIONAL here (the D.backend!=="s3" gate above already exited for the other
+  // two), so this is always the S3 commons store now -- no Azure account/key/SAS to resolve any more.
+  if (!DRY && !(await commonsConfigured())) throw new Error("AWS credentials unavailable for the commons S3 mirror (checked the ECS task role, AWS_ACCESS_KEY_ID/SECRET, and OTC_AWS_ACCESS_KEY_ID/SECRET)");
+  console.log(`[notion-export] RING=${RING} -> S3 otchealthcommons/company-journal/${D.prefix}  items=${items.length}${DRY ? "  (DRY)" : ""}`);
+  const done = FORCE || DRY ? new Set() : new Set(await cList(D.prefix + "/"));
   const doneIds = new Set();                         // resume by unique 32-hex id, not by slug
   for (const n of done) { const m = n.match(/[0-9a-f]{32}/); if (m) doneIds.add(m[0]); }
   let okPages = 0, okDbs = 0, rowsTot = 0, skipped = 0, errs = 0, heldN = 0;
@@ -241,11 +291,17 @@ async function exportDb(o) {
       if (hit) { held.push({ id: o.id, title: o.title, type: o.type, reason: hit }); heldN++; if (o.type === "database") console.log(`  [HELD db] ${o.title} (${hit})`); else if (heldN % 10 === 0) console.log(`  ...${heldN} held`); continue; }
       // AUDIT: even when scrubbing is relaxed, record what the FULL scrub WOULD have caught (no content).
       if (relaxed) { const w = scrubFind(scanText, true); if (w) bypassed.push({ id: o.id, title: o.title, type: o.type, reason: w }); }
-      if (o.type === "database") { await bPut(`${base}.md`, md); await bPut(`${base}.rows.jsonl`, jsonl, "application/x-ndjson"); okDbs++; rowsTot += count; console.log(`  [db] ${o.title} (${count} rows)`); }
-      else { await bPut(`${base}.md`, md); okPages++; if (okPages % 100 === 0) console.log(`  ...${okPages} pages exported`); }
+      if (o.type === "database") { await cPut(`${base}.md`, md); await cPut(`${base}.rows.jsonl`, jsonl, "application/x-ndjson"); okDbs++; rowsTot += count; console.log(`  [db] ${o.title} (${count} rows)`); }
+      else { await cPut(`${base}.md`, md); okPages++; if (okPages % 100 === 0) console.log(`  ...${okPages} pages exported`); }
     } catch (e) { errs++; console.error(`  ERR ${o.type} ${o.title}: ${e.message}`); }
   }
-  if (held.length) await bPut(`${D.prefix}/_HELD/held-${RING.toLowerCase()}.jsonl`, held.map((h) => JSON.stringify(h)).join("\n") + "\n", "application/x-ndjson");
-  if (bypassed.length) await bPut(`${D.prefix}/_HELD/scrub-bypassed-${RING.toLowerCase()}.jsonl`, bypassed.map((h) => JSON.stringify(h)).join("\n") + "\n", "application/x-ndjson");
+  if (held.length) await cPut(`${D.prefix}/_HELD/held-${RING.toLowerCase()}.jsonl`, held.map((h) => JSON.stringify(h)).join("\n") + "\n", "application/x-ndjson");
+  if (bypassed.length) await cPut(`${D.prefix}/_HELD/scrub-bypassed-${RING.toLowerCase()}.jsonl`, bypassed.map((h) => JSON.stringify(h)).join("\n") + "\n", "application/x-ndjson");
   console.log(`[notion-export] DONE ring=${RING}: ${okPages} pages, ${okDbs} dbs (${rowsTot} rows), QUARANTINED ${heldN}, scrub-relaxed-but-flagged ${bypassed.length}, skipped ${skipped}, errors ${errs}`);
+  // FAIL LOUD: a per-item error is caught above so one bad Notion object never aborts the whole run,
+  // but the run as a WHOLE must never report success when items genuinely failed to upload -- the
+  // exact silent-success shape (an S3/Azure write failing while the process still exits 0) this fix
+  // exists to close. errs is always 0 in DRY mode (the DRY branch returns before any upload is
+  // attempted), so this never fires there.
+  if (errs > 0) throw new Error(`${errs} item(s) failed to export for RING=${RING} (see ERR lines above) -- exiting non-zero rather than reporting DONE as a success`);
 })().catch((e) => { console.error("FATAL", e.message); process.exit(1); });
