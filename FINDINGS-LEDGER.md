@@ -720,3 +720,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T06:30:52.837Z
 - **Closed:** (open)
+
+### finding:FND-20260828-13be severity:high status:open | Recovered n8n workflows report active:true but their production webhooks are NOT registered (node-version mismatch, activate 400 'reading execute'). Shopify order router iix5KWSp9EtUlh6k confirmed broken; order webhooks repointed to cs-n8n but flow not live until node-repaired. Audit all 14 'active' recovered workflows for real webhook registration; fold into CS rebuild.
+
+- **Source audit doc:** otchealth-cto/CLAUDE.md#2026-08-28
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T21:36:46.992Z
+- **Closed:** (open)
