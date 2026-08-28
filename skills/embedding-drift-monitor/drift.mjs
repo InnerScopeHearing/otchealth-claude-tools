@@ -1,8 +1,23 @@
 #!/usr/bin/env node
-// embedding-drift-monitor — lightweight recall-quality monitor over the fleet's Azure AI Search memory
-// indexes (Azure GenAIOps #13 "Phoenix" pattern, done cost-neutrally on our existing stack: no new
-// vendor, no new spend, reuses the same Azure AI Search + Azure OpenAI embeddings + PostHog + claude-
-// driver SA every other memory skill already uses).
+// embedding-drift-monitor — lightweight recall-quality monitor over the fleet's memory indexes (Azure
+// GenAIOps #13 "Phoenix" pattern, done cost-neutrally on our existing stack: no new vendor, no new
+// spend, reuses the same search + embeddings + PostHog + credential-resolution primitives every other
+// memory skill already uses).
+//
+// BACKEND (CORRECTED 2026-08-28 — see FND-20260819-c9bb): Azure AI Search + Azure OpenAI died with
+// subscription 55c84f6b (permanently deleted 2026-08-13); this file's `initClients()` used to throw
+// unconditionally on missing azure-search-endpoint/-admin-key, regardless of what the caller actually
+// wanted, which left the whole recall-drift monitor dark. SEARCH_BACKEND=azure|opensearch (env, default
+// now OPENSEARCH) and EMBEDDINGS_PROVIDER=foundry|openai (env, default now OPENAI) — the SAME env var
+// names/values/semantics as skills/kb-memory/semantic.mjs's own dispatcher (INDEPENDENT switches, since
+// a genuine Azure outage takes Foundry down too and SEARCH_BACKEND=opensearch alone would still reach
+// Azure via embed() otherwise). The port mirrors semantic.mjs exactly: same config resolution
+// (opensearch-write.mjs's resolveOpenSearchConfig/resolveOpenAIKey), same AWS SigV4 `es`-service
+// signing, same embedding model/dimension (text-embedding-3-large, 3072 dims) — a drop-in for the
+// already-live OpenSearch memory-exec/ring indexes, not a re-embed. The azure/foundry branches remain
+// as dead code behind an explicit, non-default override (SEARCH_BACKEND=azure /
+// EMBEDDINGS_PROVIDER=foundry) for anyone who still needs them; see semantic.mjs's own header for the
+// full credential-resolution rationale.
 //
 // WHAT IT DOES: for each memory index (memory-exec, the per-ring private indexes, and any future
 // commons-<agent>-memory index), runs a small set of CANNED probe queries (skills/embedding-drift-
@@ -17,10 +32,15 @@
 // fleet telemetry), and prints Datadog-friendly lines (the gateway already ships APM; this rides the
 // same stdout->log pipeline rather than standing up a second observability path).
 //
-// THIS IS A MONITOR, NOT A GATE: it never fails CI and never blocks anything. It answers "is recall
-// quality on our memory indexes silently degrading" (stale embeddings model, index corruption, a bad
-// reindex, content drift) the same way agent-evals answers "is answer quality regressing" — same
-// report-first posture, same eventual path to alerting on a threshold once trusted.
+// THIS IS A MONITOR, NOT A GATE, FOR DRIFT — BUT IT FAILS LOUD IF IT CANNOT RUN AT ALL. Once probing
+// starts, a drifted index never fails CI (a `::warning::` annotation only) — same report-first posture
+// agent-evals uses, same eventual path to alerting on a threshold once trusted. But if the search/
+// embeddings backend itself cannot be resolved (initClients() throws: no OpenSearch credentials, no
+// OpenAI key, or the equivalent azure-branch failure) the process exits NON-ZERO with a distinct
+// "FATAL" message — this is deliberately NOT folded into the same always-exit-0 path a per-probe
+// hiccup gets, because a monitor that reports "0 drifted" when it never actually reached the backend is
+// a silent-success bug (the exact class documented in claude-tools/CLAUDE.md's "fleet-wide durable
+// lessons" section), not a quiet monitor.
 //
 // Usage:
 //   node drift.mjs                      # probe every index in probes.json, print + compare to baseline
@@ -29,14 +49,18 @@
 //   node drift.mjs --json out.json      # write a structured report (for CI artifact upload)
 //   node drift.mjs --write-baseline     # after reviewing, persist this run as the new baseline
 //
-// Needs GCP_CLAUDE_DRIVER_SA_JSON (same claude-driver SA every memory skill uses to reach Secret
-// Manager for azure-search-endpoint/-admin-key + azure-(foundry-)openai-endpoint/-key).
+// Credentials self-resolve (env -> AWS SSM -> Azure Key Vault, cheapest/most Azure-independent first;
+// see opensearch-write.mjs's header) — no required env var for the default OpenSearch/OpenAI path in a
+// fleet seat/job that already carries ambient AWS credentials. GCP_CLAUDE_DRIVER_SA_JSON is needed only
+// for the non-default SEARCH_BACKEND=azure/EMBEDDINGS_PROVIDER=foundry override, or for `--emit`'s
+// posthog-fleet-ingest-key lookup, both of which still go through kvSecret()'s own fallback chain.
 import crypto from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import * as OS from "../kb-memory/opensearch-write.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -54,6 +78,10 @@ const WRITE_BASELINE = argv.includes("--write-baseline");
 // relevance scores fluctuate run-to-run; these are absolute, not percentage, deltas).
 const TOPSCORE_DROP = Number(takeVal("--topscore-drop", "")) || 0.15;
 const COVERAGE_DROP = Number(takeVal("--coverage-drop", "")) || 0.2;
+// Read ONCE at module load (matches semantic.mjs's own SEARCH_BACKEND/EMBEDDINGS_PROVIDER convention,
+// and this file's own TOPSCORE_DROP/COVERAGE_DROP pattern above).
+const SEARCH_BACKEND = (process.env.SEARCH_BACKEND || "opensearch").toLowerCase(); // 'opensearch' (default since 2026-08-28; Azure AI Search died with sub 55c84f6b) | 'azure'
+const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "openai").toLowerCase(); // 'openai' (default since 2026-08-28; Azure Foundry died with sub 55c84f6b) | 'foundry'
 
 function saRaw() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
@@ -75,16 +103,31 @@ async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return 
 }
 
 let AIS_EP, AIS_KEY, AOAI_EP, AOAI_KEY, AOAI_DEP;
-async function initClients() {
-  AIS_EP = (await sm("azure-search-endpoint") || "").replace(/\/$/, "");
-  AIS_KEY = await sm("azure-search-admin-key");
-  AOAI_EP = ((await sm("azure-foundry-openai-endpoint")) || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
-  AOAI_KEY = (await sm("azure-foundry-key")) || (await sm("azure-openai-key"));
-  AOAI_DEP = (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
-  if (!AIS_EP || !AIS_KEY) throw new Error("missing azure-search-endpoint/admin-key");
-  if (!AOAI_EP || !AOAI_KEY) throw new Error("missing azure-openai endpoint/key");
+// Exported so a test can exercise the backend dispatch directly (mirrors semantic.mjs's own exported
+// init(), same rationale: a test proves the OpenSearch/OpenAI path is genuinely reachable with ZERO
+// Azure calls, not merely that a branch exists in the source).
+export async function initClients() {
+  if (SEARCH_BACKEND === "opensearch") {
+    await OS.resolveOpenSearchConfig(); // throws a clear, distinct message if truly unresolvable; never touches azure-search-*
+  } else {
+    AIS_EP = (await sm("azure-search-endpoint") || "").replace(/\/$/, "");
+    AIS_KEY = await sm("azure-search-admin-key");
+    if (!AIS_EP || !AIS_KEY) throw new Error("missing azure-search-endpoint/admin-key");
+  }
+  if (EMBEDDINGS_PROVIDER === "openai") {
+    await OS.resolveOpenAIKey(); // throws a clear, distinct message if truly unresolvable; never touches azure-openai-*
+  } else {
+    AOAI_EP = ((await sm("azure-foundry-openai-endpoint")) || (await sm("azure-openai-endpoint")) || "").replace(/\/$/, "");
+    AOAI_KEY = (await sm("azure-foundry-key")) || (await sm("azure-openai-key"));
+    AOAI_DEP = (await sm("azure-openai-embedding-deployment")) || "text-embedding-3-large";
+    if (!AOAI_EP || !AOAI_KEY) throw new Error("missing azure-openai endpoint/key");
+  }
 }
-async function embed(text) {
+// Exported alongside initClients (same rationale). Single-string-in, single-flat-vector-out — the exact
+// contract probeIndex() already relies on; only the OpenAI-direct call is new, the azure fallback branch
+// is byte-identical to before.
+export async function embed(text) {
+  if (EMBEDDINGS_PROVIDER === "openai") { const [vec] = await OS.embedOpenAI([text]); return vec; }
   for (let a = 0; a < 6; a++) {
     const r = await fetch(`${AOAI_EP}/openai/deployments/${AOAI_DEP}/embeddings?api-version=2024-02-01`, { method: "POST", headers: { "api-key": AOAI_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ input: [text] }) });
     if (r.status === 429) { await new Promise(s => setTimeout(s, 1500 * (a + 1))); continue; }
@@ -93,7 +136,12 @@ async function embed(text) {
   }
   throw new Error("embed 429 exhausted");
 }
-async function searchIndex(index, query, vec) {
+// Exported alongside initClients/embed. OS.hybridSearch() already returns hits shaped exactly like the
+// azure branch's `.value` array (agent/type/ts/text/tags/retracted/"@search.score" — see
+// opensearch-write.mjs's hybridSearch() doc comment), so probeIndex() needs no branching on which
+// backend produced them.
+export async function searchIndex(index, query, vec) {
+  if (SEARCH_BACKEND === "opensearch") return OS.hybridSearch(index, { queryText: query, vector: vec, top: 5 });
   const body = { search: query, top: 5, vectorQueries: [{ kind: "vector", vector: vec, fields: "contentVector", k: 5 }] };
   const r = await fetch(`${AIS_EP}/indexes/${index}/docs/search?api-version=${AIS_API}`, { method: "POST", headers: { "api-key": AIS_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`search ${index} ${r.status} ${(await r.text()).slice(0, 160)}`);
@@ -223,6 +271,13 @@ async function main() {
 const isMain = (() => {
   try { return process.argv[1] && new URL(import.meta.url).pathname === process.argv[1]; } catch { return false; }
 })();
-if (isMain) { main().catch((e) => { console.error("embedding-drift-monitor: fatal " + e.message); process.exit(0); }); }
+// FAIL LOUD, distinct from the report-only drift path: this catch fires ONLY when the monitor could
+// not even START (initClients() threw — no OpenSearch credentials, no OpenAI key, the equivalent azure-
+// branch failure, or a probes.json read failure) — never for "some index drifted" or "one probe query
+// errored", both of which main() already handles internally and still exits 0 for (see the header
+// comment above). Exit code 2 matches this file's OWN existing "no indexes to probe" config-error exit
+// inside main() — a distinct, non-zero, greppable signal that the run never produced a real report, so
+// a cron/CI job watching the exit code cannot mistake "could not run" for "ran clean, zero drift".
+if (isMain) { main().catch((e) => { console.error("embedding-drift-monitor: FATAL (could not run — backend/embeddings config unresolvable): " + e.message); process.exit(2); }); }
 
-export default { probeIndex, compareDrift };
+export default { probeIndex, compareDrift, initClients, embed, searchIndex };
