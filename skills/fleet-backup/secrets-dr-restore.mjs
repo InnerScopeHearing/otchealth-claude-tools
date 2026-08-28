@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 /**
- * secrets-dr-restore.mjs — decrypt a secrets-dr-export.mjs archive. This is the "morning Azure is
- * dead" tool: pull the .enc file from S3 (or from Matt's OneDrive/local disk copy) and this script
- * turns it back into usable credentials, either as a printed report (names + which ones exist) or,
- * with --print-values, the actual values (only ever run that locally/interactively).
+ * secrets-dr-restore.mjs — decrypt a secrets-dr-export.mjs OR ssm-dr-export.mjs archive (the format
+ * is source-agnostic: both write the same `{exportedAt, vault, count, secrets}` envelope, and this
+ * script has never needed to know which one produced it). This is the "morning the account is dead"
+ * tool: pull the .enc file from S3 (or from Matt's OneDrive/local disk copy) and this script turns it
+ * back into usable credentials, either as a printed report (names + which ones exist), --print-values
+ * (only ever run that locally/interactively), --to-env-file (an owner-only, base64-encoded env file),
+ * or --to-ssm (2026-08-28, restores directly into a live AWS SSM Parameter Store -- see that verb's
+ * own section below for the restore-fidelity design).
  *
  * PASSPHRASE INPUT (fixed 2026-07-28 review finding): this decrypts the entire company credential
  * inventory, so the passphrase is NEVER accepted as a positional CLI argument — that would land it in
@@ -28,10 +32,40 @@
  *   node secrets-dr-restore.mjs <file.enc> --passphrase-file pass.txt
  *   SECRETS_DR_PASSPHRASE=... node secrets-dr-restore.mjs <file.enc> --print-values  # non-interactive/CI use only -- see the note above; do not type the real value here at a live terminal
  *   node secrets-dr-restore.mjs <file.enc> --passphrase-file pass.txt --to-env-file out.env
+ *   node secrets-dr-restore.mjs <file.enc> --passphrase-file pass.txt --to-ssm [--dry-run]
+ *
+ * --TO-SSM (2026-08-28, the "restore into a live AWS account" path): writes every recovered parameter
+ * back into AWS SSM Parameter Store at /otchealth/<name>, using the archive's own recorded `paramMeta`
+ * (Type/Tier/KMS-KeyId) when present, so a String parameter is restored as a String (not silently
+ * corrupted into an encrypted SecureString a plain-read consumer cannot use) and a >4KB value is
+ * restored with Tier=Advanced (not a hard PutParameter failure). An archive with no `paramMeta` (an
+ * older export, or one where DescribeParameters access was unavailable at export time -- see
+ * ssm-dr-export.mjs's own "restoreFidelity" reporting) falls back to the same safe
+ * SecureString/Standard defaults every restore has always assumed; this verb never refuses to restore
+ * just because the fidelity metadata is missing. Prints only NAMES and a pass/fail count, never a
+ * value, matching --to-env-file's --print-values-refusal posture. `--dry-run` prints the exact plan
+ * (name -> type/tier) without writing anything.
  */
 import { readFileSync, writeFileSync, fchmodSync, openSync, closeSync, constants as fsConstants } from "node:fs";
 import { createInterface } from "node:readline";
 import { decrypt } from "./crypto-envelope.mjs";
+import { ssmPutParameterFull } from "../kb-memory/aws-secret.mjs";
+
+/** Pure planner (no network): given the decrypted `secrets` map and the archive's optional
+ *  `paramMeta` map, compute exactly what --to-ssm would write, one row per name, sorted. Exported so
+ *  the restore-fidelity fallback logic (String/StringList/SecureString, Standard/Advanced tier, an
+ *  archive with no paramMeta at all) is unit-tested without any AWS credentials or network access —
+ *  see tests/secrets-dr-restore-to-ssm.test.mjs. Never includes the VALUE in its return shape by
+ *  design (the caller already has `secrets[name]` and this plan is also what gets printed/logged). */
+export function planSsmRestore(secretNames, paramMeta) {
+  const meta = paramMeta || {};
+  return secretNames.slice().sort().map((name) => {
+    const m = meta[name] || {};
+    const type = m.type === "String" || m.type === "StringList" ? m.type : "SecureString";
+    const tier = m.tier === "Advanced" || m.tier === "Intelligent-Tiering" ? m.tier : "Standard";
+    return { name, type, tier, keyId: type === "SecureString" ? (m.keyId || null) : null };
+  });
+}
 
 function readPassphraseFromFile(path) {
   return readFileSync(path, "utf8").trim();
@@ -104,7 +138,7 @@ async function resolvePassphrase(rest) {
 async function main() {
   const [file, ...rest] = process.argv.slice(2);
   if (!file) {
-    console.error("usage: secrets-dr-restore.mjs <file.enc> [--passphrase-file <path>] [--print-values | --to-env-file out.env]");
+    console.error("usage: secrets-dr-restore.mjs <file.enc> [--passphrase-file <path>] [--print-values | --to-env-file out.env | --to-ssm [--dry-run]]");
     console.error("       (or set SECRETS_DR_PASSPHRASE in the environment)");
     process.exit(2);
   }
@@ -138,6 +172,30 @@ async function main() {
     return;
   }
 
+  if (rest.includes("--to-ssm")) {
+    const dryRun = rest.includes("--dry-run");
+    const plan = planSsmRestore(names, data.paramMeta);
+    if (dryRun) {
+      console.log(`[secrets-dr-restore] --to-ssm --dry-run: would write ${plan.length} parameter(s) to AWS SSM /otchealth/* (no network call made):`);
+      for (const p of plan) console.log(`  ${p.name}  type=${p.type}  tier=${p.tier}${p.keyId ? `  keyId=${p.keyId}` : ""}`);
+      return;
+    }
+    console.error(`[secrets-dr-restore] --to-ssm: writing ${plan.length} parameter(s) to AWS SSM /otchealth/* (values never printed)...`);
+    let ok = 0;
+    const failures = [];
+    for (const p of plan) {
+      const res = await ssmPutParameterFull(p.name, data.secrets[p.name], { type: p.type, tier: p.tier, keyId: p.keyId });
+      if (res.ok) { ok += 1; console.error(`  ok    ${p.name}`); }
+      else { failures.push(p.name); console.error(`  FAIL  ${p.name} (${res.reason || "unknown error"})`); }
+    }
+    console.error(`[secrets-dr-restore] --to-ssm: ${ok}/${plan.length} written.`);
+    if (failures.length) {
+      console.error(`::error::[secrets-dr-restore] --to-ssm: ${failures.length} parameter(s) FAILED to write: ${failures.join(", ")}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   if (rest.includes("--print-values")) {
     // TTY guard (2026-07-28 review finding): --print-values is documented as interactive-only ("only
     // ever run that locally/interactively" -- see this file's header), but nothing enforced that. Piped
@@ -155,4 +213,16 @@ async function main() {
   }
 }
 
-main();
+// isMain guard (2026-08-28 fix, latent bug found while adding a unit test for planSsmRestore()):
+// this file previously called main() UNCONDITIONALLY at module load, with no import.meta.url guard --
+// unlike every sibling script in this family (secrets-dr-export.mjs, restore-drill.mjs,
+// page-on-failure.mjs, heartbeat.mjs all guard this exact way). Simply IMPORTING this module for its
+// pure exports (planSsmRestore, needed for a hermetic restore-fidelity test with no AWS credentials)
+// ran the full CLI body, printed the usage banner, and called process.exit(2) -- killing the entire
+// test process, caught live writing tests/secrets-dr-restore-to-ssm.test.mjs for this same change.
+// Adding the guard changes nothing about real CLI invocation (`node secrets-dr-restore.mjs <file>
+// ...` still runs main() exactly as before, since import.meta.url equals argv[1] in that case) and
+// does not affect tests/secrets-dr-restore.test.mjs, which already runs this file as a subprocess.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}

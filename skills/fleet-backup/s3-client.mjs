@@ -16,6 +16,17 @@
 // only, the separate privileged DR bucket — with no global/module-level credential state that could
 // accidentally cross-wire the two.
 //
+// OPTIONAL `creds.sessionToken` (added for the AWS-native SSM secrets-DR export, 2026-08-28): every
+// prior caller of this file authenticated with a long-lived IAM-user access key (no session token), so
+// this field defaults to absent and changes nothing for them. A GitHub Actions OIDC-assumed IAM ROLE
+// (aws-actions/configure-aws-credentials) yields TEMPORARY credentials that also carry a session
+// token — omitting it from the signature is not optional, it is a hard requirement of STS credentials
+// (the request is rejected as an invalid signature without it). Field name matches
+// skills/kb-memory/s3-blob.mjs's own header note on this exact mismatch class ("aws-secret.mjs's
+// awsCreds() returns {ak, sk, st} (short names), NOT the {accessKeyId, secretAccessKey, sessionToken}
+// shape...") — callers translate awsCreds()'s `st` into this file's `sessionToken` explicitly, so the
+// field name here stays self-explanatory for anyone reading this file in isolation.
+//
 // CAVEAT (documented, not handled): bucket names containing a literal "." break virtual-hosted-style
 // HTTPS (TLS SNI/certificate wildcard mismatch — `*.s3.<region>.amazonaws.com` does not match
 // `my.bucket.name.s3.<region>.amazonaws.com`). Provision the aws-dr-*-s3-bucket names WITHOUT dots.
@@ -67,6 +78,9 @@ function sigv4(creds, { method, key, headers, payloadHashHex }) {
   norm.host = host;
   norm["x-amz-content-sha256"] = payloadHashHex;
   norm["x-amz-date"] = amzDate;
+  // STS temporary credentials (an OIDC-assumed role) MUST sign+send this header or the request is
+  // rejected outright — this is not an optional extra like the other headers in this function.
+  if (creds.sessionToken) norm["x-amz-security-token"] = creds.sessionToken;
 
   const sortedNames = Object.keys(norm).sort();
   const canonicalHeaders = sortedNames.map((k) => `${k}:${norm[k].trim()}\n`).join("");
@@ -113,17 +127,27 @@ export async function s3Put(creds, key, buf, sha256HexStr, metadata = {}) {
 }
 
 /** HEAD an object. Returns null on 404 (soft miss — the normal "not mirrored yet" case), throws on any
- *  other non-2xx. Returns { bytes, etag, metaSha256, lastModified } on success. */
+ *  other non-2xx. Returns { bytes, etag, metaSha256, lastModified, meta } on success. `meta` (added
+ *  2026-08-28 for the aws-dr-canary freshness checks) is every `x-amz-meta-*` header S3 returns, keyed
+ *  by its ORIGINAL name as passed to s3Put's `metadata` argument, lowercased (S3 itself lowercases
+ *  custom metadata header names on the wire regardless of how they were sent — this undoes that so a
+ *  caller can look up `meta.secretCount` and get the right answer regardless of casing). Additive: no
+ *  existing caller reads this field, so this changes nothing for them. */
 export async function s3Head(creds, key) {
   const { url, headers } = sigv4(creds, { method: "HEAD", key, headers: {}, payloadHashHex: EMPTY_SHA256 });
   const r = await fetch(url, { method: "HEAD", headers });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`S3 HEAD ${key} failed: ${r.status}`);
+  const meta = {};
+  for (const [k, v] of r.headers.entries()) {
+    if (k.toLowerCase().startsWith("x-amz-meta-")) meta[k.slice("x-amz-meta-".length).toLowerCase()] = v;
+  }
   return {
     bytes: Number(r.headers.get("content-length") || 0),
     etag: r.headers.get("etag"),
     metaSha256: r.headers.get("x-amz-meta-sha256") || null,
     lastModified: r.headers.get("last-modified") || null,
+    meta,
   };
 }
 
