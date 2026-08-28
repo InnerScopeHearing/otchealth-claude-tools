@@ -82,7 +82,7 @@ export function buildNonPrivilegedIndexPattern() {
  *  which wins over non-privileged. */
 export function classifyIndexLane(indexName) {
   const lower = indexName.toLowerCase();
-  if (SYSTEM_INDEX_EXCLUDES.some((p) => lower.startsWith(p.replace("*", "")))) return "system";
+  if (SYSTEM_INDEX_EXCLUDES.some((p) => lower.startsWith(p.replaceAll("*", "")))) return "system";
   if (PERSONAL_LEGAL_SUBSTRINGS.some((s) => lower.includes(s))) return "personal-legal";
   if (FINANCE_COMPANY_LEGAL_SUBSTRINGS.some((s) => lower.includes(s))) return "finance-company-legal";
   return "non-privileged";
