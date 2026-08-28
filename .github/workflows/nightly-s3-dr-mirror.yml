@@ -36,8 +36,12 @@
 name: Nightly S3 DR Mirror
 
 on:
-  schedule:
-    - cron: '50 6 * * *'   # daily 06:50 UTC, after backup.mjs's own 06:00 UTC Container Apps Job run, ahead of the 08:00 medic
+  # SCHEDULE DISARMED 2026-08-27: this workflow authenticates to / exercises the Azure estate
+  # on subscription 55c84f6b, which was PERMANENTLY DELETED 2026-08-13 -- every scheduled run
+  # since then has failed or produced noise against dead resources. workflow_dispatch is kept.
+  # Re-arm only as part of an AWS-native rebuild (see the 2026-08-27 migration-audit report).
+  # schedule:
+  #   - cron: '50 6 * * *'   # daily 06:50 UTC, after backup.mjs's own 06:00 UTC Container Apps Job run, ahead of the 08:00 medic
   workflow_dispatch: {}     # manual trigger; use this for the first real proving run after merge
 
 permissions:

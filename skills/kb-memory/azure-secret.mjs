@@ -157,19 +157,28 @@ export async function kvSecretSet(name, value) {
   // failure somewhere else entirely. Writing both here is what keeps the fallback above trustworthy.
   // The SSM leg is attempted first and its result folded into the return value, so a half-written
   // rotation is reported rather than silently accepted.
+  const backend = process.env.SECRET_BACKEND || "ssm";
   const ssmOk = await ssmSecretSet(name, value).catch(() => false);
-  const kvOk = await kvSecretSetAzure(name, value);
-  if (kvOk && !ssmOk) {
-    console.error(
-      `[kv-secret] PARTIAL ROTATION for "${name}": Key Vault updated, SSM mirror did NOT. The stores ` +
-        `have diverged -- the SSM fallback will serve a STALE value for this secret until it is reconciled.`,
-    );
-  }
-  if (!kvOk && ssmOk) {
-    console.error(`[kv-secret] PARTIAL ROTATION for "${name}": SSM updated, Key Vault did NOT.`);
+  // Key Vault kv-otc-55c84f6bef died with Azure subscription 55c84f6b (permanently deleted
+  // 2026-08-13). Under the ssm default the KV leg is SKIPPED entirely: attempting it burns the
+  // whole dead-vault token ladder on every rotation and then logs a spurious PARTIAL ROTATION
+  // error even though the live store (SSM) took the write -- which is exactly the failure shape
+  // that made every token-keeper rotation report FAILURE while actually succeeding. Setting
+  // SECRET_BACKEND=keyvault restores the old dual-write for a hypothetical future vault.
+  const kvOk = backend === "ssm" ? false : await kvSecretSetAzure(name, value);
+  if (backend !== "ssm") {
+    if (kvOk && !ssmOk) {
+      console.error(
+        `[kv-secret] PARTIAL ROTATION for "${name}": Key Vault updated, SSM mirror did NOT. The stores ` +
+          `have diverged -- the SSM fallback will serve a STALE value for this secret until it is reconciled.`,
+      );
+    }
+    if (!kvOk && ssmOk) {
+      console.error(`[kv-secret] PARTIAL ROTATION for "${name}": SSM updated, Key Vault did NOT.`);
+    }
   }
   // Success means the ACTIVE primary took the write; a mirror-only failure is loud but not fatal.
-  return (process.env.SECRET_BACKEND || "keyvault") === "ssm" ? ssmOk : kvOk;
+  return backend === "ssm" ? ssmOk : kvOk;
 }
 
 /** The original Key-Vault-only writer, now one leg of the dual-write above. */
@@ -215,12 +224,12 @@ async function kvSecretSetAzure(name, value) {
  *  secret name) or 5xx (vault down) stops immediately without trying the other path, because
  *  silently retrying there would mask a genuinely different bug behind "it worked anyway via SP". */
 export async function kvSecret(name) {
-  // SECRET_BACKEND=ssm makes AWS SSM the PRIMARY store (the Azure-exit posture). Default 'keyvault'
-  // is byte-for-byte the previous behaviour. Either way the OTHER store is tried on failure, and
-  // that cross-fallback is the whole point: it is what lets a job keep its credentials when Azure is
-  // suspended. Without it, an Azure outage does not just degrade the brain, it takes away every
-  // job's ability to authenticate to anything, including whatever would have reported the outage.
-  if ((process.env.SECRET_BACKEND || "keyvault") === "ssm") {
+  // SECRET_BACKEND now DEFAULTS to ssm (2026-08-27): AWS SSM /otchealth/* is the store of record
+  // since Azure subscription 55c84f6b -- and Key Vault kv-otc-55c84f6bef with it -- was permanently
+  // deleted 2026-08-13. The old 'keyvault' default meant every read on a default-configured seat
+  // burned the dead Azure token ladder before reaching the store that actually works. Either way
+  // the OTHER store is still tried on a miss (cross-fallback preserved).
+  if ((process.env.SECRET_BACKEND || "ssm") === "ssm") {
     const v = await ssmSecret(name);
     if (v != null) return v;
     // Fall through to Key Vault below rather than returning null: during the transition the mirror
@@ -259,7 +268,7 @@ export async function kvSecret(name) {
   // Key Vault could not serve it. If SSM was not already tried as primary, try it now -- this is the
   // branch that actually runs during an Azure outage, when every attempt above fails on auth or
   // network.
-  if ((process.env.SECRET_BACKEND || "keyvault") !== "ssm") {
+  if ((process.env.SECRET_BACKEND || "ssm") !== "ssm") {
     const v = await ssmSecret(name);
     if (v != null) {
       if (!_ssmFallbackNoted) {

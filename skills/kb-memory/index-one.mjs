@@ -27,8 +27,8 @@ const SM = "otchealth-shared-prod";
 const IDX = "memory-exec";
 const AIS_API = "2023-11-01";
 // Read ONCE at module load, matching semantic.mjs's convention exactly.
-const SEARCH_BACKEND = (process.env.SEARCH_BACKEND || "azure").toLowerCase(); // 'azure' | 'opensearch'
-const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "foundry").toLowerCase(); // 'foundry' | 'openai'
+const SEARCH_BACKEND = (process.env.SEARCH_BACKEND || "opensearch").toLowerCase(); // 'opensearch' (default since 2026-08-27; Azure AI Search died with sub 55c84f6b) | 'azure'
+const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "openai").toLowerCase(); // 'openai' (default since 2026-08-27; Azure Foundry died with sub 55c84f6b) | 'foundry'
 const agent = (process.argv[2] || "").toLowerCase();
 let entry; try { entry = JSON.parse(process.argv[3] || "{}"); } catch { process.exit(0); }
 if (!agent || !entry.id || !entry.text) process.exit(0);

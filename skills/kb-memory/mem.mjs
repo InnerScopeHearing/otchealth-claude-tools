@@ -434,19 +434,41 @@ const SEM_STAMP = `${CACHE_DIR}/.last-sem`;
 function readSemCredsCache() { try { const c = JSON.parse(readFileSync(SEM_CRED_FILE, "utf8")); if (c.searchEp && c.queryKey && Date.now() - (c.ts || 0) < 6 * 3600 * 1000) return c; } catch {} return null; }
 function spawnSemRefresh() { try { spawn(process.execPath, [join(HERE, "mem.mjs"), "sem-refresh"], { detached: true, stdio: "ignore" }).unref(); } catch {} }
 async function semanticHits(prompt, creds, excludePrefixes) {
-  const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 2000);
-  try {
-    const r = await fetch(`${creds.searchEp}/indexes/memory-exec/docs/search?api-version=2023-11-01`, { method: "POST", signal: ac.signal, headers: { "api-key": creds.queryKey, "Content-Type": "application/json" }, body: JSON.stringify({ search: String(prompt).slice(0, 400), queryType: "semantic", semanticConfiguration: "sem", top: 6, select: "agent,type,ts,text,tags" }) });
-    if (!r.ok) return [];
+  // Shared post-filter for both backends: drop empties, dedupe against the local pack, and hold the
+  // cross-agent ring wall regardless of which engine served the hits.
+  const sift = (hits) => {
     const out = [];
-    for (const h of (await r.json()).value || []) {
+    for (const h of hits) {
       const text = (h.text || "").trim(); if (!text) continue;
+      if (h.retracted) continue;
       if (excludePrefixes.has(text.slice(0, 40).toLowerCase())) continue;                  // already in the local pack
-      if (h.agent !== AGENT && !ringSafeCross({ text, tags: (h.tags || "").split(", ") })) continue; // cross-agent ring wall
+      const tags = Array.isArray(h.tags) ? h.tags : String(h.tags || "").split(", ");
+      if (h.agent !== AGENT && !ringSafeCross({ text, tags })) continue;                   // cross-agent ring wall
       out.push({ agent: h.agent, type: h.type, text });
       if (out.length >= 3) break;
     }
     return out;
+  };
+  // DEFAULT backend is the AWS OpenSearch brain (2026-08-27): Azure AI Search died with subscription
+  // 55c84f6b, and until this port the hot-path semantic tier burned its 2s budget against the dead
+  // endpoint on every thin prompt, fleet-wide, and returned nothing. hybridSearch (BM25+RRF, no
+  // embed call) preserves this path's contract: one bounded read, fail-open to the local pack.
+  if ((process.env.SEARCH_BACKEND || "opensearch").toLowerCase() !== "azure") {
+    try {
+      const os = await import("./opensearch-write.mjs");
+      const hits = await Promise.race([
+        os.hybridSearch("memory-exec", { queryText: String(prompt).slice(0, 400), top: 6 }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
+      ]);
+      return Array.isArray(hits) ? sift(hits) : [];
+    } catch { return []; }                                                                 // timeout / error -> fail-open
+  }
+  // Legacy Azure path, reachable only via explicit SEARCH_BACKEND=azure.
+  const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 2000);
+  try {
+    const r = await fetch(`${creds.searchEp}/indexes/memory-exec/docs/search?api-version=2023-11-01`, { method: "POST", signal: ac.signal, headers: { "api-key": creds.queryKey, "Content-Type": "application/json" }, body: JSON.stringify({ search: String(prompt).slice(0, 400), queryType: "semantic", semanticConfiguration: "sem", top: 6, select: "agent,type,ts,text,tags" }) });
+    if (!r.ok) return [];
+    return sift((await r.json()).value || []);
   } catch { return []; }                                                                   // timeout / error -> fail-open
   finally { clearTimeout(to); }
 }
@@ -736,12 +758,15 @@ async function runPack() {
   const SEM_MIN = parseInt(process.env.KB_SEM_MIN || "3", 10) || 3;
   const SEM_THROTTLE = (parseInt(process.env.KB_SEM_THROTTLE_S || "60", 10) || 60) * 1000;
   if (!process.env.KB_SEM_DISABLE && rawPrompt && terms.length >= 2 && ranked.length < SEM_MIN && !NO_SHARE.has(AGENT) && ageMs(SEM_STAMP) > SEM_THROTTLE) {
-    const creds = readSemCredsCache();
-    if (creds) {
+    // The cached-creds gate only applies to the legacy Azure path: the OpenSearch default signs
+    // per-request with the seat's AWS credentials, so there is nothing to pre-cache.
+    const backendIsAzure = (process.env.SEARCH_BACKEND || "opensearch").toLowerCase() === "azure";
+    const creds = backendIsAzure ? readSemCredsCache() : null;
+    if (!backendIsAzure || creds) {
       try { mkdirSync(CACHE_DIR, { recursive: true }); writeFileSync(SEM_STAMP, String(Date.now())); } catch {} // stamp EARLY so a slow/failed call still respects the window
       const excl = new Set([...ranked, ...recent, ...pitfalls, ...decisions, ...corrections, ...entities].map((r) => (r.text || "").slice(0, 40).toLowerCase()));
       semantic = await semanticHits(rawPrompt, creds, excl);
-    } else if (memoryBackendPresent()) spawnSemRefresh(); // not cached -> warm it off the hot path for next time; skip this turn
+    } else if (memoryBackendPresent()) spawnSemRefresh(); // azure only: not cached -> warm it off the hot path for next time; skip this turn
   }
 
   // beacon: LIVE only if the ledger is actually readable + non-empty (proves FUNCTION, not just wiring).
