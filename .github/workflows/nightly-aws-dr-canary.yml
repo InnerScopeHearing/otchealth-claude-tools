@@ -18,8 +18,8 @@
 name: Nightly AWS DR Canary
 
 on:
-  # schedule:
-  #   - cron: '45 8 * * *'   # daily 08:45 UTC, after the secrets export + the OpenSearch SM policy's own 07:00 UTC run
+  schedule:
+    - cron: '45 8 * * *'   # daily 08:45 UTC, after the secrets export + the OpenSearch SM policy's own 07:00 UTC run -- armed 2026-08-28, first snapshot + first export both proven SUCCESS
   workflow_dispatch: {}
 
 permissions:
