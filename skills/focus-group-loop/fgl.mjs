@@ -28,7 +28,7 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
-import { TIERS, LEGACY_STANDARD, chatBody, resolveTier } from "../../setup/model-routing.mjs";
+import { LEGACY_STANDARD, chatBody, resolveTier } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
