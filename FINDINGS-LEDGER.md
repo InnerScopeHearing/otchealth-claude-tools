@@ -345,13 +345,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-18T23:12:11.685Z
 - **Closed:** (open)
 
-### finding:FND-20260819-c9bb severity:high status:open | 6 fleet skills dark: quality-LLM callers still hard-depend on the dead Azure Foundry (critic-pass reports SUCCESS while doing nothing)
+### finding:FND-20260819-c9bb severity:high status:fixed | 6 fleet skills dark: quality-LLM callers still hard-depend on the dead Azure Foundry (critic-pass reports SUCCESS while doing nothing)
 
 - **Source audit doc:** /tmp/dark-skills.md
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-19T07:31:57.288Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T01:33:51.227Z
 
 ### finding:FND-20260821-7eb1 severity:low status:fixed | flatstick infra/aws (CDK) is outside the pnpm workspace, so CI never typechecks it
 
