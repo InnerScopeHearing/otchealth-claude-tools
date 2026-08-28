@@ -592,3 +592,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-27T19:59:42.033Z
 - **Closed:** (open)
+
+### finding:FND-20260828-3142 severity:high status:open | Brain ingest backfill + freshness canary: docs added since 2026-08-13 unindexed; librarian jobs must run OpenSearch push-search (PR #469) per room; add per-room newest-indexed_at-vs-newest-S3-object canary; verify librarian ECS env pins
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness (scratchpad/critic-completeness.md)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:35:43.385Z
+- **Closed:** (open)
