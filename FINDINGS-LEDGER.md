@@ -625,13 +625,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:35:52.204Z
 - **Closed:** (open)
 
-### finding:FND-20260828-4f85 severity:high status:open | otchealth-cto CLAUDE.md 2026-08-27 entry still says FourVault dump NOT found (POTENTIAL DATA LOSS) contradicting ground truth (dump EXISTS in otchealth-brain-dr pg-dumps/fourvault-2026-08-04.sql.gz); correct the doc; otchealth-pgrestore targets wrong tenancy (shared RDS) for COPPA kids data - restore target must be isolated/Neon; label flatstick-2026-08-04 dump PRE-cutover stale
+### finding:FND-20260828-4f85 severity:high status:fixed | otchealth-cto CLAUDE.md 2026-08-27 entry still says FourVault dump NOT found (POTENTIAL DATA LOSS) contradicting ground truth (dump EXISTS in otchealth-brain-dr pg-dumps/fourvault-2026-08-04.sql.gz); correct the doc; otchealth-pgrestore targets wrong tenancy (shared RDS) for COPPA kids data - restore target must be isolated/Neon; label flatstick-2026-08-04 dump PRE-cutover stale
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** otchealth-cto CLAUDE.md 2026-08-27 entry corrected in place (CORRECTED 2026-08-28 line: dump EXISTS at s3://otchealth-brain-dr-55c84f6b/pg-dumps/fourvault-2026-08-04.sql.gz, 15.2KB, verified beside flatstick dump)
+- **Verified by:** Doc correction live in CLAUDE.md (FourVault reclassified rebuild-decision-not-data-loss, ~9-day tail gap named). The isolated-restore-target requirement (COPPA kids data must NOT restore into shared-tenancy otchealth-pg; use isolated/Neon) and the flatstick-dump-is-pre-cutover-stale label are carried in FND-20260827-98d2's own text, which stays open as the restore-execution finding
 - **Opened:** 2026-08-28T01:35:54.711Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T23:03:53.291Z
 
 ### finding:FND-20260828-e364 severity:medium status:open | Datadog monitor estate audit: monitors watch Azure-era metrics + dead emitters (permanent Alert/NoData trains everyone to ignore Datadog); none of the 32 AWS schedules report to it; audit/retire/repoint or consciously retire Datadog
 
