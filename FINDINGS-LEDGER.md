@@ -688,3 +688,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T02:17:50.650Z
 - **Closed:** (open)
+
+### finding:FND-20260828-06f4 severity:high status:open | Customer.io Track Basic credential embedded in the otchealth-ops n8n workflow export (cnGH ElevenLabs post-call receiver) - a committed secret VALUE in git and now live on the recovery host; rotate the CIO Track pair, then replace the embedded header with an n8n credential
+
+- **Source audit doc:** session:2026-08-28 n8n restore review
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T03:45:53.120Z
+- **Closed:** (open)
