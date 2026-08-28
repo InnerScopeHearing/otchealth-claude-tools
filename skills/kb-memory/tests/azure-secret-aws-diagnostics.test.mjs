@@ -30,7 +30,11 @@ async function withTempHome(run) {
   const dir = await mkdtemp(join(tmpdir(), "azsec-diag-test-"));
   const savedHome = process.env.HOME;
   process.env.HOME = dir;
-  try { return await run(dir); } finally { process.env.HOME = savedHome; await rm(dir, { recursive: true, force: true }); }
+  // maxRetries: the subprocess under test probes the az CLI, which async-writes ~/.azure inside this
+  // temp HOME; on a slow CI disk that write can race a plain recursive rm into ENOTEMPTY (seen live
+  // on PR #473's gate run). retryDelay+maxRetries lets the in-flight write settle instead of failing
+  // the TEST for a teardown artifact.
+  try { return await run(dir); } finally { process.env.HOME = savedHome; await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
 }
 
 test("kvSecretOrThrow(): with no credentials at all, names that AWS was tried too and what to set", async () => {

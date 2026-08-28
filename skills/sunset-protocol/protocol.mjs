@@ -2,7 +2,7 @@
 // SUNSET / SUNRISE TRANSFER PROTOCOL — hardened cross-engine consciousness transfer for the fleet.
 //
 // Matt's ask: one phrase spins an agent DOWN on one engine, another phrase spins it UP on the other,
-// fully self-updated. The brain is already durable + engine-agnostic (Azure ledgers + memory-exec), so
+// fully self-updated. The brain is already durable + engine-agnostic (S3 ledgers + memory-exec), so
 // "transfer" = FLUSH-then-ATTACH, not a migration of state.
 //
 // 2026-07-12 CORRECTION (Matt, direct): the Executive-side agents (cto/cfo/clo/coo/cro) run in
@@ -34,6 +34,15 @@
 // raw ledger text — a CFO ledger is MNPI, a CLO ledger is privileged. last3 reads the agent's OWN ledger
 // and is only ever shown in that agent's OWN session to the principal. Procedure travels; content stays home.
 //
+// STORAGE (ported to S3, 2026-08-27): the handoff docs (_HANDOFF/) AND the ledger reads (_MEMORY/) this
+// file does directly both used to go through a hand-rolled Azure Blob account-SAS in this file. That
+// storage account died with the Azure subscription deletion (2026-08-13). Now routes through
+// skills/kb-memory/commons-store.mjs (the same facade setup/heartbeat.mjs, fleet-dispatch/dispatch.mjs,
+// fleet-medic/medic.mjs, and fleet-search/search.mjs use). This also fixes a real pre-existing mismatch:
+// mem.mjs (the actual writer of _MEMORY/<agent>.jsonl) already defaults to S3, so this file's OWN direct
+// Azure read of that same ledger was ALREADY silently broken (reading a dead account while the real data
+// lived on S3) before this port -- readLedger() now reads from the SAME place mem.mjs writes to.
+//
 // Verbs:
 //   node protocol.mjs sunset  --agent <role> [--repo-path <dir>]   # one agent down (writes commons doc + audit)
 //   node protocol.mjs sunset-fleet [--roles a,b,c]                 # ALL agents down, NO sessions needed (Tier-1)
@@ -41,17 +50,13 @@
 //   node protocol.mjs last3   --agent <role> [--json]              # the 3 most recent distinct workstreams
 //
 // Fail-open on every read path so it can never break a session or a cron job.
-import crypto from "node:crypto";
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { cGet, cPut } from "../kb-memory/commons-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SM = "otchealth-shared-prod";
-const COMMONS = { accountSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal" };
 const MEM_PREFIX = "_MEMORY/";
 const HANDOFF_PREFIX = "_HANDOFF/";
 const DISPATCH_PREFIX = "_DISPATCH/";
@@ -71,24 +76,6 @@ const argv = process.argv.slice(2);
 const cmd = argv[0];
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const FLAG = (f) => argv.includes(f);
-
-function resolveSa() {
-  if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  try { try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; } } catch { return null; }
-}
-const _saRaw = resolveSa();
-function saJwt() { const __r=_saRaw;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;} const n = Math.floor(Date.now() / 1e3), e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: n, exp: n + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
-async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const t = (await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt())}` })).json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } }); return r.ok ? Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim() : null; }
-
-// Commons blob (account SAS, rwl so sunset can write the handoff doc).
-const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-function buildSas(acct, key, write) { const sv = "2021-12-02", sp = write ? "rwlc" : "rl", ss = "b", srt = "co"; const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z"; const se = new Date(Date.now() + 12 * 3600 * 1000).toISOString().slice(0, 19) + "Z"; const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n"; const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64"); return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString(); }
-let CA, CSAS;
-async function commonsInit(write) { CA = process.env.KB_COMMONS_ACCOUNT || (await sm(COMMONS.accountSecret)); const k = await sm(COMMONS.keySecret); if (!CA || !k) throw new Error("commons creds missing"); CSAS = buildSas(CA, k, write); }
-const cUrl = (name) => `https://${CA}.blob.core.windows.net/${COMMONS.container}/${encPath(name)}?${CSAS}`;
-async function fetchRetry(url, opts, tries = 4) { let last; for (let i = 0; i < tries; i++) { try { const r = await fetch(url, opts); if (r.status === 404) return r; if (r.ok || (r.status < 500 && r.status !== 408 && r.status !== 429 && r.status !== 403)) return r; last = new Error("http " + r.status); } catch (e) { last = e; } await new Promise((s) => setTimeout(s, 400 * Math.pow(2, i))); } throw last || new Error("fetch failed"); }
-async function cGet(name) { const r = await fetchRetry(cUrl(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("cget " + r.status); return await r.text(); }
-async function cPut(name, body) { const r = await fetchRetry(cUrl(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "text/markdown" }, body }); if (!r.ok) throw new Error("cput " + r.status); }
 
 const fromNd = (t) => (t || "").split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 
@@ -207,7 +194,7 @@ async function sunsetOne(agent, { repoPath } = {}) {
   const rows = await readLedger(agent);
   const openDisp = await openDispatchCount(agent);
   const doc = renderHandoff(agent, rows, openDisp);
-  await cPut(`${HANDOFF_PREFIX}${agent}.md`, doc);
+  await cPut(`${HANDOFF_PREFIX}${agent}.md`, doc, "text/markdown; charset=utf-8");
   // Optional git copy for discoverability in the agent's home repo (non-sensitive procedure doc).
   if (repoPath && existsSync(join(repoPath, ".git"))) {
     try { writeFileSync(join(repoPath, `HYPERAGENT-${agent.toUpperCase()}-HANDOFF.md`), doc); } catch { /* ignore */ }
@@ -218,7 +205,6 @@ async function sunsetOne(agent, { repoPath } = {}) {
 async function sunset() {
   const agent = (val("--agent", "") || process.env.KB_AGENT || "").toLowerCase();
   if (!agent) { console.error("usage: protocol.mjs sunset --agent <role>"); process.exit(2); }
-  await commonsInit(true);
   const r = await sunsetOne(agent, { repoPath: val("--repo-path", "") });
   stampLedger(agent, `SUNSET (Transfer Protocol): wrote portable handoff to commons _HANDOFF/${agent}.md at sunset. Ledger ${r.ledger} entries, ${r.openDisp} pending dispatches. Ready for cross-engine attach (other engine: ${otherEngineLabel(agent)}).`);
   console.log(`\n[SUNSET] ${agent}: handoff written -> _HANDOFF/${agent}.md (commons). Ledger ${r.ledger} entries; ${r.openDisp} pending dispatch(es).`);
@@ -226,7 +212,6 @@ async function sunset() {
 }
 
 async function sunsetFleet() {
-  await commonsInit(true);
   const roles = (val("--roles", "") ? val("--roles", "").split(",") : ROSTER).map((s) => s.trim().toLowerCase()).filter(Boolean);
   const done = [];
   for (const role of roles) {
@@ -240,7 +225,7 @@ async function sunsetFleet() {
 async function last3() {
   const agent = (val("--agent", "") || process.env.KB_AGENT || "").toLowerCase();
   if (!agent) { if (FLAG("--json")) console.log("[]"); process.exit(0); }
-  try { await commonsInit(false); const rows = await readLedger(agent); const l3 = computeLast3(rows);
+  try { const rows = await readLedger(agent); const l3 = computeLast3(rows);
     if (FLAG("--json")) { console.log(JSON.stringify(l3)); return; }
     l3.forEach((x, i) => console.log(`${i + 1}. [${x.ts}] ${x.title}`));
   } catch { if (FLAG("--json")) console.log("[]"); }
@@ -254,9 +239,9 @@ async function sunrise() {
   const m = memBin();
   if (m) { try { const out = execFileSync("node", [m, "whoami", "--agent", agent], { encoding: "utf8", timeout: 30000 }); attach = /RESULT:\s*PASS/.test(out) ? "PASS" : "FAIL"; } catch { attach = "FAIL"; } }
   let l3 = [];
-  try { await commonsInit(false); l3 = computeLast3(await readLedger(agent)); } catch { /* fail-open */ }
+  try { l3 = computeLast3(await readLedger(agent)); } catch { /* fail-open */ }
   console.log(`================ SUNRISE TRANSFER PROTOCOL - ${agent.toUpperCase()} ================`);
-  console.log(`attach: memory ${attach}` + (attach !== "PASS" ? "  (if FAIL: no memory-backend creds resolved - check AZURE_SP_* / managed identity, or run session-start; this is NOT a GCP-SA issue, GCP is retired)" : ""));
+  console.log(`attach: memory ${attach}` + (attach !== "PASS" ? "  (if FAIL: no memory-backend creds resolved - check the AWS credential chain (ECS task role / AWS_ACCESS_KEY_ID / OTC_AWS_ACCESS_KEY_ID), or run session-start; this is NOT a GCP-SA or Azure-SP issue, both are retired)" : ""));
   console.log(`\nThe agent must now greet Matt EXACTLY:\n  "I am fully updated and ready to go, Sir."`);
   console.log(`\nThen present THE LAST 3 THINGS WE WORKED ON (from the live ledger):`);
   if (l3.length) l3.forEach((x, i) => console.log(`  ${i + 1}. [${x.ts}] ${x.title}`));
