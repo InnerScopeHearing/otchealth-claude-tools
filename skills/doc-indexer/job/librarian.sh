@@ -59,7 +59,18 @@ fi
 
 echo "[librarian] profile=$PROFILE backend=$BACKEND_FLAG $*"
 node "$ROOT/skills/doc-indexer/indexer.mjs" index --profile "$PROFILE" $BACKEND_FLAG "$@"
-node "$ROOT/skills/doc-indexer/indexer.mjs" understand --profile "$PROFILE" $BACKEND_FLAG "$@"
+# SKIP_UNDERSTAND=1 (added 2026-08-28): `understand` is the Azure Content Understanding enrichment
+# pass, and that service died with the permanently deleted Azure subscription -- a librarian run
+# that reaches it exits 1 on CU's 401 BEFORE push-search ever runs, so the ingest step a run exists
+# for never happens (observed live on the first post-#474 commerce run, task ea9e14b6). Until a CU
+# replacement lands (the Bedrock deep-pass lane is the metadata-enrichment successor), the ECS
+# librarian jobs set SKIP_UNDERSTAND=1 so index -> push-search still run; invoking understand
+# EXPLICITLY (flag unset) still fails loud rather than pretending CU works.
+if [ "${SKIP_UNDERSTAND:-}" = "1" ]; then
+  echo "[librarian] SKIP_UNDERSTAND=1 -> skipping understand (Azure CU is retired; enrichment moves to the deep-pass lane)"
+else
+  node "$ROOT/skills/doc-indexer/indexer.mjs" understand --profile "$PROFILE" $BACKEND_FLAG "$@"
+fi
 # push-search writes FLAT docs (contentVector, key=id) to the room index. After the Phase-3 S1
 # cutover the doc rooms are CHUNKED (text_vector, key=chunk_id) and fed by native S1 pull-indexers,
 # so a flat push would be rejected (schema mismatch) and turn the job RED for nothing. Set
