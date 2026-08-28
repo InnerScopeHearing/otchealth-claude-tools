@@ -449,13 +449,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T18:59:56.473Z
 - **Closed:** 2026-08-27T19:49:28.476Z
 
-### finding:FND-20260827-dbb9 severity:critical status:open | n8n recovery incomplete: cs-n8n.otchealthmart.com (Lightsail) answers 502; ~34 CS workflows offline since 2026-08-13; finish aws-n8n-recovery lane then re-run the webhook/security batteries
+### finding:FND-20260827-dbb9 severity:critical status:fixed | n8n recovery incomplete: cs-n8n.otchealthmart.com (Lightsail) answers 502; ~34 CS workflows offline since 2026-08-13; finish aws-n8n-recovery lane then re-run the webhook/security batteries
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** otchealth-cto PRs #119-#125, run 33138654904
+- **Verified by:** cs-n8n.otchealthmart.com /healthz 200 live; 15 workflows imported; owner claimed + API key minted 2026-08-28; Twilio/EL tools repointed
 - **Opened:** 2026-08-27T18:59:59.400Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:17:48.686Z
 
 ### finding:FND-20260827-bcfc severity:high status:fixed | Toolkit Azure-blob cluster still writes to dead estate: heartbeat.mjs, fleet-dispatch, fleet-search, fleet-medic notes, sunset-protocol, memory-librarian, ledger-archive, notion-export, innd-stock -- port to S3 (s3-blob.mjs pattern)
 
