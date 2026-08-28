@@ -457,13 +457,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T18:59:59.400Z
 - **Closed:** (open)
 
-### finding:FND-20260827-bcfc severity:high status:open | Toolkit Azure-blob cluster still writes to dead estate: heartbeat.mjs, fleet-dispatch, fleet-search, fleet-medic notes, sunset-protocol, memory-librarian, ledger-archive, notion-export, innd-stock -- port to S3 (s3-blob.mjs pattern)
+### finding:FND-20260827-bcfc severity:high status:fixed | Toolkit Azure-blob cluster still writes to dead estate: heartbeat.mjs, fleet-dispatch, fleet-search, fleet-medic notes, sunset-protocol, memory-librarian, ledger-archive, notion-export, innd-stock -- port to S3 (s3-blob.mjs pattern)
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 9cdba8c6..f66092ce batch + PR #473
+- **Verified by:** leg-A sweep: 8/9 files verified on commons-store/s3-blob S3; 9th (notion-export) deliberately RETIRED per PR #473 SKILL.md supersession (zero callers, migration complete); PR #485 port closed unmerged honoring that decision
 - **Opened:** 2026-08-27T19:00:02.382Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:00:47.808Z
 
 ### finding:FND-20260827-4288 severity:high status:fixed | xero-token.mjs + xero-run.mjs token cache/lock on dead Azure Blob: the proven org-lockout race is re-armed whenever concurrent Xero use resumes; port lock to S3 If-None-Match or DynamoDB
 
