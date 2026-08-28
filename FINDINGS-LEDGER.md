@@ -648,3 +648,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:35:59.920Z
 - **Closed:** (open)
+
+### finding:FND-20260828-386c severity:medium status:open | Security baseline: SecurityAudit + LogArchive accounts used by NOTHING; no org CloudTrail, no GuardDuty, no SCPs, 3 never-expire CloudWatch groups; small mgmt-account CDK/CLI pass
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:36:02.549Z
+- **Closed:** (open)
