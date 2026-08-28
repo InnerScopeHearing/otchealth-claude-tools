@@ -12,11 +12,14 @@
 #
 # LLM_PROVIDER (2026-08-27): run.mjs now DEFAULTS to LLM_PROVIDER=openai (Azure subscription 55c84f6b,
 # the whole Foundry estate this critic used exclusively, is permanently deleted -- verified 401 forever).
-# The azure/login OIDC step below is KEPT, unchanged: it is what lets kvSecret()'s az-CLI/OIDC path read
-# `openai-api-key` from Key Vault when the runner has no AWS credentials for the SSM-primary path (see
-# skills/kb-memory/azure-secret.mjs) -- so it now serves the OpenAI key lookup, not a Foundry key lookup.
-# If Foundry is ever re-provisioned, LLM_PROVIDER=foundry (set as a workflow env or repo variable) routes
-# run.mjs back through the original azure-foundry-*/legacy path with no other change here.
+# CORRECTION (2026-08-28): the azure/login step this header previously said "serves the OpenAI key
+# lookup" could not serve anything -- Key Vault kv-otc-55c84f6bef died WITH that subscription, so the
+# login succeeded while every secret read failed and the critic reported "missing openai-api-key" on
+# its first post-port runs. The step is removed; the key now arrives as the OPENAI_API_KEY repo Actions
+# secret on the critic step (value sourced from AWS SSM /otchealth/openai-api-key -- rotate both
+# together). If Foundry is ever re-provisioned, LLM_PROVIDER=foundry (workflow env or repo variable)
+# routes run.mjs back through the original azure-foundry-*/legacy path, which would then also need its
+# own credential plumbing restored here.
 #
 # Scope (job-level `if`): only DRAFT PRs, or PRs from claude/* branches (the autonomous runner's + the
 # fleet-dispatch --spawn safety-net branches). A normal non-draft feature PR triggers the workflow but
@@ -32,7 +35,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
-  id-token: write     # secretless OIDC login to Azure (azure/login); no client secret at rest
   contents: read
   pull-requests: write
 
@@ -59,13 +61,12 @@ jobs:
         with:
           node-version: 22
 
-      - name: Azure login (OIDC, secretless — the claude-tools Azure auth pattern)
-        continue-on-error: true
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
-        with:
-          client-id: ${{ vars.AZURE_CI_CLIENT_ID }}   # least-privilege CI identity (KV Secrets User only), pull_request federated cred; NOT the Owner azure-sp
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # The azure/login OIDC step that used to sit here is REMOVED (2026-08-28): it existed so
+      # kvSecret()'s az-CLI path could read secrets from Key Vault kv-otc-55c84f6bef, and that vault
+      # died with the permanently deleted Azure subscription on 2026-08-13 -- the login could still
+      # succeed while every subsequent secret read failed, which is exactly how the critic kept
+      # reporting "missing openai-api-key" after the OpenAI port. The key now arrives as a plain
+      # repo Actions secret (below), value sourced from AWS SSM /otchealth/openai-api-key.
 
       - name: Gather the PR diff + goal (injection-safe via env + files, never interpolated)
         continue-on-error: true
@@ -90,8 +91,12 @@ jobs:
 
       - name: Run the real critic pass on the diff (credentialed runner)
         continue-on-error: true
-        # No env creds: the azure/login step above authenticated the runner via OIDC, and run.mjs's sm()
-        # resolves azure-openai-* from Key Vault via kvSecret()'s az-CLI/OIDC path. No secret at rest.
+        # OPENAI_API_KEY is the first thing run.mjs's defaultOpenAIChat checks (before any secret-store
+        # lookup), so this env var alone makes the critic runnable on a bare runner with no cloud
+        # login. Repo Actions secret, value sourced from AWS SSM /otchealth/openai-api-key (set
+        # 2026-08-28); on rotation, update BOTH the SSM param and this repo secret.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           node skills/critic-pass/run.mjs \
             --task-file /tmp/task.txt \
