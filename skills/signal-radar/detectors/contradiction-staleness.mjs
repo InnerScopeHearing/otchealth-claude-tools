@@ -33,7 +33,7 @@ import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { makeSignal, isMnpiSubject, isPhiExcluded } from "../schema.mjs";
-import { TIERS, LEGACY_STANDARD, chatBody } from "../../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, chatBody, resolveTier } from "../../../setup/model-routing.mjs";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 export const NAME = "contradiction-staleness";
@@ -309,13 +309,82 @@ async function readSharedFeed() {
   return { rows, note: `read ${rows.length} shared exec row(s) across ${files.length} lane(s)` };
 }
 
-// Azure OpenAI entailment call - primary on Foundry (2026-08-01: the legacy resource's gpt-4o deployment
-// is 50K TPM regional-Standard, already 100% subscribed, and has never had a gpt-5.1 deployment anyway -
-// that combination was a pre-existing bug, not a genuinely working fallback), with the legacy resource
-// kept as a true last-resort fallback using its ONLY real deployment (gpt-4o via LEGACY_STANDARD), so a
-// transient throttle on Foundry does not silence the detector. Uses the shared model-routing body shape
-// (quality tier = gpt-5.1 on Foundry; NOT gpt-4.1-mini - that is banned for judgment work).
-async function makeEntailer() {
+// LLM_PROVIDER (2026-08-28, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
+// Foundry estate the entailment call below used exclusively) is permanently deleted since 2026-08-13 --
+// verified HTTP 401 forever, not a transient outage (the same dead-dependency class as
+// skills/doc-indexer/enrich.mjs's 2026-08-19 finding and the fleet's FND-20260819-c9bb, which named
+// this exact detector as one of six still hard-dependent on it). Default flips to 'openai'
+// (api.openai.com), keeping this detector's existing QUALITY/reasoning-tier choice (gpt-5.1 -- fact-
+// checking entailment judgment, NOT gpt-4.1-mini, which is banned for judgment work) via OPENAI_TIERS'
+// quality tier resolved through resolveTier(). OPENAI_TIERS.quality reuses the SAME 'gpt-5.1' model id
+// (a real OpenAI model, not just an Azure deployment alias -- see setup/model-routing.mjs), so this is a
+// drop-in, not a re-tuning. LLM_PROVIDER=foundry/azure keeps the original Foundry-then-legacy path
+// selectable, one env var away, if that estate is ever re-provisioned; it is not removed. Mirrors
+// skills/critic-pass/run.mjs's identical dispatch shape.
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
+
+// OpenAI-direct call, the same retry/429-backoff shape as the Foundry callOne() below (chatBody() is
+// provider-agnostic; OpenAI just wants the model NAME in the body instead of the URL, and a bearer
+// token instead of an api-key header -- it also auto-selects the reasoning-family body shape for
+// gpt-5.1 via chatBody()'s own modelFamilyOf() check, so no gpt-5.1-specific branch is needed here).
+// Mirrors critic-pass/run.mjs's callChatOpenAI exactly.
+async function callOpenAI(key, dep, system, user, maxTokens, tries) {
+  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true }), model: dep };
+  for (let a = 0; a < tries; a++) {
+    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
+    if (!r.ok) throw new Error("chat " + r.status);
+    return (await r.json()).choices[0].message.content;
+  }
+  throw Object.assign(new Error("429"), { throttled: true });
+}
+
+// The entailment call - the QUALITY/reasoning tier (gpt-5.1; NOT gpt-4.1-mini, banned for judgment
+// work). Default provider is OpenAI direct (see LLM_PROVIDER above); LLM_PROVIDER=foundry/azure selects
+// the original Foundry-then-legacy path (Foundry primary, the legacy azure-openai resource as a
+// last-resort fallback via LEGACY_STANDARD) -- kept intact below, unchanged, for a future
+// re-provisioned Azure estate.
+//
+// Exported (2026-08-28) for direct unit testing of the real HTTP path (mocking global.fetch) without
+// needing the shared exec feed itself to be reachable -- the existing scanRows-level tests already
+// cover the pure gating/materiality logic with an injected fake entailer; this covers the actual
+// network call and its FAIL-LOUD behavior on a genuine provider failure.
+export async function makeEntailer() {
+  const SYS = `You are a precise fact-checker for an internal company memory ledger. You are given ONE NEW statement and a small numbered set of PRIOR statements about the same named entity. Decide, for the SINGLE prior statement (if any) that most clearly conflicts, whether the new statement:
+- "agree": consistent, or merely restates/paraphrases, or adds no conflicting info.
+- "supersede": a NORMAL expected update (a version/build number bump, a status flip from pending to done, a value that legitimately changed over time). NOT a contradiction.
+- "contradict": the new and the prior statement cannot both be true - a real, unambiguous factual conflict.
+- "stale-with-material-drift": the prior statement asserts an ongoing/current state that is implausible to still hold given the time elapsed and the new statement, though not in direct logical conflict.
+Be CONSERVATIVE: prefer "supersede" or "agree" unless the conflict is unambiguous. This feeds an automated alert; false positives cost real attention. Respond with STRICT JSON only: {"label":"agree|supersede|contradict|stale-with-material-drift","citedId":"<exact prior row id, or null>","reason":"<one short sentence>"}. You MUST cite the exact prior row id you judged against when label is contradict or stale-with-material-drift.`;
+
+  if (LLM_PROVIDER === "openai") {
+    const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+    if (!key) return null;
+    const dep = resolveTier(process.env.CONTRADICTION_MODEL || "quality", "openai").deployment;
+    return async function entail(newRow, slice) {
+      const user = `NEW (id ${newRow.id}, ${(newRow.ts || "").slice(0, 10)}, ${newRow.type}): "${clip(newRow.text, 400)}"\n\nPRIOR STATEMENTS (same entity keys: ${(newRow.ekeys || []).join(", ") || "n/a"}):\n` +
+        slice.map((p) => `[${p.id}] (${(p.ts || "").slice(0, 10)}) ${p.type}: "${clip(p.text, 300)}"${p.was ? ` (was: "${clip(p.was, 120)}")` : ""}`).join("\n");
+      let raw;
+      try {
+        raw = await callOpenAI(key, dep, SYS, user, 400, 4);
+      } catch (e) {
+        // FAIL LOUD, DISTINCT from "no issues found": a throttle still fail-quiets to 'agree' (same
+        // posture as before -- a busy fleet must never fabricate a verdict), but ANY OTHER failure is a
+        // genuine dead-provider outage and must never masquerade as a clean 'agree' verdict. That
+        // silent pass-as-clean shape is exactly what FND-20260819-c9bb flagged ("the auto critic ...
+        // reported its own check SUCCESS on real PRs"). The "detector ERROR:" marker makes this row's
+        // failure note (scanRows's per-row catch below) unmistakably distinct from a real 'agree'.
+        if (e.throttled) return { label: "agree", citedId: null, reason: "throttled, fail-quiet" };
+        throw new Error(`detector ERROR: OpenAI entailment call failed: ${e.message}`);
+      }
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { return { label: "agree", citedId: null, reason: "malformed model output, fail-quiet" }; } // fail-closed to silence on malformed output
+      return { label: parsed.label, citedId: parsed.citedId || null, reason: parsed.reason || "" };
+    };
+  }
+
+  // ---- Foundry-then-legacy path (LLM_PROVIDER=foundry/azure opt-in; original code, unchanged) ----
   const primEp = (await smGet("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
   const primKey = await smGet("azure-foundry-key");
   const fbEp = (await smGet("azure-openai-endpoint") || "").replace(/\/$/, "");
@@ -336,13 +405,6 @@ async function makeEntailer() {
     }
     throw Object.assign(new Error("429"), { throttled: true });
   };
-
-  const SYS = `You are a precise fact-checker for an internal company memory ledger. You are given ONE NEW statement and a small numbered set of PRIOR statements about the same named entity. Decide, for the SINGLE prior statement (if any) that most clearly conflicts, whether the new statement:
-- "agree": consistent, or merely restates/paraphrases, or adds no conflicting info.
-- "supersede": a NORMAL expected update (a version/build number bump, a status flip from pending to done, a value that legitimately changed over time). NOT a contradiction.
-- "contradict": the new and the prior statement cannot both be true - a real, unambiguous factual conflict.
-- "stale-with-material-drift": the prior statement asserts an ongoing/current state that is implausible to still hold given the time elapsed and the new statement, though not in direct logical conflict.
-Be CONSERVATIVE: prefer "supersede" or "agree" unless the conflict is unambiguous. This feeds an automated alert; false positives cost real attention. Respond with STRICT JSON only: {"label":"agree|supersede|contradict|stale-with-material-drift","citedId":"<exact prior row id, or null>","reason":"<one short sentence>"}. You MUST cite the exact prior row id you judged against when label is contradict or stale-with-material-drift.`;
 
   return async function entail(newRow, slice) {
     const user = `NEW (id ${newRow.id}, ${(newRow.ts || "").slice(0, 10)}, ${newRow.type}): "${clip(newRow.text, 400)}"\n\nPRIOR STATEMENTS (same entity keys: ${(newRow.ekeys || []).join(", ") || "n/a"}):\n` +
@@ -370,7 +432,12 @@ export async function run() {
     if (note) notes.push(note);
     if (!rows.length) return { signals: [], notes };
     const entail = await makeEntailer();
-    if (!entail) { notes.push("Azure OpenAI creds unavailable (azure-foundry-openai-endpoint/key or azure-openai-endpoint/key) - entailment skipped, detector idle."); return { signals: [], notes }; }
+    if (!entail) {
+      notes.push(LLM_PROVIDER === "openai"
+        ? "openai-api-key unavailable (env OPENAI_API_KEY or the fleet secret) - entailment skipped, detector idle."
+        : "Azure OpenAI creds unavailable (azure-foundry-openai-endpoint/key or azure-openai-endpoint/key) - entailment skipped, detector idle.");
+      return { signals: [], notes };
+    }
     const res = await scanRows(rows, entail, { nowMs: Date.now() });
     return { signals: res.signals, notes: notes.concat(res.notes) };
   } catch (e) {
