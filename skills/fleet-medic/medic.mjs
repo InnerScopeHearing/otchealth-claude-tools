@@ -18,21 +18,34 @@
 // Never reads a private/clo-personal lane's content. The directive it writes is generic activation
 // steps, no secrets. Fail-open: exits 0; a medic that crashes must not be worse than no medic.
 //
+// STORAGE (ported to S3, 2026-08-27): the medic's directives + state used to live in Azure Blob
+// (otchealthcommons/company-journal, account-SAS'd directly in this file). That storage account died
+// with the Azure subscription deletion (2026-08-13). Now routes through skills/kb-memory/commons-store.mjs
+// (the same facade setup/heartbeat.mjs, fleet-dispatch/dispatch.mjs, sunset-protocol/protocol.mjs, and
+// fleet-search/search.mjs use).
+//
+// CREDS GATE FIX (2026-08-27, alongside the S3 port): the pre-port gates in scan()/check() checked
+// `!_saRaw && !process.env.AZURE_SP_CLIENT_ID` -- on an AWS-only seat (ECS task role, no GCP SA, no
+// Azure SP env) that condition was ALWAYS TRUE, so the medic exited 0 (its normal fail-open shape) on
+// EVERY run without ever scanning anything. This is the exact "component that produces nothing
+// produces no error" class fleet-medic itself exists to catch in other agents. The gate now checks
+// `awsCredsPresent().any` (skills/kb-memory/aws-secret.mjs) -- the credential the S3 store actually
+// needs -- instead of a credential this file no longer uses for storage at all.
+//
 // Verbs:
 //   node medic.mjs scan [--dispatch] [--json]      # classify every agent; --dispatch leaves directives + alerts
 //   node medic.mjs check --agent <a>               # print THIS agent's pending directive (for session-start), then ack
 //   node medic.mjs clear --agent <a>               # manually clear an agent's directive
-import crypto from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { awsCredsPresent } from "../kb-memory/aws-secret.mjs";
+import { cGet, cPut, cDel } from "../kb-memory/commons-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SM = "otchealth-shared-prod";
-const COMMONS = { account: "otchealthcommons", accountSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal" };
 const MEDIC_PREFIX = "_MEDIC/";
 const EXEC = ["coo", "cfo", "clo", "cto", "capital", "commerce", "compliance", "rainmaker", "growth", "developer"];
 
@@ -117,30 +130,13 @@ Once whoami is PASS, your ledger + per-prompt recall are back ON. This directive
 `;
 }
 
-// =============================== I/O (creds, PostHog, Azure) ===============================
-function resolveSa() { if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON; try { try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; } } catch { return null; } }
-const _saRaw = resolveSa();
-function saJwt() { const __r=_saRaw;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;} const n = Math.floor(Date.now() / 1e3), e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: n, exp: n + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
-// sm(): Azure Key Vault first (kvSecret, itself a 3-path fail-safe resolver), then the legacy GCP
-// Secret Manager fallback -- but ONLY when a real GCP service-account JWT can be built. Fail CLOSED
-// (return null) the instant EITHER the SA is absent OR the SA rejects/errors, rather than building a
-// request around a missing/null credential and relying on the remote API to reject it safely. Never
-// throws: every caller of sm() treats "no secret" as a normal, expected outcome.
-export async function sm(id) {
-  const _kv = await kvSecret(id);
-  if (_kv != null) return _kv;
-  const jwt = saJwt();
-  if (!jwt) return null; // no GCP SA available either -> every auth path exhausted -> fail closed
-  try {
-    const tokRes = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}` });
-    const t = (await tokRes.json()).access_token;
-    if (!t) return null; // GCP rejected the assertion (expired/invalid SA) -> fail closed, never guess
-    const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } });
-    return r.ok ? Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim() : null;
-  } catch {
-    return null; // any network/parse failure on the fallback path -> fail closed, never throw
-  }
-}
+// =============================== I/O (creds, PostHog) ===============================
+// sm(): kvSecret() ALREADY defaults to AWS SSM (/otchealth/*, the store of record since the Azure
+// subscription deletion) and never throws, so the old GCP-Secret-Manager fallback leg (a hand-rolled
+// JWT + oauth2.googleapis.com token exchange) is dead weight -- SSM is tried before Key Vault would
+// ever be reached anyway. Kept as a thin, exported wrapper (not inlined at call sites) purely so a
+// future secret-resolution change lands in one place.
+export async function sm(id) { return kvSecret(id); }
 
 // team-health from the canonical source: exec mem.mjs (DRY - one health definition). Robust path probe.
 function readHealth() {
@@ -173,7 +169,7 @@ async function readBeacons() {
 // (the secret itself failed to resolve) is also now a loud, distinct failure instead of a quiet return.
 async function emitDispatch(ingestKey, agent, item) {
   if (!ingestKey) {
-    console.error(`  [fleet-medic] POSTHOG CAPTURE SKIPPED for ${agent}: posthog-fleet-ingest-key did not resolve from Key Vault`);
+    console.error(`  [fleet-medic] POSTHOG CAPTURE SKIPPED for ${agent}: posthog-fleet-ingest-key did not resolve`);
     return false;
   }
   const body = JSON.stringify({ api_key: ingestKey, event: "medic_dispatch", distinct_id: agent, timestamp: new Date().toISOString(), properties: { agent, condition: item.condition, severity: item.severity, escalate: item.escalate, reason: item.reason, $lib: "fleet-medic" } });
@@ -193,26 +189,11 @@ async function emitDispatch(ingestKey, agent, item) {
   return false;
 }
 
-// Azure commons blob (account SAS) for the _MEDIC directives + medic state.
-const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-// 'd' = delete in sp: the medic ACKS a directive by DELETING it (surface once). Without 'd' the DELETE
-// 403s silently and the directive re-nags every session forever.
-function buildSas(acct, key) { const sv = "2021-12-02", sp = "rwdlc", ss = "b", srt = "co"; const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z"; const se = new Date(Date.now() + 12 * 3600 * 1000).toISOString().slice(0, 19) + "Z"; const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n"; const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64"); return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString(); }
-let CA, CSAS;
-async function commonsInit() { if (CA) return; CA = process.env.KB_COMMONS_ACCOUNT || COMMONS.account || (await sm(COMMONS.accountSecret)); const k = await sm(COMMONS.keySecret); if (!CA || !k) throw new Error("commons creds missing"); CSAS = buildSas(CA, k); }
-const cUrl = (name) => `https://${CA}.blob.core.windows.net/${COMMONS.container}/${encPath(name)}?${CSAS}`;
-async function cGet(name) { const r = await fetch(cUrl(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("cget " + r.status); return await r.text(); }
-async function cPut(name, body, ct) { const r = await fetch(cUrl(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("cput " + r.status); }
-async function cDel(name) { const r = await fetch(cUrl(name), { method: "DELETE" }); return r.ok || r.status === 404; }
-
 // ================================== commands ==================================
 async function scan() {
-  // lint-silent-success: ok (checks BOTH Azure SP and dead GCP path before exiting 0 — genuinely no
-  // creds available anywhere, not the vestigial-single-path bug this lint hunts for)
-  if (!_saRaw && !process.env.AZURE_SP_CLIENT_ID) { console.error("fleet-medic: no credentials (neither Azure SP nor GCP SA); cannot scan."); process.exit(0); }
+  if (!awsCredsPresent().any) { console.error("fleet-medic: no AWS credentials (checked the ECS task role, AWS_ACCESS_KEY_ID/SECRET, OTC_AWS_ACCESS_KEY_ID/SECRET); cannot reach the commons S3 store, so cannot scan."); process.exit(0); }
   const health = readHealth();
   const beacons = await readBeacons();
-  await commonsInit();
   let state = {}; try { const t = await cGet(`${MEDIC_PREFIX}_state.json`); if (t) state = JSON.parse(t); } catch {}
   const now = Date.now();
   const results = classify(health, beacons, state, now);
@@ -265,9 +246,8 @@ async function scan() {
 
 async function check() {
   const agent = (val("--agent", "") || process.env.KB_AGENT || "").toLowerCase();
-  if (!agent || (!_saRaw && !process.env.AZURE_SP_CLIENT_ID)) process.exit(0);
+  if (!agent || !awsCredsPresent().any) process.exit(0);
   try {
-    await commonsInit();
     const t = await cGet(`${MEDIC_PREFIX}${agent}.md`);
     if (!t) process.exit(0);
     process.stdout.write("\n================= FLEET MEDIC: PENDING SELF-HEAL =================\n" + t + "=================================================================\n");
@@ -279,7 +259,6 @@ async function check() {
 async function clear() {
   const agent = (val("--agent", "") || "").toLowerCase();
   if (!agent) { console.error("usage: medic.mjs clear --agent <a>"); process.exit(2); }
-  await commonsInit();
   await cDel(`${MEDIC_PREFIX}${agent}.md`);
   console.log(`cleared medic directive for ${agent}`);
 }
