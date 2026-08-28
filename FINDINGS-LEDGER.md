@@ -713,13 +713,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T03:45:58.649Z
 - **Closed:** (open)
 
-### finding:FND-20260828-47ef severity:low status:open | 3 ECR repos (os-chat, fourvault-api, pressgolf-api) had tagStatus:any keep-last-10 lifecycle fuse; fixed LIVE 2026-08-28 to safe 3-rule pattern. IaC reconcile: if any lifecycle policy is defined in CDK/terraform, update source or a future deploy re-arms the fuse.
+### finding:FND-20260828-47ef severity:low status:fixed | 3 ECR repos (os-chat, fourvault-api, pressgolf-api) had tagStatus:any keep-last-10 lifecycle fuse; fixed LIVE 2026-08-28 to safe 3-rule pattern. IaC reconcile: if any lifecycle policy is defined in CDK/terraform, update source or a future deploy re-arms the fuse.
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md#2026-08-28
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** live PutLifecyclePolicy 2026-08-28
+- **Verified by:** repo-wide IaC grep: the ONLY reference is otchealth-mcp-server/infra/aws/ecr.tf, the documentation-only never-applied tf capture, which defines the 3 repos WITHOUT lifecycle-policy resources - no applied IaC exists that could re-arm the tagStatus:any fuse; live policies read back safe on all 3
 - **Opened:** 2026-08-28T06:30:52.837Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:45:45.763Z
 
 ### finding:FND-20260828-13be severity:high status:open | Recovered n8n workflows report active:true but their production webhooks are NOT registered (node-version mismatch, activate 400 'reading execute'). Shopify order router iix5KWSp9EtUlh6k confirmed broken; order webhooks repointed to cs-n8n but flow not live until node-repaired. Audit all 14 'active' recovered workflows for real webhook registration; fold into CS rebuild.
 
