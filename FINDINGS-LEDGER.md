@@ -696,3 +696,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T03:45:53.120Z
 - **Closed:** (open)
+
+### finding:FND-20260828-121c severity:medium status:open | Recovered Taylor frontdesk-graph workflow (jJsq) answers action-routing errors BEFORE its X-Taylor-Tool-Key auth check (live: unauthenticated POST got unknown-action not 403) - imported version predates the auth-first hardening
+
+- **Source audit doc:** session:2026-08-28 n8n restore review
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T03:45:55.990Z
+- **Closed:** (open)
