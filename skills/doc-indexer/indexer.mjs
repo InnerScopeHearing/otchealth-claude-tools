@@ -80,6 +80,11 @@ const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
 const FLUSH_EVERY = parseInt(takeVal("--flush", "150"), 10) || 150;
 const CONCURRENCY = Math.max(1, parseInt(takeVal("--concurrency", process.env.CU_CONCURRENCY || "8"), 10) || 8);
 const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.CU_MAX_MINUTES || "0"), 10) || 0; // soft time budget for understand; 0 = no budget
+// CHUNK_MAX_CHARS / CHUNK_OVERLAP (2026-08-28): push-search's CHUNKED-room path only (see that
+// section below for the full evidence). Defaults (2000/200) are measured directly off the live
+// corpus, not guessed -- see the CHUNKED-room ingest header comment ahead of buildChunkDocs().
+const CHUNK_MAX_CHARS = parseInt(takeVal("--chunk-size", process.env.CHUNK_MAX_CHARS || "2000"), 10) || 2000;
+const CHUNK_OVERLAP = parseInt(takeVal("--chunk-overlap", process.env.CHUNK_OVERLAP || "200"), 10) || 200;
 // SEARCH_BACKEND / EMBEDDINGS_PROVIDER (2026-08-27): governs search-init / push-search / cloud-search
 // ONLY -- a completely separate axis from BACKEND (STORAGE_BACKEND) above, exactly like enrich.mjs's
 // header distinguishes "where the source bytes live" from "where the enriched/searchable fields go".
@@ -822,6 +827,208 @@ export function buildFlatSearchDoc(row, txt, vector, nowIso = new Date().toISOSt
   };
 }
 
+// ---------------- CHUNKED-room ingest (2026-08-28) ----------------
+// Closes the gap the CHUNKED-room guard above deliberately left open: a flat push correctly SKIPS a
+// chunked room (nothing FLAT can validly write there), but skipping is not parity. Every real doc
+// room in the fleet -- finance-cfo-source-docs (221,312 chunks), legal-personal (170,037),
+// legal-company (72,297), commons-company-journal (12,451), commerce-commerce-source-docs (133) --
+// is CHUNKED on OpenSearch (verified live 2026-08-28), so until this section existed, a document
+// added to any of those rooms' catalogs AFTER the original S1-to-OpenSearch migration could never
+// reach brain_search: push-search would see 'chunked' and return without writing anything.
+//
+// GROUND TRUTH (verified live 2026-08-28 by querying the domain directly -- GET .../_mapping and
+// bounded _search calls against finance-cfo-source-docs, legal-company, commons-company-journal and
+// commerce-commerce-source-docs; legal-personal's MAPPING/COUNT were checked but never its document
+// CONTENT, out of respect for the attorney-privileged ring even in read-only mode):
+//
+//   - chunk _id shape: "<parentId>_<chunkIndex>", parentId a 40-hex-char (sha1-length) string, e.g.
+//     "3ee8e7c32f91f2a1d017cd83a5a2bb40b0c8eb93_1". The HISTORICAL migration's exact parentId
+//     formula could NOT be reverse-engineered -- sha1 of the relative path, of the full
+//     "account/container/path" string, of the blob's https:// URL, and of the _TEXT sidecar path
+//     were all tried against a real live parentId and NONE matched. It is almost certainly an
+//     Azure-skillset-internal key the bulk loader carried over verbatim when it moved the old S1
+//     index into OpenSearch. THIS DOES NOT MATTER for new documents: buildChunkDocs() below mints
+//     its OWN parentId as sha1(row.path) -- the exact scheme buildFlatSearchDoc() already uses for
+//     a flat room's `id` -- and, critically, resumability is checked by the `path` FIELD, never by
+//     a pre-computed id (see osExistingChunkPaths), so a mismatch against the unknown historical
+//     scheme can never produce a duplicate: a document already present under ANY parentId is
+//     recognized by its stable `path` value and skipped outright.
+//   - `path` on every chunk = "<account>/<container>/<catalog-row-path>", e.g.
+//     "otchealthcommerce/commerce-source-docs/shopify-library/00-index.md" -- field-for-field the
+//     SAME convention enrich.mjs's own header already documents ("a genuinely different convention
+//     from Azure's https://.../_TEXT/... blob-URL style, not a typo"), independent of which STORAGE
+//     backend (s3/azure/gcs) actually serves the bytes today -- see chunkRoomAccountContainer().
+//   - the per-chunk TEXT lives in the `chunk` field (type text), NEVER `content`. The live mapping
+//     defines both (`content` is the FLAT room's own field name, left in the chunked mapping as a
+//     union artifact from schema-merge), but every document sampled live across THREE different
+//     rooms (commerce, legal-company, finance) has `chunk` populated and `content` entirely ABSENT
+//     from `_source`. This section therefore writes ONLY `chunk`.
+//   - `content_hash` is the PARENT DOCUMENT's sha256 (== the catalog row's r.sha256), NOT a
+//     per-chunk hash: two different chunks of the SAME parent ("...93_1" and "...93_2") carry the
+//     IDENTICAL content_hash live. Matches enrich.mjs's own rewire exactly
+//     (`const content_hash = r.sha256 || ""`), so this section computes it the same way.
+//   - `word_count` is likewise the PARENT DOCUMENT's total word count, copied identically onto
+//     every one of its chunks (confirmed live: two chunks of one parent report the SAME
+//     word_count) -- matching enrich.mjs's own `(text.match(/\S+/g)||[]).length`, computed ONCE
+//     over the full sidecar text, never per chunk.
+//   - `doc_title` is an LLM/enrichment field (metadata-schema.mjs marks it `source:"llm"`); this
+//     section writes a DEFAULT equal to `title` (the basename) so a freshly-chunked, not-yet-
+//     enriched document is still searchable via doc_title -- mirroring buildFlatSearchDoc()'s own
+//     "basename when the catalog carries nothing richer" fallback. enrich.mjs's next `run` pass
+//     overwrites it unconditionally (osBulkUpdate's partial-update semantics), so this default is
+//     never stale for long.
+//   - CHUNK SIZE: measured directly off the live corpus (commerce AND legal-company, two unrelated
+//     rooms/domains). Chunk length NEVER exceeds 2000 characters in either room, and the observed
+//     size distribution clusters hard against that ceiling. Two independent chunk boundaries of the
+//     SAME commerce document showed a 199-char and a 200-char longest-common prefix/suffix overlap
+//     between consecutive chunks. 2000 chars / 200-char overlap is exactly Azure Cognitive Search's
+//     classic Text Split skill default (`maximumPageLength:2000, pageOverlapLength:200`), which is
+//     consistent with this corpus's origin (an S1 skillset). CHUNK_MAX_CHARS/CHUNK_OVERLAP above
+//     default to exactly this; override with --chunk-size/--chunk-overlap if a future room needs
+//     something else.
+//   - NO document-level timestamp field exists anywhere in the live chunked mapping (confirmed
+//     against the full field list of three separate rooms) -- setup/expected-indexes.json's own
+//     header already documents this ("the S1 chunked schema carries NO per-doc timestamp field"),
+//     so nothing here invents one; doing so would be exactly the new-mapping-field this task was
+//     told never to add.
+//
+// LEGAL WALL: everything in this section writes ONLY the structural/embedding fields listed above
+// and NEVER calls an LLM, so it is safe to run against legal-personal (attorney-privileged) exactly
+// as-is. Semantic ENRICHMENT (doc_type/summary/keywords/entities/confidentiality/mnpi_flag/...) is
+// enrich.mjs's separate, later, LLM-calling pass, which this section never performs -- and
+// legal-personal stays excluded from THAT pass regardless of anything here (see
+// otchealth-cto/CLAUDE.md's 2026-08-19 entry: "legal-personal stays excluded regardless
+// (attorney-privileged ring)"). This section only gets a new document structurally INTO the room so
+// BM25/path/title retrieval can find it even before enrichment ever runs.
+function dirnameBelowRoot(path) {
+  // Mirrors enrich.mjs's own private dirnameBelowRoot() exactly (this codebase's established
+  // convention is a small parallel copy per file rather than a cross-file import for tiny
+  // profile/path helpers -- see indexer.mjs's and enrich.mjs's own separately-maintained
+  // PROFILES/STORAGE_PROFILES tables for the same pattern).
+  const parts = String(path || "").split("/");
+  parts.pop();
+  return parts.join("/");
+}
+
+/** Word count matching enrich.mjs's own definition exactly. Pure, exported for a direct unit test
+ *  and so a caller can compute it ONCE on the full sidecar text and reuse it across every chunk of
+ *  that document (see buildChunkDocs -- word_count is a per-DOCUMENT value, not per-chunk). */
+export function countWords(text) {
+  return ((text || "").match(/\S+/g) || []).length;
+}
+
+/** Find the best split point in `text` within (from, to]: the last paragraph break, else the last
+ *  sentence-ending punctuation, else the last newline, else the last plain space -- in that
+ *  preference order -- so a chunk boundary never falls mid-word. Returns -1 when the window has no
+ *  usable boundary at all (the caller then hard-cuts at `to`; this only happens for a pathological
+ *  run of text with no whitespace anywhere in the lookback window, e.g. a very long URL or hash). */
+function findChunkBreak(text, from, to) {
+  const window = text.slice(from, to);
+  const para = window.lastIndexOf("\n\n");
+  if (para > 0) return from + para + 2;
+  let sentenceEnd = -1;
+  for (const m of window.matchAll(/[.!?]["')\]]?\s+/g)) sentenceEnd = from + m.index + m[0].length;
+  if (sentenceEnd > from) return sentenceEnd;
+  const nl = window.lastIndexOf("\n");
+  if (nl > 0) return from + nl + 1;
+  const sp = window.lastIndexOf(" ");
+  if (sp > 0) return from + sp + 1;
+  return -1;
+}
+
+/** Split `text` into overlapping chunks of at most `maxChunkSize` characters each, with consecutive
+ *  chunks overlapping by roughly `overlap` characters. Pure, exported for direct unit testing.
+ *  Defaults (2000/200) match the live-measured chunked-room corpus -- see this section's header.
+ *
+ *  Prefers a paragraph/sentence/whitespace boundary near the target size (findChunkBreak) over a
+ *  hard character cut, and snaps the START of the next chunk's overlap forward to the next
+ *  whitespace run too, so neither the END of one chunk nor the START of the next ever falls
+ *  mid-word except in a pathological no-whitespace run.
+ *
+ *  Returns [] for empty/whitespace-only input (a document with no real text must never produce a
+ *  garbage chunk) and [text] unchanged when it already fits in one chunk (no spurious overlap on a
+ *  short document -- matches buildFlatSearchDoc()'s own "no chunking needed" precedent for a flat
+ *  room's single-document case). */
+export function chunkText(text, opts = {}) {
+  const maxChunkSize = Math.max(1, Math.floor(opts.maxChunkSize ?? 2000));
+  const overlap = Math.max(0, Math.min(Math.floor(opts.overlap ?? 200), Math.floor(maxChunkSize / 2)));
+  const t = String(text == null ? "" : text);
+  if (!t.trim()) return [];
+  if (t.length <= maxChunkSize) return [t];
+
+  const LOOKBACK = Math.max(1, Math.floor(maxChunkSize * 0.3));
+  const chunks = [];
+  let start = 0;
+  while (start < t.length) {
+    let end = Math.min(start + maxChunkSize, t.length);
+    if (end < t.length) {
+      const bp = findChunkBreak(t, Math.max(start, end - LOOKBACK), end);
+      if (bp > start) end = bp;
+    }
+    chunks.push(t.slice(start, end));
+    if (end >= t.length) break;
+    let next = end - overlap;
+    if (next > start) {
+      const m = t.slice(next, Math.min(next + 60, end)).search(/\s/);
+      if (m >= 0) next += m + 1;
+    }
+    if (next <= start) next = end; // guarantee forward progress even on a pathological input
+    start = next;
+  }
+  return chunks;
+}
+
+/** Build the OpenSearch chunk documents for ONE catalog row, given its text already split into
+ *  `chunks` (see chunkText). Field-for-field the structural subset this section's header describes
+ *  -- never an enrichment field (those are enrich.mjs's job, run separately, later; see the LEGAL
+ *  WALL note above). Pure (no I/O; `vectors`/`wordCount` are passed in) so the exact document shape
+ *  is directly assertable in a unit test with no live cluster or embedding call.
+ *
+ *  `vectors[i]`, when given, becomes chunk i's text_vector; a caller that has not embedded yet (or
+ *  whose embed call failed) may omit `vectors` entirely and add it to the returned docs itself, or
+ *  pass a sparse/undefined entry -- this function does not require every chunk to have a vector, it
+ *  only ever sets the field when one is actually provided. */
+export function buildChunkDocs(row, chunks, opts = {}) {
+  const { account, container, vectors = [], wordCount = 0 } = opts;
+  const parentId = crypto.createHash("sha1").update(row.path).digest("hex");
+  const fullPath = `${account}/${container}/${row.path}`;
+  const baseTitle = row.title || basename(row.path);
+  const sourcePath = dirnameBelowRoot(row.path);
+  return chunks.map((chunkStr, i) => {
+    const chunk_id = `${parentId}_${i}`;
+    const doc = {
+      id: chunk_id,
+      chunk_id,
+      parent_id: parentId,
+      path: fullPath,
+      source_path: sourcePath,
+      title: baseTitle,
+      doc_title: baseTitle,
+      chunk: chunkStr,
+      content_hash: row.sha256 || "",
+      entity: row.entity || "",
+      word_count: wordCount,
+    };
+    if (vectors[i]) doc[OS_VECTOR_FIELD_CHUNKED] = vectors[i];
+    return doc;
+  });
+}
+
+/** The (account, container) pair embedded in every chunked-room document's `path` field --
+ *  INDEPENDENT of which storage BACKEND (s3/azure/gcs) actually serves the bytes; see this
+ *  section's header for the live evidence. Reuses whichever of S3ACCT/S3CONTAINER (backend s3, the
+ *  default) or ACCT/CONTAINER (backend azure) initStorage() already resolved -- never re-resolves
+ *  storage state itself. BACKEND==="gcs" has no equivalent module state (initStorage()'s gcs path
+ *  only sets GBUCKET, a physical bucket name that predates this account/container convention
+ *  entirely -- GCS was finance's pre-Azure legacy backend, from before any of these 5 chunked rooms
+ *  existed), so it falls back to the same profile-default account/container the other two backends
+ *  resolve from (mirrors enrich.mjs's own STORAGE_PROFILES resolution). */
+function chunkRoomAccountContainer() {
+  if (BACKEND === "s3") return { account: S3ACCT, container: S3CONTAINER };
+  if (BACKEND === "azure") return { account: ACCT, container: CONTAINER };
+  return { account: ACCT_OV || P.azAccount || "", container: containerOverride || P.azContainer || "" };
+}
+
 /** GET the room's live mapping and classify it, or 'absent' on a clean 404. Throws loud on any other
  *  non-2xx (a genuine outage/permissions problem must never read as "safe to create"). */
 async function osRoomShape(cfg, index) {
@@ -875,14 +1082,130 @@ async function runSearchInitOpenSearch() {
   console.log(`OpenSearch index ready: ${IDXNAME} (shape=${shape}, dims ${EMB_DIMS})`);
 }
 
+/** Every DISTINCT document `path` value already present in a chunked room, gathered via one full
+ *  scroll (opensearch-write.mjs's scrollAll -- the SAME primitive the flat path's existingIds()
+ *  already uses at this exact scale). This is the RESUMABILITY check for the chunked path: by
+ *  PATH, never by pre-computed id -- see the CHUNKED-room ingest header above buildChunkDocs() for
+ *  why matching the historical migration's parentId formula is neither possible nor necessary. A
+ *  room with 200k+ chunks still returns a manageable Set once deduplicated to distinct documents
+ *  (a document has, at most, a few dozen chunks). */
+async function osExistingChunkPaths(index) {
+  const rows = await OS.scrollAll(index, { source: ["path"] });
+  const set = new Set();
+  for (const r of rows) if (r.path) set.add(r.path);
+  return set;
+}
+
+/** --reindex only: after rewriting a document's chunks under a new count, delete any trailing
+ *  chunk_ids for the SAME parentId whose index is >= the new count -- otherwise a document that
+ *  shrank from N chunks to M<N (a --reindex re-chunk of edited source text) leaves N-M stale,
+ *  orphaned chunk rows behind under the same parent, silently polluting search results for that
+ *  document forever. Bounded at 500 candidates (mirrors enrich.mjs's own osFindChunkIds() bound --
+ *  comfortably above any real document's chunk count) rather than unbounded. Only ever touches
+ *  chunk_ids that start with `${parentId}_`, and parentId here is ALWAYS our own sha1(row.path)
+ *  scheme, so this can never reach a historical-migration document's chunks (a different, unknown
+ *  parentId formula -- see the CHUNKED-room ingest header) even under --reindex. Best-effort: a
+ *  lookup/delete failure here is logged by the caller and must never undo the (already-successful)
+ *  write of the new chunks. */
+async function pruneStaleChunks(cfg, index, parentId, keepCount) {
+  const res = await osSearch(cfg, index, { size: 500, _source: false, query: { term: { parent_id: parentId } } });
+  if (!res.ok) return;
+  const stale = (res.json?.hits?.hits || [])
+    .map((h) => String(h._id))
+    .filter((id) => {
+      if (!id.startsWith(parentId + "_")) return false;
+      const n = parseInt(id.slice(parentId.length + 1), 10);
+      return Number.isFinite(n) && n >= keepCount;
+    });
+  if (stale.length) await OS.deleteDocs(index, stale);
+}
+
+/** The CHUNKED-room counterpart to the flat push loop below. Called when osEnsureRoomIndex() has
+ *  already reported the LIVE mapping is 'chunked'. Never creates or alters the room's index
+ *  mapping itself -- a chunked room's schema is owned by enrich.mjs's ensure-schema command (or, on
+ *  OpenSearch, ordinary dynamic mapping); this function only ever ADDS chunk documents shaped to
+ *  match what that mapping already expects. See the CHUNKED-room ingest header comment above
+ *  buildChunkDocs() for the full evidence behind every field/size choice below.
+ *
+ *  EMBEDDING IS PER-DOCUMENT ATOMIC, deliberately not a cross-document streaming pipeline like the
+ *  flat path's: resumability here is checked by PATH at whole-document granularity
+ *  (osExistingChunkPaths), so if a document's chunks were split across two embed batches and only
+ *  the FIRST batch's chunks made it into the room before the second one failed, that document would
+ *  have a `path` entry in the room already -- and every later run would then see it as
+ *  "already present" and skip it FOREVER, permanently missing its later chunks with no way to
+ *  detect the gap. Embedding all of one document's chunks before queuing ANY of them for push (and
+ *  discarding the lot on a failure partway through) makes that impossible: a document is either
+ *  fully embedded and queued, or not queued at all, so an incomplete document is never marked
+ *  "present" and is simply retried whole on the next run. */
+async function runPushSearchOpenSearchChunked(cfg, index) {
+  let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
+  const { account, container } = chunkRoomAccountContainer();
+  if (!account || !container) {
+    console.error(`[push-search] cannot resolve an account/container for the chunked-room path prefix (profile=${PROFILE} backend=${BACKEND}) -- refusing to guess one.`);
+    process.exitCode = 1;
+    return;
+  }
+  const existingPaths = REINDEX ? new Set() : await osExistingChunkPaths(index); // --reindex forces a full re-chunk
+  console.error(`[push-search] CHUNKED room ${index}: ${rows.length} catalog doc(s) with text; ${existingPaths.size} distinct doc(s) already present by path -> chunking new docs only (chunk<=${CHUNK_MAX_CHARS}c, overlap ${CHUNK_OVERLAP}c)`);
+
+  const EMB_BATCH = 16, PUSH_BATCH = 64;
+  let docsNew = 0, docsSkipped = 0, docsEmpty = 0, docsEmbFailed = 0, n = 0, pushErr = 0, ready = [];
+  async function pushReady(force) {
+    while (ready.length >= PUSH_BATCH || (force && ready.length)) {
+      const b = ready.splice(0, PUSH_BATCH);
+      const r = await OS.pushDocs(index, b);
+      if (!r.ok) { pushErr += r.errors.length; console.error(`  bulk push had ${r.errors.length} error(s): ${JSON.stringify(r.errors.slice(0, 3))}`); }
+      n += b.length - r.errors.length;
+      console.error(`  pushed ${n} chunk(s) across ${docsNew} new doc(s) (skip ${docsSkipped}${docsEmbFailed ? `, embFailed ${docsEmbFailed}` : ""}${pushErr ? `, pushErr ${pushErr}` : ""})`);
+    }
+  }
+  for (const r of rows) {
+    const fullPath = `${account}/${container}/${r.path}`;
+    if (!REINDEX && existingPaths.has(fullPath)) { docsSkipped++; continue; } // resumable: this document already has chunks in the room
+    const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || "";
+    if (!txt.trim()) { docsEmpty++; continue; }
+    const chunks = chunkText(txt, { maxChunkSize: CHUNK_MAX_CHARS, overlap: CHUNK_OVERLAP });
+    if (!chunks.length) { docsEmpty++; continue; }
+
+    const vectors = new Array(chunks.length).fill(null);
+    let embedFailed = false;
+    for (let i = 0; i < chunks.length && !embedFailed; i += EMB_BATCH) {
+      const slice = chunks.slice(i, i + EMB_BATCH);
+      try {
+        const vecs = await embedForSearch(slice);
+        for (let j = 0; j < vecs.length; j++) vectors[i + j] = vecs[j];
+      } catch (e) {
+        console.error(`  [push-search] embed failed for ${r.path.slice(-60)} (chunk ${i}..${i + slice.length - 1} of ${chunks.length}): ${e.message}`);
+        embedFailed = true;
+      }
+    }
+    if (embedFailed) { docsEmbFailed++; continue; } // never push a partially-embedded document -- retried whole on the next run
+
+    const parentId = crypto.createHash("sha1").update(r.path).digest("hex");
+    const docs = buildChunkDocs(r, chunks, { account, container, vectors, wordCount: countWords(txt) });
+    ready.push(...docs);
+    docsNew++;
+    await pushReady(false);
+    if (REINDEX) {
+      try { await pruneStaleChunks(cfg, index, parentId, chunks.length); }
+      catch (e) { console.error(`  [push-search] WARN: stale-chunk prune failed for ${r.path.slice(-60)}: ${e.message}`); }
+    }
+  }
+  await pushReady(true);
+  if (n > 0) { try { await OS.refresh(index); } catch { /* best-effort -- docs are already durably written; a refresh failure only delays search-visibility */ } }
+  const failNote = pushErr ? `, ${pushErr} push-failed` : "";
+  console.log(`pushed ${n} chunk(s) across ${docsNew} new document(s) (${docsSkipped} doc(s) already present, ${docsEmpty} doc(s) with no usable text${docsEmbFailed ? `, ${docsEmbFailed} doc(s) embed-failed (retried next run)` : ""}${failNote}) to OpenSearch CHUNKED index ${index}`);
+  if (pushErr > 0) process.exitCode = 1; // a partial bulk failure must not read as a clean run
+}
+
 async function runPushSearchOpenSearch() {
   await initStorage();
   const cfg = await OS.resolveOpenSearchConfig();
   IDXNAME = computeIndexName();
   const shape = await osEnsureRoomIndex(cfg, IDXNAME);
   if (shape === "chunked") {
-    console.error(`[push-search] SKIP: index ${IDXNAME} is CHUNKED on OpenSearch (${OS_VECTOR_FIELD_CHUNKED} field present). A flat push does not apply to this room; it is fed by enrich.mjs's OpenSearch write path / the migration bulk loader instead.`);
-    return;
+    return runPushSearchOpenSearchChunked(cfg, IDXNAME);
   }
   let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
   if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
@@ -1122,6 +1445,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     else if (cmd === "cu-init") { await cuInit(); await cuEnsureAnalyzer(); console.log("CU analyzer ready: " + CU_ANALYZER); }
     else if (cmd === "understand") await runUnderstand();
     else if (cmd === "cu-calibrate") await runCuCalibrate();
-    else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --s3|--azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex\nsearch-init/push-search/cloud-search only: --search-backend opensearch|azure (default opensearch; env SEARCH_BACKEND) --embeddings-provider openai|foundry (default openai; env EMBEDDINGS_PROVIDER)'); process.exit(2); }
+    else { console.error('commands: index | search "<q>" | build-index | status | build-csv | propose-mapping | search-init | push-search | cloud-search "<q>" | cu-defaults | cu-init | understand | cu-calibrate\nflags: --profile finance|legal|generic --s3|--azure|--gcs --container c --azure-account a --bucket b --key-secret s --index name --prefix p --limit n --ocr-model prebuilt-read|prebuilt-layout --no-ocr --no-text --reindex\nsearch-init/push-search/cloud-search only: --search-backend opensearch|azure (default opensearch; env SEARCH_BACKEND) --embeddings-provider openai|foundry (default openai; env EMBEDDINGS_PROVIDER)\npush-search on a CHUNKED OpenSearch room only: --chunk-size n (default 2000; env CHUNK_MAX_CHARS) --chunk-overlap n (default 200; env CHUNK_OVERLAP)'); process.exit(2); }
   } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
 }
