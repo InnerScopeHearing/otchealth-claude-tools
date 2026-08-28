@@ -2,8 +2,28 @@
 // kb-memory reflect — the SELF-IMPROVING loop. At the end of a significant session, extract the
 // durable, reusable lessons (pitfalls / decisions / facts) and write them to memory, deduped
 // against what is already recorded. The safety net so the fleet keeps learning even when an agent
-// forgets to write memory by hand. Stop-hook-friendly: significance-gated, exits 0 always, never
-// blocks. Dry-run by default; --commit writes via mem.mjs (which keeps the ring + sharing correct).
+// forgets to write memory by hand. Stop-hook-friendly: significance-gated, dry-run by default;
+// --commit writes via mem.mjs (which keeps the ring + sharing correct).
+//
+// EXIT CODE CONTRACT (revised 2026-08-28, see the FAIL LOUD note in main() below): every SKIP
+// condition (no agent, no transcript, session below --min-tools) still exits 0, and a mem.mjs
+// COMMIT-write failure still resolves to 0 at the end of a run (that failure has its own durable
+// local-fallback safety net, see appendFailedWriteFallback below) -- kb-inject.sh's Stop-hook
+// invocations absorb any exit code either way (`|| true`), so this was never required for hook
+// safety. What changed: when the LLM STEP ITSELF fails (missing/invalid credentials, an
+// unreachable provider, a malformed response), this script now exits NON-ZERO with a distinct
+// "LLM call FAILED" stderr message, so that failure is never indistinguishable from the
+// legitimate "the model ran and found nothing" outcome (see FND-20260819-c9bb: this exact
+// silent-success shape let the fleet's memory loop run for days after Azure Foundry died on
+// 2026-08-13, always reporting "no new durable lessons").
+//
+// LLM_PROVIDER=openai (default, 2026-08-28 port) | foundry|azure (opt-in, the original path).
+// Azure Foundry (this file's sole LLM step until now) returns HTTP 401 forever since Azure
+// subscription 55c84f6b was permanently deleted (2026-08-13) -- see FND-20260819-c9bb and this
+// file's already-ported sibling, memory-librarian.mjs, whose LLM_PROVIDER default + openai-api-key
+// secret name + api.openai.com call shape this port mirrors. LLM_PROVIDER=foundry/azure keeps the
+// original Foundry-then-legacy-Azure path selectable, one env var away, if that estate is ever
+// re-provisioned; it is not deleted, only demoted from default.
 //
 // Usage (Stop hook passes {transcript_path} JSON on stdin):
 //   echo '{"transcript_path":"x.jsonl"}' | KB_AGENT=cto node reflect.mjs [--commit] [--min-tools 12]
@@ -30,28 +50,46 @@ const AGENT = (process.env.KB_AGENT || val("--agent", "") || "").toLowerCase();
 // PreCompact (the highest-stakes distill) passes --prefer-fallback. HISTORICAL meaning: use the
 // uncontended foundry deployment as PRIMARY so the capture never blocks on the contended shared
 // gpt-4o LEGACY deployment. As of 2026-08-01 this file's default PRIMARY already IS the foundry
-// resource (see initModel()/ask() below), so that original intent is satisfied unconditionally now;
-// the flag is effectively a no-op post-migration. Kept parsed for backward compat with existing
-// callers (kb-inject.sh still passes it) -- see the comment in ask() for exactly why it must NOT be
-// reinterpreted as "prefer the legacy fallback first".
+// resource, so that original intent was already satisfied unconditionally under LLM_PROVIDER=foundry.
+// Under the 2026-08-28 OpenAI default (see askOpenAI() below) it is a genuine no-op for a different
+// reason: OpenAI-direct has no analogous "contended shared legacy deployment" to avoid, so there is
+// nothing for this flag to prefer. Kept parsed for backward compat with existing callers (kb-inject.sh
+// still passes it) and still meaningful again the moment LLM_PROVIDER=foundry is selected.
 // intentional cheap-capture, non-summarization: this extracts 0-3 short durable-lesson candidates
 // from a session (a cheap, bounded-output classification task), NOT decision-grade quality synthesis.
-// It primaries on Foundry TIERS.standard (gpt-4.1) -- NOT TIERS.cheap/gpt-4.1-mini as primary, see
-// initModel() -- with the legacy azure-openai resource as a last-resort fallback only (the ban targets
-// quality summarization work, e.g. company-brain / focus-group-loop / agent-evals, not this task).
+// Under LLM_PROVIDER=foundry it primaries on Foundry TIERS.standard (gpt-4.1) -- NOT
+// TIERS.cheap/gpt-4.1-mini as primary, see initModel() -- with the legacy azure-openai resource as a
+// last-resort fallback only (the ban targets quality summarization work, e.g. company-brain /
+// focus-group-loop / agent-evals, not this task).
 const PREFER_FB = argv.includes("--prefer-fallback") || !!process.env.REFLECT_PREFER_FALLBACK;
+export const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
 
 function loadSA() { if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) { try { return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); } catch {} } for (const p of [process.env.HOME + "/.gcp_claude_driver_sa.json", "/root/.gcp_claude_driver_sa.json"]) { try { return JSON.parse(readFileSync(p, "utf8")); } catch {} } return null; }
 const _SA = loadSA(); // env var OR the file, so reflect does not silently no-op on a fresh shell
 function saJwt(scope) { const sa = _SA; if (!sa || !sa.private_key) return null; const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
 async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
-let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
+let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;   // Foundry-only (LLM_PROVIDER=foundry/azure)
+let OAI_KEY, OAI_DEP, OAI_FB_DEP;          // OpenAI-only (LLM_PROVIDER=openai, the default)
 async function initModel() {
-  // PRIMARY now resolves to the FOUNDRY resource (2,000K TPM GlobalStandard, ample headroom).
-  // FALLBACK resolves to the LEGACY azure-openai resource (its gpt-4o deployment is capped at 50K TPM
-  // on the regional "Standard" SKU, already 100% subscribed with zero headroom -- the confirmed root
-  // cause of the recurring "Azure OpenAI throttled (blocked_calls)" Datadog page, 2026-08-01). See
-  // setup/model-routing.mjs LEGACY_STANDARD. Never swap these back so the legacy resource is primary.
+  if (LLM_PROVIDER === "openai") {
+    // OpenAI direct (2026-08-28 port): same secret name memory-librarian.mjs already uses
+    // (openai-api-key, via kvSecret -> AWS SSM by default), same api.openai.com endpoint. Model
+    // names reuse this file's existing REFLECT_MODEL/REFLECT_FALLBACK_MODEL env vars unchanged --
+    // gpt-4.1/gpt-4o are real OpenAI models, not merely Azure deployment aliases, so this is a
+    // drop-in provider swap, not a model change.
+    OAI_KEY = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+    OAI_DEP = process.env.REFLECT_MODEL || "gpt-4.1";
+    OAI_FB_DEP = process.env.REFLECT_FALLBACK_MODEL || "gpt-4o";
+    return;
+  }
+  // LLM_PROVIDER=foundry/azure: the ORIGINAL path, kept intact (not deleted) for a future
+  // re-provisioned Azure estate. PRIMARY resolves to the FOUNDRY resource (2,000K TPM
+  // GlobalStandard, ample headroom). FALLBACK resolves to the LEGACY azure-openai resource (its
+  // gpt-4o deployment is capped at 50K TPM on the regional "Standard" SKU, already 100% subscribed
+  // with zero headroom -- the confirmed root cause of the recurring "Azure OpenAI throttled
+  // (blocked_calls)" Datadog page, 2026-08-01). See setup/model-routing.mjs LEGACY_STANDARD. Never
+  // swap these back so the legacy resource is primary. NOTE: as of 2026-08-13 this whole estate is
+  // permanently gone (Foundry returns HTTP 401) -- this branch only runs when explicitly selected.
   EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.REFLECT_MODEL || "gpt-4.1";
   // Last-resort fallback only (see note above): the legacy resource, gpt-4o.
   FB_EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-openai-key"); FB_DEP = process.env.REFLECT_FALLBACK_MODEL || "gpt-4o";
@@ -64,7 +102,7 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   }
   throw Object.assign(new Error("429"), { throttled: true });
 }
-async function ask(system, user, maxTokens = 700) {
+async function askFoundry(system, user, maxTokens = 700) {
   const primary = () => callChat(EP, KEY, DEP, system, user, maxTokens, 4);
   const hasFB = FB_EP && FB_KEY;
   const fallback = () => hasFB ? callChat(FB_EP, FB_KEY, FB_DEP, system, user, maxTokens, 5) : Promise.reject(Object.assign(new Error("no fallback"), { throttled: true }));
@@ -80,6 +118,49 @@ async function ask(system, user, maxTokens = 700) {
   // sustained throttle.
   try { return await primary(); }
   catch (e) { if (e.throttled && hasFB) return await fallback(); throw e; }
+}
+
+// OpenAI-direct call (2026-08-28 port), same request/response shape as callChat() above (a chat
+// completions POST, 429-retry with backoff) but api.openai.com's own auth (bearer token, not an
+// api-key header) and URL (no per-deployment path segment -- the model name goes in the body).
+// Mirrors memory-librarian.mjs's openaiChat() exactly for this same reason: this is the SAME
+// provider, called the SAME way, from a sibling file in the SAME 2026-08-27/28 porting effort.
+async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
+  for (let a = 0; a < tries; a++) {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: dep, messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.3 }),
+    });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
+    if (!r.ok) { const body = await r.text().catch(() => ""); throw new Error("chat " + r.status + (body ? " " + body.slice(0, 160) : "")); }
+    const j = await r.json();
+    return j.choices?.[0]?.message?.content || "";
+  }
+  throw Object.assign(new Error("429 exhausted"), { throttled: true });
+}
+
+// The default (real) model call on OpenAI-direct: primary REFLECT_MODEL (gpt-4.1), falling back to
+// REFLECT_FALLBACK_MODEL (gpt-4o) on a sustained throttle only -- same shape as askFoundry() above,
+// resolved against the OpenAI key/models set in initModel(). Throws (never silently returns empty)
+// on a missing key or an exhausted/failed call, so main()'s FAIL LOUD handling (see below) always
+// sees a real error to report instead of a swallowed one.
+async function askOpenAI(system, user, maxTokens = 700) {
+  if (!OAI_KEY) throw new Error("missing openai-api-key (set OPENAI_API_KEY or the fleet secret)");
+  try {
+    return await callChatOpenAI(OAI_KEY, OAI_DEP, system, user, maxTokens, 4);
+  } catch (e) {
+    if (e.throttled && OAI_FB_DEP && OAI_FB_DEP !== OAI_DEP) {
+      return await callChatOpenAI(OAI_KEY, OAI_FB_DEP, system, user, maxTokens, 5);
+    }
+    throw e;
+  }
+}
+
+// Provider dispatch. Default LLM_PROVIDER=openai (see the file-header note); LLM_PROVIDER=foundry/
+// azure selects the original Foundry-then-legacy path above, kept intact for a re-provisioned estate.
+async function ask(system, user, maxTokens = 700) {
+  return LLM_PROVIDER === "openai" ? askOpenAI(system, user, maxTokens) : askFoundry(system, user, maxTokens);
 }
 
 // DETERMINISTIC safety net: when the LLM is fully unavailable (sustained 429 / error), do not lose the
@@ -119,6 +200,56 @@ function condense(path) {
 }
 function recentMemory() { try { return execFileSync("node", [join(HERE, "mem.mjs"), "tail", "--agent", AGENT, "--n", "30"], { encoding: "utf8" }).slice(0, 6000); } catch { return ""; } }
 
+// Exported (2026-08-28, FAIL LOUD port) so this file's LLM-distillation step is unit-testable
+// without any network call or real credential: pass a fake `chatFn` (matching nightly-reflection.mjs's
+// `distillAgent()` convention in this same skill) and this never touches fetch/kvSecret/env.
+// `modelConfigured`/`provider` are passed in explicitly rather than read from module state so a test
+// never has to fight module-level `await initModel()` side effects.
+//
+// Returns { items, llmError }:
+//   - llmError === null, items === []       -> the model ran and GENUINELY found nothing. This is
+//     the ONLY combination main() reports as "reflect: no new durable lessons." (exit 0).
+//   - llmError === null, items.length > 0    -> the model ran and found real lessons.
+//   - llmError instanceof Error (items may be [] or the deterministic-fallback salvage below)
+//                                             -> the LLM STEP ITSELF failed: missing/invalid
+//     credentials, an unreachable provider, or a response that was not parsable JSON / not an
+//     array. NEVER collapsed into the legitimate-empty shape above -- main() reports this
+//     distinctly and exits non-zero (see the FAIL LOUD note there). extractDurable() still runs as
+//     a best-effort salvage belt (a dead LLM should not also cost the session's most explicit
+//     verbatim facts), but salvaging 0 or more items never changes the fact that this run reports
+//     FAILURE -- that is the entire point of this function returning llmError separately from items
+//     instead of folding a failure into "items happened to come out empty".
+export async function distill({ agent, toolCount = 0, body = "", known = "", chatFn = ask, modelConfigured = true, provider = LLM_PROVIDER } = {}) {
+  const sys = `You are the memory-reflection step for agent "${agent}". From the session below, extract ONLY genuinely DURABLE, REUSABLE lessons that are NOT already in the agent's recent memory. Prefer: pitfalls (a wrong belief or trap + the fix), decisions (a standing choice + why), or facts (a stable identifier/config). Be strict: 0-3 items, each one sentence, specific and self-contained. If nothing new and durable, return []. Mark share=true ONLY if it is non-sensitive and useful cross-team (no MNPI/PHI/privileged). Return ONLY a JSON array: [{"type":"pitfall|decision|remember","text":"..","share":bool}].`;
+  const user = `AGENT RECENT MEMORY (do NOT duplicate these):\n${known}\n\n===== SESSION SIGNAL (${toolCount} tool calls) =====\n${body}`;
+
+  let items = [];
+  let llmError = null;
+  if (!modelConfigured) {
+    llmError = new Error(provider === "openai" ? "missing openai-api-key (set OPENAI_API_KEY or the fleet secret)" : "missing azure-foundry-openai-endpoint/-key");
+  } else {
+    try {
+      const raw = await chatFn(sys, user);
+      const match = raw && raw.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error("model response contained no JSON array" + (raw ? ` (got: ${String(raw).slice(0, 160)})` : ""));
+      const parsed = JSON.parse(match[0]);
+      if (!Array.isArray(parsed)) throw new Error("model response JSON was not an array");
+      items = parsed;
+    } catch (e) {
+      llmError = e;
+    }
+  }
+
+  if (llmError) {
+    // Deterministic best-effort salvage (kept as a belt, not a substitute -- see the header note
+    // above): pull the highest-signal verbatim assistant statements straight out of the transcript.
+    const verbatim = extractDurable(body);
+    items = verbatim.map((t) => ({ type: "remember", text: t, share: false, _fallback: true }));
+  }
+  items = (Array.isArray(items) ? items : []).filter((x) => x && x.text && /^(pitfall|decision|remember)$/.test(x.type)).slice(0, 3);
+  return { items, llmError };
+}
+
 async function main() {
   if (!AGENT) { console.error("no KB_AGENT; skipping reflect"); process.exit(0); }
   // FIX 2026-07-05 (FAILLOUD-ADOPT): same vestigial GCP-only gate found in kb-journal.mjs — fired
@@ -130,24 +261,32 @@ async function main() {
   let c; try { c = condense(path); } catch (e) { console.error("condense: " + e.message); process.exit(0); }
   if (c.tools < MIN_TOOLS) { console.error(`session not significant (${c.tools} tools < ${MIN_TOOLS}); skipping reflect`); process.exit(0); }
   await initModel();
-  if (!EP || !KEY) { console.error("no model; skipping"); process.exit(0); }
+  const modelConfigured = LLM_PROVIDER === "openai" ? Boolean(OAI_KEY) : Boolean(EP && KEY);
   const known = recentMemory();
-  const sys = `You are the memory-reflection step for agent "${AGENT}". From the session below, extract ONLY genuinely DURABLE, REUSABLE lessons that are NOT already in the agent's recent memory. Prefer: pitfalls (a wrong belief or trap + the fix), decisions (a standing choice + why), or facts (a stable identifier/config). Be strict: 0-3 items, each one sentence, specific and self-contained. If nothing new and durable, return []. Mark share=true ONLY if it is non-sensitive and useful cross-team (no MNPI/PHI/privileged). Return ONLY a JSON array: [{"type":"pitfall|decision|remember","text":"..","share":bool}].`;
-  const user = `AGENT RECENT MEMORY (do NOT duplicate these):\n${known}\n\n===== SESSION SIGNAL (${c.tools} tool calls) =====\n${c.body}`;
-  let items;
-  try { items = JSON.parse((await ask(sys, user)).match(/\[[\s\S]*\]/)[0]); }
-  catch (e) {
-    // LLM unavailable (sustained 429 / error) -> deterministic safety net so a 429 never costs a fact.
-    const verbatim = extractDurable(c.body);
-    items = verbatim.map((t) => ({ type: "remember", text: t, share: false, _fallback: true }));
-    if (items.length) console.error(`reflect: LLM unavailable (${e.message}); deterministic extract saved ${items.length} fact(s).`);
+  const { items: rawItems, llmError } = await distill({ agent: AGENT, toolCount: c.tools, body: c.body, known, modelConfigured });
+  let items = rawItems;
+
+  // FAIL LOUD (2026-08-28 port off dead Azure Foundry, FND-20260819-c9bb). A dead/misconfigured LLM
+  // must NEVER look like "ran and found no lessons" -- that exact silent-success shape is what let
+  // this file's memory loop run for days after Foundry returned HTTP 401, always printing "no new
+  // durable lessons" (see the top-of-file EXIT CODE CONTRACT note). This distinguishes the two
+  // outcomes the same way the same day's critic-pass port distinguishes "unreachable" from
+  // "malformed": a failure announces itself, it does not collapse into the legitimate-empty shape.
+  if (llmError) {
+    console.error(`reflect: LLM call FAILED (provider=${LLM_PROVIDER}): ${llmError.message} — NOT the same as 'no lessons'.`);
+    console.error(items.length
+      ? `reflect: deterministic fallback salvaged ${items.length} fact(s) from the raw transcript (best-effort only; NOT a substitute for the real LLM reflection that failed above).`
+      : "reflect: deterministic fallback found nothing either; zero lessons were extracted this session because the LLM call failed.");
   }
-  items = (Array.isArray(items) ? items : []).filter(x => x && x.text && /^(pitfall|decision|remember)$/.test(x.type)).slice(0, 3);
-  if (!items.length) { console.log("reflect: no new durable lessons."); process.exit(0); }
+  if (!items.length) {
+    if (!llmError) console.log("reflect: no new durable lessons.");
+    process.exit(llmError ? 1 : 0);
+  }
   console.log(`reflect: ${items.length} candidate lesson(s)${COMMIT ? " (committing)" : " (dry-run; pass --commit to write)"}:`);
-  // FAIL-LOUD + DURABLE FALLBACK (2026-08-18). Exiting 0 unconditionally is still correct (a Stop
-  // hook must never block a session over a best-effort memory distill), but doing so used to also
-  // discard the evidence: `stdio: "ignore"` threw away mem.mjs's own stderr (the actual "ERROR: put
+  // FAIL-LOUD + DURABLE FALLBACK (2026-08-18). A per-item mem.mjs COMMIT failure below must never
+  // silently abort this loop or change items/llmError above (a Stop hook must never block a session
+  // over a best-effort memory distill) -- but the OLD code used to also discard the evidence of that
+  // narrower failure: `stdio: "ignore"` threw away mem.mjs's own stderr (the actual "ERROR: put
   // 403 ..." detail), the catch block logged one generic "write failed" line, and on the "stop" hook
   // path THAT line is itself piped to /dev/null by kb-inject.sh's invocations of this same script
   // (see kb-inject.sh's three call sites) -- so a session could exit clean while every one of its
@@ -194,7 +333,12 @@ async function main() {
   // human or a future audit grepping raw logs for "LOST WRITE" or this summary still finds the
   // fallback file's path named right here, once, unconditionally.
   if (COMMIT) console.log(`reflect: ${items.length - failures}/${items.length} lesson(s) committed${failures ? `, ${failures} LOST (recovered to ${FAILED_WRITE_FILE(AGENT)})` : ""}.`);
-  process.exit(0);
+  // FAIL LOUD tail (2026-08-28): the LLM-failure signal set far above (before the commit loop) is
+  // what decides the exit code here, NOT anything in the commit loop -- a commit-write failure
+  // (LOST WRITE, handled above via the local fallback) never turns a real "the model ran fine" run
+  // into a failure, and conversely a successful salvage commit of fallback-derived items never turns
+  // a real LLM failure into a success. Two independent signals, on purpose.
+  process.exit(llmError ? 1 : 0);
 }
 // GUARDED (2026-08-18): only run the CLI flow (which calls process.exit()) when this file is the
 // entry point, not merely imported. Previously main() ran unconditionally at module load, so even
