@@ -672,3 +672,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:36:07.572Z
 - **Closed:** (open)
+
+### finding:FND-20260828-e0fd severity:medium status:open | Disposition matrix: PlantID backend rebuild (acct 800993023626 unused), os-chat + m365-agent-bridge retire incl tenant residue (Teams catalog 592d4e54/91fb0b97, Bot Service, 6 Copilot agents at dead endpoints, Entra a0bca2fb superseded secret), GCP orphaned Cloud Run export-then-delete (NEVER the MedReview BAA ring)
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:36:10.307Z
+- **Closed:** (open)
