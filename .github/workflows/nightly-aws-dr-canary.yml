@@ -57,6 +57,8 @@ jobs:
           OS_DOMAIN_NAME: ${{ vars.OS_DOMAIN_NAME || 'otchealth-brain' }}
           OS_SNAPSHOT_REPO: ${{ vars.OS_SNAPSHOT_REPO || 'otchealth-brain-s3' }}
           RDS_DB_INSTANCE_ID: ${{ vars.RDS_DB_INSTANCE_ID || 'otchealth-pg' }}
+          N8N_LIGHTSAIL_INSTANCE_NAME: ${{ vars.N8N_LIGHTSAIL_INSTANCE_NAME || 'otchealth-cs-n8n' }}
+          N8N_HEALTHZ_URL: ${{ vars.N8N_HEALTHZ_URL || 'https://cs-n8n.otchealthmart.com/healthz' }}
           SECRETS_DR_PASSPHRASE: ${{ secrets.SECRETS_DR_PASSPHRASE }}
         run: |
           set -o pipefail
