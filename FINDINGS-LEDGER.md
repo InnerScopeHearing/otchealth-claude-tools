@@ -705,13 +705,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T03:45:55.990Z
 - **Closed:** 2026-08-28T22:54:59.332Z
 
-### finding:FND-20260828-cf13 severity:medium status:open | plantid-app carries 70 dependabot vulns (14 critical, 26 high) on main - triage pass needed, likely concentrated in the migration/legacy tree
+### finding:FND-20260828-cf13 severity:medium status:fixed | plantid-app carries 70 dependabot vulns (14 critical, 26 high) on main - triage pass needed, likely concentrated in the migration/legacy tree
 
 - **Source audit doc:** session:2026-08-28 PlantID PR #61 push output
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** plantid-app#62 squash 0dd596ac4c4a1e17d202b467e6e70efa74ceaa2c
+- **Verified by:** Triage complete + shipped-surface fixes merged, CI gate/e2e/CodeQL/Gitleaks green. Mapped 4 dependency roots: (a) shipped client = fixed (tar/nanoid/postcss overrides + react-router-dom 7.18.2 both call sites; root audit 30->20, crit 2->1); (b) live Lambda functions/ = clean (all 5 findings are dev-only vitest/vite/esbuild, never bundled); (c) dev tooling = out of scope; (d) migration/legacy = dead tree, recommend deletion. Residual documented in PR: vitest/vite major bumps need a dedicated regression-pass PR; GitHub counts exceed local npm audit because the GHSA feed is broader
 - **Opened:** 2026-08-28T03:45:58.649Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T23:01:13.849Z
 
 ### finding:FND-20260828-47ef severity:low status:fixed | 3 ECR repos (os-chat, fourvault-api, pressgolf-api) had tagStatus:any keep-last-10 lifecycle fuse; fixed LIVE 2026-08-28 to safe 3-rule pattern. IaC reconcile: if any lifecycle policy is defined in CDK/terraform, update source or a future deploy re-arms the fuse.
 
