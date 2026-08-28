@@ -51,12 +51,12 @@
 // Usage (creds via kvSecret / AZURE_SP, or run.sh):
 //   node mine-hard-negatives.mjs --target 10 --out hard-negative-set.json
 //   node mine-hard-negatives.mjs --max-minutes 5 --out hard-negative-set.json   # time-boxed, incremental save
-import crypto from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { cGet, cList, commonsConfigured } from "../kb-memory/commons-store.mjs";
 import { tokenize, jaccard } from "../kb-memory/dedupe.mjs";
 import { chatBody, resolveTier } from "../../setup/model-routing.mjs";
 import { hitAtK, groupHitLines } from "./scoring.mjs";
@@ -191,41 +191,38 @@ export function parseHardNegCandidate(raw) {
 }
 
 // ---- IO: fetch the whole shared exec feed (read-only; the SAME corpus semantic.mjs indexes) -------
-
-const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-function buildSas(acct, key) {
-  const sv = "2021-12-02", sp = "rl", ss = "b", srt = "co"; // READ-ONLY SAS: this script never writes to the ledger.
-  const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
-  const se = new Date(Date.now() + 3600 * 1000).toISOString().slice(0, 19) + "Z";
-  const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
-  const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64");
-  return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
-}
-
-async function fetchAllSharedRows() {
-  const acct = await kvSecret("azure-commons-storage-account");
-  const key = await kvSecret("azure-commons-storage-key");
-  if (!acct || !key) throw new Error("azure-commons-storage-account/key unavailable");
-  const sas = buildSas(acct, key);
-  const prefix = "_MEMORY/_exec/";
-  let marker = "", blobs = [];
-  do {
-    let u = `https://${acct}.blob.core.windows.net/company-journal?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${sas}`;
-    if (marker) u += `&marker=${encodeURIComponent(marker)}`;
-    const r = await fetch(u);
-    if (!r.ok) throw new Error(`list ${r.status}`);
-    const xml = await r.text();
-    for (const m of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) blobs.push(m[1]);
-    marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || "";
-  } while (marker);
-
+//
+// PORTED (2026-08-28, Azure Blob retirement): this used to hand-roll an Azure Blob account-SAS
+// directly against otchealthcommons/company-journal -- the same (account, container) five other
+// toolkit callers each duplicated identically (see commons-store.mjs's own header). That storage
+// account died with the Azure subscription deletion (2026-08-13), so `kvSecret("azure-commons-
+// storage-account"/"-key")` resolved to null and every call here threw immediately
+// ("azure-commons-storage-account/key unavailable") -- this tool could not mine a single
+// hard-negative case. Routed through the shared S3-backed commons-store.mjs facade instead, the
+// SAME facade setup/heartbeat.mjs, skills/fleet-dispatch/dispatch.mjs, skills/fleet-medic/medic.mjs,
+// skills/sunset-protocol/protocol.mjs, skills/fleet-search/search.mjs, and
+// skills/kb-memory/memory-librarian.mjs already use -- so this reads the identical live
+// `_MEMORY/_exec/<agent>.jsonl` objects those siblings do (and the exact corpus semantic.mjs indexes
+// into memory-exec), never a new or different location.
+//
+// Dependencies are injectable (mirrors isEligiblePair's jaccardFn/tokenizeFn pattern above), purely
+// so this is unit-testable with fake cList/cGet stand-ins -- no live AWS credentials, no simulated S3
+// wire protocol needed. Real callers (main(), below) never pass these; they get the live facade.
+//
+// FAIL LOUD vs EMPTY-IS-VALID: an unresolvable AWS credential chain (commonsConfiguredFn() false) or
+// any real listing/read failure (cListFn/cGetFn throw on anything but a genuine 404 -- see
+// s3-blob.mjs's contract) is a DISTINCT thrown failure: "the store is unreachable." A prefix with
+// zero `.jsonl` objects under it is a normal, valid state (e.g. a fresh non-prod seat with no shared
+// exec ledger yet) and returns a clean `[]`, never conflated with the unreachable case.
+export async function fetchAllSharedRows({ cListFn = cList, cGetFn = cGet, commonsConfiguredFn = commonsConfigured } = {}) {
+  if (!(await commonsConfiguredFn())) {
+    throw new Error("AWS credentials unavailable for the commons S3 mirror (checked the ECS task role, AWS_ACCESS_KEY_ID/SECRET, OTC_AWS_ACCESS_KEY_ID/SECRET); cannot read the shared exec feed.");
+  }
+  const names = (await cListFn("_MEMORY/_exec/")).filter((n) => n.endsWith(".jsonl"));
   const rows = [];
-  for (const b of blobs) {
-    if (!b.endsWith(".jsonl")) continue;
-    const u = `https://${acct}.blob.core.windows.net/company-journal/${encPath(b)}?${sas}`;
-    const r = await fetch(u);
-    if (!r.ok) continue;
-    const t = await r.text();
+  for (const name of names) {
+    const t = await cGetFn(name); // null ONLY on a genuine 404 (e.g. deleted mid-listing); throws loud on any other failure
+    if (!t) continue;
     for (const l of t.split(/\r?\n/).filter(Boolean)) {
       try { rows.push(JSON.parse(l)); } catch { /* skip a malformed line */ }
     }
