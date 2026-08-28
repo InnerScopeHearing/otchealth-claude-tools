@@ -736,3 +736,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T21:43:02.043Z
 - **Closed:** (open)
+
+### finding:FND-20260828-8a48 severity:medium status:open | Restored Taylor workflow jJsq re-embeds the superseded Entra app a0bca2fb client secret INLINE in its Code node jsCode (pre-hardening restore regressed the 2026-08-07 credentialization; encrypted credential 8hPSiaFyOV3oxyk5 died with old instance). Now auth-gated at webhook (121c fix) but secret value sits in workflow JSON readable via n8n API, and the old tenant password key is still valid. Fix: re-credentialize Graph auth in the CS rebuild program, then owner/Application-Administrator removes the old password key (standing Matt gate).
+
+- **Source audit doc:** session:2026-08-28 jJsq jsCode full read during 121c fix
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T22:55:17.249Z
+- **Closed:** (open)
