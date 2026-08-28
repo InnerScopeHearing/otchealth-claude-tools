@@ -656,3 +656,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:36:02.549Z
 - **Closed:** (open)
+
+### finding:FND-20260828-92fa severity:medium status:open | Flatstick-Prod 391894613037 empty while live production traffic runs in NonProd 301001539500: decision memo for Matt (promote via gated migration, or bless NonProd as prod and re-scope)
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:36:05.089Z
+- **Closed:** (open)
