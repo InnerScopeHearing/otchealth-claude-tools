@@ -57,14 +57,45 @@ export function canonicalQuery(params) {
 }
 
 /**
- * Sign one OpenSearch REST request. Returns { headers, query } -- `headers` is the FULL set to send
- * (host, x-amz-date, content-type when a body is present, Authorization, and x-amz-security-token
- * when a session token is given); `query` is the already-canonicalized (sorted+encoded) query string
- * to append to the URL, so the caller sends EXACTLY what was signed (never re-derive it separately --
- * that is how a signed request and a sent request silently diverge).
+ * Double percent-encode an already-canonicalized URI (encode it a second time, so a literal '%'
+ * from the first pass becomes '%25'). Per the AWS SigV4 spec, the canonical request for EVERY AWS
+ * service except S3 is built from the DOUBLE percent-encoded path; S3 is the one documented
+ * single-encode exception (see skills/kb-memory/s3-blob.mjs's canonicalUri() header for the exact
+ * citation and the real bug it caused when this fleet got it backwards once already). This function
+ * existed nowhere in this file before 2026-08-28 because it made no observable difference: every
+ * OpenSearch index name / `_bulk` path this client has ever signed is built only from characters
+ * (letters, digits, '-', '_') that percent-encoding never touches, so encoding once or twice produced
+ * byte-identical output and the gap went unnoticed. A Bedrock model id's `:` and `.` are exactly the
+ * kind of character where the two diverge (`:` -> `%3A` -> `%253A` on the second pass), which is why
+ * `service: "bedrock"` below routes through this and the pre-existing `service: "es"` default does
+ * not -- changing the default's behavior would risk regressing an already-live-verified signer with
+ * no way to test the change against the real cluster from here.
  */
-export function signOpenSearchRequest({ method, host, path, query, body, region, accessKeyId, secretAccessKey, sessionToken, now, contentType }) {
-  const service = "es";
+function doubleEncodeUri(path) {
+  return canonicalUri(canonicalUri(path));
+}
+
+/**
+ * Sign one AWS REST request. Returns { headers, query, path } -- `headers` is the FULL set to send
+ * (host, x-amz-date, content-type when a body is present, Authorization, and x-amz-security-token
+ * when a session token is given); `query` is the already-canonicalized (sorted+encoded) query string;
+ * `path` is the WIRE path (single percent-encoded per segment) the caller must send the request to.
+ * The caller must use `query`/`path` VERBATIM in the URL it fetches, never re-derive either
+ * separately -- that is how a signed request and a sent request silently diverge (see osFetch()
+ * below, which predates `path` being returned here and instead re-derives the URL from its own raw
+ * `path` argument -- safe only because every index name it has ever been called with round-trips
+ * identically through `canonicalUri`, which is not something a new caller should assume).
+ *
+ * `service` (default "es", the pre-existing OpenSearch/Elasticsearch signing name) selects the
+ * signing scope/service AND, for anything other than "es", switches the CANONICAL REQUEST (never the
+ * wire path) to the double-encode rule real AWS services other than S3 require -- see
+ * doubleEncodeUri()'s comment. Passing "es" reproduces this function's exact pre-2026-08-28 output
+ * for every existing call site; this is covered by a regression test (see
+ * tests/opensearch-client-sigv4.test.mjs) precisely so a future edit here cannot silently change what
+ * OpenSearch itself receives.
+ */
+export function signOpenSearchRequest({ method, host, path, query, body, region, accessKeyId, secretAccessKey, sessionToken, now, contentType, service }) {
+  const svc = service || "es";
   const d = now || new Date();
   const amzDate = d.toISOString().replace(/[:-]|\.\d{3}/g, ""); // YYYYMMDDTHHMMSSZ
   const dateStamp = amzDate.slice(0, 8);
@@ -80,18 +111,20 @@ export function signOpenSearchRequest({ method, host, path, query, body, region,
   const signedHeaders = sortedNames.join(";");
   const qs = canonicalQuery(query);
 
-  const canonicalRequest = [method.toUpperCase(), canonicalUri(path), qs, canonicalHeaders, signedHeaders, bodyHash].join("\n");
-  const scope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const wireUri = canonicalUri(path); // what actually gets sent -- unchanged by `service` on purpose
+  const signingUri = svc === "es" ? wireUri : doubleEncodeUri(path);
+  const canonicalRequest = [method.toUpperCase(), signingUri, qs, canonicalHeaders, signedHeaders, bodyHash].join("\n");
+  const scope = `${dateStamp}/${region}/${svc}/aws4_request`;
   const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
 
   const kDate = hmac(`AWS4${secretAccessKey}`, dateStamp);
   const kRegion = hmac(kDate, region);
-  const kService = hmac(kRegion, service);
+  const kService = hmac(kRegion, svc);
   const kSigning = hmac(kService, "aws4_request");
   const signature = hmac(kSigning, stringToSign).toString("hex");
 
   const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-  return { headers: { ...headersToSign, Authorization: authorization }, query: qs };
+  return { headers: { ...headersToSign, Authorization: authorization }, query: qs, path: wireUri };
 }
 
 /** Low-level signed fetch. Returns the raw Response (never throws on a non-2xx -- callers decide what

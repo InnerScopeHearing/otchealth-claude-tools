@@ -385,13 +385,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-21T05:37:57.534Z
 - **Closed:** 2026-08-21T06:32:42.647Z
 
-### finding:FND-20260821-97e9 severity:high status:open | 3 deep-* jobs (deep-finance, deep-legal-company, deep-legal-personal) show State=ENABLED but carry cron(0 5 1 1 ? *) = 05:00 on Jan 1, i.e. fire once a year
+### finding:FND-20260821-97e9 severity:high status:fixed | 3 deep-* jobs (deep-finance, deep-legal-company, deep-legal-personal) show State=ENABLED but carry cron(0 5 1 1 ? *) = 05:00 on Jan 1, i.e. fire once a year
 
 - **Source audit doc:** CTO fleet sweep 2026-08-21
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T05:37:59.928Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T02:21:25.633Z
 
 ### finding:FND-20260821-29e2 severity:medium status:fixed | otchealth-mcp-gateway ECR lifecycle is 'keep last 10, tagStatus any', so every pinned image tag is on a 10-deploy fuse; this already silently killed otchealth-mcp-eval
 
@@ -409,13 +409,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-21T05:38:04.792Z
 - **Closed:** 2026-08-21T06:17:39.870Z
 
-### finding:FND-20260821-783d severity:high status:open | Root cause of FND-20260821-97e9 (deep-finance/deep-legal-company/deep-legal-personal placeholder cron): NOT an auth/IAM gap -- fleetSecret() SSM resolution + otchealthTaskRole live-verified working via real ECS RunTask (all 4 secrets resolved: azure-foundry-key, azure-foundry-openai-endpoint, azure-cfo-storage-key, azure-legal-storage-key). Root cause is the SAME dead Azure Foundry already named in claude-tools CLAUDE.md (enrich.mjs + deep-pass.mjs called out by name): a live authenticated probe using the actual current production key returns HTTP 401 'invalid subscription key' on both otchealth-foundry.openai.azure.com and the .cognitiveservices.azure.com fallback host. deep-pass.mjs is NOT one of the six skills tracked under FND-20260819-c9bb -- this is a seventh, previously-undocumented dark caller. Fixing the cron alone (without a processor decision) would be ACTIVELY HARMFUL, not merely inert: deep-pass.mjs's chat()-failure catch path sets deep:true + review:NEEDS_CLAUDE_REVIEW/'summary model error' on every row it touches and that state is terminal (selectTodo's !r.deep filter never re-selects it), so one 90-min tick would flood all 3 privileged rooms' _REVIEW/review-queue.csv (the CFO/CLO 'job one' list) with near-total false-positive review flags on the first run. Recommendation: hold the cron at its current placeholder (do not apply rate(90 minutes) yet) until Matt picks a replacement processor for deep-pass.mjs (mirrors the enrich.mjs -> OpenAI-direct port, or route via the AWS Bedrock-for-privileged-rooms option already proposed in otchealth-cto/CLAUDE.md's 2026-08-19 entry) -- deep-pass.mjs sends full document TEXT plus page-image VISION calls for finance-cfo-source-docs/legal-company/legal-personal, so this is the same class of reserved processor decision as enrich.mjs's, not an infra-parity fix.
+### finding:FND-20260821-783d severity:high status:fixed | Root cause of FND-20260821-97e9 (deep-finance/deep-legal-company/deep-legal-personal placeholder cron): NOT an auth/IAM gap -- fleetSecret() SSM resolution + otchealthTaskRole live-verified working via real ECS RunTask (all 4 secrets resolved: azure-foundry-key, azure-foundry-openai-endpoint, azure-cfo-storage-key, azure-legal-storage-key). Root cause is the SAME dead Azure Foundry already named in claude-tools CLAUDE.md (enrich.mjs + deep-pass.mjs called out by name): a live authenticated probe using the actual current production key returns HTTP 401 'invalid subscription key' on both otchealth-foundry.openai.azure.com and the .cognitiveservices.azure.com fallback host. deep-pass.mjs is NOT one of the six skills tracked under FND-20260819-c9bb -- this is a seventh, previously-undocumented dark caller. Fixing the cron alone (without a processor decision) would be ACTIVELY HARMFUL, not merely inert: deep-pass.mjs's chat()-failure catch path sets deep:true + review:NEEDS_CLAUDE_REVIEW/'summary model error' on every row it touches and that state is terminal (selectTodo's !r.deep filter never re-selects it), so one 90-min tick would flood all 3 privileged rooms' _REVIEW/review-queue.csv (the CFO/CLO 'job one' list) with near-total false-positive review flags on the first run. Recommendation: hold the cron at its current placeholder (do not apply rate(90 minutes) yet) until Matt picks a replacement processor for deep-pass.mjs (mirrors the enrich.mjs -> OpenAI-direct port, or route via the AWS Bedrock-for-privileged-rooms option already proposed in otchealth-cto/CLAUDE.md's 2026-08-19 entry) -- deep-pass.mjs sends full document TEXT plus page-image VISION calls for finance-cfo-source-docs/legal-company/legal-personal, so this is the same class of reserved processor decision as enrich.mjs's, not an infra-parity fix.
 
 - **Source audit doc:** CTO session 2026-08-21 (deep-pass EventBridge cron + auth investigation)
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-21T06:16:25.323Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T02:21:22.844Z
 
 ### finding:FND-20260821-e303 severity:medium status:open | Gateway Content Safety Prompt Shields (auto-guard.ts inboundShield) never actually run despite SHIELD_MODE=report since 2026-07-02; endpoint IS reachable (not the dead-Azure-subscription class), so root cause is auth/config on the gateway's own client, fail-open masks it silently
 
@@ -609,13 +609,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:35:46.158Z
 - **Closed:** (open)
 
-### finding:FND-20260828-8b41 severity:high status:open | Privileged DR buckets otchealth-finance-legal-dr + otchealth-legal-personal-dr are now PRIMARY stores with NO versioning/lifecycle/object-lock; n8n Lightsail Postgres has no snapshots; enable versioning+protection, add to canary
+### finding:FND-20260828-8b41 severity:high status:fixed | Privileged DR buckets otchealth-finance-legal-dr + otchealth-legal-personal-dr are now PRIMARY stores with NO versioning/lifecycle/object-lock; n8n Lightsail Postgres has no snapshots; enable versioning+protection, add to canary
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:35:49.600Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T01:39:19.176Z
 
 ### finding:FND-20260828-f1ca severity:high status:open | n8n pre-activation PHI-residue scan: recovered execution tables may hold historical WF02/WF03 PHI rows on non-BAA host; scan + counsel-gated purge BEFORE Phase-1 activation (legal wall)
 
@@ -679,4 +679,12 @@ finding with `node ledger.mjs finding add`, close one with
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:36:10.307Z
+- **Closed:** (open)
+
+### finding:FND-20260828-fe09 severity:medium status:open | deep-pass selectTodo still uses the blanket _-prefix eligibility filter that #463 replaced in enrich.mjs with isPipelineInternal(); legal-company alone lost +183 real docs to this bug class -- port selectTodo to the explicit prefix list (accepted, documented gap in PR #472)
+
+- **Source audit doc:** PR #472 deep-pass port (builder report + CTO review)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T02:17:50.650Z
 - **Closed:** (open)

@@ -29,6 +29,12 @@ COPY skills/vault-sync/ /app/skills/vault-sync/
 # fleet-medic: the auto-dispatch memory medic job (fleet-medic.sh -> medic.mjs scan --dispatch).
 # medic.mjs execs kb-memory/mem.mjs team-health (copied above) for its deterministic health spine.
 COPY skills/fleet-medic/ /app/skills/fleet-medic/
+# aws-image-canary (EventBridge schedule otchealth-image-canary, rate 2h, containerOverride
+# `sh -c node /app/skills/aws-image-canary/image-canary.mjs --strict`): pages when a pinned ECR
+# tag referenced by any task def/schedule has expired or is near the lifecycle fuse. The COPY list
+# here is selective, so a schedule override pointing at a skill NOT copied dies MODULE_NOT_FOUND
+# at runtime while RunTask reports success -- exactly the silent class the canary exists to catch.
+COPY skills/aws-image-canary/ /app/skills/aws-image-canary/
 # decision-clock (cron daily): decision.mjs sweep --dispatch reads Cosmos decisions_pending and
 # execFileSync's fleet-dispatch/dispatch.mjs to send ONE batched per-owner overdue-gate nudge.
 COPY skills/decision-clock/ /app/skills/decision-clock/

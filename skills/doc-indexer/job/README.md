@@ -86,15 +86,20 @@ Two `doc-indexer` job families both use the word "deep"/"enrich" in the ledger a
 conflate; they are complementary, not the same pipeline:
 
 - **`deep-pass.sh` -> `deep-pass.mjs`** (jobs `deep-finance`, `deep-legal-company`,
-  `deep-legal-personal`, cron every ~90 min per `setup/heartbeat-registry.json`): HIGH-POWER
-  re-summarization (gpt-4.1) + a vision pass for signature/execution-status detection. It patches
-  `_CATALOG/catalog.jsonl` in place (`summary_deep`, `counterparty`, `materiality`,
+  `deep-legal-personal`; schedules exist but are held at a placeholder cron pending a manually-verified
+  first run -- see FND-20260821-97e9/-783d -- the intended cadence is ~90 min per
+  `setup/heartbeat-registry.json`): HIGH-POWER re-summarization (2026-08-28: AWS Bedrock, a Claude
+  model per room -- Sonnet 4.5 for legal, Haiku 4.5 for finance; the gpt-4.1-on-Azure-Foundry path this
+  line used to name is dead and kept only as a `--llm-provider azure` history/rollback stub) + a vision
+  pass for signature/execution-status detection. `legal-personal` is categorically excluded from this
+  pass regardless of provider (attorney-privileged; see `isLlmExcludedRoom()` in `deep-pass.mjs`). It
+  patches `_CATALOG/catalog.jsonl` in place (`summary_deep`, `counterparty`, `materiality`,
   `execution_status`, `signatories`, ...) and, on room completion, calls
   `indexer.mjs push-search --reindex` (a no-op today on the S1 chunked rooms per the CHUNKED-ROOM
-  GUARD in `indexer.mjs`). This existed BEFORE the metadata-enrichment schema work and was only
-  migrated off GCP credentials onto Azure Key Vault in the same PR that introduced `enrich.mjs`
-  (#381) -- the credential migration and the new schema pipeline landed together, which is why they
-  read as one change in the ledger. They are not.
+  GUARD in `indexer.mjs`, and now also fails loud+fast rather than timing out, since that call targets
+  the permanently-retired Azure AI Search -- see deep-pass.mjs's own header for the tracked follow-up).
+  Storage is AWS S3 by default (`--storage-backend s3`, the same mirror `enrich.mjs`/`indexer.mjs` use);
+  `--storage-backend azure` remains selectable for read-only inspection of pre-lockdown history only.
 - **`enrich.mjs`** (`ensure-schema` / `run` / `reindex-room` / `verify`, see the file header and
   `metadata-schema.mjs`): the S1 brain METADATA ENRICHMENT pipeline (2026-07-21) that adds the
   22-field universal-core + per-domain pack (commerce only, today) as blob custom metadata on the
