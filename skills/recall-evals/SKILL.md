@@ -127,8 +127,11 @@ hearing-number/medreview content -- the runner hard-refuses (throws before makin
 detects one, as a defense-in-depth backstop on top of kb-memory's own `RING_DENY` regex.
 
 ### `mine-cases.mjs` -- generate + VALIDATE hard cases from a real agent's ledger
-For each real fact it asks Azure OpenAI (credit-funded gpt-4o) for a PARAPHRASED query (low lexical
-overlap -> tests SEMANTIC recall, not keyword) plus verbatim `expect` substrings, then keeps ONLY cases
+For each real fact it asks a gpt-4o-class model (credit-funded, OpenAI-direct by default --
+`LLM_PROVIDER=openai`; `LLM_PROVIDER=foundry` selects the original, permanently-retired Foundry path
+if that estate ever returns -- same provider switch `mine-hard-negatives.mjs` uses) for a PARAPHRASED
+query (low lexical overlap -> tests SEMANTIC recall, not keyword) plus verbatim `expect` substrings,
+then keeps ONLY cases
 the current `semantic.mjs recall` HITS@5 (via the same `groupHitLines`-corrected scoring) -- so every
 committed case is answerable-by-current-recall and a future recall regression MISSES it (a meaningful
 tripwire, not noise). Re-runnable to grow the set; merges with (never drops) the existing set.

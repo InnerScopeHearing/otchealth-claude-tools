@@ -5,8 +5,16 @@
 // eval_result events to the PostHog Fleet Agents project so eval scores live next to the
 // fleet-telemetry data (initiative #1 closes its own loop).
 //
-// Model-configurable: defaults to Azure OpenAI gpt-4o (credit-funded) for both run + judge.
+// Model-configurable: defaults to a gpt-4o-class model (credit-funded) for both run + judge, resolved
+// via setup/model-routing.mjs so the tier + body shape agree with the rest of the fleet.
 // When an Anthropic key is added, point AGENT_MODEL at Claude for true model-fidelity evals.
+//
+// LLM_PROVIDER (2026-08-27, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
+// Foundry estate this file called exclusively) is permanently deleted -- verified 401 forever, not a
+// transient outage. Default flips to 'openai' (api.openai.com, model ids from
+// setup/model-routing.mjs's OPENAI_TIERS -- same tier keys, so AGENT_MODEL/AGENT_FALLBACK_MODEL still
+// mean "standard"/an explicit override regardless of provider). LLM_PROVIDER=foundry/azure keeps the
+// original Foundry-then-legacy path selectable, one env var away, if that estate is ever re-provisioned.
 //
 // Usage:
 //   node run-evals.mjs                 # run all tasks
@@ -18,10 +26,12 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { TIERS, chatBody, LEGACY_STANDARD } from "../../setup/model-routing.mjs";
+import { TIERS, chatBody, LEGACY_STANDARD, resolveTier } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 const argv = process.argv.slice(2);
 const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const ONLY_AGENT = (takeVal("--agent", "") || "").toLowerCase();
@@ -46,11 +56,20 @@ async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return 
 
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
-  // PRIMARY is now Foundry (2,000K TPM GlobalStandard), not the legacy azure-openai resource (50K TPM,
-  // already 100% subscribed, zero headroom -- the direct cause of the fleet-wide Datadog "Azure OpenAI
-  // throttled (blocked_calls)" flap). DEP still resolves via TIERS.standard.deployment ('gpt-4.1'), which
-  // only exists on Foundry, so EP/KEY must resolve there too (see model-routing.mjs LEGACY_STANDARD).
-  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.AGENT_MODEL || TIERS.standard.deployment;
+  if (LLM_PROVIDER === "openai") {
+    KEY = process.env.OPENAI_API_KEY || (await sm("openai-api-key"));
+    DEP = process.env.AGENT_MODEL || resolveTier("standard", "openai").deployment;
+    FB_KEY = KEY;
+    FB_DEP = process.env.AGENT_FALLBACK_MODEL || resolveTier("quality", "openai").deployment;
+    if (!KEY) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
+    return;
+  }
+  // Azure/Foundry path, unchanged, selectable via LLM_PROVIDER=foundry|azure. PRIMARY is Foundry
+  // (2,000K TPM GlobalStandard), not the legacy azure-openai resource (50K TPM, already 100%
+  // subscribed, zero headroom -- the direct cause of the fleet-wide Datadog "Azure OpenAI throttled
+  // (blocked_calls)" flap). DEP still resolves via TIERS.standard.deployment ('gpt-4.1'), which only
+  // exists on Foundry, so EP/KEY must resolve there too (see model-routing.mjs LEGACY_STANDARD).
+  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.AGENT_MODEL || resolveTier("standard", "azure").deployment;
   // FALLBACK: the legacy resource, demoted to last-resort only. Its gpt-4o deployment is the ONLY chat
   // deployment that exists there, so the fallback must use LEGACY_STANDARD.deployment ('gpt-4o'), never
   // TIERS.standard.deployment ('gpt-4.1', which 404s on the legacy resource).
@@ -67,7 +86,24 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   }
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
+// OpenAI-direct call, same request/response shape as Azure's chat.completions (chatBody() is
+// provider-agnostic; OpenAI just wants the model NAME in the body instead of the URL, and a bearer
+// token instead of an api-key header). Mirrors callChat's retry/429 handling exactly.
+async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
+  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens }), model: dep };
+  for (let a = 0; a < tries; a++) {
+    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
+    if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
+    return (await r.json()).choices[0].message.content;
+  }
+  throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
+}
 async function chat(system, user, maxTokens = 1200) {
+  if (LLM_PROVIDER === "openai") {
+    try { return await callChatOpenAI(KEY, DEP, system, user, maxTokens, 4); }
+    catch (e) { if (e.throttled && FB_DEP && FB_DEP !== DEP) return await callChatOpenAI(FB_KEY, FB_DEP, system, user, maxTokens, 5); throw e; }
+  }
   // primary Foundry gpt-4.1; fall back to the legacy gpt-4o deployment (separate, capacity-capped
   // resource) only on sustained throttle (Fleet Intel #5)
   try { return await callChat(EP, KEY, DEP, system, user, maxTokens, 4); }

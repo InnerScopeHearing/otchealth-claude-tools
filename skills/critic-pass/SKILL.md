@@ -101,22 +101,30 @@ node skills/critic-pass/run.mjs --task "<task>" --draft-file <path> [--constrain
   [--context "..."] [--min-severity high] [--tier standard] [--if-critic] [--live] [--fail-on-revise]
 ```
 
-- Makes ONE real Azure OpenAI chat call via `setup/model-routing.mjs` (default tier `standard` = gpt-4o,
-  the Sonnet-tier analog critic-pass is designed for; NOT the banned `cheap`/gpt-4.1-mini). Override with
-  `CRITIC_MODEL`. Foundry fallback on sustained throttle, same as agent-evals.
+- Makes ONE real chat call via `setup/model-routing.mjs` (default tier `standard`, a gpt-4o-class
+  model, the Sonnet-tier analog critic-pass is designed for; NOT the banned `cheap`/gpt-4.1-mini).
+  Override with `CRITIC_MODEL`. Provider defaults to OpenAI-direct (`LLM_PROVIDER=openai`; Azure
+  Foundry is permanently retired) with a `quality`-tier fallback on sustained throttle, same as
+  agent-evals; `LLM_PROVIDER=foundry` selects the original Foundry-then-legacy path if that estate
+  is ever re-provisioned.
 - **`--if-critic`**: consult `compute-allocator` (allocateCompute on the task text; `--live` also pulls
   signal-radar signals) and RUN the pass only when it recommends `useCritic=true`; otherwise print
   `{ran:false}` and spend nothing. This is the compute-allocator -> critic-pass wiring.
-- **Fail-safe / report-mode**: any failure (no creds, throttle, malformed output) degrades to
-  `{verdict:"approve", malformed:true}` — a broken critic NEVER blocks. Exit 0 by default;
-  `--fail-on-revise` exits 3 when the verdict is `revise` (hard CI gate).
+- **Fail-safe / report-mode, two DISTINCT failure shapes**: a model that answered with junk JSON
+  degrades to `{verdict:"approve", malformed:true}` (report-mode fail-safe, matches critic.mjs's own
+  parse fallback); a model that was **never reached at all** (no creds, network, exhausted throttle)
+  reports `{verdict:null, unreachable:true, note:"critic did not run (LLM unreachable)"}` instead —
+  it is never labeled `approve`, because nothing was reviewed. Both are non-blocking (`shouldRevise`
+  stays `false`); `.github/workflows/critic-pr.yml` renders the unreachable case as a loud "critic
+  did not run" note, not a green checkmark. Exit 0 by default; `--fail-on-revise` exits 3 when the
+  verdict is `revise` (hard CI gate).
 
 ### Programmatic API
 ```js
 import { runCriticPass, criticGate } from "./run.mjs";
 // criticGate short-circuits (no model call) unless useCritic is true:
 const r = await criticGate({ useCritic: alloc.useCritic, task, draft, minSeverity: "medium" });
-// -> { ran, verdict, issues, confidence, shouldRevise, malformed, model }
+// -> { ran, verdict, issues, confidence, shouldRevise, malformed, unreachable, model }
 // Inject a chatFn for tests/offline: runCriticPass({ task, draft, chatFn: async()=>'{"verdict":"approve"}' })
 ```
 

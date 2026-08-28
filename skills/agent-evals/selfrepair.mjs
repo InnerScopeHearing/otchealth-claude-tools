@@ -58,8 +58,17 @@ import { execFileSync } from "node:child_process";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { diffScorecards } from "./promptcheck.mjs";
-import { TIERS, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, chatBody, resolveTier } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+
+// LLM_PROVIDER (2026-08-27, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
+// Foundry estate defaultRewriteLLM called exclusively) is permanently deleted -- verified 401 forever.
+// Default flips to 'openai' (api.openai.com, model ids from setup/model-routing.mjs's OPENAI_TIERS --
+// same 'quality' tier key, so SELFREPAIR_REWRITE_MODEL still means the same override regardless of
+// provider). LLM_PROVIDER=foundry/azure keeps the original Foundry path selectable, one env var away,
+// if that estate is ever re-provisioned.
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -375,22 +384,31 @@ function loadTaskRubric(agent, taskId) {
   return [];
 }
 
-// The real gpt-5.1 rewrite caller, injected into proposeRewrite at the CLI so the pure core stays
-// offline-testable. Uses the fleet 'quality' tier (gpt-5.1; gpt-4.1-mini is BANNED for synthesis) via
-// setup/model-routing.mjs for the correctly-shaped request body. Resolves the Azure endpoint/key from
-// GCP Secret Manager exactly like run-evals.mjs. SYNCHRONOUS by contract (proposeRewrite calls llm()
-// synchronously): callers that need the network use rewriteCmd's async wrapper, which resolves the hunk
-// first and hands proposeRewrite a closure returning that resolved string. defaultRewriteLLM is the
-// async resolver used to build that closure.
+// The real gpt-5.1-class rewrite caller, injected into proposeRewrite at the CLI so the pure core
+// stays offline-testable. Uses the fleet 'quality' tier (gpt-4.1-mini is BANNED for synthesis) via
+// setup/model-routing.mjs for the correctly-shaped request body. SYNCHRONOUS by contract (proposeRewrite
+// calls llm() synchronously): callers that need the network use rewriteCmd's async wrapper, which
+// resolves the hunk first and hands proposeRewrite a closure returning that resolved string.
+// defaultRewriteLLM is the async resolver used to build that closure.
 async function defaultRewriteLLM(promptText) {
-  const dep = process.env.SELFREPAIR_REWRITE_MODEL || TIERS.quality.deployment;
+  const sys = "You rewrite a prompt hunk to recover failed rubric criteria while keeping the PR's intended change. Output ONLY the replacement hunk text, no commentary, no code fences.";
+  if (LLM_PROVIDER === "openai") {
+    const dep = process.env.SELFREPAIR_REWRITE_MODEL || resolveTier("quality", "openai").deployment;
+    const key = process.env.OPENAI_API_KEY || (await smGet("openai-api-key"));
+    if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
+    const body = { ...chatBody(dep, { messages: [{ role: "system", content: sys }, { role: "user", content: promptText }], maxTokens: 1200 }), model: dep };
+    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error("rewrite chat " + r.status + " " + (await r.text()).slice(0, 160));
+    return (await r.json()).choices[0].message.content;
+  }
+  // Azure/Foundry path, unchanged, selectable via LLM_PROVIDER=foundry|azure.
   // TIERS.quality.deployment (gpt-5.1, reasoning-family) only exists on the Foundry resource -- the
   // legacy azure-openai resource has no gpt-5.1 deployment at all, so pairing it with the legacy
   // endpoint/key (as this used to) always 404'd. Fixed here to resolve azure-foundry-* instead.
+  const dep = process.env.SELFREPAIR_REWRITE_MODEL || TIERS.quality.deployment;
   const ep = (await smGet("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
   const key = await smGet("azure-foundry-key");
   if (!ep || !key) throw new Error("missing azure-foundry endpoint/key (Secret Manager)");
-  const sys = "You rewrite a prompt hunk to recover failed rubric criteria while keeping the PR's intended change. Output ONLY the replacement hunk text, no commentary, no code fences.";
   const body = chatBody(dep, { messages: [{ role: "system", content: sys }, { role: "user", content: promptText }], maxTokens: 1200 });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error("rewrite chat " + r.status + " " + (await r.text()).slice(0, 160));

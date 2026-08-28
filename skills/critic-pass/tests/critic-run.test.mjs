@@ -41,25 +41,28 @@ test("a high min-severity floor suppresses a revise driven only by a low-severit
   assert.equal(r.shouldRevise, false, "a low-only revise must not trip a high-severity gate");
 });
 
-test("fail-safe: a throwing model call degrades to approve (malformed) and NEVER blocks", async () => {
+test("UNREACHABLE: a throwing model call is reported LOUD and DISTINCT from a malformed response, and is NEVER labeled approve", async () => {
   const chatFn = async () => { throw new Error("simulated 500 from the model"); };
   const r = await runCriticPass({ task: "t", draft: "d", chatFn });
   assert.equal(r.ran, true);
-  assert.equal(r.verdict, "approve");
-  assert.equal(r.malformed, true);
-  assert.equal(r.shouldRevise, false);
+  assert.equal(r.verdict, null, "an unreachable LLM must never be reported as approve — nothing was reviewed");
+  assert.equal(r.unreachable, true);
+  assert.equal(r.malformed, false, "unreachable is not the same failure as a malformed model response");
+  assert.equal(r.shouldRevise, false, "still non-blocking: report-mode contract unchanged");
+  assert.match(r.note, /critic did not run.*LLM unreachable/i);
   assert.match(r.error, /simulated 500/);
 });
 
-test("fail-safe: malformed (non-JSON) model output degrades to approve, not a throw", async () => {
+test("fail-safe: malformed (non-JSON) model output degrades to approve, not a throw, and is NOT reported unreachable", async () => {
   const chatFn = async () => "the model rambled without any json";
   const r = await runCriticPass({ task: "t", draft: "d", chatFn });
   assert.equal(r.verdict, "approve");
   assert.equal(r.malformed, true);
+  assert.equal(r.unreachable, false, "a real (if junk) model response must not be reported as unreachable");
   assert.equal(r.shouldRevise, false);
 });
 
-test("the resolved model tier is reported (default standard = gpt-4o, never the banned mini)", async () => {
+test("the resolved model tier is reported (default standard = a gpt-4o-class model, never the banned mini)", async () => {
   const chatFn = async () => approveJson;
   const r = await runCriticPass({ task: "t", draft: "d", chatFn });
   assert.equal(typeof r.model, "string");

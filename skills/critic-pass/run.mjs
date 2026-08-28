@@ -11,9 +11,17 @@
 // degrades to {verdict:"approve", malformed:true} — a broken critic pass NEVER blocks the pipeline, same
 // report-mode posture as critic.mjs. Dependency injection (chatFn) keeps it unit-testable offline.
 //
-// Model tier: defaults to 'standard' (gpt-4o, chat-family) — the Sonnet-tier analog critic-pass is
-// designed for, cheaper than the Opus/gpt-5.1 draft it reviews, and NOT the banned gpt-4.1-mini 'cheap'
-// tier (banned for quality/synthesis work; a critic IS evaluation work). Override via CRITIC_MODEL.
+// Model tier: defaults to 'standard' (a gpt-4o-class model, chat-family) — the Sonnet-tier analog
+// critic-pass is designed for, cheaper than the Opus/gpt-5.1 draft it reviews, and NOT the banned
+// gpt-4.1-mini 'cheap' tier (banned for quality/synthesis work; a critic IS evaluation work). Override
+// via CRITIC_MODEL.
+//
+// LLM_PROVIDER (2026-08-27, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
+// Foundry estate this file called exclusively) is permanently deleted -- verified 401 forever, not a
+// transient outage. Default flips to 'openai' (api.openai.com, model ids from
+// setup/model-routing.mjs's OPENAI_TIERS -- the SAME tier keys, so CRITIC_MODEL/CRITIC_FALLBACK_MODEL
+// still mean "standard"/"quality" regardless of provider). LLM_PROVIDER=foundry/azure keeps the
+// original Foundry-then-legacy path selectable, one env var away, if that estate is ever re-provisioned.
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -23,6 +31,9 @@ import { chatBody, resolveTier, LEGACY_STANDARD } from "../../setup/model-routin
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const SM = "otchealth-shared-prod";
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
+const TIER_PROVIDER = LLM_PROVIDER === "openai" ? "openai" : "azure";
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 const CRITIC_SYSTEM =
   "You are a cheap, fast CRITIC pass. Review the draft strictly against the task and return STRICT JSON only, exactly as the prompt specifies. Do not rewrite the draft.";
 
@@ -57,6 +68,20 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
 
+// OpenAI-direct call, same request/response shape as Azure's chat.completions (chatBody() is
+// provider-agnostic; OpenAI just wants the model NAME in the body instead of the URL, and a bearer
+// token instead of an api-key header). Mirrors callChat's retry/429 handling exactly.
+async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
+  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true }), model: dep };
+  for (let a = 0; a < tries; a++) {
+    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
+    if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
+    return (await r.json()).choices[0].message.content;
+  }
+  throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
+}
+
 // The default (real) model call: primary Foundry (gpt-4.1 standard, 2,000K TPM GlobalStandard),
 // Foundry-quality (gpt-5.1) as a secondary fallback on throttle, and the LEGACY azure-openai resource
 // (gpt-4o, 50K TPM, already 100% subscribed) as the last-resort fallback only. The legacy resource used
@@ -66,7 +91,7 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
 // Mirrors agent-evals/run-evals.mjs's chat() so the whole fleet agrees on endpoints + throttle handling.
 async function defaultAzureChat({ system, user, tier, maxTokens = 700 }) {
   const saRaw = resolveSa(); // may be null post-GCP-exit; sm() then resolves via Key Vault (OIDC on CI)
-  const dep = resolveTier(process.env.CRITIC_MODEL || tier || "standard").deployment;
+  const dep = resolveTier(process.env.CRITIC_MODEL || tier || "standard", "azure").deployment;
   const [ep, key] = await Promise.all([sm("azure-foundry-openai-endpoint", saRaw), sm("azure-foundry-key", saRaw)]);
   if (!ep || !key) throw new Error("missing azure-foundry endpoint/key");
   const endpoint = ep.replace(/\/$/, "");
@@ -75,7 +100,7 @@ async function defaultAzureChat({ system, user, tier, maxTokens = 700 }) {
   } catch (e) {
     if (e.throttled) {
       try {
-        const fbDep = resolveTier(process.env.CRITIC_FALLBACK_MODEL || "quality").deployment;
+        const fbDep = resolveTier(process.env.CRITIC_FALLBACK_MODEL || "quality", "azure").deployment;
         return await callChat(endpoint, key, fbDep, system, user, maxTokens, 2);
       } catch (e2) {
         // last resort only: the legacy resource has zero headroom (50K/50K TPM), so it is a final
@@ -89,24 +114,73 @@ async function defaultAzureChat({ system, user, tier, maxTokens = 700 }) {
   }
 }
 
+// The default (real) model call on OpenAI-direct. Primary 'standard' (gpt-4.1, chat-family), falling
+// back to 'quality' (gpt-5.1, reasoning-family) on a sustained throttle -- same tier names, same
+// fallback shape as the Foundry path above, resolved against OPENAI_TIERS instead of TIERS. Key comes
+// from env first (a caller/CI may already have it resolved), else the fleet secret store (SSM primary
+// per kvSecret()'s SECRET_BACKEND default, Key Vault fallback).
+async function defaultOpenAIChat({ system, user, tier, maxTokens = 700 }) {
+  const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+  if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
+  const dep = resolveTier(process.env.CRITIC_MODEL || tier || "standard", "openai").deployment;
+  try {
+    return await callChatOpenAI(key, dep, system, user, maxTokens, 4);
+  } catch (e) {
+    if (e.throttled) {
+      const fbDep = resolveTier(process.env.CRITIC_FALLBACK_MODEL || "quality", "openai").deployment;
+      if (fbDep !== dep) return await callChatOpenAI(key, fbDep, system, user, maxTokens, 4);
+    }
+    throw e;
+  }
+}
+
+// Provider dispatch. Default LLM_PROVIDER=openai; LLM_PROVIDER=foundry/azure selects the original
+// Foundry-then-legacy path (kept intact above, not removed) for a future re-provisioned Azure estate.
+async function defaultChat(args) {
+  return LLM_PROVIDER === "openai" ? defaultOpenAIChat(args) : defaultAzureChat(args);
+}
+
 /**
  * runCriticPass({ task, draft, constraints?, context?, tier?, minSeverity?, chatFn? })
- *   -> { ran:true, verdict, issues, confidence, malformed, shouldRevise, model, error? }
+ *   -> { ran:true, verdict, issues, confidence, malformed, unreachable?, shouldRevise, model, error?, note? }
  * Makes ONE real critic-model call (or uses an injected chatFn for tests), parses the verdict, and
- * computes shouldRevise. FAIL-SAFE: any throw degrades to a fail-safe "approve" (malformed:true) with
- * the error attached — a broken critic pass approves, never blocks. tier defaults to 'standard' (gpt-4o).
+ * computes shouldRevise. Report-mode, non-blocking either way, but TWO DIFFERENT failure shapes are
+ * distinguished on purpose (see the catch block below): a model that answered with junk JSON
+ * (malformed:true, verdict:"approve" — parseCriticVerdict's own fail-safe) is not the same event as a
+ * model that was never reached at all (unreachable:true, verdict:null — this function's own catch).
+ * tier defaults to 'standard' (a gpt-4o-class model, never the banned gpt-4.1-mini).
  */
 export async function runCriticPass({ task, draft, constraints, context, tier, minSeverity = "medium", chatFn } = {}) {
-  const model = resolveTier(process.env.CRITIC_MODEL || tier || "standard").deployment;
+  const model = resolveTier(process.env.CRITIC_MODEL || tier || "standard", TIER_PROVIDER).deployment;
   try {
     const prompt = buildCriticPrompt(task, draft, { constraints, context });
-    const call = chatFn || defaultAzureChat;
+    const call = chatFn || defaultChat;
     const raw = await call({ system: CRITIC_SYSTEM, user: prompt, tier: tier || "standard" });
     const verdict = parseCriticVerdict(raw);
-    return { ran: true, ...verdict, shouldRevise: shouldRevise(verdict, { minSeverity }), model };
+    return { ran: true, ...verdict, unreachable: false, shouldRevise: shouldRevise(verdict, { minSeverity }), model };
   } catch (e) {
-    // report-mode fail-safe: never block the pipeline on a critic failure.
-    return { ran: true, verdict: "approve", issues: [], confidence: 0, malformed: true, shouldRevise: false, model, error: String((e && e.message) || e) };
+    // UNREACHABLE, not malformed. Nothing inside the try above throws except `call()` itself
+    // (buildCriticPrompt/parseCriticVerdict/shouldRevise are pure and never throw) — so every catch
+    // here means the model was never reached: no creds, a network failure, or a throttle that never
+    // recovered. Reporting that identically to "the model answered with junk JSON, fail-safe approve"
+    // (the old shape: malformed:true, verdict:"approve") is exactly what let a totally-dead critic
+    // look, on a real PR, like a review that happened and quietly approved (see FND-20260819-c9bb:
+    // "the auto critic posted 'could not run cleanly (fail-safe approve)' and reported its check
+    // SUCCESS on real PRs"). Still non-blocking (shouldRevise stays false, report-mode contract
+    // unchanged) but verdict is null — NEVER "approve" — and `note` gives callers (critic-pr.yml) an
+    // unmistakable label to render instead of a green checkmark.
+    return {
+      ran: true,
+      verdict: null,
+      issues: [],
+      confidence: 0,
+      malformed: false,
+      unreachable: true,
+      shouldRevise: false,
+      model,
+      error: String((e && e.message) || e),
+      note: "critic did not run (LLM unreachable)",
+    };
   }
 }
 

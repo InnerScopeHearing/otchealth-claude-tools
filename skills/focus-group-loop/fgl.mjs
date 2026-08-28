@@ -14,15 +14,26 @@
 // Usage:
 //   node fgl.mjs round --app <name> --pitch <file.txt> [--screens <dir-of-pngs>] [--round N]
 //        [--prior results/<app>-round-<N-1>.json] [--personas <override.json>] [--catalog]
-// Model: Azure OpenAI gpt-4o (vision-capable, credit-funded). Set FGL_MODEL to override.
+// Model: a gpt-4o-class model (vision-capable, credit-funded). Set FGL_MODEL to override.
+//
+// LLM_PROVIDER (2026-08-27, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
+// Foundry estate this file called exclusively) is permanently deleted -- verified 401 forever, not a
+// transient outage. Default flips to 'openai' (api.openai.com, model ids from
+// setup/model-routing.mjs's OPENAI_TIERS -- same tier keys, so FGL_MODEL/FGL_FALLBACK_MODEL still mean
+// the same override regardless of provider). LLM_PROVIDER=foundry/azure keeps the original
+// Foundry-then-legacy path selectable, one env var away, if that estate is ever re-provisioned. OpenAI's
+// chat.completions vision input (`{type:"image_url", image_url:{url:"data:..."}}`) is the SAME shape
+// this file already builds for Azure OpenAI, so the persona-screenshot review path is a genuine drop-in.
 import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
-import { TIERS, LEGACY_STANDARD, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, chatBody, resolveTier } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -38,11 +49,20 @@ async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return 
 
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;
 async function initModel() {
-  // PRIMARY (2026-08-01): the Foundry resource (gpt-4.1, 2,000K TPM GlobalStandard, vision-capable)
-  // via the shared 'standard' tier in setup/model-routing.mjs, the single source of truth for tier +
-  // body shape fleet-wide. gpt-4.1-mini is BANNED for quality work (persona review IS the quality
-  // signal that feeds the 90% gate), which is why 'standard' (not 'cheap') is the default here.
-  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.FGL_MODEL || TIERS.standard.deployment;
+  if (LLM_PROVIDER === "openai") {
+    KEY = process.env.OPENAI_API_KEY || (await sm("openai-api-key"));
+    DEP = process.env.FGL_MODEL || resolveTier("standard", "openai").deployment;
+    FB_KEY = KEY;
+    FB_DEP = process.env.FGL_FALLBACK_MODEL || resolveTier("quality", "openai").deployment;
+    if (!KEY) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
+    return;
+  }
+  // Azure/Foundry path, unchanged, selectable via LLM_PROVIDER=foundry|azure. PRIMARY (2026-08-01):
+  // the Foundry resource (gpt-4.1, 2,000K TPM GlobalStandard, vision-capable) via the shared
+  // 'standard' tier in setup/model-routing.mjs, the single source of truth for tier + body shape
+  // fleet-wide. gpt-4.1-mini is BANNED for quality work (persona review IS the quality signal that
+  // feeds the 90% gate), which is why 'standard' (not 'cheap') is the default here.
+  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.FGL_MODEL || resolveTier("standard", "azure").deployment;
   // FALLBACK: the legacy Azure OpenAI resource (octhealth-aoai-4701, gpt-4o, also vision-capable) as
   // the last-resort safety net on sustained Foundry throttle. LEGACY_STANDARD is that resource's real
   // deployment name; it is capacity-capped (50K TPM, 100% subscribed, zero headroom) so it stays a
@@ -60,7 +80,24 @@ async function callChat(ep, key, dep, system, content, maxTokens, tries) {
   }
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
+// OpenAI-direct call, same request/response shape as Azure's chat.completions (chatBody() is
+// provider-agnostic; the vision `image_url` content parts already built above pass through unchanged).
+// Mirrors callChat's retry/429 handling exactly.
+async function callChatOpenAI(key, dep, system, content, maxTokens, tries) {
+  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content }], maxTokens, temperature: 0.5 }), model: dep };
+  for (let a = 0; a < tries; a++) {
+    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
+    if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 140));
+    return (await r.json()).choices[0].message.content;
+  }
+  throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
+}
 async function ask(system, content, maxTokens = 1600) {
+  if (LLM_PROVIDER === "openai") {
+    try { return await callChatOpenAI(KEY, DEP, system, content, maxTokens, 5); }
+    catch (e) { if (e.throttled && FB_DEP && FB_DEP !== DEP) return await callChatOpenAI(FB_KEY, FB_DEP, system, content, maxTokens, 5); throw e; }
+  }
   // primary Foundry gpt-4.1 (vision); fall back to the legacy gpt-4o deployment (separate, capacity-
   // capped quota, also vision-capable) on sustained throttle so the autonomous QA loop never stalls
   // (Fleet Intel #5).

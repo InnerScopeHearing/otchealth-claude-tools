@@ -1,14 +1,16 @@
 ---
 name: agent-evals
-description: Golden-task evaluation harness for the agent fleet. For each golden task it runs an agent persona (Azure OpenAI gpt-4o, credit-funded) to produce an answer, scores it with an LLM-as-judge against an explicit rubric, prints a scorecard, and (with --emit) sends eval_result events to the PostHog Fleet Agents project. Use to measure agent quality, gate it in CI, and catch quality regressions across roles (CTO/CFO/CLO). Part of Fleet Intelligence #1. Non-PHI ring; tasks and outputs carry no PHI/MNPI.
+description: Golden-task evaluation harness for the agent fleet. For each golden task it runs an agent persona (a gpt-4o-class model, credit-funded, OpenAI-direct by default) to produce an answer, scores it with an LLM-as-judge against an explicit rubric, prints a scorecard, and (with --emit) sends eval_result events to the PostHog Fleet Agents project. Use to measure agent quality, gate it in CI, and catch quality regressions across roles (CTO/CFO/CLO). Part of Fleet Intelligence #1. Non-PHI ring; tasks and outputs carry no PHI/MNPI.
 ---
 
 # agent-evals — golden-task eval harness for the agent fleet
 
 Measures agent quality and catches regressions. For each golden task: run the agent's persona on
-the task (Azure OpenAI gpt-4o, credit-funded) to produce an answer, then score it with an
+the task (a gpt-4o-class model, credit-funded) to produce an answer, then score it with an
 LLM-as-judge against an explicit rubric. Outputs a scorecard and (with `--emit`) sends
 `eval_result` events to the PostHog Fleet Agents project, so eval scores sit next to fleet-telemetry.
+Provider defaults to OpenAI-direct (`LLM_PROVIDER=openai`; Azure Foundry is permanently retired —
+`LLM_PROVIDER=foundry` selects the original Foundry-then-legacy path if that estate ever returns).
 
 ## Run
 - `node run-evals.mjs` (all) | `--agent cto` | `--task <id>` | `--emit` (to PostHog) | `--json <path>`
@@ -75,7 +77,7 @@ persona brief with those behaviors took CTO from 1/3 to 3/3. That is the flywhee
 the gap, fix the instructions, re-measure.
 
 ## Fidelity upgrade (when ready)
-v1 runs the persona on gpt-4o (credits) so it measures the INSTRUCTIONS. For true model-fidelity
+v1 runs the persona on a gpt-4o-class model (credits) so it measures the INSTRUCTIONS. For true model-fidelity
 (measure the actual Claude agent), add an `anthropic-api-key` and set `AGENT_MODEL`, and load the
 real dream-team agent definitions instead of the short persona briefs.
 
@@ -96,13 +98,13 @@ curve, so the reported score tracks what a human reviewer would actually say.
 - IO shim: `runJudgePanel(judgeFn, task, rubric, answer, {tiers})` calls a caller-supplied judge
   function once per tier and tolerates a single judge erroring out (drops it, does not fail the whole
   panel) - `judgeFn` is where a caller (e.g. a future small patch to run-evals.mjs) would wire in its
-  existing Azure OpenAI `chat()`/`judge()` helpers per tier; this module performs no network I/O itself.
+  existing `chat()`/`judge()` helpers per tier; this module performs no network I/O itself.
 - `attachPanelToResult` is PURELY ADDITIVE: it never overwrites `score`/`pass` (the existing
   single-judge gate's verdict, unchanged); it only adds `panel_score`, `calibrated_score`, `agreement`,
   `confidence`, `judge_tiers` fields a caller may fold into the scorecard or a PR comment.
 - REPORT-ONLY / advisory by design, same as the rest of this wave: no exit-code effect, not wired into
-  `promptcheck.yml`'s gate, no new external service (same Azure OpenAI/Foundry endpoint, different
-  tiers), NO ledger writes.
+  `promptcheck.yml`'s gate, no new external service (same OpenAI-direct endpoint, different tiers),
+  NO ledger writes.
 - `node judgepanel-cli.mjs calibration-report [--golden golden-set.json] [--out report.md]` is a
   pure-data (no network) CLI that prints the fitted calibration curve + its mean absolute error against
   the golden set, so the calibration's own trustworthiness can be reviewed before it is ever applied to
