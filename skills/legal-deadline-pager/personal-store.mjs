@@ -69,14 +69,16 @@ export function scrubErrorMessage(msg) {
     .replace(/\b[A-Za-z0-9/+=]{40}\b/g, "<redacted-40char-token>");
 }
 
-/** Extraction-based log token for this module's console lines: a fresh string built ONLY from a
- *  constrained match (an HTTP-ish 3-digit status) or a fixed label. Unlike a denylist scrub, an
- *  extraction structurally cannot carry anything it did not explicitly select, so a log line built
- *  from it is leak-proof by construction (and taint-free to CodeQL's clear-text-logging model).
- *  Exported for tests. */
+/** Log token for this module's console lines, built ONLY from the error's structured NUMERIC
+ *  `.status` property (s3-blob's putObjectToS3 attaches it) behind an Number.isInteger guard --
+ *  never from any string derived from `e.message`, however constrained: a regex match of a tainted
+ *  string is still a substring of tainted data (and CodeQL's clear-text-logging model rightly keeps
+ *  flagging it), while a guarded integer structurally cannot carry text from env, an echoed key id,
+ *  or a response body. Errors without a numeric status (e.g. getTextFromS3's message-only throws,
+ *  network failures) log the fixed label -- a small diagnosability trade accepted on purpose; the
+ *  full SCRUBBED detail still travels in the write path's rejection. Exported for tests. */
 export function statusToken(e) {
-  const m = String(e?.message ?? "").match(/\b\d{3}\b/);
-  return m ? `HTTP ${m[0]}` : "non-HTTP error";
+  return Number.isInteger(e?.status) ? `HTTP ${e.status}` : "no structured status";
 }
 
 /** Read the personal cooldown map ({ [opaqueRowKey]: { last_paged_at: ISOString } }). Returns {} if the

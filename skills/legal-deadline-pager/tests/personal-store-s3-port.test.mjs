@@ -226,8 +226,14 @@ test("scrubErrorMessage leaves ordinary diagnostic text untouched (env var NAMES
 // ---- statusToken: the console lines log ONLY this extraction (leak-proof by construction) --------
 import { statusToken } from "../personal-store.mjs";
 
-test("statusToken extracts a bare 3-digit status and nothing else, or a fixed label", () => {
-  assert.equal(statusToken(new Error("s3 put 500 (refusing...): <AWSAccessKeyId>AKIAIOSFODNN7EXAMPLE</AWSAccessKeyId>")), "HTTP 500");
-  assert.equal(statusToken(new Error("fetch failed")), "non-HTTP error");
-  assert.equal(statusToken(undefined), "non-HTTP error");
+test("statusToken uses ONLY the structured numeric .status (never any substring of the message), else a fixed label", () => {
+  const withStatus = new Error("s3 put 500: <AWSAccessKeyId>AKIAIOSFODNN7EXAMPLE</AWSAccessKeyId>");
+  withStatus.status = 500;
+  assert.equal(statusToken(withStatus), "HTTP 500");
+  // A 3-digit number in the MESSAGE alone must NOT surface -- the token is never message-derived.
+  assert.equal(statusToken(new Error("s3 get 500 (refusing...)")), "no structured status");
+  assert.equal(statusToken(new Error("fetch failed")), "no structured status");
+  assert.equal(statusToken(undefined), "no structured status");
+  const nonInt = new Error("x"); nonInt.status = "500";
+  assert.equal(statusToken(nonInt), "no structured status", "a string status is not trusted");
 });
