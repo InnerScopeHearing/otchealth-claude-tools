@@ -14,21 +14,27 @@
 // RING-SAFE: the inbox lives in the shared commons (non-PHI). Do not dispatch MNPI/PHI/privileged
 // content; this is a coordination channel, not a data channel. Fail-open on read paths.
 //
+// STORAGE (ported to S3, 2026-08-27): the inbox used to live in Azure Blob (otchealthcommons/
+// company-journal, account-SAS'd directly in this file). That storage account died with the Azure
+// subscription deletion (2026-08-13). Now routes through skills/kb-memory/commons-store.mjs, the
+// shared facade over the fleet's S3 DR mirror (same one setup/heartbeat.mjs, fleet-medic/medic.mjs,
+// sunset-protocol/protocol.mjs, and fleet-search/search.mjs use) -- one bucket, one credential chain,
+// one place to fix instead of five. send()'s inbox read-modify-write stays UNCONDITIONAL (no ETag), on
+// purpose, for parity with the pre-port behavior: the collision window this always had is unchanged by
+// the storage swap, and check()'s surface-then-delete semantics already tolerate it. A conditional
+// append (cPutCond + reload/retry, the same pattern ledger-archive.mjs uses) is a real follow-on, not
+// part of this port.
+//
 // Verbs:
 //   node dispatch.mjs send <to> "<message/task>" [--from <a>] [--task] [--spawn [--repo <r>] [--minutes N]]
 //   node dispatch.mjs check --agent <self>        # surface + ACK this agent's inbox (wired into SessionStart)
 //   node dispatch.mjs list [--agent <a>]          # operator view of pending dispatches
-import crypto from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { cGet, cPut, cDel, cList } from "../kb-memory/commons-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SM = "otchealth-shared-prod";
-const COMMONS = { account: "otchealthcommons", accountSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal" };
 const PREFIX = "_DISPATCH/";
 const OWNER = "innerscopehearing";
 
@@ -37,22 +43,6 @@ const cmd = argv[0];
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const FLAG = (f) => argv.includes(f);
 const positional = argv.slice(1).filter((a, i, arr) => !a.startsWith("--") && !(i > 0 && arr[i - 1].startsWith("--")));
-
-function resolveSa() { if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON; try { try { return readFileSync(`${homedir()}/.gcp_claude_driver_sa.json`, "utf8"); } catch { return null; } } catch { return null; } }
-const _saRaw = resolveSa();
-function saJwt() { const __r=_saRaw;if(!__r){return null;}let sa;try{sa=JSON.parse(__r);}catch{return null;}if(!sa||!sa.private_key){return null;} const n = Math.floor(Date.now() / 1e3), e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: n, exp: n + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url"); }
-async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const t = (await (await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt())}` })).json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } }); return r.ok ? Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim() : null; }
-
-// Azure commons blob (account SAS WITH 'd' so check can ACK by deleting the inbox).
-const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-function buildSas(acct, key) { const sv = "2021-12-02", sp = "rwdlc", ss = "b", srt = "co"; const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z"; const se = new Date(Date.now() + 12 * 3600 * 1000).toISOString().slice(0, 19) + "Z"; const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n"; const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64"); return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString(); }
-let CA, CSAS;
-async function commonsInit() { if (CA) return; CA = process.env.KB_COMMONS_ACCOUNT || COMMONS.account || (await sm(COMMONS.accountSecret)); const k = await sm(COMMONS.keySecret); if (!CA || !k) throw new Error("commons creds missing"); CSAS = buildSas(CA, k); }
-const cUrl = (name) => `https://${CA}.blob.core.windows.net/${COMMONS.container}/${encPath(name)}?${CSAS}`;
-async function cGet(name) { const r = await fetch(cUrl(name)); if (r.status === 404) return null; if (!r.ok) throw new Error("cget " + r.status); return await r.text(); }
-async function cPut(name, body, ct) { const r = await fetch(cUrl(name), { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "application/x-ndjson" }, body }); if (!r.ok) throw new Error("cput " + r.status); }
-async function cDel(name) { const r = await fetch(cUrl(name), { method: "DELETE" }); return r.ok || r.status === 404; }
-async function cList() { const out = []; let m = ""; do { let u = `https://${CA}.blob.core.windows.net/${COMMONS.container}?restype=container&comp=list&prefix=${encodeURIComponent(PREFIX)}&${CSAS}`; if (m) u += `&marker=${encodeURIComponent(m)}`; const r = await fetch(u); if (!r.ok) break; const xml = await r.text(); for (const mm of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(mm[1]); m = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (m); return out; }
 
 const inboxKey = (agent) => `${PREFIX}${agent}.jsonl`;
 function fromNd(t) { return (t || "").split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
@@ -100,7 +90,6 @@ async function send() {
   const text = positional.slice(1).join(" ").trim();
   if (!to || !text) { console.error('usage: dispatch.mjs send <to-agent> "<message/task>" [--from <a>] [--task] [--spawn]'); process.exit(2); }
   const from = (val("--from", "") || process.env.KB_AGENT || "cto").toLowerCase();
-  await commonsInit();
   const rows = fromNd(await cGet(inboxKey(to)));
   const d = new Date().toISOString();
   const id = `${d.slice(0, 10).replace(/-/g, "")}-${String(rows.filter((r) => (r.id || "").startsWith(d.slice(0, 10).replace(/-/g, ""))).length + 1).padStart(3, "0")}`;
@@ -134,19 +123,15 @@ async function send() {
     } catch (e) { spawnNote = ` (spawn FAILED: ${e.message}; the inbox entry still queued)`; }
   }
   rows.push(entry);
-  await cPut(inboxKey(to), nd(rows));
+  await cPut(inboxKey(to), nd(rows), "application/x-ndjson");
   const computeNote = compute ? ` [${fmtCompute(compute)}]` : "";
   console.log(`[fleet-dispatch] ${from} -> ${to}: queued id=${id}${spawnNote}${computeNote}. It surfaces at ${to}'s next session.`);
 }
 
 async function check() {
   const agent = (val("--agent", "") || process.env.KB_AGENT || "").toLowerCase();
-  // FIX 2026-07-05 (FAILLOUD-ADOPT): `!_saRaw` fires unconditionally now GCP is dead; commonsInit()
-  // below is already Azure-first and fails loud on its own with a clear message, so this vestigial
-  // gate only served to silently hide every inbox check (agents never saw "you have mail").
   if (!agent) process.exit(0);
   try {
-    await commonsInit();
     const rows = fromNd(await cGet(inboxKey(agent)));
     if (!rows.length) process.exit(0);
     let out = `\n================= FLEET DISPATCH: ${rows.length} message(s) for ${agent.toUpperCase()} =================\n`;
@@ -159,11 +144,8 @@ async function check() {
 }
 
 async function list() {
-  // FIX 2026-07-05 (FAILLOUD-ADOPT): same vestigial GCP-only gate as check() above; commonsInit()
-  // is Azure-first and fails loud on its own.
-  await commonsInit();
   const only = (val("--agent", "") || "").toLowerCase();
-  const blobs = (await cList()).filter((b) => b.endsWith(".jsonl"));
+  const blobs = (await cList(PREFIX)).filter((b) => b.endsWith(".jsonl"));
   let n = 0;
   for (const b of blobs) {
     const agent = b.split("/").pop().replace(/\.jsonl$/, "");

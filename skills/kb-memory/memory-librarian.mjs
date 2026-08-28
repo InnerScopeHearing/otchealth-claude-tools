@@ -2,22 +2,52 @@
 // memory-librarian — the nightly "secretary" that REVIEWS + CATALOGS the fleet's memory. It is the
 // scheduled counterpart to the live capture hooks: it reads every session JOURNAL (the complete
 // per-day input/output record kb-journal captured), and for each agent + day it
-//   1) writes a human-readable DAILY DIGEST (cheap LLM) -> _JOURNAL/<agent>/<date>/_DIGEST.md,
+//   1) writes a human-readable DAILY DIGEST (LLM) -> _JOURNAL/<agent>/<date>/_DIGEST.md,
 //   2) DISTILLS durable facts/decisions/corrections the live throttle missed -> the agent ledger
 //      (via mem.mjs, deduped + ring-correct), the backstop that makes "the ledger is always current",
 //   3) re-indexes the shared brain memory so everything is queryable,
 //   4) prints a GAP report (agents whose journals have substance but whose ledger barely moved).
 // Privileged lanes (clo-personal) are processed into their OWN segregated ledger and NEVER folded
-// into the shared brain. Cheap model, Azure credits, $0 cash, zero Max draw. Fail-open per agent.
+// into the shared brain. Fail-open PER AGENT-DAY (one broken day never blocks the rest of the sweep);
+// NOT fail-open on a missing LLM credential entirely (see the 2026-08-27 note below) -- those are
+// different failure classes and conflating them is exactly what let this job "succeed" doing nothing.
 //
 // Run:  node memory-librarian.mjs [--days 2] [--agents cto,cfo,clo] [--no-reindex]
-import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
+//
+// PORTED (2026-08-27) -- BOTH storage AND the LLM, together, deliberately:
+//
+// STORAGE: the journals + digests used to live in Azure Blob (otchealthcommons/company-journal,
+// account-SAS'd directly in this file). That storage account died with the Azure subscription
+// deletion (2026-08-13). Now routes through skills/kb-memory/commons-store.mjs (the same facade
+// setup/heartbeat.mjs, fleet-dispatch/dispatch.mjs, fleet-medic/medic.mjs, sunset-protocol/
+// protocol.mjs, and fleet-search/search.mjs use).
+//
+// LLM: the model calls targeted TWO Azure OpenAI/Foundry deployments (azure-foundry-openai-endpoint
+// primary, azure-openai-endpoint fallback) -- both permanently dead (Foundry returns HTTP 401; see
+// skills/doc-indexer/enrich.mjs's identical 2026-08-19 finding and the fleet's `FND-20260819-c9bb`).
+// Storage-only would NOT have fixed this job: every chat() call would still throw, every digest would
+// still read "(digest unavailable: ...)", `items` would still be `[]` every time, and the job would
+// still print "DONE" and exit 0 -- a job that runs and distills nothing, the exact silent-success
+// class this whole port exists to close. So both halves ship together, per the design's own
+// "ship both or neither" instruction.
+//
+// Ported to OpenAI direct (api.openai.com), the same proven pattern enrich.mjs already uses
+// (`openai-api-key`, confirmed present in SSM). This is ALSO the point where the pre-existing
+// "gpt-4.1-mini is BANNED for quality summarization" fleet correction (otchealth-claude-tools
+// CLAUDE.md, 2026-08-01 entry) gets actually applied here, closing the TODO the original code left in
+// its own header comment ("flag for the CTO to decide whether the digest call specifically should
+// move to a quality-tier deployment"): the daily digest (a human-readable narrative summary) now uses
+// a QUALITY-tier model (gpt-4o); the bounded pitfall/decision/fact extraction (a short, structured
+// 0-4-item list, not narrative prose) stays on a CHEAP-tier model (gpt-4o-mini), matching enrich.mjs's
+// own choice for a similarly bounded-extraction task. These are two deliberate, task-appropriate model
+// picks now, not a "try cheap, fall back to quality" chain -- the old two-Azure-deployment fallback
+// shape does not carry over cleanly onto a single provider, and conflating "cheap vs quality" with
+// "primary vs fallback" was part of what let the wrong model serve the wrong job for as long as it did.
 import { execFileSync } from "node:child_process";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { kvSecret, requireSecrets } from "./azure-secret.mjs";
+import { kvSecret } from "./azure-secret.mjs";
+import { cGet, cPut, cList, commonsConfigured } from "./commons-store.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -25,36 +55,44 @@ const DAYS = parseInt(val("--days", "2"), 10) || 2;          // process the last
 const ONLY = (val("--agents", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const NO_REINDEX = argv.includes("--no-reindex");
 
-function loadSA() { if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) { try { return JSON.parse(process.env.GCP_CLAUDE_DRIVER_SA_JSON); } catch {} } for (const p of [join(homedir(), ".gcp_claude_driver_sa.json"), "/root/.gcp_claude_driver_sa.json"]) { try { return JSON.parse(readFileSync(p, "utf8")); } catch {} } return null; }
-const SA = loadSA();
-function saJwt(scope) { if(!SA)return null; const now = Math.floor(Date.now() / 1000); const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url"); const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: SA.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`; return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(SA.private_key, "base64url"); }
-let GTOK;
-async function gtok() { if (GTOK) return GTOK; const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); return (GTOK = (await r.json()).access_token); }
-async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const t = await gtok(); const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/otchealth-shared-prod/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } }); return r.ok ? Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim() : null; }
-
 // ---- commons storage (the journals + digests live here) ----
-let ACCT, AKEY, SAS;
-function buildSas() { const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co"; const st = new Date(Date.now() - 3e5).toISOString().slice(0, 19) + "Z"; const se = new Date(Date.now() + 6 * 36e5).toISOString().slice(0, 19) + "Z"; const sts = [ACCT, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n"; return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig: crypto.createHmac("sha256", Buffer.from(AKEY, "base64")).update(sts, "utf8").digest("base64") }).toString(); }
-const CONTAINER = "company-journal";
-const enc = (n) => n.split("/").map(encodeURIComponent).join("/");
-async function list(prefix) { const out = []; let marker = ""; do { let u = `https://${ACCT}.blob.core.windows.net/${CONTAINER}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${SAS}`; if (marker) u += `&marker=${encodeURIComponent(marker)}`; const r = await fetch(u); if (!r.ok) break; const xml = await r.text(); for (const m of xml.matchAll(/<Name>([^<]+)<\/Name>/g)) out.push(m[1]); marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || ""; } while (marker); return out; }
-async function getTxt(n) { const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`); return r.ok ? await r.text() : null; }
-async function putTxt(n, body, ct) { const r = await fetch(`https://${ACCT}.blob.core.windows.net/${CONTAINER}/${enc(n)}?${SAS}`, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/plain; charset=utf-8" }, body }); if (!r.ok) throw new Error("put " + r.status); }
+async function list(prefix) { return cList(prefix); }
+// Unlike the pre-port getTxt (which swallowed EVERY failure, permission errors included, as "no
+// content" -> silently skip), cGet only returns null on a genuine 404 and THROWS on anything else.
+// That throw propagates out of processAgentDay() and is caught by main()'s per-agent-day try/catch
+// (see below), which prints a visible ERROR line for that agent-day instead of quietly treating a real
+// storage failure as an empty journal. Deliberate tightening, not an oversight.
+async function getTxt(n) { return cGet(n); }
+async function putTxt(n, body, ct) { return cPut(n, body, ct || "text/plain; charset=utf-8"); }
 
-// ---- cheap model (foundry gpt-4.1-mini primary; azure-openai gpt-4o fallback) ----
-// intentional cheap-capture, non-summarization: gpt-4.1-mini is kept as the PRIMARY here by design
-// (nightly, high-volume, Azure-credit-funded distillation across every agent-day; gpt-4o is the
-// fallback, not the other way round, precisely because this path is meant to stay cheap). The one
-// NOTE for a future pass: the daily-digest call below (processAgentDay's digSys prompt) reads closer
-// to quality summarization than the distillation call does (it is a human-readable narrative digest,
-// not a bounded pitfall/decision/fact extraction); left UNCHANGED this pass per explicit scope (both
-// callsites share this single init, so there is no separate "primary" to split without restructuring
-// the chat() plumbing) rather than risk a regression. Flag for the CTO to decide whether the digest
-// call specifically should move to a quality-tier deployment.
-let M1, M1K, M1D, M2, M2K, M2D;
-async function initModel() { M1 = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); M1K = await sm("azure-foundry-key"); M1D = process.env.LIBRARIAN_MODEL || "gpt-4.1-mini"; M2 = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); M2K = await sm("azure-openai-key"); M2D = "gpt-4o"; }
-async function chatOne(ep, key, dep, sys, user, max) { for (let a = 0; a < 4; a++) { const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: sys }, { role: "user", content: user }], max_tokens: max, temperature: 0.2 }) }); if (r.status === 429) { await new Promise((s) => setTimeout(s, 2000 * (a + 1))); continue; } if (!r.ok) throw new Error("chat " + r.status); return (await r.json()).choices[0].message.content; } throw new Error("chat throttled"); }
-async function chat(sys, user, max = 900) { try { if (M1 && M1K) return await chatOne(M1, M1K, M1D, sys, user, max); } catch {} return await chatOne(M2, M2K, M2D, sys, user, max); }
+// ============================ LLM (OpenAI direct; Azure Foundry died 2026-08-19) ============================
+let OAI_KEY;
+async function initModel() {
+  OAI_KEY = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+  if (!OAI_KEY) {
+    console.error("[memory-librarian] Missing openai-api-key (env OPENAI_API_KEY or the fleet secret) -- cannot run without an LLM. This is a FATAL config error, not a per-agent skip: a missing key would otherwise make every digest read '(digest unavailable)' and every distillation silently extract nothing, while the job still exits 0.");
+    process.exit(2);
+  }
+}
+const QUALITY_MODEL = process.env.LIBRARIAN_DIGEST_MODEL || "gpt-4o";       // narrative summarization: gpt-4.1-mini is banned here (fleet correction, 2026-08-01)
+const CHEAP_MODEL = process.env.LIBRARIAN_MODEL || "gpt-4o-mini";           // bounded, structured 0-4-item extraction: cheap tier is fine
+async function openaiChat(model, sys, user, max, attempt = 0) {
+  const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${OAI_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages: [{ role: "system", content: sys }, { role: "user", content: user }], max_tokens: max, temperature: 0.2 }),
+  });
+  if (r.status === 429 && attempt < 4) {
+    const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10);
+    await new Promise((s) => setTimeout(s, (retryAfter > 0 ? retryAfter * 1000 : 2000 * (attempt + 1)) + Math.floor(Math.random() * 500)));
+    return openaiChat(model, sys, user, max, attempt + 1);
+  }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error("chat " + r.status + " " + JSON.stringify(j).slice(0, 160));
+  return j.choices?.[0]?.message?.content || "";
+}
+async function chatQuality(sys, user, max = 900) { return openaiChat(QUALITY_MODEL, sys, user, max); }
+async function chatCheap(sys, user, max = 900) { return openaiChat(CHEAP_MODEL, sys, user, max); }
 
 function recentMemory(agent) { try { return execFileSync("node", [join(HERE, "mem.mjs"), "tail", "--agent", agent, "--n", "40"], { encoding: "utf8" }).slice(0, 7000); } catch { return ""; } }
 function writeMem(agent, type, text, share) { try { const a = [join(HERE, "mem.mjs"), type, text, "--agent", agent, "--tags", "librarian"]; if (share) a.push("--share"); execFileSync("node", a, { stdio: "ignore" }); return true; } catch { return false; } }
@@ -71,15 +109,15 @@ async function processAgentDay(agent, date) {
   // build the transcript-ish body for the LLM (cap)
   let body = turns.map((t) => `[${(t.ts || "").slice(11, 19)}] ${t.dir}: ${String(t.text).replace(/\s+/g, " ").slice(0, 500)}`).join("\n");
   if (body.length > 24000) body = body.slice(-24000);
-  // 1) daily digest (human-readable catalog of the day)
+  // 1) daily digest (human-readable catalog of the day) -- QUALITY tier (narrative summarization)
   const personal = agent.includes("personal");
   const digSys = `You are the memory secretary for agent "${agent}". Write a concise DAILY DIGEST (markdown, <= 350 words) of this day's sessions: what the operator asked, what was done/decided/shipped, key facts and numbers, and any open items. Group by theme, not by message. Factual, no fluff.`;
-  let digest = ""; try { digest = await chat(digSys, `Date ${date}. Journal:\n${body}`, 800); } catch (e) { digest = `(digest unavailable: ${e.message})`; }
+  let digest = ""; try { digest = await chatQuality(digSys, `Date ${date}. Journal:\n${body}`, 800); } catch (e) { digest = `(digest unavailable: ${e.message})`; }
   try { await putTxt(`_JOURNAL/${agent}/${date}/_DIGEST.md`, `# ${agent} daily digest ${date}\n\n_Generated by memory-librarian_\n\n${digest}\n`, "text/markdown; charset=utf-8"); } catch {}
-  // 2) distill durable items the live throttle may have missed, deduped vs the ledger
+  // 2) distill durable items the live throttle may have missed, deduped vs the ledger -- CHEAP tier (bounded, structured extraction)
   const known = recentMemory(agent);
   const dSys = `You are the memory-distillation step for agent "${agent}". From the day's journal, extract ONLY genuinely DURABLE, REUSABLE items NOT already in the agent's recent memory: pitfalls (a wrong belief/trap + fix), decisions (a standing choice + why), or facts (a stable identifier/config). 0-4 items, each one sentence, specific. If nothing new, return []. share=true ONLY if non-sensitive + cross-team useful (NEVER for ${personal ? "this privileged personal lane (always false)" : "MNPI/PHI/privileged"}). Return ONLY a JSON array: [{"type":"pitfall|decision|remember","text":"..","share":bool}].`;
-  let items = []; try { items = JSON.parse((await chat(dSys, `RECENT MEMORY (do NOT duplicate):\n${known}\n\nJOURNAL ${date}:\n${body}`, 700)).match(/\[[\s\S]*\]/)[0]); } catch {}
+  let items = []; try { items = JSON.parse((await chatCheap(dSys, `RECENT MEMORY (do NOT duplicate):\n${known}\n\nJOURNAL ${date}:\n${body}`, 700)).match(/\[[\s\S]*\]/)[0]); } catch {}
   items = (Array.isArray(items) ? items : []).filter((x) => x && x.text && /^(pitfall|decision|remember)$/.test(x.type)).slice(0, 4);
   let wrote = 0;
   for (const it of items) { if (writeMem(agent, it.type, it.text, personal ? false : !!it.share)) wrote++; }
@@ -88,13 +126,14 @@ async function processAgentDay(agent, date) {
 
 async function main() {
   // FIX 2026-07-05 (FAILLOUD-ADOPT): this job was silently exiting 0 (fake success) on EVERY run
-  // since GCP retirement — `if (!SA) exit(0)` fired unconditionally (SA is the dead GCP fallback,
-  // always null now) before ever reaching the Azure-first sm() calls below. It's a scheduled daily
-  // cron (0 8 * * *); the heartbeat/execution history showed it "Succeeded" while doing nothing.
-  // requireSecrets() now fails LOUD (exit 78, names the missing key) instead of a fake-success no-op.
-  await requireSecrets(["azure-commons-storage-account", "azure-commons-storage-key"]);
-  ACCT = await sm("azure-commons-storage-account"); AKEY = await sm("azure-commons-storage-key");
-  SAS = buildSas(); await initModel();
+  // since GCP retirement — the old GCP-SA gate fired unconditionally before ever reaching the
+  // Azure-first storage calls. Then Azure died too (2026-08-13). Fail loud on EITHER a missing
+  // storage credential or (below) a missing LLM credential, instead of a fake-success no-op.
+  if (!(await commonsConfigured())) {
+    console.error("[memory-librarian] AWS credentials unavailable for the commons S3 mirror (checked the ECS task role, AWS_ACCESS_KEY_ID/SECRET, OTC_AWS_ACCESS_KEY_ID/SECRET); cannot read journals.");
+    process.exit(78);
+  }
+  await initModel();
   // discover agents from the journal tree
   const names = await list("_JOURNAL/");
   let agents = [...new Set(names.map((n) => n.split("/")[1]).filter(Boolean))];
@@ -116,4 +155,9 @@ async function main() {
   if (gaps.length) { console.error("GAP (journal active but ledger barely moved — check capture/identity):"); for (const g of gaps) console.error(`  ${g.agent}/${g.date}: ${g.turns} turns, 0 distilled`); }
   process.exit(0);
 }
-main().catch((e) => { console.error("[memory-librarian] FATAL " + e.message); process.exit(0); });
+// FIX (2026-08-27, alongside the storage+LLM port): a FATAL, unhandled error now exits 1, not 0. The
+// pre-port `process.exit(0)` here meant ANY crash -- including "the LLM key is entirely missing"
+// before the initModel() guard above existed -- was reported as a clean run, the exact silent-success
+// class this whole port exists to close. initModel()'s own process.exit(2) already catches the missing-
+// key case earlier and more specifically; this is the backstop for anything else that manages to throw.
+main().catch((e) => { console.error("[memory-librarian] FATAL " + e.message); process.exit(1); });

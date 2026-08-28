@@ -31,15 +31,22 @@
 // pushing despite printing a message implying it had. Both mistakes are avoided here by (a) reading
 // FLEET-BULLETIN.md via the authenticated GitHub Contents API (never git clone / raw.githubusercontent
 // -- the latter is CDN-cached and served stale content for several minutes on a real incident earlier
-// today), and (b) persisting the per-agent "last seen" marker as a durable Azure Blob object in the
-// shared commons (_BULLETIN_SEEN/<agent>.json), not a local file, so it means the same thing regardless
-// of which engine or container is asking. Fail-open: any failure here never blocks the three main
-// search results above.
+// today), and (b) persisting the per-agent "last seen" marker as a durable S3 object (see the STORAGE
+// note below) in the shared commons (_BULLETIN_SEEN/<agent>.json), not a local file, so it means the
+// same thing regardless of which engine or container is asking. Fail-open: any failure here never
+// blocks the three main search results above.
+//
+// STORAGE (ported to S3, 2026-08-27): the _DOCS/ listing and the _BULLETIN_SEEN/ marker both used to
+// go through a hand-rolled Azure Blob account-SAS in this file. That storage account died with the
+// Azure subscription deletion (2026-08-13). Now routes through skills/kb-memory/commons-store.mjs (the
+// same facade setup/heartbeat.mjs, fleet-dispatch/dispatch.mjs, fleet-medic/medic.mjs, and
+// sunset-protocol/protocol.mjs use).
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { cGet, cPut, cListMeta } from "../kb-memory/commons-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BRAIN_MJS = join(HERE, "..", "company-brain", "brain.mjs");
@@ -53,44 +60,15 @@ const ROOMS = val("--rooms", "");
 const AGENT = (val("--agent", "") || "unknown").toLowerCase();
 const JSON_OUT = FLAG("--json");
 
-// ---------------- commons blob (same account/container as sunset-protocol + kb-memory) ----------------
-const COMMONS = { accountSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal" };
-const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-function buildSas(acct, key, write) {
-  const sv = "2021-12-02", sp = write ? "rwlc" : "rl", ss = "b", srt = "co";
-  const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
-  const se = new Date(Date.now() + 3600 * 1000).toISOString().slice(0, 19) + "Z";
-  const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
-  const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64");
-  return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
-}
-async function commonsCreds() {
-  const acct = await kvSecret(COMMONS.accountSecret);
-  const key = await kvSecret(COMMONS.keySecret);
-  return { acct, key };
-}
+// ---------------- commons store (S3, same account/container as sunset-protocol + kb-memory) ----------------
 async function listDocsPrefix(prefix = "_DOCS/") {
+  // cListMeta throws on a genuine failure (never returns "empty" for a failed listing -- see
+  // s3-blob.mjs's own contract note); this try/catch is what turns that into the SAME {ok:false,...}
+  // fail-open envelope callers already expect, so `main()`'s "one source erroring never blocks the
+  // other two" behavior is unchanged by the storage swap.
   try {
-    const { acct, key } = await commonsCreds();
-    if (!acct || !key) return { ok: false, error: "commons creds unavailable", items: [] };
-    const sas = buildSas(acct, key, false);
-    const items = [];
-    let marker = "";
-    do {
-      let url = `https://${acct}.blob.core.windows.net/${COMMONS.container}?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&${sas}`;
-      if (marker) url += `&marker=${encodeURIComponent(marker)}`;
-      const r = await fetch(url);
-      if (!r.ok) return { ok: false, error: `list ${r.status}`, items };
-      const xml = await r.text();
-      for (const m of xml.matchAll(/<Blob>([\s\S]*?)<\/Blob>/g)) {
-        const b = m[1];
-        const name = (b.match(/<Name>([^<]+)<\/Name>/) || [])[1];
-        const size = +((b.match(/<Content-Length>([^<]+)<\/Content-Length>/) || [])[1] || 0);
-        const mtime = (b.match(/<Last-Modified>([^<]+)<\/Last-Modified>/) || [])[1] || "";
-        if (name) items.push({ name, size, mtime });
-      }
-      marker = (xml.match(/<NextMarker>([^<]+)<\/NextMarker>/) || [])[1] || "";
-    } while (marker);
+    const rows = await cListMeta(prefix);
+    const items = rows.map((r) => ({ name: r.name, size: r.size, mtime: r.lastModified }));
     return { ok: true, items };
   } catch (e) { return { ok: false, error: e.message, items: [] }; }
 }
@@ -182,26 +160,17 @@ async function fetchBulletinEntries() {
 }
 async function getSeenCount(agent) {
   try {
-    const { acct, key } = await commonsCreds();
-    if (!acct || !key) return 0;
-    const sas = buildSas(acct, key, false);
-    const url = `https://${acct}.blob.core.windows.net/${COMMONS.container}/${encPath(SEEN_PREFIX + agent + ".json")}?${sas}`;
-    const r = await fetch(url);
-    if (r.status === 404) return 0;
-    if (!r.ok) return 0;
-    const j = await r.json();
+    const text = await cGet(SEEN_PREFIX + agent + ".json");
+    if (text == null) return 0; // null on a genuine 404 (never seen before) -- see cGet's contract
+    const j = JSON.parse(text);
     return j.seenCount || 0;
-  } catch { return 0; }
+  } catch { return 0; } // malformed JSON or any other read failure: fail open to "nothing seen yet"
 }
 async function setSeenCount(agent, count) {
   try {
-    const { acct, key } = await commonsCreds();
-    if (!acct || !key) return false;
-    const sas = buildSas(acct, key, true);
-    const url = `https://${acct}.blob.core.windows.net/${COMMONS.container}/${encPath(SEEN_PREFIX + agent + ".json")}?${sas}`;
     const body = JSON.stringify({ seenCount: count, updatedAt: new Date().toISOString() });
-    const r = await fetch(url, { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": "application/json" }, body });
-    return r.ok;
+    await cPut(SEEN_PREFIX + agent + ".json", body, "application/json");
+    return true;
   } catch { return false; }
 }
 async function checkBulletin(agent) {
@@ -273,4 +242,4 @@ async function main() {
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) { main().catch((e) => { console.error("fleet-search ERROR: " + e.message); process.exit(1); }); }
 
-export { listDocsPrefix, filterDocsByQuery, githubSearch, brainAsk, fetchBulletinEntries, checkBulletin };
+export { listDocsPrefix, filterDocsByQuery, githubSearch, brainAsk, fetchBulletinEntries, checkBulletin, getSeenCount, setSeenCount };
