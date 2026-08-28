@@ -640,3 +640,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:35:57.236Z
 - **Closed:** (open)
+
+### finding:FND-20260828-3976 severity:medium status:open | Rotation program: PERPLEXITY_CONNECTOR_TOKEN (leaked, still live) first; ROTATE-BEFORE-LAUNCH list; migrate build-doc-indexer-ecr.yml static IAM key + aws-n8n-recovery.yml escrowed keys to OIDC
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:35:59.920Z
+- **Closed:** (open)
