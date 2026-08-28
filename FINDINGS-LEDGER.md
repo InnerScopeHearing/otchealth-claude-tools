@@ -481,13 +481,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:09.592Z
 - **Closed:** 2026-08-28T22:17:51.187Z
 
-### finding:FND-20260827-dd78 severity:high status:open | Foundry LLM callers still dead (extends FND-20260819-c9bb): critic-pass (reports SUCCESS on fail-safe approve on every PR), agent-evals, focus-group-loop, recall-evals, doc-indexer deep-pass; port per enrich.mjs pattern; make critic-pr report neutral until then
+### finding:FND-20260827-dd78 severity:high status:fixed | Foundry LLM callers still dead (extends FND-20260819-c9bb): critic-pass (reports SUCCESS on fail-safe approve on every PR), agent-evals, focus-group-loop, recall-evals, doc-indexer deep-pass; port per enrich.mjs pattern; make critic-pr report neutral until then
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 2026-08-27 port batch + #482,#483,#484
+- **Verified by:** critic-pass/agent-evals/focus-group/recall-evals confirmed LLM_PROVIDER=openai (leg-A line-cited); reflect+shark+signal-radar+drift ported tonight, fail-loud; deep-pass on Bedrock (own header)
 - **Opened:** 2026-08-27T19:00:12.839Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:17:53.783Z
 
 ### finding:FND-20260827-d47b severity:high status:open | Gateway tail: legal_blob_put('personal') writes to dead Azure; heygen artifact-store Azure-only while HeyGen writes enabled; HEYGEN_APPROVAL_BROKER_URL dead (approval lane fail-closed); 37 n8n_* + 13 azure_* tools dead surface; prune dead AZURE_*/FOUNDRY_*/COSMOS_* env at next deploy
 
