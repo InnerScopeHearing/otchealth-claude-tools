@@ -83,7 +83,7 @@ test("pageExitCode: non-strict never pages, even with anomalies (report-only def
   assert.equal(pageExitCode(0, false), 0);
 });
 
-test("the live registry: all 10 nightly-workflow entries are present and each carries a positive interval_min", () => {
+test("the live registry: all 9 nightly-workflow entries are present and each carries a positive interval_min", () => {
   // Guards against a silent typo/removal in setup/heartbeat-registry.json itself dropping one of the
   // tracked entries or leaving its interval_min unset (which would make heartbeat.mjs's own status
   // math treat it as NO-DATA instead of a real staleness check). ITEM 5.3 (Wave 5, AI-OS
@@ -97,9 +97,13 @@ test("the live registry: all 10 nightly-workflow entries are present and each ca
   // until 5 off-Azure secrets are provisioned, see azure-watchdog.yml's own header comment) -- adding a
   // kind:"nightly-workflow" registry entry for a workflow with no live schedule would make
   // schedule-canary.mjs correctly-but-uselessly flag it DEAD forever and page every sentinel run.
+  // 2026-08-28: "nightly-azure-canary" REMOVED from this list -- its workflow was deleted outright
+  // (Azure permanently gone; see skills/azure-canary/SKILL.md's SUPERSEDED banner), and the registry
+  // entry's "kind":"nightly-workflow" tag was dropped for the exact "azure-watchdog" reason above: a
+  // deleted workflow can never beat again, so tracking it would page forever on a corpse. The entry
+  // itself is KEPT (untracked) in the registry as the anchor several sibling notes still reference.
   const registry = JSON.parse(readFileSync(new URL("../setup/heartbeat-registry.json", import.meta.url), "utf8"));
   const expected = [
-    "nightly-azure-canary",
     "nightly-continuity-canary",
     "nightly-embedding-drift",
     "nightly-eval",

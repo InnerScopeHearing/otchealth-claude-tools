@@ -94,3 +94,73 @@ test("null scorecards degrade gracefully (no crash, no regressions)", () => {
   assert.equal(plan.total_regressions, 0);
   assert.equal(plan.primary, null);
 });
+
+// ---------------------------------------------------------------------------
+// FND-20260814-bcbc: a proposed revert must never target a file the PR's own diff never touched (it
+// would silently discard unrelated main-branch work if applied). These tests exercise planRepairs'
+// opts.prFiles constraint directly, without touching git -- the same "inject the boundary, test the
+// pure core" pattern proposeRewrite's `llm` injection already uses in this file.
+// ---------------------------------------------------------------------------
+
+test("FND-20260814-bcbc: a regression whose prompt_file is OUTSIDE the PR's diff is not repaired", () => {
+  const base = card([row("t1", "cto", 1.0, true, "skills/some/unrelated-file.mjs")]);
+  const head = card([row("t1", "cto", 0.5, false, "skills/some/unrelated-file.mjs")]);
+  // The PR's real diff touched a completely different file -- the regressed task's prompt_file tag is
+  // stale/wrong relative to THIS PR, so no revert may be proposed for it.
+  const prFiles = new Set(["skills/some/other-file-the-pr-actually-touched.mjs"]);
+  const plan = planRepairs(base, head, { prFiles });
+  assert.equal(plan.total_regressions, 1);
+  assert.equal(plan.repairable_count, 0, "out-of-diff file must not be repairable");
+  assert.equal(plan.repairs.length, 0, "no revert proposed");
+  assert.equal(plan.primary, null);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /outside this PR's diff/i);
+});
+
+test("FND-20260814-bcbc: a regression whose prompt_file IS in the PR's diff is repaired, targeting exactly that file", () => {
+  const pf = "skills/company-brain/brain.mjs";
+  const base = card([row("t1", "cto", 1.0, true, pf)]);
+  const head = card([row("t1", "cto", 0.5, false, pf)]);
+  const prFiles = new Set([pf, "some/other/file/the/pr/also/touched.mjs"]);
+  const plan = planRepairs(base, head, { prFiles });
+  assert.equal(plan.repairable_count, 1);
+  assert.equal(plan.repairs.length, 1);
+  assert.equal(plan.repairs[0].prompt_file, pf, "the revert must target exactly the regressed file");
+  assert.ok(plan.primary);
+  assert.equal(plan.primary.prompt_file, pf);
+  assert.equal(plan.skipped.length, 0);
+});
+
+test("FND-20260814-bcbc: a null prFiles (the PR diff could not be computed) fails CLOSED -- no revert proposed even for a valid prompt_file", () => {
+  const base = card([row("t1", "cto", 1.0, true, "skills/agent-evals/run-evals.mjs")]);
+  const head = card([row("t1", "cto", 0.5, false, "skills/agent-evals/run-evals.mjs")]);
+  const plan = planRepairs(base, head, { prFiles: null });
+  assert.equal(plan.repairable_count, 0);
+  assert.equal(plan.repairs.length, 0);
+  assert.equal(plan.primary, null);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /outside this PR's diff/i);
+});
+
+test("FND-20260814-bcbc: prFiles omitted entirely (no PR-diff context supplied at all) preserves the pre-fix unconstrained behavior", () => {
+  const base = card([row("t1", "cto", 1.0, true, "skills/agent-evals/run-evals.mjs")]);
+  const head = card([row("t1", "cto", 0.5, false, "skills/agent-evals/run-evals.mjs")]);
+  const plan = planRepairs(base, head); // no third arg at all -- matches every pre-existing test above
+  assert.equal(plan.repairable_count, 1);
+  assert.equal(plan.primary.prompt_file, "skills/agent-evals/run-evals.mjs");
+});
+
+test("FND-20260814-bcbc: two regressions sharing a prompt_file are constrained independently -- one in diff, one not", () => {
+  const inDiff = "skills/in-diff.mjs";
+  const outOfDiff = "skills/out-of-diff.mjs";
+  const base = card([row("a", "cto", 1.0, true, inDiff), row("b", "cfo", 1.0, true, outOfDiff)]);
+  const head = card([row("a", "cto", 0.4, false, inDiff), row("b", "cfo", 0.3, false, outOfDiff)]);
+  const plan = planRepairs(base, head, { prFiles: new Set([inDiff]) });
+  assert.equal(plan.total_regressions, 2);
+  assert.equal(plan.repairable_count, 1);
+  assert.equal(plan.repairs.length, 1);
+  assert.equal(plan.repairs[0].prompt_file, inDiff);
+  assert.equal(plan.skipped.length, 1);
+  assert.equal(plan.skipped[0].id, "b");
+  assert.match(plan.skipped[0].reason, /outside this PR's diff/i);
+});

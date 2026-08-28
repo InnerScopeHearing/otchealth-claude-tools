@@ -1,9 +1,37 @@
 ---
 name: fleet-secret-custodian
-description: Tier-1 autonomous secret-lifecycle custody for the OTCHealth fleet. Enumerates every secret in Key Vault kv-otc-55c84f6bef, classifies each by rotation capability (Azure-native regenerateKey / third-party / short-lived-token-is-better / token-keeper-owned OAuth / Tier-2-bootstrap / Tier-3-permanently-manual / public-non-secret), surfaces real hygiene gaps (missing-expiry, stale, unclassified), and autonomously rotates the Azure-native key class on an age threshold — FAIL-CLOSED (verify-before-retire, prior version kept enabled for a grace window, never a half-rotated state). Every action writes a tamper-evident, hash-chained append-only record to Blob (WORM-capable), mirrored best-effort into the Cosmos work-ledger. Builds ON skills/kb-memory/azure-secret.mjs (KV primitive) and DEFERS to skills/token-keeper as the single writer for OAuth-rotating tokens (never becomes a second writer — the fleet's #1 lockout class). Non-PHI ring; secret VALUES never logged. Run: node skills/fleet-secret-custodian/custodian.mjs <audit|report|rotate <name>|rotate-due|selftest>.
+description: "SUPERSEDED 2026-08-28 -- do not run or port. Was Tier-1 autonomous secret-lifecycle custody (enumerate + classify + hygiene-audit + autonomous rotation) for Azure Key Vault kv-otc-55c84f6bef. That vault, and the Azure subscription it lived on, was permanently deleted 2026-08-13 -- every function here (KV enumeration, ARM regenerateKey, the Blob Append-Blob tamper-evident audit log) targets a dead resource. AWS SSM Parameter Store (/otchealth/*, ~455 params) is the fleet's secret store of record now, and it has no Tier-1 custodian yet; this needs a NEW SSM-native tool, not a port of this one (SSM's PutParameter rotation model has no ARM regenerateKey analog, and SSM has no first-class Append-Blob-equivalent for the hash-chained log). See the Status note at the bottom of this file for the one piece worth reusing directly: the classification taxonomy, which is store-agnostic."
 ---
 
 # fleet-secret-custodian — the CTO owns every secret, autonomously, with an audit trail
+
+> **SUPERSEDED (2026-08-28) -- read this before touching this skill.** This directory is kept for
+> HISTORY only. Do not run `custodian.mjs` and do not port it. Reasons:
+> 1. **Its entire subject is permanently gone.** Every function here targets Azure Key Vault
+>    `kv-otc-55c84f6bef` (ARM `regenerateKey` for rotation, an Azure Blob Append Blob for the
+>    tamper-evident audit log) on the Azure subscription permanently deleted 2026-08-13. There is
+>    nothing left to enumerate, classify, or rotate through this code path.
+> 2. **AWS SSM Parameter Store is the fleet's secret store of record now** (`/otchealth/*`, ~455
+>    params -- see `otchealth-claude-tools/CLAUDE.md`'s 2026-08-27 correction), and it has no Tier-1
+>    autonomous custodian yet. Unlike the other Azure-estate skills ported in the 2026-08-27/28 S3
+>    cluster (a like-for-like storage-backend swap), this one is **not** a like-for-like port
+>    candidate: SSM's rotation primitive (`PutParameter` with `Overwrite:true`) does not map onto
+>    ARM's dual-key-swap `regenerateKey` model, and SSM has no first-class Append-Blob equivalent for
+>    a hash-chained tamper-evident log (an S3 Object Lock bucket, already used elsewhere in the
+>    fleet's DR chain, would be the natural substitute but is a genuinely different design, not a
+>    swap-in). **If Tier-1 autonomous SSM custody is ever wanted, build a NEW, small, SSM-native
+>    tool** rather than porting this one -- mirror `skills/notion-export/SKILL.md`'s own precedent for
+>    this exact situation (a dead-store tool whose migration already happened, or whose successor
+>    would be a different shape, is not worth porting).
+> 3. **One piece IS worth reusing directly**, and is called out here so it is not lost with the rest:
+>    the **classification taxonomy** (`a-azure-native` / `b-shortlived-better` / `owner-token-keeper`
+>    / `tier2-bootstrap` / `tier3-out-of-scope` / `public-nonsecret` / `unknown` -- see the table
+>    below) -- the CATEGORIES and the reasoning behind each (what rotates safely, what token-keeper
+>    alone must own, what stays permanently out of scope) are store-agnostic and apply just as well
+>    to an SSM-native classifier as they did to this Key-Vault one.
+>
+> Everything below this note is the ORIGINAL skill documentation, preserved as-is for history; treat
+> every Key Vault / ARM / Azure Blob reference in it as describing a dead target, not a live one.
 
 Tier 1 of the CEO directive (Matt: the CTO owns complete custody of all secrets fleet-wide; no ongoing
 human token management). This is **accountability, not permission-seeking**: nothing here waits for an
