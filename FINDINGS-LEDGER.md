@@ -632,3 +632,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:35:54.711Z
 - **Closed:** (open)
+
+### finding:FND-20260828-e364 severity:medium status:open | Datadog monitor estate audit: monitors watch Azure-era metrics + dead emitters (permanent Alert/NoData trains everyone to ignore Datadog); none of the 32 AWS schedules report to it; audit/retire/repoint or consciously retire Datadog
+
+- **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-28T01:35:57.236Z
+- **Closed:** (open)
