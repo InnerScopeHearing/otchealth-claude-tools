@@ -249,13 +249,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-16T18:29:57.947Z
 - **Closed:** (open)
 
-### finding:FND-20260816-1aa3 severity:low status:open | sentinel-os-eval has failed 4 of its last 5 Azure runs (08-12,08-13,08-14 Failed, 08-15 Succeeded but took 1h28m, 08-16 Failed) -- pre-existing, unrelated to the AWS migration, surfaced while cross-checking the jobs matrix
+### finding:FND-20260816-1aa3 severity:low status:fixed | sentinel-os-eval has failed 4 of its last 5 Azure runs (08-12,08-13,08-14 Failed, 08-15 Succeeded but took 1h28m, 08-16 Failed) -- pre-existing, unrelated to the AWS migration, surfaced while cross-checking the jobs matrix
 
 - **Source audit doc:** runbooks/AWS-JOBS-MIGRATION-WAVE-B.md
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** schedule disabled 2026-08-28
+- **Verified by:** sentinel-os-eval's SUBJECT is otchealth-os-chat (dead Azure Container App, standing RETIRE recommendation, Matt decision item 7). CloudWatch shows every AWS run FATAL ConnectTimeout against otchealth-os-chat...azurecontainerapps.io. Schedule otchealth-sentinel-os-eval set DISABLED (readback confirmed) - a daily guaranteed-failure probe of a permanently dead host. Job/task-def deletion folds into the os-chat retirement decision
 - **Opened:** 2026-08-16T18:30:02.634Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:42:23.314Z
 
 ### finding:FND-20260816-b38b severity:medium status:fixed | index-one.mjs (kb-memory's detached write-through single-entry indexer, Wave 2b) is a THIRD Azure-AI-Search-only memory writer, not ported to SEARCH_BACKEND=opensearch in this pass -- explicitly out of scope (FILE OWNERSHIP was semantic.mjs + ring-memory-index/ only), so a real Azure outage still silently blocks instant per-entry indexing even after this port lands
 
