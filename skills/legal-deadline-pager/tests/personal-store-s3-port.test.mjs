@@ -222,3 +222,12 @@ test("scrubErrorMessage leaves ordinary diagnostic text untouched (env var NAMES
   const msg = "s3-blob: AWS credentials unavailable (checked the ECS task role, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and OTC_AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)";
   assert.equal(scrubErrorMessage(msg), msg);
 });
+
+// ---- statusToken: the console lines log ONLY this extraction (leak-proof by construction) --------
+import { statusToken } from "../personal-store.mjs";
+
+test("statusToken extracts a bare 3-digit status and nothing else, or a fixed label", () => {
+  assert.equal(statusToken(new Error("s3 put 500 (refusing...): <AWSAccessKeyId>AKIAIOSFODNN7EXAMPLE</AWSAccessKeyId>")), "HTTP 500");
+  assert.equal(statusToken(new Error("fetch failed")), "non-HTTP error");
+  assert.equal(statusToken(undefined), "non-HTTP error");
+});

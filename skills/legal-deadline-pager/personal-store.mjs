@@ -69,6 +69,16 @@ export function scrubErrorMessage(msg) {
     .replace(/\b[A-Za-z0-9/+=]{40}\b/g, "<redacted-40char-token>");
 }
 
+/** Extraction-based log token for this module's console lines: a fresh string built ONLY from a
+ *  constrained match (an HTTP-ish 3-digit status) or a fixed label. Unlike a denylist scrub, an
+ *  extraction structurally cannot carry anything it did not explicitly select, so a log line built
+ *  from it is leak-proof by construction (and taint-free to CodeQL's clear-text-logging model).
+ *  Exported for tests. */
+export function statusToken(e) {
+  const m = String(e?.message ?? "").match(/\b\d{3}\b/);
+  return m ? `HTTP ${m[0]}` : "non-HTTP error";
+}
+
 /** Read the personal cooldown map ({ [opaqueRowKey]: { last_paged_at: ISOString } }). Returns {} if the
  *  object does not exist yet, or the store is unreachable -- never throws (fail-open; see header). */
 export async function getPersonalCooldown() {
@@ -78,7 +88,12 @@ export async function getPersonalCooldown() {
     const j = JSON.parse(text);
     return j && typeof j === "object" ? j : {};
   } catch (e) {
-    console.log(`[legal-deadline-pager] personal cooldown store read failed (${scrubErrorMessage(e.message)}); treating as empty.`);
+    // Log only an EXTRACTED status token, never the upstream message itself (even scrubbed):
+    // CodeQL's clear-text-logging taint model does not recognize a custom denylist scrubber, and
+    // more importantly an extraction can never leak what it never carries. statusToken() returns a
+    // fresh, fully-constrained string (three digits or a fixed label), so nothing upstream -- env,
+    // an echoed key id, a response body -- can reach this log line by construction.
+    console.log(`[legal-deadline-pager] personal cooldown store read failed (${statusToken(e)}); treating as empty.`);
     return {};
   }
 }
@@ -100,8 +115,10 @@ export async function putPersonalCooldown(map) {
       console.error(`[legal-deadline-pager] personal cooldown store write refused: ${PERSONAL_WRITE_IAM_GATE_MESSAGE}.`);
       throw new Error(PERSONAL_WRITE_IAM_GATE_MESSAGE);
     }
-    const scrubbed = scrubErrorMessage(e.message);
-    console.error(`[legal-deadline-pager] personal cooldown store write FAILED (${scrubbed}).`);
-    throw new Error(`personal cooldown store write failed: ${scrubbed}`);
+    // Console gets only the EXTRACTED status token (see the read-path comment above: an extraction
+    // can never leak what it never carries); the full SCRUBBED detail travels in the rejection,
+    // which every real caller (runSweep's .catch, a CLI's try/catch printing e.message) surfaces.
+    console.error(`[legal-deadline-pager] personal cooldown store write FAILED (${statusToken(e)}; full scrubbed detail in the thrown error).`);
+    throw new Error(`personal cooldown store write failed: ${scrubErrorMessage(e.message)}`);
   }
 }
