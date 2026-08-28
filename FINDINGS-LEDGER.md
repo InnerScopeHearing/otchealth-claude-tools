@@ -473,13 +473,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:05.975Z
 - **Closed:** 2026-08-28T01:33:24.537Z
 
-### finding:FND-20260827-4131 severity:high status:open | DR chain is dead: no working nightly backup of SSM secrets or the OpenSearch brain (old chain enumerated Azure); rebuild AWS-native (SSM export + OpenSearch snapshots to S3)
+### finding:FND-20260827-4131 severity:high status:fixed | DR chain is dead: no working nightly backup of SSM secrets or the OpenSearch brain (old chain enumerated Azure); rebuild AWS-native (SSM export + OpenSearch snapshots to S3)
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** claude-tools #475,#477-#480
+- **Verified by:** nightly SSM export run 33139324078 (454 params, FULL fidelity, Object-Lock + OneDrive); OpenSearch snapshot first-manual-20260828 9/9 shards zero privileged; canary green + n8n AutoSnapshot check added #480; crons armed
 - **Opened:** 2026-08-27T19:00:09.592Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:17:51.187Z
 
 ### finding:FND-20260827-dd78 severity:high status:open | Foundry LLM callers still dead (extends FND-20260819-c9bb): critic-pass (reports SUCCESS on fail-safe approve on every PR), agent-evals, focus-group-loop, recall-evals, doc-indexer deep-pass; port per enrich.mjs pattern; make critic-pr report neutral until then
 
