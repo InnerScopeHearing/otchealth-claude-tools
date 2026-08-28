@@ -305,13 +305,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-17T20:00:46.587Z
 - **Closed:** 2026-08-17T21:30:31.442Z
 
-### finding:FND-20260817-e462 severity:medium status:open | cro lane advertises full 1008-tool catalog incl kb_search_privileged (coo advertises 11); TOOL_CATALOG_CURATION_MODE=report so LANE_TOOLSETS does not narrow internal lanes. Ring gate PROVEN holding, so not a data exposure -- a catalog-honesty/least-privilege gap.
+### finding:FND-20260817-e462 severity:medium status:fixed | cro lane advertises full 1008-tool catalog incl kb_search_privileged (coo advertises 11); TOOL_CATALOG_CURATION_MODE=report so LANE_TOOLSETS does not narrow internal lanes. Ring gate PROVEN holding, so not a data exposure -- a catalog-honesty/least-privilege gap.
 
 - **Source audit doc:** live lane probe 2026-08-17 (otchealth-gateway:10)
-- **Fix commit:** (none yet)
-- **Verified by:** tools/list per lane via client_credentials; cro=1008, coo=11
+- **Fix commit:** gateway task-def rev 24 (TOOL_CATALOG_CURATE_LANES=cro)
+- **Verified by:** live tools/list post-rollout 2026-08-28: cro lane = 236 curated tools (was 1008), cto lane = 1001 (unchanged full). Used the module's own designed-for-this TOOL_CATALOG_CURATE_LANES mechanism, mode stays curate-m365-only
 - **Opened:** 2026-08-17T20:13:00.425Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:44:14.452Z
 
 ### finding:FND-20260817-9f1c severity:high status:wontfix | kb_search_privileged returns count:0 (silent empty) instead of an explicit denial for an out-of-ring lane -- a false 'no evidence' is indistinguishable from 'not allowed', the exact failure class that produced the CFO's unproven-finding incident. Proven: identical queries on legal-company and finance-cfo-source-docs return clo=3 matches, cro=0, with no error and no denial text.
 
