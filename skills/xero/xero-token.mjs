@@ -60,7 +60,7 @@
 import crypto from "node:crypto"; import fs from "node:fs"; import os from "node:os";
 import { kvSecret, kvSecretSet, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import { mintToken as mintGatewayToken, GATEWAY_MCP } from "../gateway-connect/connect.mjs";
-import { createObjectIfAbsentInS3, getTextFromS3, putObjectToS3, deleteObjectFromS3 } from "../kb-memory/s3-blob.mjs";
+import { createObjectIfAbsentInS3, getTextFromS3, getTextMetaFromS3, putObjectToS3, deleteObjectFromS3 } from "../kb-memory/s3-blob.mjs";
 
 const SM_PROJECT = "otchealth-shared-prod";
 // S3 lock/health location (2026-08-27 port off dead Azure Blob). Reuses the SAME (account, container)
@@ -173,26 +173,44 @@ async function refreshAndPersist(org) {
  *  createObjectIfAbsentInS3 turns that into created:false rather than throwing). Any OTHER failure
  *  (auth/network/5xx) THROWS, so the caller can tell "someone else holds the lock" (expected, not an
  *  error) apart from "the lock layer itself is broken" (the caller's fail-open path). */
+// EVERY lock mutation below is OWNER-SCOPED by the object's S3 ETag (2026-08-28 hardening, from the
+// push security review of the first cut): renew is a conditional PUT (`If-Match`), release and
+// stale-break are conditional DELETEs (`If-Match`), so a holder or waiter can only ever affect the
+// exact lock GENERATION it last observed. Without this, two waiters that both observed an expired
+// lock could each blind-DELETE: the second delete lands AFTER another waiter already broke the lock
+// and re-acquired, silently destroying the NEW holder's lock — two concurrent refreshes, the exact
+// invalid_grant race this file exists to prevent. A 412 on any of these means "the lock is no longer
+// the one you observed" and is handled as a normal outcome (loop / stand down), never an error.
 async function tryAcquireLock(org) {
   const holder = `${os.hostname()}:${process.pid}:${crypto.randomUUID()}`;
   const body = JSON.stringify({ holder, acquiredAt: Date.now(), expiresAt: Date.now() + LOCK_TTL_MS });
   const res = await createObjectIfAbsentInS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org), body, "application/json");
-  return res.created ? { acquired: true, holder } : { acquired: false };
+  return res.created ? { acquired: true, holder, etag: res.etag } : { acquired: false };
 }
-/** Best-effort: read the current lock record (null if absent or unreadable — never throws). */
+/** Best-effort: read the current lock record WITH its ETag (null if absent or unreadable — never
+ *  throws). The ETag is what lets a waiter's stale-break target exactly the generation it judged
+ *  expired, and nothing newer. */
 async function readLock(org) {
-  try { const text = await getTextFromS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org)); return text ? JSON.parse(text) : null; }
-  catch { return null; }
+  try {
+    const { text, etag } = await getTextMetaFromS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org));
+    if (!text) return null;
+    return { ...JSON.parse(text), etag };
+  } catch (e) { if (process.env.LOCK_DEBUG) console.error("readLock threw:", e.message); return null; }
 }
-/** Best-effort renew (fire-and-forget from an interval timer) — extends the TTL so a holder whose
- *  refresh is running long is never mistaken for a crashed/stale holder by a waiter. */
-async function renewLock(org, holder) {
+/** Owner-scoped renew: conditional PUT on the holder's last-observed ETag. Returns the NEW etag on
+ *  success (the caller must thread it into its lock state for the next renew/release). Throws with
+ *  `.status === 412` when the holder has been evicted (a waiter stale-broke and someone else now
+ *  holds the lock) — the caller records that as `lost` and must NOT touch the lock again. */
+async function renewLock(org, holder, etag) {
   const body = JSON.stringify({ holder, acquiredAt: Date.now(), expiresAt: Date.now() + LOCK_TTL_MS });
-  await putObjectToS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org), body, "application/json");
+  const res = await putObjectToS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org), body, "application/json", { "If-Match": etag });
+  return res.etag;
 }
-/** Best-effort release/break — never throws (a failed delete just lets the lock expire on its own TTL). */
-async function dropLock(org) {
-  try { await deleteObjectFromS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org)); } catch {}
+/** Owner-scoped release/break: conditional DELETE on the given ETag — it CANNOT remove a lock
+ *  generation other than the one observed. Never throws: a 412 means someone else already
+ *  broke/replaced it (normal contention), anything else just lets the TTL be the backstop. */
+async function dropLock(org, etag) {
+  try { await deleteObjectFromS3(S3_ACCOUNT, S3_CONTAINER, LOCK(org), etag ? { "If-Match": etag } : undefined); } catch {}
 }
 
 // ---- public: locked access context (see header comment for the full cache/lock design) ----
@@ -214,15 +232,39 @@ export async function getAccessContext(org, opts = {}) {
       let lock;
       try { lock = await tryAcquireLock(org); } catch { break; } // lock infra error -> fail open (step 3)
       if (lock.acquired) {
+        // Holder lock state, threaded through every owner-scoped op: `etag` is the generation this
+        // holder last wrote; `lost` flips on a renew 412 (a waiter judged us stale and evicted us)
+        // after which we must never touch the lock object again. Renewals run SEQUENTIALLY (the
+        // interval skips while one is in flight) and the release path AWAITS any in-flight renew,
+        // so a slow renew can never land after our conditional DELETE and resurrect the lock.
+        const lockState = { etag: lock.etag, lost: false, renewInFlight: null };
         let renewTimer = null;
         try {
-          renewTimer = setInterval(() => { renewLock(org, lock.holder).catch((e) => { console.error(`[xero-token] lock renew failed for ${org}: ${e.message} (TTL is the backstop)`); }); }, LOCK_REFRESH_MS);
+          renewTimer = setInterval(() => {
+            if (lockState.lost || lockState.renewInFlight) return;
+            lockState.renewInFlight = renewLock(org, lock.holder, lockState.etag)
+              .then((newEtag) => { lockState.etag = newEtag; })
+              .catch((e) => {
+                if (e && e.status === 412) { lockState.lost = true; console.error(`[xero-token] lock for ${org} was stale-broken by a waiter mid-hold; standing down from the lock object`); }
+                else console.error(`[xero-token] lock renew failed for ${org}: ${e.message} (TTL is the backstop)`);
+              })
+              .finally(() => { lockState.renewInFlight = null; });
+          }, LOCK_REFRESH_MS);
+          // Eviction pre-flight: if a waiter already evicted us, do NOT start the rotation — the
+          // evictor (or whoever acquired after it) is about to refresh, and starting ours too is the
+          // exact concurrent-rotation race. Past this point the rotation ALWAYS runs to completion
+          // and persists: discarding a COMPLETED single-use rotation would orphan the new refresh
+          // token in Xero and guarantee the org lockout, which is strictly worse than the tiny
+          // double-refresh window a mid-flight eviction can open (TTL 120s vs a ~2-5s refresh makes
+          // that window vanishingly rare in practice).
+          if (lockState.lost) continue;
           const ctx = await refreshAndPersist(org);
           _memCache.set(org, ctx);
           return { ...ctx, source: "refresh" };
         } finally {
           if (renewTimer) clearInterval(renewTimer);
-          await dropLock(org);
+          if (lockState.renewInFlight) await lockState.renewInFlight.catch(() => {});
+          if (!lockState.lost) await dropLock(org, lockState.etag);
         }
       }
       // locked by someone else: break it if the embedded expiry is in the past (stale-holder
@@ -230,8 +272,11 @@ export async function getAccessContext(org, opts = {}) {
       // and retry acquiring (there is no durable cache to re-check here; the next holder to acquire
       // the lock does its OWN refresh, reading the refresh token fresh from SSM at that time, so it
       // always gets the correctly-rotated value even though it could not observe the prior rotation).
+      // The break DELETE is conditioned on the exact ETag this waiter judged expired: if another
+      // waiter broke it first (our 412), or the holder renewed in the meantime (ETag moved), the
+      // delete is a no-op and we simply loop — a fresh lock can never be destroyed here.
       const lk = await readLock(org);
-      if (lk && typeof lk.expiresAt === "number" && Date.now() > lk.expiresAt) { await dropLock(org); continue; }
+      if (lk && typeof lk.expiresAt === "number" && Date.now() > lk.expiresAt) { await dropLock(org, lk.etag); continue; }
       await sleep(1500);
     }
   } catch (e) {

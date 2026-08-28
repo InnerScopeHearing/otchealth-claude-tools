@@ -58,9 +58,13 @@ function makeFakeXeroWorld({ org, initialRefreshToken, tokenDelayMs = 0 }) {
 
   async function fetchStub(url, opts = {}) {
     const u = String(url);
+    // Anchored host classification (CodeQL js/incomplete-url-substring-sanitization: a bare
+    // substring test admits attacker-shaped hosts like evil.com/.amazonaws.com — irrelevant to a
+    // test stub's threat model, but the anchored form is just as short and keeps the scanner green).
+    const host = new URL(u).hostname;
     const method = (opts.method || "GET").toUpperCase();
 
-    if (u.includes("ssm.") && u.includes(".amazonaws.com")) {
+    if (host.startsWith("ssm.") && host.endsWith(".amazonaws.com")) {
       const body = JSON.parse(opts.body);
       const target = opts.headers["x-amz-target"];
       if (target === "AmazonSSM.GetParameter") {
@@ -74,12 +78,21 @@ function makeFakeXeroWorld({ org, initialRefreshToken, tokenDelayMs = 0 }) {
       return { ok: false, status: 400, text: async () => "{}" };
     }
 
-    if (u.includes(".s3.") && u.includes(".amazonaws.com")) {
+    if (host.includes(".s3.") && host.endsWith(".amazonaws.com")) {
       const { pathname } = new URL(u);
       if (method === "PUT") {
         const ifNoneMatch = opts.headers["if-none-match"];
+        const ifMatch = opts.headers["if-match"];
         if (ifNoneMatch === "*" && s3Objects.has(pathname)) {
           return { ok: false, status: 412, headers: new Map(), text: async () => "conflict" };
+        }
+        // Real S3 conditional-write semantics for the owner-scoped renew: an If-Match PUT only
+        // lands on the exact generation the caller last observed.
+        if (ifMatch !== undefined) {
+          const cur = s3Objects.get(pathname);
+          if (!cur || cur.etag !== ifMatch) {
+            return { ok: false, status: 412, headers: new Map(), text: async () => "precondition failed" };
+          }
         }
         const bodyStr = Buffer.isBuffer(opts.body) ? opts.body.toString("utf8") : String(opts.body);
         const etag = `"etag-${++rotationCounter}"`;
@@ -92,6 +105,13 @@ function makeFakeXeroWorld({ org, initialRefreshToken, tokenDelayMs = 0 }) {
         return { ok: true, status: 200, headers: new Map([["etag", obj.etag]]), text: async () => obj.body };
       }
       if (method === "DELETE") {
+        // Real S3 conditional-delete semantics for the owner-scoped release/stale-break: an
+        // If-Match DELETE 412s (and removes nothing) when the object moved to a newer generation.
+        const ifMatch = opts.headers["if-match"];
+        const cur = s3Objects.get(pathname);
+        if (ifMatch !== undefined && cur && cur.etag !== ifMatch) {
+          return { ok: false, status: 412, headers: new Map(), text: async () => "precondition failed" };
+        }
         const existed = s3Objects.delete(pathname);
         return { ok: existed, status: existed ? 204 : 404, headers: new Map(), text: async () => "" };
       }
@@ -148,7 +168,7 @@ test("a lock whose embedded expiresAt is in the past is detected as stale and br
   const world = makeFakeXeroWorld({ org, initialRefreshToken: "seed-rt-0" });
   // Pre-seed an already-expired lock, simulating a holder that crashed without releasing it.
   world.s3Objects.set(
-    `/xero-token-cache/${org}.lock`,
+    `/otchealthcfodata/cfo-source-docs/xero-token-cache/${org}.lock`,
     { body: JSON.stringify({ holder: "dead-holder", acquiredAt: Date.now() - 999_000, expiresAt: Date.now() - 500_000 }), etag: '"stale"' },
   );
   const t0 = Date.now();
@@ -166,7 +186,7 @@ test("a live (non-stale) held lock is respected: a second caller does not acquir
   const world = makeFakeXeroWorld({ org, initialRefreshToken: "seed-rt-0" });
   // Pre-seed a lock that is NOT stale (expires well in the future).
   world.s3Objects.set(
-    `/xero-token-cache/${org}.lock`,
+    `/otchealthcfodata/cfo-source-docs/xero-token-cache/${org}.lock`,
     { body: JSON.stringify({ holder: "other-live-holder", acquiredAt: Date.now(), expiresAt: Date.now() + 60_000 }), etag: '"live"' },
   );
   // A caller with a short overall LOCK_WAIT_MS budget would fail-open; getAccessContext's own
@@ -177,7 +197,7 @@ test("a live (non-stale) held lock is respected: a second caller does not acquir
   let firstPutSeen = false;
   const wrapped = async (url, opts = {}) => {
     const u = String(url);
-    if (u.includes(".s3.") && (opts.method || "").toUpperCase() === "PUT" && !firstPutSeen) {
+    if (new URL(u).hostname.includes(".s3.") && (opts.method || "").toUpperCase() === "PUT" && !firstPutSeen) {
       firstPutSeen = true;
       const r = await world.fetchStub(url, opts);
       assert.equal(r.status, 412, "the live lock must reject the very first conditional create attempt");
@@ -196,6 +216,31 @@ test("a live (non-stale) held lock is respected: a second caller does not acquir
   assert.ok(firstPutSeen, "the lock acquire must actually have been attempted");
 });
 
+test("two waiters that both observed the SAME expired lock cannot destroy each other's fresh lock -- the ETag-scoped stale-break serializes them with zero invalid_grant", async () => {
+  const org = "racelocktest-org-breakrace";
+  const world = makeFakeXeroWorld({ org, initialRefreshToken: "seed-rt-0", tokenDelayMs: 120 });
+  // Pre-seed an already-expired lock. BOTH concurrent callers will read it, judge it stale, and try
+  // to break it. Under the pre-hardening blind DELETE, the slower breaker could land its delete
+  // AFTER the faster one had already broken the lock and re-acquired -- destroying the FRESH lock
+  // and letting both refresh concurrently (the invalid_grant lockout race). With the If-Match
+  // conditioned break, the second delete targets the OLD generation only, 412s harmlessly, and the
+  // conditional create fully serializes the two refreshes.
+  world.s3Objects.set(
+    `/otchealthcfodata/cfo-source-docs/xero-token-cache/${org}.lock`,
+    { body: JSON.stringify({ holder: "dead-holder", acquiredAt: Date.now() - 999_000, expiresAt: Date.now() - 500_000 }), etag: '"stale-gen"' },
+  );
+  const [r1, r2] = await withEnv(FAKE_CREDS, () =>
+    withStubbedFetch(world.fetchStub, () => Promise.all([
+      getAccessContext(org, { forceRefresh: true }),
+      getAccessContext(org, { forceRefresh: true }),
+    ])));
+  assert.equal(r1.tenantId, `tenant-${org}`);
+  assert.equal(r2.tenantId, `tenant-${org}`);
+  assert.equal(world.invalidGrantAttempts.length, 0, `zero invalid_grant attempts required (got ${JSON.stringify(world.invalidGrantAttempts)}) -- a blind stale-break race would show up here`);
+  assert.equal(world.refreshCallCount(), 2, "each contender performs its own serialized refresh");
+  assert.equal(world.s3Objects.size, 0, "the lock must be fully released afterwards");
+});
+
 // ---- counterfactual guard: no Azure Blob code remains in the ported file -------------------------
 test("xero-token.mjs no longer talks to Azure Blob for its cache/lock (ported to AWS S3 + SSM, 2026-08-27)", async () => {
   const src = await readFile(new URL("../xero-token.mjs", import.meta.url), "utf8");
@@ -205,4 +250,10 @@ test("xero-token.mjs no longer talks to Azure Blob for its cache/lock (ported to
   assert.match(src, /createObjectIfAbsentInS3/, "the lock must use the S3 conditional-create helper");
   assert.match(src, /expiresAt/, "the lock record must carry an expiry for stale-holder recovery");
   assert.match(src, /_memCache/, "the access-token cache must be in-process only (no durable cross-process cache)");
+  // 2026-08-28 ETag hardening (owner-scoped lock ops -- see the push security review): renew must be
+  // an If-Match conditional PUT threading the observed generation, and release/stale-break must be
+  // If-Match conditional DELETEs, so no code path can ever touch a lock generation it did not observe.
+  assert.match(src, /renewLock\(org, lock\.holder, lockState\.etag\)/, "renew must thread the holder's observed ETag");
+  assert.match(src, /deleteObjectFromS3\(S3_ACCOUNT, S3_CONTAINER, LOCK\(org\), etag \? \{ "If-Match": etag \}/, "release/stale-break must be ETag-conditioned deletes");
+  assert.match(src, /dropLock\(org, lk\.etag\)/, "the waiter's stale-break must target exactly the generation it judged expired");
 });
