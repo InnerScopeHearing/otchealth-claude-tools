@@ -433,13 +433,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-21T06:23:39.854Z
 - **Closed:** 2026-08-21T06:32:45.291Z
 
-### finding:FND-20260827-1503 severity:critical status:open | Twilio prod numbers (Sarah/Taylor/Helen) + ElevenLabs post-call webhook still target the dead n8n host (now NXDOMAIN); repoint the moment cs-n8n recovery validates (template: runbooks/scripts/apply-twilio-postwave.mjs)
+### finding:FND-20260827-1503 severity:critical status:fixed | Twilio prod numbers (Sarah/Taylor/Helen) + ElevenLabs post-call webhook still target the dead n8n host (now NXDOMAIN); repoint the moment cs-n8n recovery validates (template: runbooks/scripts/apply-twilio-postwave.mjs)
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** live vendor-config changes (no repo commit): repoint-apply.mjs executed 2026-08-28
+- **Verified by:** Readback-verified: all 9 EL agent tools (Taylor make_intro/get_open_slots/book_meeting -> /webhook/frontdesk-graph; Sarah+Helen cio_lookup_contact/shopify_create_draft_order/cio_log_event -> /webhook/helen-tools) on cs-n8n, 0 remaining on dead host; all 4 Twilio numbers keep EL voice primary + SMS/SMS-fallback/voice-fallback -> recovered sms-forward/voice-forward; msgsvc MGab9a fallback set. RESIDUAL deliberately excluded: the EL post-call workspace webhook (EL-side PATCH silently ignores webhook_url = immutable) is HELD because the only recovered receiver cnGH is pre-hardening (no HMAC + embedded CIO cred) - that bundle (harden receiver + new EL webhook + rotate CIO pair) is tracked under FND-20260828-06f4 + the CS rebuild program
 - **Opened:** 2026-08-27T18:59:53.397Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T23:03:48.061Z
 
 ### finding:FND-20260827-02c2 severity:critical status:fixed | FourVault potential customer data loss: prod DB was on deleted Azure Postgres, NO dump found in master-account S3 (4 buckets, live-listed); full inventory of all AWS accounts/stores required before concluding
 
