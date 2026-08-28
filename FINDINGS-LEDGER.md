@@ -513,13 +513,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:21.836Z
 - **Closed:** (open)
 
-### finding:FND-20260827-e4e3 severity:high status:open | doc-indexer push-search still requires dead Azure Search: librarian ECS jobs run but room freshness rides on enrich-only; add first-class OpenSearch push-search backend and make it default
+### finding:FND-20260827-e4e3 severity:high status:fixed | doc-indexer push-search still requires dead Azure Search: librarian ECS jobs run but room freshness rides on enrich-only; add first-class OpenSearch push-search backend and make it default
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** claude-tools #474/#476
+- **Verified by:** indexer.mjs SEARCH_BACKEND default opensearch; commerce librarian ECS run proven end-to-end exit 0
 - **Opened:** 2026-08-27T19:00:24.807Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T22:17:56.760Z
 
 ### finding:FND-20260827-acce severity:medium status:open | 12 SSM /otchealth/* params hold dead-Azure VALUES (azure-search/foundry/cosmos/docintel/contentsafety endpoints, n8n-base-url, cfo-legal-store-sas-ro, brain-search-endpoint): retire or repoint each as consumers are ported
 
