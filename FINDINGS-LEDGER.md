@@ -225,13 +225,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-14T13:46:59.976Z
 - **Closed:** (open)
 
-### finding:FND-20260814-bcbc severity:medium status:open | selfrepair.mjs proposes reverting a file the PR never touched (would silently discard unrelated main-branch work if applied)
+### finding:FND-20260814-bcbc severity:medium status:fixed | selfrepair.mjs proposes reverting a file the PR never touched (would silently discard unrelated main-branch work if applied)
 
 - **Source audit doc:** otchealth-cto/runbooks/AWS-CUTOVER-2026-08-14.md
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** otchealth-claude-tools#487 squash ec6415d4a3b54d781ea799e8c245a1dbd747de47
+- **Verified by:** CTO diff review + suite: planRepairs opts.prFiles is three-valued (undefined=legacy unconstrained, Set=PR-diff-constrained, null=FAIL-CLOSED proposes nothing); draftCmd (the armed git-checkout path) constrained; 5 new tests incl. fail-closed + builder's end-to-end smoke on real git history; toolkit test gate green on PR
 - **Opened:** 2026-08-14T18:51:35.167Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T23:00:28.008Z
 
 ### finding:FND-20260816-90b1 severity:high status:fixed | Committed AWS pre-signed S3 URLs (access key id + signature) in otchealth-mcp-server infra/aws/data/task-definitions-jobs.json; prefix-anchored secret scan missed them because the key sat mid-string in a query param
 
