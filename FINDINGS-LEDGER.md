@@ -417,13 +417,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-21T06:16:25.323Z
 - **Closed:** 2026-08-28T02:21:22.844Z
 
-### finding:FND-20260821-e303 severity:medium status:open | Gateway Content Safety Prompt Shields (auto-guard.ts inboundShield) never actually run despite SHIELD_MODE=report since 2026-07-02; endpoint IS reachable (not the dead-Azure-subscription class), so root cause is auth/config on the gateway's own client, fail-open masks it silently
+### finding:FND-20260821-e303 severity:medium status:fixed | Gateway Content Safety Prompt Shields (auto-guard.ts inboundShield) never actually run despite SHIELD_MODE=report since 2026-07-02; endpoint IS reachable (not the dead-Azure-subscription class), so root cause is auth/config on the gateway's own client, fail-open masks it silently
 
 - **Source audit doc:** CTO fleet sweep 2026-08-21 (subagent investigation of FND-20260821-12b0, correlated with a live reachability check: cs-otchealth.cognitiveservices.azure.com returns HTTP 200 base / 401 real-API-without-key, confirmed live by CTO)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** otchealth-mcp-server#260 squash dd2691b472d844b34ff5560301d06fac44c819b4, deployed gateway rev 25 (image dd2691b)
+- **Verified by:** LIVE on prod rev 25: shield_check returns configured:false + provider 'none (azure retired)' + summary 'Prompt Shields: NOT RUN ... This is not a scan verdict.' The root defect (a dead/unconfigured provider rendering as clean/fully-grounded = fake pass) is closed by design: CONTENT_SAFETY_RETIRED is env-independent so no stale task-def value can re-dial the dead host; counterfactual tests assert fetch is never called even with env set + an attack-indicating stub. Replacement provider (Bedrock Guardrails) is a separate future decision
 - **Opened:** 2026-08-21T06:17:58.714Z
-- **Closed:** (open)
+- **Closed:** 2026-08-28T23:17:35.336Z
 
 ### finding:FND-20260821-5934 severity:critical status:fixed | Live PERPLEXITY_CONNECTOR_TOKEN (production credential, authenticates the real Perplexity connector) was leaked into CloudWatch daily via FND-20260821-b74d, because eval-runner.mjs's GATEWAY_BEARER was an undocumented byte-identical copy of it, not a dedicated eval credential -- decoupling fix built (otchealth-mcp-server PR #256, EVAL_AGENT_TOKEN) but the already-exposed Perplexity value itself is NOT yet rotated and remains a live, valid credential exposed in retained logs
 
