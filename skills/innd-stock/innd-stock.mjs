@@ -15,11 +15,28 @@
 // The two are merged by date; Massive wins on the overlap (true VWAP + trades). If the
 // Massive keys are absent or a call fails, the skill degrades gracefully to Yahoo-only.
 //
-// The canonical workbook lives in the CFO source-doc bucket (GCS) so it is one file
-// that grows over time. `backfill` builds it from full history; `update` appends any
+// The canonical workbook lives in the CFO's finance-legal S3 DR mirror (see STORAGE below) so it is
+// one file that grows over time. `backfill` builds it from full history; `update` appends any
 // new trading days (idempotent) - run `update` daily after the close.
 //
-// Creds (hydrated): GCP_CLAUDE_DRIVER_SA_JSON (GCS read/write to the cfo-store bucket);
+// STORAGE (ported to S3, 2026-08-27): this workbook used to live in EITHER Google Cloud Storage (the
+// original path) or Azure Blob Storage (the later, funded-credit `STORAGE_BACKEND=azure` default,
+// SharedKey-signed directly in this file). GCP Secret Manager billing was intentionally disabled
+// fleet-wide (2026-07) and the Azure subscription holding that storage account was permanently
+// deleted (2026-08-13) -- both backends are equally dead now, so this file no longer has a "pick one"
+// switch at all: it targets ONE place, the S3 DR mirror, via skills/kb-memory/s3-blob.mjs (the same
+// dependency-free SigV4 client every other ported skill in this cluster uses). A read-only preflight
+// listing confirmed the evacuated workbook is already present at this exact key.
+//
+// RING NOTE (called out explicitly, not merely inherited): INND market data is public, but this
+// workbook is the CFO's internal record-keeping artifact, adjacent to MNPI, and INND is
+// securities-firewalled. It belongs in the shared finance-legal S3 bucket (the same one cfo-source-docs
+// uses; see s3-blob.mjs's MIRROR table), never in the commons/brain bucket, never brain-federated,
+// never web-published. The About-sheet compliance language below (internal CFO record-keeping, not
+// stock promotion) is unchanged by the storage swap.
+//
+// Creds (hydrated): resolved by s3-blob.mjs's awsCreds() (ECS task role -> AWS_ACCESS_KEY_ID/SECRET ->
+//   OTC_AWS_ACCESS_KEY_ID/SECRET) -- no new credential path added here.
 //   MASSIVE_API_KEY (+ optional MASSIVE_API_KEY_2 for rate-limit failover).
 //
 // Usage:
@@ -31,9 +48,9 @@
 import { createRequire } from "node:module";
 import { existsSync, writeFileSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { getBufferFromS3, putObjectToS3 } from "../kb-memory/s3-blob.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Lazy-install xlsx if missing (skill is dependency-light otherwise).
@@ -49,8 +66,6 @@ function loadXLSX() {
 
 const TICKER = "INND";
 const COMPANY = "InnerScope Hearing Technologies, Inc.";
-const BUCKET = process.env.CFO_SOURCE_BUCKET || "otchealth-cfo-source-docs";
-const OBJECT = "innd-stock/INND-daily-stock-history.xlsx";
 const START_EPOCH = 1451606400; // 2016-01-01 (Yahoo returns from the stock's first available day)
 
 // ---- corporate events (splits + press releases), verified, from innd-events.json ----
@@ -70,79 +85,34 @@ function splitFactor(date){
   return f;
 }
 
-// ---- GCS (via the claude-driver SA) ---------------------------------------
-function need(n){ const v=process.env[n]; if(!v){ console.error("Missing env "+n); process.exit(2);} return v; }
-async function gcsToken(scope){
-  const sa = JSON.parse(need("GCP_CLAUDE_DRIVER_SA_JSON"));
-  const now = Math.floor(Date.now()/1000);
-  const e = o => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const i = `${e({alg:"RS256",typ:"JWT"})}.${e({iss:sa.client_email,scope,aud:"https://oauth2.googleapis.com/token",iat:now,exp:now+3600})}`;
-  const s = crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key,"base64url");
-  const r = await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:`grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(i+"."+s)}`});
-  if(!r.ok) throw new Error("GCS auth "+r.status);
-  return (await r.json()).access_token;
-}
-async function gcsDownload(tok){
-  const r = await fetch(`https://storage.googleapis.com/storage/v1/b/${BUCKET}/o/${encodeURIComponent(OBJECT)}?alt=media`,{headers:{Authorization:`Bearer ${tok}`}});
-  if(r.status===404) return null;
-  if(!r.ok) throw new Error("GCS download "+r.status);
-  return Buffer.from(await r.arrayBuffer());
-}
-async function gcsUpload(tok, buf){
-  const r = await fetch(`https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(OBJECT)}`,{method:"POST",headers:{Authorization:`Bearer ${tok}`,"Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},body:buf});
-  if(!r.ok) throw new Error("GCS upload "+r.status+" "+(await r.text()).slice(0,160));
-  return `gs://${BUCKET}/${OBJECT}`;
-}
-
-// ---- Azure Blob Storage (SharedKey auth; the funded-credit lane) -----------
-const AZ_ACCT = process.env.AZURE_STORAGE_ACCOUNT;
-const AZ_KEY = process.env.AZURE_STORAGE_KEY;
-const AZ_CONTAINER = process.env.AZURE_STORAGE_CONTAINER || "innd-stock";
-const AZ_BLOB = "INND-daily-stock-history.xlsx";
-const AZ_VER = "2021-08-06";
+// ---- storage: the S3 DR mirror (single backend; both GCS and Azure are permanently dead) ----------
+// account/container match s3-blob.mjs's verified MIRROR row exactly (otchealthcfodata/innd-stock ->
+// otchealth-finance-legal-dr-55c84f6b/otchealthcfodata/innd-stock/); the blob name is unprefixed
+// (relative to that mirror's own keyPrefix), confirmed against a real read-only listing that already
+// shows the evacuated workbook sitting at this exact key.
+const S3_ACCOUNT = "otchealthcfodata";
+const S3_CONTAINER = "innd-stock";
+const S3_BLOB = "INND-daily-stock-history.xlsx";
 const XLSX_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-function azureConfigured(){ return !!(AZ_ACCT && AZ_KEY); }
-function azSig(method, xms, contentLength, contentType){
-  const canon = Object.keys(xms).sort().map(k=>`${k}:${xms[k]}`).join("\n")+"\n"+`/${AZ_ACCT}/${AZ_CONTAINER}/${AZ_BLOB}`;
-  const sts = [method,"","",contentLength||"","",contentType||"","","","","","","",canon].join("\n");
-  return `SharedKey ${AZ_ACCT}:${crypto.createHmac("sha256",Buffer.from(AZ_KEY,"base64")).update(sts,"utf8").digest("base64")}`;
+// STORAGE_BACKEND is no longer a real choice (there is only one backend left), but a stale env value
+// left over from the Azure-era job definition (STORAGE_BACKEND=azure) must fail LOUD, not be silently
+// ignored -- an operator seeing "it worked" after setting a now-meaningless flag is exactly the kind of
+// quiet drift this whole port exists to close. Unset / "s3" both mean "use the only backend there is".
+const STORAGE_BACKEND = (process.env.STORAGE_BACKEND || "s3").toLowerCase();
+if (STORAGE_BACKEND !== "s3") {
+  console.error(`innd-stock: STORAGE_BACKEND=${STORAGE_BACKEND} is no longer supported -- GCS and Azure Blob are both permanently dead (GCP billing retired 2026-07; the Azure subscription was deleted 2026-08-13). The only backend is the S3 DR mirror; unset STORAGE_BACKEND or set it to "s3".`);
+  process.exit(2);
 }
-async function azureUpload(buf){
-  const xms = { "x-ms-blob-type":"BlockBlob", "x-ms-date":new Date().toUTCString(), "x-ms-version":AZ_VER };
-  const auth = azSig("PUT", xms, String(buf.length), XLSX_CT);
-  const r = await fetch(`https://${AZ_ACCT}.blob.core.windows.net/${AZ_CONTAINER}/${AZ_BLOB}`,{method:"PUT",headers:{...xms,"Content-Type":XLSX_CT,Authorization:auth},body:buf});
-  if(!r.ok) throw new Error("Azure upload "+r.status+" "+(await r.text()).slice(0,160));
-  return `azure://${AZ_ACCT}/${AZ_CONTAINER}/${AZ_BLOB}`;
-}
-async function azureDownload(){
-  const xms = { "x-ms-date":new Date().toUTCString(), "x-ms-version":AZ_VER };
-  const auth = azSig("GET", xms, "", "");
-  const r = await fetch(`https://${AZ_ACCT}.blob.core.windows.net/${AZ_CONTAINER}/${AZ_BLOB}`,{headers:{...xms,Authorization:auth}});
-  if(r.status===404) return null;
-  if(!r.ok) throw new Error("Azure download "+r.status+" "+(await r.text()).slice(0,160));
-  return Buffer.from(await r.arrayBuffer());
-}
-
-// ---- storage backend switch (STORAGE_BACKEND = gcs | azure; default azure — GCS/GCP retired) ----
-// The job already sets STORAGE_BACKEND=azure explicitly (+ MIRROR_GCS=1, itself inert unless
-// GCP_CLAUDE_DRIVER_SA_JSON is also present, which it isn't on this job); the default is hardened
-// here too so a future bare invocation or job re-provision that forgets the env var stays on Azure.
-const BACKEND = (process.env.STORAGE_BACKEND || "azure").toLowerCase();
-function storageURI(){ return BACKEND==="azure" ? `azure://${AZ_ACCT}/${AZ_CONTAINER}/${AZ_BLOB}` : `gs://${BUCKET}/${OBJECT}`; }
-async function storageDownload(){
-  if(BACKEND==="azure"){ if(!azureConfigured()){ console.error("STORAGE_BACKEND=azure but AZURE_STORAGE_* unset"); process.exit(2);} return await azureDownload(); }
-  return await gcsDownload(await gcsToken("https://www.googleapis.com/auth/devstorage.read_only"));
-}
+function storageURI(){ return `s3://${S3_ACCOUNT}/${S3_CONTAINER}/${S3_BLOB}`; }
+// getBufferFromS3, NOT getTextFromS3: the workbook is a binary .xlsx, and the text variant would
+// decode the body as UTF-8 and silently corrupt it (see s3-blob.mjs's own getBufferFromS3 doc comment,
+// which calls this out by name as the reason it exists as a separate export). null ONLY on a genuine
+// 404 (no workbook stored yet); throws loud on anything else (a permission failure must never read as
+// "no workbook", the exact class of bug this whole cluster of ports exists to close).
+async function storageDownload(){ return getBufferFromS3(S3_ACCOUNT, S3_CONTAINER, S3_BLOB); }
 async function storageUpload(buf){
-  if(BACKEND==="azure"){
-    const uri = await azureUpload(buf);
-    if(process.env.MIRROR_GCS==="1" && process.env.GCP_CLAUDE_DRIVER_SA_JSON){
-      try { await gcsUpload(await gcsToken("https://www.googleapis.com/auth/devstorage.read_write"), buf); console.error("mirrored to GCS"); }
-      catch(e){ console.error("GCS mirror failed (non-fatal): "+e.message); }
-    }
-    return uri;
-  }
-  return await gcsUpload(await gcsToken("https://www.googleapis.com/auth/devstorage.read_write"), buf);
+  await putObjectToS3(S3_ACCOUNT, S3_CONTAINER, S3_BLOB, buf, XLSX_CT);
+  return storageURI();
 }
 
 // ---- Yahoo Finance daily history ------------------------------------------

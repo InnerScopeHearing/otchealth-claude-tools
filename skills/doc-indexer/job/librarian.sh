@@ -59,15 +59,32 @@ fi
 
 echo "[librarian] profile=$PROFILE backend=$BACKEND_FLAG $*"
 node "$ROOT/skills/doc-indexer/indexer.mjs" index --profile "$PROFILE" $BACKEND_FLAG "$@"
-node "$ROOT/skills/doc-indexer/indexer.mjs" understand --profile "$PROFILE" $BACKEND_FLAG "$@"
-# push-search writes FLAT docs (contentVector, key=id) to the room index. After the Phase-3 S1
-# cutover the doc rooms are CHUNKED (text_vector, key=chunk_id) and fed by native S1 pull-indexers,
-# so a flat push would be rejected (schema mismatch) and turn the job RED for nothing. Set
-# SKIP_PUSH_SEARCH=1 on a doc-room librarian job at cutover to drop ONLY the push step; index +
-# understand still run, keeping the _TEXT/ sidecars fresh (that is exactly what the S1 pull-indexer
-# reads). Default (unset) = push-search runs as before, so this is a no-op until the flag is set.
+# SKIP_UNDERSTAND=1 (added 2026-08-28): `understand` is the Azure Content Understanding enrichment
+# pass, and that service died with the permanently deleted Azure subscription -- a librarian run
+# that reaches it exits 1 on CU's 401 BEFORE push-search ever runs, so the ingest step a run exists
+# for never happens (observed live on the first post-#474 commerce run, task ea9e14b6). Until a CU
+# replacement lands (the Bedrock deep-pass lane is the metadata-enrichment successor), the ECS
+# librarian jobs set SKIP_UNDERSTAND=1 so index -> push-search still run; invoking understand
+# EXPLICITLY (flag unset) still fails loud rather than pretending CU works.
+if [ "${SKIP_UNDERSTAND:-}" = "1" ]; then
+  echo "[librarian] SKIP_UNDERSTAND=1 -> skipping understand (Azure CU is retired; enrichment moves to the deep-pass lane)"
+else
+  node "$ROOT/skills/doc-indexer/indexer.mjs" understand --profile "$PROFILE" $BACKEND_FLAG "$@"
+fi
+# push-search writes FLAT docs (contentVector, key=id) to a flat room, or CHUNK docs (text_vector,
+# key=chunk_id) to a CHUNKED room -- indexer.mjs detects the live room's shape itself and dispatches
+# accordingly (skills/doc-indexer/indexer.mjs's CHUNKED-room ingest section, 2026-08-28). All four
+# doc rooms this script can target (finance/commerce/legal-company/legal-personal) are CHUNKED on
+# the live OpenSearch brain, so a run with SKIP_PUSH_SEARCH unset now genuinely CHUNKS + EMBEDS +
+# PUSHES any new catalog documents into the room, not merely a no-op safety check. This corrects an
+# earlier version of this comment (pre-2026-08-28) that described push-search as unconditionally
+# rejected against a chunked room ("fed by native S1 pull-indexers" -- that was true only of the old
+# Azure S1 service, which no longer exists; there is no pull-indexer on OpenSearch). SKIP_PUSH_SEARCH
+# remains a valid escape hatch for a job that wants index+understand to keep the _TEXT/ sidecars
+# fresh WITHOUT paying the chunk/embed/push cost on every run (e.g. daily-digest, which defers that
+# cost elsewhere) -- it is a deliberate cost/latency choice now, not a workaround for a rejected write.
 if [ "$SKIP_PUSH_SEARCH" = "1" ]; then
-  echo "[librarian] SKIP_PUSH_SEARCH=1 -> skipping push-search ($PROFILE is now S1 pull-indexer-fed)"
+  echo "[librarian] SKIP_PUSH_SEARCH=1 -> skipping push-search for $PROFILE (deliberate cost/latency opt-out, not a schema-mismatch workaround)"
 else
   node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile "$PROFILE" $BACKEND_FLAG "$@"
 fi

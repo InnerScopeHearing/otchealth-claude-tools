@@ -1,9 +1,39 @@
 ---
 name: notion-export
-description: Ring-routed, resumable export of Notion content into the Azure Blob brain substrate, the engine of the Notion -> Azure retirement (Matt directive 2026-06-22). Reads a routing manifest (per-object ring: OPERATIONAL | CREDENTIALS | MNPI-INND | PERSONAL-PRIVILEGED | PHI-HOLD), renders each page to Markdown and each database to Markdown + JSONL, and uploads to the ring-correct storage account/container so the librarian can index it into the company brain. TWO safety gates: the upstream classifier routes by database identity + teamspace, and this exporter adds a CONTENT scrubber that QUARANTINES any object containing a real secret value or a confidential marker (secret values live in Secret Manager, never in a searchable store). Operational -> commons; CREDENTIALS regenerate from Secret Manager separately (never raw-copied); PERSONAL-PRIVILEGED is a CLO-lane action; PHI-HOLD is never exported here. Wielded by the CTO. Non-PHI ring. Reuses the kb-memory storage pattern (claude-driver SA -> Secret Manager -> account SAS -> Blob REST), dependency-free Node.
+description: "SUPERSEDED 2026-08-27 -- do not run or port. Was a ring-routed, resumable export of Notion content into the Azure Blob brain substrate, the one-time engine of the Notion -> Azure retirement (Matt directive 2026-06-22). The migration it existed to run already completed (the commons _NOTION/ prefix carries 3,234 chunks per the 2026-08-19 enrich census) and it has zero callers anywhere in the repo (no job, no workflow, no cron). Its Azure Blob storage target is also permanently dead (the subscription holding it was deleted 2026-08-13). See the Status note at the bottom of this file for the retirement rationale and what to build instead if a future re-export is ever needed."
 ---
 
 # notion-export
+
+> **SUPERSEDED (2026-08-27) -- read this before touching this skill.** This directory is kept for
+> HISTORY only. Do not run `notion-export.mjs` and do not port it to S3. Reasons, all independently
+> verified during the 2026-08-27 S3-blob-cluster port (see `otchealth-claude-tools` CLAUDE.md's
+> Azure-retirement notes for the broader context this sits inside):
+> 1. **The one-time migration it exists to run already ran.** This tool's whole purpose (per its own
+>    description above) was the Notion -> Azure retirement, Matt directive 2026-06-22. The commons
+>    `_NOTION/` prefix is the LARGEST prefix in that data room (3,234 chunks, per the 2026-08-19
+>    enrich-census entry in the CLAUDE.md dated log) -- the export completed and is already indexed.
+> 2. **Zero callers anywhere in this repo.** A repo-wide grep for `notion-export` outside this
+>    directory returns nothing: no job script, no GitHub Actions workflow, no cron entry, no other
+>    skill importing it.
+> 3. **Its storage target is permanently dead anyway.** Every write in `notion-export.mjs` targets
+>    Azure Blob (`DEST` ring map -> `otchealthcommons`/`otchealthlegalstore` accounts) via a hand-rolled
+>    account-SAS, exactly like the five skills that WERE ported in the 2026-08-27 S3 cluster. Porting a
+>    tool nothing calls, for a migration that already finished, would be effort spent on dead code.
+>
+> **If a future re-export is ever genuinely needed** (e.g. Notion content changes and needs a refresh),
+> build a NEW, small, S3-native tool rather than porting these ~250 lines of Azure plumbing. Two pieces
+> of this file ARE worth reusing directly, and are called out here so they are not lost with the rest:
+> - The `SECRET_PATTERNS` + `CONFIDENTIAL` content scrubber (`notion-export.mjs`, the regexes bound to
+>   `SECRET_PATTERNS`/`CONFIDENTIAL` and the classifier function that quarantines a hit) -- a genuinely
+>   reusable secret/confidential-marker detector, storage-backend-agnostic.
+> - The ring-gated relaxation logic (`--no-scrub` refused for every ring but PERSONAL-PRIVILEGED,
+>   `--no-confidential-scrub` refused for OPERATIONAL, full scrub always on for OPERATIONAL) -- the
+>   actual safety invariant, independent of which blob store it writes to.
+>
+> Everything below this note is the ORIGINAL skill documentation, preserved as-is for history; treat
+> every storage instruction in it (account SAS, Azure Blob URLs, `azure-*-storage-*` secrets) as
+> describing a dead target, not a live one.
 
 The migration engine for retiring Notion onto the owned Azure substrate (Blob + AI Search + company-brain + librarians). Notion is agent-only, expiring, and not durable/portable/self-learning; this moves the content to a store the fleet already owns and can search.
 
