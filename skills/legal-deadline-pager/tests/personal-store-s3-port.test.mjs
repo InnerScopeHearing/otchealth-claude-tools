@@ -178,3 +178,47 @@ test("node --check passes on personal-store.mjs and its importer pager.mjs", () 
     assert.doesNotThrow(() => execFileSync("node", ["--check", join(ROOT, rel)], { stdio: "pipe" }), `node --check failed for ${rel}`);
   }
 });
+
+// ---- scrubErrorMessage (CodeQL post-merge hardening, 2026-08-28): no credential-shaped value may
+// reach a log line or a rethrown message from this module. The concrete real path: an S3
+// InvalidAccessKeyId error body echoes the caller's ACCESS KEY ID verbatim, and s3-blob.mjs embeds
+// up to 200 chars of that body in its thrown Error.message. --------------------------------------
+import { scrubErrorMessage } from "../personal-store.mjs";
+
+test("scrubErrorMessage masks an AWS access key id echoed by an S3 error body", () => {
+  const out = scrubErrorMessage("s3 put 403: <Error><Code>InvalidAccessKeyId</Code><AWSAccessKeyId>AKIAIOSFODNN7EXAMPLE</AWSAccessKeyId></Error>");
+  assert.doesNotMatch(out, /AKIAIOSFODNN7EXAMPLE/);
+  assert.match(out, /<aws-key-id-redacted>/);
+  assert.match(out, /403/, "the status code must survive the scrub (diagnosability)");
+});
+
+test("scrubErrorMessage masks a 40-char secret-shaped token and SigV4 Credential/Signature fragments", () => {
+  // 40 chars, secret-access-key SHAPE, constructed at runtime so no secret-shaped literal exists in
+  // this source file (GitHub push protection rightly blocks even doc-example-derived lookalikes).
+  const fakeSecret = "Fake0".repeat(8);
+  const out = scrubErrorMessage(`boom Credential=AKIAIOSFODNN7EXAMPLE/20260828/us-east-1/s3/aws4_request, Signature=abc123def456 raw=${fakeSecret}`);
+  assert.doesNotMatch(out, /Fake0Fake0/);
+  assert.doesNotMatch(out, /AKIAIOSFODNN7EXAMPLE/);
+  assert.match(out, /Credential=<redacted>/);
+  assert.match(out, /Signature=<redacted>/);
+});
+
+test("putPersonalCooldown's non-403 rejection carries the SCRUBBED message (an echoed key id never propagates)", async () => {
+  await withEnv(FAKE_CREDS, () =>
+    withStubbedFetch(async () => ({ ok: false, status: 500, headers: new Map(), text: async () => "<AWSAccessKeyId>AKIAIOSFODNN7EXAMPLE</AWSAccessKeyId>" }),
+      async () => {
+        await assert.rejects(
+          () => putPersonalCooldown({}),
+          (e) => {
+            assert.doesNotMatch(e.message, /AKIAIOSFODNN7EXAMPLE/, "the echoed key id must be masked in the rethrown message");
+            assert.match(e.message, /personal cooldown store write failed/);
+            return true;
+          },
+        );
+      }));
+});
+
+test("scrubErrorMessage leaves ordinary diagnostic text untouched (env var NAMES, status codes, prose)", () => {
+  const msg = "s3-blob: AWS credentials unavailable (checked the ECS task role, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, and OTC_AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)";
+  assert.equal(scrubErrorMessage(msg), msg);
+});

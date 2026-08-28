@@ -53,6 +53,22 @@ const BLOB_NAME = "pager-state/cooldown.json";
 export const PERSONAL_WRITE_IAM_GATE_MESSAGE =
   "personal-legal S3 writes are IAM-gated pending owner approval (PersonalLegalRingReadOnly)";
 
+/** Shape-based scrub applied to every upstream error message this module logs or rethrows --
+ *  defense in depth on the attorney-privileged ring (the redact-at-output lesson from
+ *  otchealth-mcp-server's src/eval/redact.mjs: never trust that a secret was kept out of a
+ *  message upstream). Concretely: an S3 error body can echo the caller's ACCESS KEY ID verbatim
+ *  (InvalidAccessKeyId), and s3-blob.mjs embeds up to 200 chars of that body in its thrown
+ *  Error.message. Masks anything shaped like an AWS key id, a SigV4 Credential/Signature
+ *  fragment, or a 40-char opaque token (the exact shape of a secret access key). Over-redaction
+ *  of an error message is acceptable; under-redaction is not. Exported for tests. */
+export function scrubErrorMessage(msg) {
+  return String(msg ?? "")
+    .replace(/\b(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b/g, "<aws-key-id-redacted>")
+    .replace(/(Credential=)[^,\s"&]+/gi, "$1<redacted>")
+    .replace(/(Signature=)[A-Za-z0-9%/+=]+/gi, "$1<redacted>")
+    .replace(/\b[A-Za-z0-9/+=]{40}\b/g, "<redacted-40char-token>");
+}
+
 /** Read the personal cooldown map ({ [opaqueRowKey]: { last_paged_at: ISOString } }). Returns {} if the
  *  object does not exist yet, or the store is unreachable -- never throws (fail-open; see header). */
 export async function getPersonalCooldown() {
@@ -62,7 +78,7 @@ export async function getPersonalCooldown() {
     const j = JSON.parse(text);
     return j && typeof j === "object" ? j : {};
   } catch (e) {
-    console.log(`[legal-deadline-pager] personal cooldown store read failed (${e.message}); treating as empty.`);
+    console.log(`[legal-deadline-pager] personal cooldown store read failed (${scrubErrorMessage(e.message)}); treating as empty.`);
     return {};
   }
 }
@@ -84,7 +100,8 @@ export async function putPersonalCooldown(map) {
       console.error(`[legal-deadline-pager] personal cooldown store write refused: ${PERSONAL_WRITE_IAM_GATE_MESSAGE}.`);
       throw new Error(PERSONAL_WRITE_IAM_GATE_MESSAGE);
     }
-    console.error(`[legal-deadline-pager] personal cooldown store write FAILED (${e.message}).`);
-    throw new Error(`personal cooldown store write failed: ${e.message}`);
+    const scrubbed = scrubErrorMessage(e.message);
+    console.error(`[legal-deadline-pager] personal cooldown store write FAILED (${scrubbed}).`);
+    throw new Error(`personal cooldown store write failed: ${scrubbed}`);
   }
 }
