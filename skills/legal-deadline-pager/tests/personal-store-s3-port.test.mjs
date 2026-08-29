@@ -109,8 +109,9 @@ test("putPersonalCooldown REJECTS with the distinct PERSONAL_WRITE_IAM_GATE_MESS
           () => putPersonalCooldown({ leg_abc123: { last_paged_at: "2026-07-15T00:00:00.000Z" } }),
           (e) => {
             assert.equal(e.message, PERSONAL_WRITE_IAM_GATE_MESSAGE);
-            assert.match(e.message, /IAM-gated/);
-            assert.match(e.message, /PersonalLegalRingReadOnly/);
+            assert.match(e.message, /DENIED by IAM/);
+            assert.match(e.message, /PersonalLegalRingReadWrite/);
+            assert.match(e.message, /missing or regressed/);
             return true;
           },
         );

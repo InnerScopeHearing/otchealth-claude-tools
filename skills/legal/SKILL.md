@@ -91,14 +91,13 @@ for reliable production polling (rate limits + PACER-backed dockets).
   to its OWN dedicated bucket `otchealth-legal-personal-dr-55c84f6b` and is confidential +
   privileged. They are never committed to git, never echoed into shared agent context, and never
   co-mingled with company records. Only the CLO (and Matt) should touch them.
-- **PERSONAL WRITES ARE CURRENTLY IAM-GATED READ-ONLY, and that is intentional, not a bug.** The
-  live IAM grant on the personal-legal DR bucket is GetObject+ListBucket ONLY for every
-  toolkit/job identity ("PersonalLegalRingReadOnly"), pending an explicit Matt approval to widen
-  it. A `--personal` write (`matter new`, `docket add`, `note`) therefore reaches AWS for real and
-  gets a genuine 403 AccessDenied, which propagates uncaught out of `putBlob`/`putMatter` -- every
-  CLI command's existing try/catch already prints the error and exits non-zero, so this is never a
-  silent no-op. Reads (`matter show`, `matters --personal`, `docket due`) work normally. The
-  sibling `legal-deadline-pager` skill's own personal cooldown store hits the identical gate and
+- **PERSONAL WRITES ARE LIVE (owner-approved 2026-08-29).** The IAM statement on the personal
+  bucket is `PersonalLegalRingReadWrite` (GetObject+PutObject+ListBucket -- parity with the company
+  grant; deletes remain ungranted on both rings on purpose). `--personal` writes (`matter new`,
+  `docket add`, `note`) work normally; a 403 today means the grant has REGRESSED and propagates
+  uncaught out of `putBlob`/`putMatter` -- every CLI command's existing try/catch prints the error
+  and exits non-zero, so a regression is never a silent no-op. Reads work as before. The sibling
+  `legal-deadline-pager` skill's own personal cooldown store shares the identical posture and
   surfaces it with a distinct named message (`PERSONAL_WRITE_IAM_GATE_MESSAGE` in that skill's
   `personal-store.mjs`) -- see that skill's SKILL.md for the full read/write asymmetry writeup.
 

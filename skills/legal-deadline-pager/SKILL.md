@@ -1,6 +1,6 @@
 ---
 name: legal-deadline-pager
-description: Reads the CLO's legal docket (skills/legal, docket due) and pages a human on tight-window, VERIFIED deadlines. Ships DISARMED by default (dry-run/report only, sends nothing); actual email requires both --commit on the CLI and the environment variable LEGAL_PAGER_ENABLED=1. Company-namespace deadlines may sync into decision-clock storage (Cosmos, shared with the rest of the fleet) so they also ride decision-clock's own owner-batched nudge; PERSONAL-namespace deadlines (Matt's confidential CA matters) NEVER touch decision-clock, fleet-dispatch, commons-journal, or memory-exec, they page only through a direct graph_send_email call with cooldown state kept inside the CLO's own access-controlled personal S3 container (its writes are currently IAM-gated read-only pending owner approval; see below). Use to check what would page (`sweep`), arm it, or check the last-run heartbeat. Wielded by the CLO / CTO. Non-PHI ring; personal-matter content is privileged and confidential.
+description: Reads the CLO's legal docket (skills/legal, docket due) and pages a human on tight-window, VERIFIED deadlines. Ships DISARMED by default (dry-run/report only, sends nothing); actual email requires both --commit on the CLI and the environment variable LEGAL_PAGER_ENABLED=1. Company-namespace deadlines may sync into decision-clock storage (Cosmos, shared with the rest of the fleet) so they also ride decision-clock's own owner-batched nudge; PERSONAL-namespace deadlines (Matt's confidential CA matters) NEVER touch decision-clock, fleet-dispatch, commons-journal, or memory-exec, they page only through a direct graph_send_email call with cooldown state kept inside the CLO's own access-controlled personal S3 container (writes LIVE since the owner-approved 2026-08-29 IAM grant; a 403 now signals a policy regression, see below). Use to check what would page (`sweep`), arm it, or check the last-run heartbeat. Wielded by the CLO / CTO. Non-PHI ring; personal-matter content is privileged and confidential.
 ---
 
 # legal-deadline-pager — a disarmed pager for the legal docket
@@ -80,20 +80,18 @@ GetObject/ListBucket to every toolkit/job identity, so a cooldown read just succ
 failure it fails OPEN (returns `{}`, logs a line, never throws), matching every other
 credential-touching module in this fleet -- a store outage must never crash the sweep.
 
-**Writes are currently, deliberately, IAM-gated read-only** (`putPersonalCooldown`): as of this
-port, the live IAM grant on that same bucket is GetObject+ListBucket ONLY ("PersonalLegalRingReadOnly"),
-pending an explicit Matt approval to widen it. A write therefore reaches AWS for real and gets a
-genuine 403 AccessDenied. Unlike reads, this does NOT fail open: it REJECTS with the exact,
-exported `PERSONAL_WRITE_IAM_GATE_MESSAGE` ("personal-legal S3 writes are IAM-gated pending owner
-approval (PersonalLegalRingReadOnly)"), and logs the same line via `console.error` before throwing
-so it is visible even to a caller that discards the rejection. A write failure for any OTHER reason
-(network, missing credentials, an unexpected 5xx) still rejects loud, with its own honest cause,
-rather than being mislabeled as the IAM gate. `runSweep` in `pager.mjs` already wraps both calls in
-its own `.catch()` for the sweep's documented fail-open semantics, so this asymmetry changes
-nothing about the sweep's control flow (a personal deadline simply does not get its cooldown
-persisted yet, and may re-page on the next run, exactly like any other store outage) -- it only
-ends the pre-port behavior where a write failure silently returned `false` with no way to
-distinguish "the store is down" from "this bucket will never accept a write until Matt says so."
+**Writes are LIVE (owner-approved 2026-08-29)** (`putPersonalCooldown`): the IAM statement on the
+personal bucket is now `PersonalLegalRingReadWrite` (GetObject+PutObject+ListBucket -- exact parity
+with the company grant; deletes remain ungranted on BOTH rings on purpose). The grant was applied
+via `PutRolePolicy` on `otchealthTaskRole`'s `runtime-access` policy and live-verified the same day
+with a content-neutral read-then-write-back through this module. WRITES STILL DO NOT FAIL OPEN: a
+403 now means the grant has REGRESSED (a policy edit, a role swap), so it rejects with the exact,
+exported `PERSONAL_WRITE_IAM_GATE_MESSAGE` naming that regression, and logs via `console.error`
+before throwing so it is visible even to a caller that discards the rejection. A write failure for
+any OTHER reason (network, missing credentials, an unexpected 5xx) still rejects loud, with its own
+honest cause, rather than being mislabeled as an IAM problem. `runSweep` in `pager.mjs` wraps both
+calls in its own `.catch()` for the sweep's documented fail-open semantics, so a thrown error never
+crashes the sweep -- a personal deadline just misses one cooldown persist and may re-page next run.
 
 This split is enforced in code (`pager.mjs`'s `runSweep`, tested in `tests/pager.test.mjs`), not just
 documented: a personal row is structurally routed to a different function than a company row, there is

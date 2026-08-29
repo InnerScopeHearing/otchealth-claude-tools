@@ -21,14 +21,12 @@
 // toolkit AWS credential chain (ECS task role / AWS_*/OTC_AWS_* env -- see
 // ../kb-memory/aws-secret.mjs's awsCreds()).
 //
-// PERSONAL WRITES ARE EXPECTED TO FAIL as of this port: the live IAM grant on the personal-legal DR
-// bucket is intentionally GetObject+ListBucket ONLY for every toolkit/job identity
-// ("PersonalLegalRingReadOnly"), pending an explicit Matt approval to widen it -- see
-// s3-blob-store.ts's own header for the full history (a Terraform-only rename to
-// "PersonalLegalRingReadWrite" describes a PROPOSED grant, never yet applied to the live account).
-// A personal write (`matter new --personal`, `docket add ... --personal`, `note ... --personal`)
-// therefore reaches AWS for real and gets a genuine 403 AccessDenied, which this file lets propagate
-// UNCAUGHT out of putBlob/putMatter. That is the intended, correct behavior, not a bug to route
+// PERSONAL WRITES ARE LIVE since 2026-08-29: the IAM statement on the personal bucket is
+// "PersonalLegalRingReadWrite" (GetObject+PutObject+ListBucket, Matt-approved, applied to
+// otchealthTaskRole's runtime-access policy and live-verified the same day -- parity with the
+// company grant; deletes remain ungranted on both rings on purpose). A personal-write 403 today
+// means that grant has REGRESSED, and this file still lets it propagate UNCAUGHT out of
+// putBlob/putMatter -- the correct behavior, not a bug to route
 // around: never add a try/catch here that turns a personal-write 403 into a quiet no-op. (The
 // legal-deadline-pager's own private cooldown store, skills/legal-deadline-pager/personal-store.mjs,
 // hits the identical gate and surfaces it with a distinct named message; this file does not need its
