@@ -617,13 +617,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:35:49.600Z
 - **Closed:** 2026-08-28T01:39:19.176Z
 
-### finding:FND-20260828-f1ca severity:high status:open | n8n pre-activation PHI-residue scan: recovered execution tables may hold historical WF02/WF03 PHI rows on non-BAA host; scan + counsel-gated purge BEFORE Phase-1 activation (legal wall)
+### finding:FND-20260828-f1ca severity:high status:fixed | n8n pre-activation PHI-residue scan: recovered execution tables may hold historical WF02/WF03 PHI rows on non-BAA host; scan + counsel-gated purge BEFORE Phase-1 activation (legal wall)
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** no code change: hypothesis disproven by construction + live evidence 2026-08-28/29
+- **Verified by:** Live n8n API audit: execution ids 1..19 total (no more pages), oldest started 2026-08-28T03:24Z (the recovery day), 15 workflows with ZERO PHI-pattern names (WF02/WF03 excluded by restore denylist and verified absent). The restore imported workflow JSONs from git into a FRESH Postgres - the dead Azure host's execution tables were never migrated, so no historical WF02/WF03 PHI rows can exist here. Legal wall satisfied for CS rebuild activation work; the standing rule (PHI flows never rehomed to non-BAA runtimes) is unchanged and continues to gate any future WF02/WF03 rebuild
 - **Opened:** 2026-08-28T01:35:52.204Z
-- **Closed:** (open)
+- **Closed:** 2026-08-29T00:14:34.039Z
 
 ### finding:FND-20260828-4f85 severity:high status:fixed | otchealth-cto CLAUDE.md 2026-08-27 entry still says FourVault dump NOT found (POTENTIAL DATA LOSS) contradicting ground truth (dump EXISTS in otchealth-brain-dr pg-dumps/fourvault-2026-08-04.sql.gz); correct the doc; otchealth-pgrestore targets wrong tenancy (shared RDS) for COPPA kids data - restore target must be isolated/Neon; label flatstick-2026-08-04 dump PRE-cutover stale
 
