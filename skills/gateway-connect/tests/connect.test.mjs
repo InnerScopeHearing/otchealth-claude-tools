@@ -99,7 +99,14 @@ import { azureEnvPresent, credSource } from '../connect.mjs';
     } finally {
       process.env.HOME = savedHome;
       for (const k of CLEAR) { if (savedVars[k] === undefined) delete process.env[k]; else process.env[k] = savedVars[k]; }
-      await rm(dir, { recursive: true, force: true });
+      // maxRetries/retryDelay (2026-08-29): mintToken's Azure leg can leave an async token-cache
+      // write into this fake HOME's .azure/ still in flight when the rejection settles, so a plain
+      // rm() can hit ENOTEMPTY mid-walk (a file lands between readdir and rmdir). Observed twice in
+      // CI on UNRELATED PRs (#484 2026-08-28, #492 2026-08-29), each cleared by a re-run -- a
+      // classic transient. Node's rm() retries exactly this error class (EBUSY/ENOTEMPTY/EPERM/...)
+      // when maxRetries is set, which absorbs the race without masking a real failure: a directory
+      // that STAYS non-removable for the full retry window still throws.
+      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
 }
