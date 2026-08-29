@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 /**
  * canary.mjs — the AWS-native DR chain's verification canary. See SKILL.md for the full design and
- * the "AGE not a doc-count floor" rationale. Six checks: SSM secrets-archive freshness (S3), OpenSearch
+ * the "AGE not a doc-count floor" rationale. Seven checks: SSM secrets-archive freshness (S3), OpenSearch
  * snapshot freshness (repo status + newest SUCCESS), RDS automated-snapshot freshness, n8n's Lightsail
  * AutoSnapshot add-on freshness (+ the add-on itself still being Enabled), n8n's public /healthz
- * reachability, and a weekly (day-of-week gated) restore-PROOF drill covering the OpenSearch and SSM
- * legs end to end.
+ * reachability, a weekly (day-of-week gated) restore-PROOF drill covering the OpenSearch and SSM legs
+ * end to end, and (2026-08-29, closes FND-20260828-3142's canary half) per-room brain freshness: for
+ * each non-privileged doc room, the newest S3 source object's age vs a per-room SLO, and — only once
+ * that SLO is exceeded — an exact `path`-based existence check in the room's OpenSearch index (never
+ * document content). See the "check 7" section below for why this compares OBJECT PRESENCE rather than
+ * a literal timestamp field (the live chunked schema has none).
  *
  * THE n8n CHECKS (added 2026-08-28) close the exact "age-not-floor" blind spot this canary was built
  * to prevent, applied to the customer-service n8n host (skills/aws-dr-canary/SKILL.md's rationale):
@@ -28,6 +32,10 @@
  *   AWS_DR_CANARY_DRILL_DOW (default 0 = Sunday, UTC) — which day of week runs the restore-proof drill
  *   SECRETS_DR_PASSPHRASE (secret, optional) — needed for the drill's SSM-decrypt leg; without it that
  *     one sub-check reports SKIPPED, not a false anomaly.
+ *   BRAIN_FRESHNESS_SLO_H_<ROOM> (optional per-room override, e.g. BRAIN_FRESHNESS_SLO_H_LEGAL_COMPANY)
+ *     — see "check 7" below; the in-file BRAIN_ROOMS table default is used when unset.
+ *   OPENSEARCH_ENDPOINT / OPENSEARCH_REGION (optional) — resolved by opensearch-write.mjs's
+ *     resolveOpenSearchConfig() the same way every other OpenSearch caller in the toolkit resolves them.
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -37,6 +45,10 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { awsCreds } from "../kb-memory/aws-secret.mjs";
 import { s3Head, s3Get } from "../fleet-backup/s3-client.mjs";
+import { listBlobsMetaFromS3 } from "../kb-memory/s3-blob.mjs";
+import { resolveOpenSearchConfig } from "../kb-memory/opensearch-write.mjs";
+import { osCount } from "../doc-indexer/opensearch-client.mjs";
+import { classifyIndexLane } from "../fleet-backup/os-snapshot.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -357,6 +369,201 @@ async function checkWeeklyDrill() {
   }
 }
 
+// ---------- check 7: per-room brain freshness (S3 source vs OpenSearch index), 2026-08-29 ----------
+// Closes the CANARY HALF of FND-20260828-3142 ("docs added since 2026-08-13 unindexed ... add
+// per-room newest-indexed_at-vs-newest-S3-object canary"). The backfill half (making the librarian
+// jobs actually run push-search per room) is separate and tracked elsewhere; this is the sensor.
+//
+// WHY THIS COMPARES OBJECT PRESENCE, NOT A LITERAL TIMESTAMP FIELD (a deliberate divergence from the
+// finding's own literal wording, written down here for the same reason indexer.mjs's own
+// buildChunkDocs() header documents its schema choices in this much detail): the finding's title asks
+// for "newest-indexed_at" freshness, which assumes a per-document timestamp field on the OpenSearch
+// side. skills/doc-indexer/indexer.mjs's CHUNKED-room-ingest section (2026-08-28) establishes, by
+// live query against three separate rooms, that NO such field exists anywhere in the live chunked
+// mapping — and that indexer.mjs was deliberately told never to invent one (adding a new mapping
+// field to a live, historically-migrated chunked index is exactly the kind of schema change that
+// section's own header warns against). setup/expected-indexes.json's header agrees
+// ("the S1 chunked schema carries NO per-doc timestamp field"). So "compare the newest indexed_at" is
+// not implementable without contradicting an explicit, load-bearing decision made one day before this
+// canary was written — reusing a stale premise instead of checking it against the actual live schema
+// would be exactly the mistake this file's own commit history keeps calling out in other checks.
+//
+// The chosen substitute answers the SAME question the finding actually cares about — "did the newest
+// thing added to S3 make it into the index" — more precisely than a raw max(indexed_at) comparison
+// ever could, because it never has to worry about clock skew between the S3 and OpenSearch timestamps
+// or about *which* document is "newest" once one has been re-embedded: it asks OpenSearch, by an
+// EXACT `path.keyword` term match (the identical field/technique enrich.mjs's own osFindChunkIds()
+// already uses live), whether the single most-recently-modified real source object in the room has
+// ANY chunk present at all. `_count` returns only an integer — no `_source`, no document fields, not
+// even a hit list — so this is a strictly narrower read than "timestamps only" would already permit.
+//
+// AGE GATE BEFORE THE PRESENCE CHECK (age-not-floor, same house rule as every other check in this
+// file): an object uploaded five minutes ago that is not yet indexed is not an anomaly, it is normal
+// pipeline latency — the librarian jobs run on a cadence (6h for the privileged rooms per
+// expected-indexes.json), not instantly. So the OpenSearch call is skipped entirely, and the room
+// reports OK, whenever the newest source object's own age is still inside its room's SLO. Only once
+// that SLO is exceeded does "still not indexed" become worth an actual query, and only then can it
+// become the STALE anomaly this finding exists to catch.
+//
+// RING SAFETY (hard, per this section's own dispatch task): classifyIndexLane() — imported from
+// os-snapshot.mjs, never copy-pasted, so this canary's ring boundary can never drift from the DR
+// snapshot canary's own privileged/non-privileged split — is consulted FIRST, before any network call
+// of any kind. A room that is not "non-privileged" is reported SKIPPED with the exact classification
+// named in the detail string (explicit, never a silent omission — "when in doubt, exclude and note
+// it"), and neither the S3 listing nor the OpenSearch query is ever attempted against it. Of the five
+// real chunked doc rooms, that currently excludes finance-cfo-source-docs and legal-company (both
+// classify "finance-company-legal") and legal-personal (classifies "personal-legal") — leaving
+// commons-company-journal and commerce-commerce-source-docs as the only two this canary actively
+// checks. Even for those two, the check never reads a document's `chunk`/`content`/`title`/`entity`
+// field or any enrichment field — only S3 object metadata (name/size/lastModified) and an OpenSearch
+// document COUNT.
+//
+// "CANNOT CHECK" vs "CHECKED AND STALE" (the other hard requirement): every failure that prevents the
+// check from running at all — an unmapped room, a failed S3 listing, unresolvable OpenSearch
+// credentials/config, a failed or non-2xx `_count` call — reports ERROR, never STALE. STALE is
+// reserved for the one case where the check actually completed and found a real gap: the newest
+// source object is past its room's SLO and OpenSearch reports zero chunks for its exact path. An
+// unreachable sensor must never report healthy, and it must not report the WRONG kind of unhealthy
+// either — an ops engineer reading ERROR knows to check credentials/connectivity; STALE means the
+// pipeline itself needs attention.
+
+const BRAIN_FRESHNESS_DEFAULT_SLO_H = 26; // same constant as FRESHNESS_SLO_H above; used only for a room whose own BRAIN_ROOMS entry omits sloHours
+
+// Union of pipeline-paths.mjs's PIPELINE_PREFIXES (_TEXT/, _CATALOG/, _REVIEW/, _MEMORY/, _STATE/,
+// _ARCHIVE/) and indexer.mjs's own local SKIP_PREFIXES (_SUMMARY/, _TRASH/, _NON-ACCOUNTING/,
+// _DUPLICATES/, _HANDOFF/, _DISPATCH/, plus the four already listed). A parallel local copy, not a
+// cross-file import of either: pipeline-paths.mjs's own list is a strict subset (missing _TRASH/, the
+// live legal_blob_delete soft-delete destination, among others) and indexer.mjs cannot be imported at
+// all without triggering its top-level argv parsing and CLI dispatch as a side effect of the import
+// (the exact hazard pipeline-paths.mjs's own header documents) — this codebase's established
+// convention for a tiny, static path predicate like this one is a small parallel copy per file (see
+// indexer.mjs's own dirnameBelowRoot() comment), not a forced cross-file dependency. Keep in sync by
+// re-reading both source lists if either ever changes; a missed prefix here only makes this canary
+// MORE cautious (it would treat a pipeline artifact as a "new document" and wait out its SLO before
+// alerting), never less safe.
+export const ROOM_PIPELINE_PREFIXES = Object.freeze([
+  "_TEXT/", "_CATALOG/", "_REVIEW/", "_MEMORY/", "_STATE/", "_ARCHIVE/",
+  "_SUMMARY/", "_TRASH/", "_NON-ACCOUNTING/", "_DUPLICATES/", "_HANDOFF/", "_DISPATCH/",
+]);
+
+/** True when a raw S3-listed object name is this pipeline's own bookkeeping (a _TEXT/ sidecar, the
+ *  catalog, a triage folder, ...) rather than a real source document. Pure, exported for a direct
+ *  unit test with no listing/network involved. */
+export function isRoomPipelineInternal(name) {
+  return ROOM_PIPELINE_PREFIXES.some((p) => String(name || "").startsWith(p));
+}
+
+// The five real chunked doc rooms (skills/doc-indexer/indexer.mjs's CHUNKED-room-ingest section,
+// verified live 2026-08-28) plus each one's (account, container) pair for the S3 source listing
+// (skills/kb-memory/s3-blob.mjs's MIRROR table) and a default per-room SLO. `index` is always
+// identical to `name` here — it is the OpenSearch index name, computed the SAME way
+// indexer.mjs's computeIndexName() computes it (`${profile}-${container}`) — kept as its own field
+// (rather than re-deriving it from account/container at call time) so a future room whose index name
+// diverges from that formula is not silently mishandled. Default sloHours are NOT the blanket 26h —
+// they are copied verbatim from setup/expected-indexes.json's OWN max_age_h for the same index name
+// (reuse, not reinvention: that file already encodes "rooms with legitimately slow churn should not
+// flap" for these exact rooms), overridable per room via BRAIN_FRESHNESS_SLO_H_<ROOM> (see
+// resolveRoomSloHours below) without a code change.
+export const BRAIN_ROOMS = Object.freeze([
+  { name: "commons-company-journal", index: "commons-company-journal", account: "otchealthcommons", container: "company-journal", sloHours: 48 },
+  { name: "commerce-commerce-source-docs", index: "commerce-commerce-source-docs", account: "otchealthcommerce", container: "commerce-source-docs", sloHours: 72 },
+  { name: "finance-cfo-source-docs", index: "finance-cfo-source-docs", account: "otchealthcfodata", container: "cfo-source-docs", sloHours: 168 },
+  { name: "legal-company", index: "legal-company", account: "otchealthlegalstore", container: "company", sloHours: 168 },
+  { name: "legal-personal", index: "legal-personal", account: "otchealthlegalstore", container: "personal", sloHours: 168 },
+]);
+
+/** Pure: pick the single newest (`lastModified`) object out of a room's raw S3 listing, after
+ *  filtering out directory-marker entries (a trailing '/') and this pipeline's own bookkeeping
+ *  prefixes. Returns null when nothing real is left (an empty room, or every object filtered out).
+ *  Exported for a direct unit test with a plain array, no S3/network involved — mirrors this file's
+ *  own pickNewestAvailable()/pickNewestSuccessfulAutoSnapshot() "filter, then reduce to the max"
+ *  shape exactly. */
+export function pickNewestSourceBlob(blobs) {
+  const real = (blobs || []).filter((b) => b && b.name && !b.name.endsWith("/") && !isRoomPipelineInternal(b.name));
+  if (!real.length) return null;
+  return real.reduce((a, b) => (Date.parse(b.lastModified) > Date.parse(a.lastModified) ? b : a));
+}
+
+function sloEnvName(roomName) {
+  return `BRAIN_FRESHNESS_SLO_H_${String(roomName).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+}
+
+/** Pure (reads only process.env, no network): a room's effective SLO in hours — an explicit
+ *  BRAIN_FRESHNESS_SLO_H_<ROOM> env override (e.g. BRAIN_FRESHNESS_SLO_H_LEGAL_COMPANY) when set to a
+ *  finite positive number, else the room's own BRAIN_ROOMS.sloHours, else BRAIN_FRESHNESS_DEFAULT_SLO_H
+ *  (26h, matching this file's other FRESHNESS_SLO_H). Exported for a direct unit test. */
+export function resolveRoomSloHours(room) {
+  const raw = process.env[sloEnvName(room.name)];
+  const n = raw != null && raw !== "" ? Number(raw) : NaN;
+  if (Number.isFinite(n) && n > 0) return n;
+  return Number.isFinite(room.sloHours) ? room.sloHours : BRAIN_FRESHNESS_DEFAULT_SLO_H;
+}
+
+/** Pure: the actual freshness DECISION, isolated from every network call above it so it is directly
+ *  unit-testable (mirrors assessAutoSnapshotFreshness()'s own separation of decision from I/O).
+ *  `indexedCount` is ignored (may be null) when `ageHours <= sloHours` — the object is still within
+ *  normal pipeline latency, so whether it happens to be indexed yet is not this call's concern. */
+export function assessRoomFreshness(ageHours, sloHours, indexedCount) {
+  if (ageHours <= sloHours) {
+    return { state: "OK", reason: `is within the ${sloHours}h SLO -- not yet expected to be indexed` };
+  }
+  if (indexedCount > 0) {
+    return { state: "OK", reason: `is past the ${sloHours}h SLO but IS present in the index (${indexedCount} chunk(s) found by exact path match)` };
+  }
+  return { state: "STALE", reason: `is past the ${sloHours}h SLO with ZERO chunks found in the index by exact path match -- looks unindexed` };
+}
+
+/** One room's full freshness check: ring-gate first (no network on a privileged room, ever), then S3
+ *  listing -> pick the newest real source object -> age-gate -> (only past SLO) an exact-path
+ *  OpenSearch `_count`. Exported so a single room is directly testable (including the "zero fetch
+ *  calls for a privileged room" ring-safety regression guard) without running the whole registry. */
+export async function checkOneBrainRoomFreshness(room) {
+  const name = `brain-room-${room.name}`;
+  const lane = classifyIndexLane(room.index);
+  if (lane !== "non-privileged") {
+    return { name, status: "SKIPPED", detail: `ring-excluded: classifyIndexLane("${room.index}") = "${lane}" -- this canary never reads a privileged room's content OR document existence (explicitly noted, not silently omitted)` };
+  }
+  const sloHours = resolveRoomSloHours(room);
+  let blobs;
+  try {
+    blobs = await listBlobsMetaFromS3(room.account, room.container, "");
+  } catch (e) {
+    return { name, status: "ERROR", detail: `cannot check (S3 listing of ${room.account}/${room.container} failed): ${String((e && e.message) || e).slice(0, 300)}` };
+  }
+  const newest = pickNewestSourceBlob(blobs);
+  if (!newest) {
+    return { name, status: "ERROR", detail: `cannot check cleanly: 0 source object(s) found under ${room.account}/${room.container} after filtering pipeline-internal paths -- either genuinely empty or a listing/permission problem` };
+  }
+  const ageH = (Date.now() - Date.parse(newest.lastModified)) / 3600000;
+  if (ageH <= sloHours) {
+    const v = assessRoomFreshness(ageH, sloHours, null);
+    return { name, status: v.state, detail: `newest source object "${newest.name}" (${ageH.toFixed(1)}h old) ${v.reason}` };
+  }
+  let cfg;
+  try {
+    cfg = await resolveOpenSearchConfig();
+  } catch (e) {
+    return { name, status: "ERROR", detail: `cannot check (OpenSearch config/credentials unresolvable): ${String((e && e.message) || e).slice(0, 300)}` };
+  }
+  const fullPath = `${room.account}/${room.container}/${newest.name}`;
+  let res;
+  try {
+    res = await osCount(cfg, room.index, { term: { "path.keyword": fullPath } });
+  } catch (e) {
+    return { name, status: "ERROR", detail: `cannot check (OpenSearch _count against "${room.index}" failed): ${String((e && e.message) || e).slice(0, 300)}` };
+  }
+  if (!res.ok) {
+    return { name, status: "ERROR", detail: `cannot check (OpenSearch _count HTTP ${res.status} for index "${room.index}"): ${(res.text || "").slice(0, 200)}` };
+  }
+  const count = Number(res.json?.count ?? 0);
+  const v = assessRoomFreshness(ageH, sloHours, count);
+  return { name, status: v.state, detail: `newest source object "${newest.name}" (${ageH.toFixed(1)}h old, SLO ${sloHours}h) ${v.reason}` };
+}
+
+async function checkBrainRoomsFreshness() {
+  return Promise.all(BRAIN_ROOMS.map((room) => checkOneBrainRoomFreshness(room)));
+}
+
 /** Exit-code policy, mirrors every sibling canary's convention exactly: report-only by default (never
  *  a non-zero exit), --strict pages (non-zero exit) on any live anomaly (STALE/ERROR). SKIPPED is
  *  never an anomaly (a day the drill is not scheduled, or a missing optional passphrase, is expected). */
@@ -367,14 +574,17 @@ export function pageExitCode(results, strict) {
 }
 
 async function main() {
-  const results = await Promise.all([
-    checkSsmArchive(),
-    checkOpenSearchSnapshot(),
-    checkRdsSnapshot(),
-    checkN8nAutoSnapshot(),
-    checkN8nHealthz(),
-    checkWeeklyDrill(),
-  ]);
+  const results = [
+    ...(await Promise.all([
+      checkSsmArchive(),
+      checkOpenSearchSnapshot(),
+      checkRdsSnapshot(),
+      checkN8nAutoSnapshot(),
+      checkN8nHealthz(),
+      checkWeeklyDrill(),
+    ])),
+    ...(await checkBrainRoomsFreshness()),
+  ];
   if (JSON_OUT) {
     console.log(JSON.stringify({ ts: new Date().toISOString(), strict: STRICT, results }, null, 2));
   } else {
