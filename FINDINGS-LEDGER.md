@@ -649,13 +649,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:35:59.920Z
 - **Closed:** (open)
 
-### finding:FND-20260828-386c severity:medium status:open | Security baseline: SecurityAudit + LogArchive accounts used by NOTHING; no org CloudTrail, no GuardDuty, no SCPs, 3 never-expire CloudWatch groups; small mgmt-account CDK/CLI pass
+### finding:FND-20260828-386c severity:medium status:fixed | Security baseline: SecurityAudit + LogArchive accounts used by NOTHING; no org CloudTrail, no GuardDuty, no SCPs, 3 never-expire CloudWatch groups; small mgmt-account CDK/CLI pass
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** no change needed for the core claims (refuted by live evidence 2026-08-29) + retention/GuardDuty verified in the same pass
+- **Verified by:** Live: org trail aws-controltower-BaselineCloudTrail EXISTS (IsOrganizationTrail=true, multi-region, log-file validation on, IsLogging=true, latest delivery 2026-08-29T00:20Z) delivering to the LogArchive account 456157355821's bucket - so 'no org CloudTrail' and 'LogArchive used by nothing' were false: the org is Control Tower-baselined. GuardDuty detector 18d02308eb33443fc8843d4484bbbbd1 already enabled. CloudWatch us-east-1: 5 log groups, 0 without retention. RESIDUALS folded into the hardening program: SCP review (CT guardrail set unknown-thin), and FourVault-NonProd 552969575274 was created via the raw Organizations API so it is NOT Account Factory-enrolled - optional CT enrollment later
 - **Opened:** 2026-08-28T01:36:02.549Z
-- **Closed:** (open)
+- **Closed:** 2026-08-29T00:21:30.525Z
 
 ### finding:FND-20260828-92fa severity:medium status:open | Flatstick-Prod 391894613037 empty while live production traffic runs in NonProd 301001539500: decision memo for Matt (promote via gated migration, or bless NonProd as prod and re-scope)
 
