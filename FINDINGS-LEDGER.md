@@ -752,3 +752,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-29T00:09:18.101Z
 - **Closed:** (open)
+
+### finding:FND-20260829-878f severity:low status:open | Work-ledger attribution is caller-supplied, not token-bound, on connector surfaces
+
+- **Source audit doc:** otchealth-mcp-server PR #263 review (sentry-bot prediction triage, 2026-08-29)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-29T03:47:48.523Z
+- **Closed:** (open)
