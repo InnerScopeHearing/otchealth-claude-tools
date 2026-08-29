@@ -27,13 +27,21 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { buildCriticPrompt, parseCriticVerdict, shouldRevise } from "./critic.mjs";
-import { chatBody, resolveTier, LEGACY_STANDARD } from "../../setup/model-routing.mjs";
+import { chatBody, resolveTier, LEGACY_STANDARD, serviceTierFor, flexRetryPolicy } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const SM = "otchealth-shared-prod";
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
 const TIER_PROVIDER = LLM_PROVIDER === "openai" ? "openai" : "azure";
 const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
+// FLEX PROCESSING (2026-08-29): critic-pass is a report-mode, non-blocking PR gate -- exactly the
+// "latency-tolerant nightly/background" shape the flex lane targets. Caller label "critic-pass" ->
+// env override OPENAI_SERVICE_TIER_CRITIC_PASS (or the fleet-wide OPENAI_SERVICE_TIER). UNSET (the
+// default everywhere today) resolves to undefined, so CRITIC_TIER below is undefined and every line
+// touched in callChatOpenAI is byte-identical to before this lane existed -- see model-routing.mjs's
+// own header for the full contract (why 429 retries only activate under flex, why a genuine non-429
+// failure never retries).
+const CRITIC_TIER = serviceTierFor("critic-pass");
 const CRITIC_SYSTEM =
   "You are a cheap, fast CRITIC pass. Review the draft strictly against the task and return STRICT JSON only, exactly as the prompt specifies. Do not rewrite the draft.";
 
@@ -71,10 +79,21 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
 // OpenAI-direct call, same request/response shape as Azure's chat.completions (chatBody() is
 // provider-agnostic; OpenAI just wants the model NAME in the body instead of the URL, and a bearer
 // token instead of an api-key header). Mirrors callChat's retry/429 handling exactly.
+//
+// FLEX PROCESSING (2026-08-29): when CRITIC_TIER resolves to "flex" (OPENAI_SERVICE_TIER_CRITIC_PASS
+// or the fleet-wide OPENAI_SERVICE_TIER), flexRetryPolicy() floors `tries` upward and supplies a
+// per-attempt AbortSignal timeout; the body carries `service_tier: "flex"`. CRITIC_TIER unset (the
+// default) makes flexRetryPolicy() a pure passthrough -- `effTries === tries` and no signal is ever
+// attached -- so this is BYTE-IDENTICAL to before this lane existed. A non-429 failure still never
+// retries, any tier (fail loud, never a silently-defeated flex saving and never a masqueraded verdict).
 async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
-  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true }), model: dep };
-  for (let a = 0; a < tries; a++) {
-    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const policy = flexRetryPolicy(CRITIC_TIER, { tries });
+  const effTries = policy.tries || tries;
+  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true, serviceTier: CRITIC_TIER }), model: dep };
+  for (let a = 0; a < effTries; a++) {
+    const init = { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) };
+    if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
+    const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
     return (await r.json()).choices[0].message.content;

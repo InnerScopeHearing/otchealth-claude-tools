@@ -24,9 +24,9 @@
 //                                       # gate to diff base-vs-head; see .github/workflows/promptcheck.yml)
 import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { chatBody, LEGACY_STANDARD, resolveTier } from "../../setup/model-routing.mjs";
+import { chatBody, LEGACY_STANDARD, resolveTier, serviceTierFor, flexRetryPolicy } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL } from "./judge-bedrock-nova.mjs";
 import { compareJudgeRow, aggregateJudgeComparison, renderJudgeComparisonReport } from "./judge-compare.mjs";
@@ -34,6 +34,13 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
 const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
+// FLEX PROCESSING (2026-08-29): agent-evals is a nightly/on-demand golden-task harness (persona
+// answer + judge, both run through chat() below) -- exactly the latency-tolerant shape the flex lane
+// targets. Caller label "agent-evals" -> env override OPENAI_SERVICE_TIER_AGENT_EVALS (or the
+// fleet-wide OPENAI_SERVICE_TIER). UNSET (the default everywhere today) resolves to undefined, so
+// AGENT_EVALS_TIER is undefined and callChatOpenAI below is byte-identical to before this lane
+// existed -- see setup/model-routing.mjs's own header for the full contract.
+const AGENT_EVALS_TIER = serviceTierFor("agent-evals");
 const argv = process.argv.slice(2);
 const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const ONLY_AGENT = (takeVal("--agent", "") || "").toLowerCase();
@@ -100,10 +107,22 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
 // OpenAI-direct call, same request/response shape as Azure's chat.completions (chatBody() is
 // provider-agnostic; OpenAI just wants the model NAME in the body instead of the URL, and a bearer
 // token instead of an api-key header). Mirrors callChat's retry/429 handling exactly.
-async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
-  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens }), model: dep };
-  for (let a = 0; a < tries; a++) {
-    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+//
+// FLEX PROCESSING (2026-08-29): when AGENT_EVALS_TIER resolves to "flex", flexRetryPolicy() floors
+// `tries` upward and supplies a per-attempt AbortSignal timeout; the body carries
+// `service_tier: "flex"`. AGENT_EVALS_TIER unset (the default) makes flexRetryPolicy() a pure
+// passthrough -- `effTries === tries` and no signal is ever attached -- so this is BYTE-IDENTICAL to
+// before this lane existed. A non-429 failure still never retries, any tier. Exported so a test can
+// exercise the real network path directly (mocking global.fetch), the same convention as
+// signal-radar's makeChecker()/makeEntailer() and critic-pass's runCriticPass.
+export async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
+  const policy = flexRetryPolicy(AGENT_EVALS_TIER, { tries });
+  const effTries = policy.tries || tries;
+  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, serviceTier: AGENT_EVALS_TIER }), model: dep };
+  for (let a = 0; a < effTries; a++) {
+    const init = { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) };
+    if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
+    const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
     return (await r.json()).choices[0].message.content;
@@ -168,60 +187,72 @@ async function emit(results) {
   for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, callsite_id: r.callsite_id, score: r.score, pass: r.pass, model: DEP, judge_model: judgeLabel() } }) });
 }
 
-const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json") && f !== "personas.json").flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
-  .filter(t => (!ONLY_AGENT || t.agent === ONLY_AGENT) && (!ONLY_TASK || t.id === ONLY_TASK));
-if (!tasks.length) { console.error("no matching tasks"); process.exit(2); }
-await initModel();
-console.log(`# agent-evals (run+judge on ${DEP}, judge=${judgeLabel()}${JUDGE_COMPARE ? ` +compare vs ${JUDGE_PROVIDER === "bedrock-nova" ? DEP : BEDROCK_NOVA_JUDGE_MODEL}` : ""}) - ${tasks.length} task(s), pass>=${PASS_AT}\n`);
-const results = [];
-// --judge-compare accumulates one compareJudgeRow() per successfully-scored task, REGARDLESS of
-// JUDGE_PROVIDER -- it always compares the default judge against judge-bedrock-nova.mjs, reusing
-// whichever of the two `scored` already IS (from the normal judge() dispatch above) instead of paying
-// for a redundant third call to the same judge.
-const compareRows = [];
-for (const t of tasks) {
-  process.stderr.write(`  running ${t.id}...`);
-  let answer, scored;
-  try { answer = await chat((PERSONA[t.agent] || `You are the ${t.agent}.`) + " Answer concretely and completely: name the SPECIFIC tools, gates, thresholds, numbers, and rules you would apply and WHY, cover every relevant consideration explicitly rather than implying it, and whenever you refuse or block, also state the compliant path.", t.task); scored = await judge(t.task, t.rubric, answer); }
-  catch (e) { console.error(` ERROR ${e.message}`); continue; }
-  const pass = scored.score >= PASS_AT;
-  // callsite_id/prompt_file identify WHICH prompt surface this task exercises (default to the agent
-  // name when a task predates the tagging), the substrate a later quality-per-dollar router joins on.
-  results.push({ id: t.id, agent: t.agent, callsite_id: t.callsite_id || t.agent, prompt_file: t.prompt_file || null, score: scored.score, pass, notes: scored.notes, met: scored.met });
-  process.stderr.write(` ${(scored.score * 100).toFixed(0)}%\n`);
-  console.log(`[${pass ? "PASS" : "FAIL"}] ${t.agent}/${t.id}  ${(scored.score * 100).toFixed(0)}%  (${scored.met.filter(Boolean).length}/${t.rubric.length})  ${scored.notes}`);
+// The CLI driver. Wrapped in a function (2026-08-29, alongside the flex-lane adoption above) and
+// guarded by isMain below -- purely a test-safety refactor (mirrors critic-pass/run.mjs's and
+// mine-hard-negatives.mjs's existing isMain pattern in this same toolkit) so a test can
+// `import(...)` this module (e.g. to exercise the exported callChatOpenAI directly with a mocked
+// fetch) without the CLI driver executing real API calls and calling process.exit(). No logic inside
+// this function changed from the pre-refactor top-level script -- only the enclosing function and the
+// guard at the bottom are new.
+async function main() {
+  const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json") && f !== "personas.json").flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
+    .filter(t => (!ONLY_AGENT || t.agent === ONLY_AGENT) && (!ONLY_TASK || t.id === ONLY_TASK));
+  if (!tasks.length) { console.error("no matching tasks"); process.exit(2); }
+  await initModel();
+  console.log(`# agent-evals (run+judge on ${DEP}, judge=${judgeLabel()}${JUDGE_COMPARE ? ` +compare vs ${JUDGE_PROVIDER === "bedrock-nova" ? DEP : BEDROCK_NOVA_JUDGE_MODEL}` : ""}) - ${tasks.length} task(s), pass>=${PASS_AT}\n`);
+  const results = [];
+  // --judge-compare accumulates one compareJudgeRow() per successfully-scored task, REGARDLESS of
+  // JUDGE_PROVIDER -- it always compares the default judge against judge-bedrock-nova.mjs, reusing
+  // whichever of the two `scored` already IS (from the normal judge() dispatch above) instead of paying
+  // for a redundant third call to the same judge.
+  const compareRows = [];
+  for (const t of tasks) {
+    process.stderr.write(`  running ${t.id}...`);
+    let answer, scored;
+    try { answer = await chat((PERSONA[t.agent] || `You are the ${t.agent}.`) + " Answer concretely and completely: name the SPECIFIC tools, gates, thresholds, numbers, and rules you would apply and WHY, cover every relevant consideration explicitly rather than implying it, and whenever you refuse or block, also state the compliant path.", t.task); scored = await judge(t.task, t.rubric, answer); }
+    catch (e) { console.error(` ERROR ${e.message}`); continue; }
+    const pass = scored.score >= PASS_AT;
+    // callsite_id/prompt_file identify WHICH prompt surface this task exercises (default to the agent
+    // name when a task predates the tagging), the substrate a later quality-per-dollar router joins on.
+    results.push({ id: t.id, agent: t.agent, callsite_id: t.callsite_id || t.agent, prompt_file: t.prompt_file || null, score: scored.score, pass, notes: scored.notes, met: scored.met });
+    process.stderr.write(` ${(scored.score * 100).toFixed(0)}%\n`);
+    console.log(`[${pass ? "PASS" : "FAIL"}] ${t.agent}/${t.id}  ${(scored.score * 100).toFixed(0)}%  (${scored.met.filter(Boolean).length}/${t.rubric.length})  ${scored.notes}`);
 
-  // --judge-compare: score the SAME answer with the OTHER judge too, purely for the comparison report
-  // below. A failure here (e.g. no AWS credentials configured for the Nova side) is logged and SKIPPED
-  // for the comparison only -- it must never invalidate this task's primary scorecard entry above,
-  // which is already recorded and unaffected by anything that happens from here down.
-  if (JUDGE_COMPARE) {
-    try {
-      const bedrockIsPrimary = JUDGE_PROVIDER === "bedrock-nova";
-      const other = bedrockIsPrimary ? await judgeDefault(t.task, t.rubric, answer) : await judgeBedrockNova(t.task, t.rubric, answer);
-      const a = bedrockIsPrimary ? other : scored;   // default-judge result
-      const b = bedrockIsPrimary ? scored : other;   // bedrock-nova-judge result
-      compareRows.push(compareJudgeRow({ id: t.id, agent: t.agent, a, b }, PASS_AT));
-    } catch (e) {
-      console.error(`  [judge-compare] skipped comparison for ${t.agent}/${t.id}: ${e.message}`);
+    // --judge-compare: score the SAME answer with the OTHER judge too, purely for the comparison report
+    // below. A failure here (e.g. no AWS credentials configured for the Nova side) is logged and SKIPPED
+    // for the comparison only -- it must never invalidate this task's primary scorecard entry above,
+    // which is already recorded and unaffected by anything that happens from here down.
+    if (JUDGE_COMPARE) {
+      try {
+        const bedrockIsPrimary = JUDGE_PROVIDER === "bedrock-nova";
+        const other = bedrockIsPrimary ? await judgeDefault(t.task, t.rubric, answer) : await judgeBedrockNova(t.task, t.rubric, answer);
+        const a = bedrockIsPrimary ? other : scored;   // default-judge result
+        const b = bedrockIsPrimary ? scored : other;   // bedrock-nova-judge result
+        compareRows.push(compareJudgeRow({ id: t.id, agent: t.agent, a, b }, PASS_AT));
+      } catch (e) {
+        console.error(`  [judge-compare] skipped comparison for ${t.agent}/${t.id}: ${e.message}`);
+      }
     }
   }
-}
-const avg = results.reduce((s, r) => s + r.score, 0) / (results.length || 1);
-const passed = results.filter(r => r.pass).length;
-console.log(`\nSCORECARD: ${passed}/${results.length} passed, avg ${(avg * 100).toFixed(0)}%`);
-if (EMIT) { await emit(results); console.log("emitted eval_result events -> PostHog Fleet Agents"); }
-if (JSON_OUT) {
-  writeFileSync(JSON_OUT, JSON.stringify({ model: DEP, judge_model: judgeLabel(), passAt: PASS_AT, avg, passed, total: results.length, results }, null, 2));
-  console.log(`wrote scorecard json -> ${JSON_OUT}`);
-}
-if (JUDGE_COMPARE) {
-  const compareSummary = aggregateJudgeComparison(compareRows);
-  console.log("\n" + renderJudgeComparisonReport(compareRows, compareSummary, { labelA: "default (" + DEP + ")", labelB: "bedrock-nova (" + BEDROCK_NOVA_JUDGE_MODEL + ")" }));
+  const avg = results.reduce((s, r) => s + r.score, 0) / (results.length || 1);
+  const passed = results.filter(r => r.pass).length;
+  console.log(`\nSCORECARD: ${passed}/${results.length} passed, avg ${(avg * 100).toFixed(0)}%`);
+  if (EMIT) { await emit(results); console.log("emitted eval_result events -> PostHog Fleet Agents"); }
   if (JSON_OUT) {
-    const comparePath = JSON_OUT.replace(/\.json$/i, "") + ".judge-compare.json";
-    writeFileSync(comparePath, JSON.stringify({ labelA: DEP, labelB: BEDROCK_NOVA_JUDGE_MODEL, rows: compareRows, summary: compareSummary }, null, 2));
-    console.log(`wrote judge-compare json -> ${comparePath}`);
+    writeFileSync(JSON_OUT, JSON.stringify({ model: DEP, judge_model: judgeLabel(), passAt: PASS_AT, avg, passed, total: results.length, results }, null, 2));
+    console.log(`wrote scorecard json -> ${JSON_OUT}`);
   }
+  if (JUDGE_COMPARE) {
+    const compareSummary = aggregateJudgeComparison(compareRows);
+    console.log("\n" + renderJudgeComparisonReport(compareRows, compareSummary, { labelA: "default (" + DEP + ")", labelB: "bedrock-nova (" + BEDROCK_NOVA_JUDGE_MODEL + ")" }));
+    if (JSON_OUT) {
+      const comparePath = JSON_OUT.replace(/\.json$/i, "") + ".judge-compare.json";
+      writeFileSync(comparePath, JSON.stringify({ labelA: DEP, labelB: BEDROCK_NOVA_JUDGE_MODEL, rows: compareRows, summary: compareSummary }, null, 2));
+      console.log(`wrote judge-compare json -> ${comparePath}`);
+    }
+  }
+  process.exit(results.some(r => !r.pass) ? 1 : 0);
 }
-process.exit(results.some(r => !r.pass) ? 1 : 0);
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) await main();
