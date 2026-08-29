@@ -69,12 +69,13 @@ test("THE OPENAI PATH WORKS: makeEntailer() with OPENAI_API_KEY set calls api.op
     }));
   assert.equal(captured.url, "https://api.openai.com/v1/chat/completions");
   assert.equal(captured.headers.Authorization, "Bearer sk-test-fake-not-real");
-  assert.equal(captured.body.model, "gpt-5.1", "default CONTRADICTION_MODEL resolves to the OpenAI quality/reasoning tier (gpt-5.1), NOT gpt-4.1-mini (banned for judgment work)");
+  assert.equal(captured.body.model, "gpt-5.6-sol", "default CONTRADICTION_MODEL resolves to the OpenAI quality/top reasoning tier (gpt-5.6-sol, 2026-08-29 refresh), NOT gpt-4.1-mini (banned for judgment work)");
   assert.equal(captured.body.response_format.type, "json_object");
-  // gpt-5.1 is reasoning-family: chatBody() must use max_completion_tokens with NO temperature override
-  // (the API rejects a non-default temperature for reasoning models) -- proves the OpenAI port correctly
-  // reuses chatBody()'s existing modelFamilyOf() branch rather than hardcoding the chat-family shape.
-  assert.equal("max_completion_tokens" in captured.body, true, "reasoning-family (gpt-5.1) must use max_completion_tokens");
+  // gpt-5.6-sol is reasoning-family (same family as its gpt-5.1 predecessor): chatBody() must use
+  // max_completion_tokens with NO temperature override (the API rejects a non-default temperature for
+  // reasoning models) -- proves the OpenAI port correctly reuses chatBody()'s existing modelFamilyOf()
+  // branch rather than hardcoding the chat-family shape.
+  assert.equal("max_completion_tokens" in captured.body, true, "reasoning-family (gpt-5.6-sol) must use max_completion_tokens");
   assert.equal("max_tokens" in captured.body, false);
   assert.equal("temperature" in captured.body, false, "reasoning-family models reject a temperature override");
   assert.deepEqual(verdict, { label: "contradict", citedId: SLICE[0].id, reason: "flip" });

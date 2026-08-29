@@ -57,13 +57,20 @@ test("THE OPENAI PATH WORKS: initModel() + ask() call api.openai.com with the st
     }, () => ask("You are Mark Cuban.", "PITCH:\nAn app for X"));
     assert.equal(captured.url, "https://api.openai.com/v1/chat/completions");
     assert.equal(captured.headers.Authorization, "Bearer sk-test-fake-not-real");
-    assert.equal(captured.body.model, "gpt-4.1", "default SHARK_MODEL resolves to the OpenAI standard tier (gpt-4.1), not an Azure Foundry deployment name");
-    assert.equal(captured.body.temperature, 0.7, "the shark persona temperature (0.7) is unchanged by the provider port");
+    assert.equal(captured.body.model, "gpt-5.6-terra", "default SHARK_MODEL resolves to the OpenAI standard/mid tier (gpt-5.6-terra, 2026-08-29 refresh), not an Azure Foundry deployment name");
+    // gpt-5.6-terra is reasoning-family (2026-08-29: the 'standard' tier moved off chat-family) --
+    // chatBody() must therefore use max_completion_tokens with NO temperature override, so the shark
+    // persona's 0.7 creative-variance temperature cannot appear on this call; see chatBody()'s own
+    // family-aware branch in setup/model-routing.mjs. This is an inherent model-family consequence
+    // of the tier default, not a regression in the provider port.
+    assert.equal("max_completion_tokens" in captured.body, true, "reasoning-family (gpt-5.6-terra) must use max_completion_tokens");
+    assert.equal("max_tokens" in captured.body, false);
+    assert.equal("temperature" in captured.body, false, "reasoning-family models reject a temperature override");
     assert.match(content, /tough but fair/);
   });
 });
 
-test("SHARK_MODEL overrides the default deployment verbatim (an explicit raw model id, not tier-resolved)", async () => {
+test("SHARK_MODEL overrides the default deployment verbatim (an explicit raw model id, not tier-resolved), and a chat-family override keeps the persona temperature", async () => {
   let captured = null;
   await withEnv({ ...NO_CREDS_ENV, OPENAI_API_KEY: "sk-test-fake-not-real", SHARK_MODEL: "gpt-4o" }, async () => {
     await initModel();
@@ -73,6 +80,10 @@ test("SHARK_MODEL overrides the default deployment verbatim (an explicit raw mod
     }, () => ask("sys", "user"));
   });
   assert.equal(captured.model, "gpt-4o");
+  // gpt-4o is chat-family (unlike the reasoning-family default) -- confirms chatBody() shapes the
+  // request per the ACTUAL model in use, not a hardcoded assumption baked in for the default case only.
+  assert.equal(captured.temperature, 0.7, "a chat-family override still carries the shark persona temperature (0.7)");
+  assert.equal("max_tokens" in captured, true);
 });
 
 test("THE FAIL-LOUD CHECK: a genuine (non-429) OpenAI failure REJECTS distinctly and is never silently absorbed into a fake shark verdict", async () => {

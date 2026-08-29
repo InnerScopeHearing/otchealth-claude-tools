@@ -17,6 +17,24 @@ Provider defaults to OpenAI-direct (`LLM_PROVIDER=openai`; Azure Foundry is perm
   (write a structured scorecard, used by the CI prompt-regression gate)
 - Exit code is non-zero if any task fails -> CI-gateable.
 
+## Judge provider (2026-08-29)
+The judge defaults to the SAME model the agent persona answered on (OpenAI, `resolveTier('standard',
+'openai')` via `setup/model-routing.mjs`) — unchanged from before this section existed. Two additions,
+both opt-in:
+- `JUDGE_PROVIDER=bedrock-nova` routes the judge through `judge-bedrock-nova.mjs` (Amazon Bedrock Nova
+  Lite, `us.amazon.nova-lite-v1:0`, via the Converse API in the fleet's own AWS account) instead — a
+  genuinely different model family from whatever answered the task, which removes the
+  judge-shares-blind-spots-with-the-model-it-grades risk the default same-family judge carries. Needs
+  AWS credentials resolvable the same way every other AWS-backed skill in this toolkit does (ECS task
+  role / `AWS_ACCESS_KEY_ID` / `OTC_AWS_ACCESS_KEY_ID`); override the model via `BEDROCK_NOVA_JUDGE_MODEL`.
+- `--judge-compare` runs BOTH judges (the default AND bedrock-nova) on every task's answer regardless of
+  `JUDGE_PROVIDER`, and prints an agreement report (per-task score delta + verdict agreement, plus a
+  fleet-wide summary: verdict agreement rate, mean/max score delta, mean per-criterion agreement) so the
+  swap is a decision made on evidence, not a guess. With `--json out.json` it also writes
+  `out.judge-compare.json`. A failure scoring the "other" judge for one task (e.g. no AWS creds) only
+  drops that task's comparison row — it never invalidates that task's primary scorecard entry.
+  Example: `node run-evals.mjs --agent cto --judge-compare --json /tmp/cto-scorecard.json`.
+
 ## Tasks
 `evals/<agent>.json` = array of `{id, agent, task, rubric:[criteria...], callsite_id?, prompt_file?}`.
 Pass threshold 0.7. `callsite_id` identifies which real prompt surface the task exercises (defaults to

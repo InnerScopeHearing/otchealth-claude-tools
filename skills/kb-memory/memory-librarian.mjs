@@ -48,6 +48,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { kvSecret } from "./azure-secret.mjs";
 import { cGet, cPut, cList, commonsConfigured } from "./commons-store.mjs";
+import { chatBody, resolveTier } from "../../setup/model-routing.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -74,13 +75,25 @@ async function initModel() {
     process.exit(2);
   }
 }
-const QUALITY_MODEL = process.env.LIBRARIAN_DIGEST_MODEL || "gpt-4o";       // narrative summarization: gpt-4.1-mini is banned here (fleet correction, 2026-08-01)
-const CHEAP_MODEL = process.env.LIBRARIAN_MODEL || "gpt-4o-mini";           // bounded, structured 0-4-item extraction: cheap tier is fine
+// 2026-08-29 fix: these used to be hardcoded literals ("gpt-4o" / "gpt-4o-mini"), completely bypassing
+// setup/model-routing.mjs -- exactly the drift class that file's own header exists to prevent, and one
+// this file was ironically held up as "the proven pattern" for in several sibling ports' comments
+// (shark-round.mjs, reflect.mjs) despite never actually using it. Now resolved through OPENAI_TIERS
+// (standard = mid tier for the narrative digest -- gpt-4.1-mini is banned here, fleet correction
+// 2026-08-01; cheap tier for the bounded 0-4-item extraction), so a future fleet-wide model rotation
+// via model-routing.mjs reaches this file automatically instead of leaving it frozen. Env var names
+// (LIBRARIAN_DIGEST_MODEL / LIBRARIAN_MODEL) are unchanged for backward compat.
+const QUALITY_MODEL = resolveTier(process.env.LIBRARIAN_DIGEST_MODEL || "standard", "openai").deployment;
+const CHEAP_MODEL = resolveTier(process.env.LIBRARIAN_MODEL || "cheap", "openai").deployment;
 async function openaiChat(model, sys, user, max, attempt = 0) {
+  // chatBody() picks the family-correct request shape (2026-08-29 fix, required now that QUALITY_MODEL/
+  // CHEAP_MODEL resolve through OPENAI_TIERS, which moved both tiers to reasoning-family -- the prior
+  // hardcoded {max_tokens, temperature} literal only worked because gpt-4o/gpt-4o-mini were chat-family).
+  const reqBody = { ...chatBody(model, { messages: [{ role: "system", content: sys }, { role: "user", content: user }], maxTokens: max, temperature: 0.2 }), model };
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${OAI_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages: [{ role: "system", content: sys }, { role: "user", content: user }], max_tokens: max, temperature: 0.2 }),
+    body: JSON.stringify(reqBody),
   });
   if (r.status === 429 && attempt < 4) {
     const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10);

@@ -28,6 +28,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { chatBody, LEGACY_STANDARD, resolveTier } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL } from "./judge-bedrock-nova.mjs";
+import { compareJudgeRow, aggregateJudgeComparison, renderJudgeComparisonReport } from "./judge-compare.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
@@ -39,6 +41,15 @@ const ONLY_TASK = takeVal("--task", "");
 const EMIT = argv.includes("--emit");
 const JSON_OUT = takeVal("--json", "");
 const PASS_AT = 0.7;
+// JUDGE_PROVIDER (2026-08-29): opt-in alternative judge lane. UNSET (the default) is BYTE-FOR-BYTE the
+// pre-existing behavior -- the judge() function below is completely unchanged, and DEP (the SAME model
+// the agent persona ran on) is still what scores it. "bedrock-nova" routes judge() through
+// judge-bedrock-nova.mjs's Amazon Bedrock Nova Lite Converse call instead, a genuinely different model
+// family (removes the same-model-family judging-its-own-output correlated-bias risk the default judge
+// carries). --judge-compare (below) runs BOTH judges on every task regardless of JUDGE_PROVIDER, so the
+// CTO can decide the swap on evidence rather than switching blind.
+const JUDGE_PROVIDER = (process.env.JUDGE_PROVIDER || "").toLowerCase();
+const JUDGE_COMPARE = argv.includes("--judge-compare");
 
 // short role briefs (v1). LATER: load the real dream-team agent definitions for full fidelity.
 const PERSONA = {
@@ -99,7 +110,19 @@ async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
   }
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
-async function chat(system, user, maxTokens = 1200) {
+// maxTokens default 1200 -> 4000 (2026-08-29, LIVE-REPRODUCED regression from the OPENAI_TIERS
+// gpt-5.6 refresh): DEP now resolves to a REASONING-family model (gpt-5.6-terra), which spends part of
+// max_completion_tokens on HIDDEN reasoning tokens before any visible output. Verified directly against
+// the real API for this exact system+task pair (the architect-spec-first golden task): at 1200 AND at
+// 2000, completion_tokens_details.reasoning_tokens consumed the ENTIRE budget (finish_reason:"length",
+// zero visible content -- a wasted API call that scores 0% for producing nothing, not for a bad
+// answer); at 4000 it succeeded cleanly (only 59 reasoning tokens, ~2800 completion tokens of real
+// content). `reasoning_effort:"low"` did NOT fix the 1200-token case in the same probe. 4000 is the
+// live-verified working floor for this fleet's persona-answering prompts on this model; it is NOT a
+// fleet-wide fix -- every OTHER caller in this toolkit with a tight maxTokens budget (250-1600 range)
+// on the same 'standard'/'cheap' tiers carries the SAME risk and needs its own empirical check, which
+// is out of scope for this change (see the PR description).
+async function chat(system, user, maxTokens = 4000) {
   if (LLM_PROVIDER === "openai") {
     try { return await callChatOpenAI(KEY, DEP, system, user, maxTokens, 4); }
     catch (e) { if (e.throttled && FB_DEP && FB_DEP !== DEP) return await callChatOpenAI(FB_KEY, FB_DEP, system, user, maxTokens, 5); throw e; }
@@ -109,26 +132,53 @@ async function chat(system, user, maxTokens = 1200) {
   try { return await callChat(EP, KEY, DEP, system, user, maxTokens, 4); }
   catch (e) { if (e.throttled && FB_EP && FB_KEY) return await callChat(FB_EP, FB_KEY, FB_DEP, system, user, maxTokens, 5); throw e; }
 }
-async function judge(task, rubric, answer) {
+// judgeDefault: the ORIGINAL judge, byte-for-byte unchanged (2026-08-29: only renamed from `judge` so
+// judge() below can dispatch on JUDGE_PROVIDER; every line of logic here is identical to before this
+// file had a second judge provider). Scores via the SAME chat()/DEP the agent persona ran on.
+async function judgeDefault(task, rubric, answer) {
   const sys = "You are a strict eval judge. Given a task, a rubric (list of criteria), and a candidate answer, decide for EACH criterion whether the answer satisfies it. Return ONLY compact JSON: {\"met\":[true/false per criterion in order],\"notes\":\"one line\"}.";
   const user = `TASK:\n${task}\n\nRUBRIC:\n${rubric.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\nANSWER:\n${answer}`;
-  const out = await chat(sys, user, 400);
+  // 400 -> 800 (2026-08-29, same reasoning-family risk as chat()'s own note above): the judge call is a
+  // much simpler bounded classification than the open-ended persona answer, so it did not truncate in
+  // the live smoke test this session, but a real 400-token budget on a reasoning-family model has ZERO
+  // margin the moment a rubric is longer or a verdict genuinely needs more deliberation. A modest bump,
+  // not a fully re-tuned value -- see chat()'s comment for the caveat that this is not a fleet-wide fix.
+  const out = await chat(sys, user, 800);
   let j; try { j = JSON.parse(out.match(/\{[\s\S]*\}/)[0]); } catch { j = { met: rubric.map(() => false), notes: "judge parse failed" }; }
   const met = (j.met || []).slice(0, rubric.length); while (met.length < rubric.length) met.push(false);
   const score = met.filter(Boolean).length / rubric.length;
   return { met, score, notes: j.notes || "" };
 }
+// judge: the dispatcher. JUDGE_PROVIDER unset (the default) takes the EXACT pre-existing code path
+// (judgeDefault); JUDGE_PROVIDER=bedrock-nova routes through judge-bedrock-nova.mjs instead. This is
+// the ONLY call site the normal (non --judge-compare) per-task loop below uses.
+async function judge(task, rubric, answer) {
+  return JUDGE_PROVIDER === "bedrock-nova" ? judgeBedrockNova(task, rubric, answer) : judgeDefault(task, rubric, answer);
+}
+// The human-readable label for whichever judge produced a given result -- used in console output and
+// the emitted PostHog judge_model property so a scorecard is legible about which judge scored it.
+function judgeLabel(provider = JUDGE_PROVIDER) {
+  return provider === "bedrock-nova" ? BEDROCK_NOVA_JUDGE_MODEL : DEP;
+}
 async function emit(results) {
   const key = await sm("posthog-fleet-ingest-key"); if (!key) return;
-  for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, callsite_id: r.callsite_id, score: r.score, pass: r.pass, model: DEP, judge_model: DEP } }) });
+  // judge_model now names the ACTUAL judge that scored each result (2026-08-29: previously hardcoded
+  // to DEP unconditionally, which was accurate before a second judge provider existed but would have
+  // silently mislabeled every bedrock-nova-judged scorecard as judged by the OpenAI agent model).
+  for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, callsite_id: r.callsite_id, score: r.score, pass: r.pass, model: DEP, judge_model: judgeLabel() } }) });
 }
 
 const tasks = readdirSync(join(HERE, "evals")).filter(f => f.endsWith(".json") && f !== "personas.json").flatMap(f => JSON.parse(readFileSync(join(HERE, "evals", f), "utf8")))
   .filter(t => (!ONLY_AGENT || t.agent === ONLY_AGENT) && (!ONLY_TASK || t.id === ONLY_TASK));
 if (!tasks.length) { console.error("no matching tasks"); process.exit(2); }
 await initModel();
-console.log(`# agent-evals (run+judge on ${DEP}) - ${tasks.length} task(s), pass>=${PASS_AT}\n`);
+console.log(`# agent-evals (run+judge on ${DEP}, judge=${judgeLabel()}${JUDGE_COMPARE ? ` +compare vs ${JUDGE_PROVIDER === "bedrock-nova" ? DEP : BEDROCK_NOVA_JUDGE_MODEL}` : ""}) - ${tasks.length} task(s), pass>=${PASS_AT}\n`);
 const results = [];
+// --judge-compare accumulates one compareJudgeRow() per successfully-scored task, REGARDLESS of
+// JUDGE_PROVIDER -- it always compares the default judge against judge-bedrock-nova.mjs, reusing
+// whichever of the two `scored` already IS (from the normal judge() dispatch above) instead of paying
+// for a redundant third call to the same judge.
+const compareRows = [];
 for (const t of tasks) {
   process.stderr.write(`  running ${t.id}...`);
   let answer, scored;
@@ -140,13 +190,38 @@ for (const t of tasks) {
   results.push({ id: t.id, agent: t.agent, callsite_id: t.callsite_id || t.agent, prompt_file: t.prompt_file || null, score: scored.score, pass, notes: scored.notes, met: scored.met });
   process.stderr.write(` ${(scored.score * 100).toFixed(0)}%\n`);
   console.log(`[${pass ? "PASS" : "FAIL"}] ${t.agent}/${t.id}  ${(scored.score * 100).toFixed(0)}%  (${scored.met.filter(Boolean).length}/${t.rubric.length})  ${scored.notes}`);
+
+  // --judge-compare: score the SAME answer with the OTHER judge too, purely for the comparison report
+  // below. A failure here (e.g. no AWS credentials configured for the Nova side) is logged and SKIPPED
+  // for the comparison only -- it must never invalidate this task's primary scorecard entry above,
+  // which is already recorded and unaffected by anything that happens from here down.
+  if (JUDGE_COMPARE) {
+    try {
+      const bedrockIsPrimary = JUDGE_PROVIDER === "bedrock-nova";
+      const other = bedrockIsPrimary ? await judgeDefault(t.task, t.rubric, answer) : await judgeBedrockNova(t.task, t.rubric, answer);
+      const a = bedrockIsPrimary ? other : scored;   // default-judge result
+      const b = bedrockIsPrimary ? scored : other;   // bedrock-nova-judge result
+      compareRows.push(compareJudgeRow({ id: t.id, agent: t.agent, a, b }, PASS_AT));
+    } catch (e) {
+      console.error(`  [judge-compare] skipped comparison for ${t.agent}/${t.id}: ${e.message}`);
+    }
+  }
 }
 const avg = results.reduce((s, r) => s + r.score, 0) / (results.length || 1);
 const passed = results.filter(r => r.pass).length;
 console.log(`\nSCORECARD: ${passed}/${results.length} passed, avg ${(avg * 100).toFixed(0)}%`);
 if (EMIT) { await emit(results); console.log("emitted eval_result events -> PostHog Fleet Agents"); }
 if (JSON_OUT) {
-  writeFileSync(JSON_OUT, JSON.stringify({ model: DEP, passAt: PASS_AT, avg, passed, total: results.length, results }, null, 2));
+  writeFileSync(JSON_OUT, JSON.stringify({ model: DEP, judge_model: judgeLabel(), passAt: PASS_AT, avg, passed, total: results.length, results }, null, 2));
   console.log(`wrote scorecard json -> ${JSON_OUT}`);
+}
+if (JUDGE_COMPARE) {
+  const compareSummary = aggregateJudgeComparison(compareRows);
+  console.log("\n" + renderJudgeComparisonReport(compareRows, compareSummary, { labelA: "default (" + DEP + ")", labelB: "bedrock-nova (" + BEDROCK_NOVA_JUDGE_MODEL + ")" }));
+  if (JSON_OUT) {
+    const comparePath = JSON_OUT.replace(/\.json$/i, "") + ".judge-compare.json";
+    writeFileSync(comparePath, JSON.stringify({ labelA: DEP, labelB: BEDROCK_NOVA_JUDGE_MODEL, rows: compareRows, summary: compareSummary }, null, 2));
+    console.log(`wrote judge-compare json -> ${comparePath}`);
+  }
 }
 process.exit(results.some(r => !r.pass) ? 1 : 0);
