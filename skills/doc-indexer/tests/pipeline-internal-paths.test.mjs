@@ -12,7 +12,7 @@
 // rather than invented ones.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isPipelineInternal } from "../pipeline-paths.mjs";
+import { isPipelineInternal, isLegalPersonalRoom } from "../pipeline-paths.mjs";
 
 test("pipeline bookkeeping is excluded", () => {
   for (const p of [
@@ -89,4 +89,49 @@ test("fail-on-old-code proof: the OLD blanket rule disagrees on the content case
     assert.equal(oldRule(p), true);
     assert.equal(isPipelineInternal(p), true);
   }
+});
+
+// ============================================================================================
+// isLegalPersonalRoom (2026-08-29): enrich.mjs's --container override can point ANY profile at
+// ANY container, including `--profile legal --container personal` (attorney-client-privileged).
+// This predicate is the hard, code-enforced gate enrich.mjs checks BEFORE any LLM call, for every
+// provider (openai/azure/bedrock) -- see enrich.mjs's cmdRun() and PILOT-bedrock-enrich.md.
+// ============================================================================================
+
+test("isLegalPersonalRoom: exact match on profile=legal + container=personal is excluded", () => {
+  assert.equal(isLegalPersonalRoom("legal", "personal"), true);
+});
+
+test("isLegalPersonalRoom: case-insensitive on both profile and container", () => {
+  assert.equal(isLegalPersonalRoom("LEGAL", "PERSONAL"), true);
+  assert.equal(isLegalPersonalRoom("Legal", "Personal"), true);
+});
+
+test("isLegalPersonalRoom: legal's default container (company) is NOT excluded", () => {
+  assert.equal(isLegalPersonalRoom("legal", "company"), false);
+});
+
+test("isLegalPersonalRoom: 'personal' under any OTHER profile is not excluded by this predicate (it is legal-profile-specific)", () => {
+  assert.equal(isLegalPersonalRoom("finance", "personal"), false);
+  assert.equal(isLegalPersonalRoom("commerce", "personal"), false);
+  assert.equal(isLegalPersonalRoom("commons", "personal"), false);
+});
+
+test("isLegalPersonalRoom: an exact match only -- a container that merely CONTAINS 'personal' does not false-positive", () => {
+  assert.equal(isLegalPersonalRoom("legal", "personal-archive"), false);
+  assert.equal(isLegalPersonalRoom("legal", "personal2"), false);
+  assert.equal(isLegalPersonalRoom("legal", "not-personal"), false);
+});
+
+test("isLegalPersonalRoom: a profile that merely CONTAINS 'legal' does not false-positive", () => {
+  assert.equal(isLegalPersonalRoom("legal-archive", "personal"), false);
+  assert.equal(isLegalPersonalRoom("legalese", "personal"), false);
+});
+
+test("isLegalPersonalRoom: null/undefined/empty are handled without throwing", () => {
+  assert.equal(isLegalPersonalRoom(null, null), false);
+  assert.equal(isLegalPersonalRoom(undefined, undefined), false);
+  assert.equal(isLegalPersonalRoom("", ""), false);
+  assert.equal(isLegalPersonalRoom("legal", null), false);
+  assert.equal(isLegalPersonalRoom(null, "personal"), false);
 });
