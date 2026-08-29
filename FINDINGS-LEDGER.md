@@ -744,3 +744,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T22:55:17.249Z
 - **Closed:** (open)
+
+### finding:FND-20260829-59ed severity:medium status:open | ROTATION FREEZE (Matt directive 2026-08-29): all secret rotations held by owner instruction - Perplexity connector token (exposed in CloudWatch pre-fix), Customer.io Track pair (value committed in otchealth-ops git export, still valid), DR passphrase custody move, n8n owner credentials, Entra a0bca2fb old key. These exposures remain OPEN by explicit owner acceptance, not oversight. Re-raise only if evidence of active abuse appears (gateway 401 spikes on the Perplexity lane, unexplained CIO track events) or Matt lifts the freeze.
+
+- **Source audit doc:** session:2026-08-29 Matt directive
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-29T00:09:18.101Z
+- **Closed:** (open)
