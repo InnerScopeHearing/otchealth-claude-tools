@@ -191,13 +191,37 @@ schedule.
               "arn:aws:es:us-east-1:900915535335:domain/otchealth-brain/*/_count"]},
  {"Sid":"OsDrillCleanup","Effect":"Allow","Action":"es:ESHttpDelete",
   "Resource":"arn:aws:es:us-east-1:900915535335:domain/otchealth-brain/drill-*"},
- {"Sid":"RdsRead","Effect":"Allow","Action":"rds:DescribeDBSnapshots","Resource":"*"}]}
+ {"Sid":"RdsRead","Effect":"Allow","Action":"rds:DescribeDBSnapshots","Resource":"*"},
+ {"Sid":"ReadBrainFreshnessRooms","Effect":"Allow","Action":"s3:ListBucket",
+  "Resource":"arn:aws:s3:::otchealth-brain-dr-55c84f6b",
+  "Condition":{"StringLike":{"s3:prefix":["otchealthcommons/company-journal/*","otchealthcommerce/commerce-source-docs/*"]}}}]}
 ```
 
 Note what is **deliberately absent**, per the design-review finding that caught the original draft
 over-granting: no `s3:GetObject` on the OpenSearch snapshot bucket at all (freshness comes from the
 domain's own `_cat/snapshots` API, never by reading raw segment files from S3), and the `ESHttpDelete`
 grant is scoped to `drill-*` only, never a live index.
+
+**`ReadBrainFreshnessRooms` (added 2026-08-29, for the per-room brain-freshness check that closes
+`FND-20260828-3142`'s canary half):** this is a genuine widening, not something already covered — the
+comment above ("no `s3:GetObject` on the OpenSearch snapshot bucket at all") describes a DIFFERENT
+bucket used for a different purpose (OpenSearch's own snapshot storage, read only via `_cat/snapshots`,
+never via S3 directly); `otchealth-brain-dr-55c84f6b` here is the bucket holding the actual SOURCE
+DOCUMENTS for the `commons-company-journal` and `commerce-commerce-source-docs` rooms
+(`skills/kb-memory/s3-blob.mjs`'s MIRROR table), which this check genuinely needs to list. `ListBucket`
+only (never `GetObject`) — the check reads object name/size/`LastModified` from the listing response,
+never an object's bytes — scoped via the `s3:prefix` condition to exactly the two non-privileged rooms'
+prefixes, never the whole bucket (which also holds the three privileged rooms' source documents, per
+that same MIRROR table). **No new OpenSearch grant is needed**: the pre-existing `OsDrillRestore`
+statement's third resource, `.../otchealth-brain/*/_count`, is already a wildcard covering `_count` on
+ANY index under the domain — including `commons-company-journal` and `commerce-commerce-source-docs` —
+so this check's `_count` calls are already authorized by the grant the weekly restore drill already
+needed. **Live-verified 2026-08-29 (see `skills/aws-dr-canary/SKILL.md`'s own Credentials section):** a
+real run from an operator-seat credential (broader than this dedicated role) succeeded end-to-end
+against both buckets/the domain, including a genuine positive path match, proving the check's logic is
+correct — but that run did NOT confirm this specific role already has `ReadBrainFreshnessRooms`, since
+it ran under a different credential. Add the statement above before assuming the nightly workflow's
+brain-room checks will do more than report `ERROR` (never a false `OK`) for the two rooms.
 
 ---
 
