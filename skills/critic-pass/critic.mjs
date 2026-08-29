@@ -23,6 +23,17 @@ const SEVERITY_ORDER = { low: 1, medium: 2, high: 3, critical: 4 };
  * Produces a prompt instructing a cheap critic model to check a draft against the original task,
  * looking for unsupported claims, logical gaps, missed constraints, math/factual errors, and
  * unstated assumptions. Instructs the critic to answer in STRICT JSON only.
+ *
+ * ORDERING (2026-08-29, prompt-caching lever): every STATIC line (the role framing, the five check
+ * categories, the JSON schema, the approve/revise instructions) is now grouped FIRST and is
+ * byte-identical across every call; the per-call VARIABLE content (task, context, constraints, draft)
+ * comes after it, unchanged in wording. This is a pure reorder -- no instruction was added, removed, or
+ * reworded -- so a repeated critic-pass call (the common case: many drafts reviewed against the SAME
+ * rubric in one session/CI run) shares the longest possible literal prefix, which is what OpenAI's
+ * automatic prompt caching keys off (90% discount on a matched prefix >=1024 tokens). Before this, the
+ * dynamic ORIGINAL TASK/DRAFT ANSWER content sat between two static blocks, capping the cacheable
+ * prefix at whatever came before the first byte that differs call-to-call -- effectively just the first
+ * two sentences.
  */
 export function buildCriticPrompt(task, draftAnswer, opts = {}) {
   const t = String(task ?? "");
@@ -36,15 +47,9 @@ export function buildCriticPrompt(task, draftAnswer, opts = {}) {
   const contextBlock = context ? `\nADDITIONAL CONTEXT:\n${context}\n` : "";
 
   return [
+    // ---- STATIC (byte-identical every call) ----
     "You are a cheap, fast CRITIC pass reviewing a draft answer BEFORE it is committed.",
     "This is a report-mode check: your job is to catch problems early, not to rewrite the draft.",
-    "",
-    "ORIGINAL TASK:",
-    t,
-    contextBlock,
-    constraintsBlock,
-    "DRAFT ANSWER TO REVIEW:",
-    d,
     "",
     "Check the draft for, specifically:",
     "1. Unsupported claims (assertions with no evidence, citation, or derivation in the draft)",
@@ -58,6 +63,14 @@ export function buildCriticPrompt(task, draftAnswer, opts = {}) {
     "",
     'If you find no material problems, respond with verdict "approve" and an empty issues array.',
     'Use verdict "revise" only when at least one issue would change the answer if fixed.',
+    "",
+    // ---- VARIABLE (differs per call) ----
+    "ORIGINAL TASK:",
+    t,
+    contextBlock,
+    constraintsBlock,
+    "DRAFT ANSWER TO REVIEW:",
+    d,
   ]
     .filter((line) => line !== "")
     .join("\n");

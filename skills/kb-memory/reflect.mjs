@@ -33,6 +33,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "./azure-secret.mjs";
+import { chatBody, resolveTier, LEGACY_STANDARD } from "../../setup/model-routing.mjs";
 import { FAILED_WRITE_FILE, appendFailedWriteFallback } from "./local-fallback.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -70,16 +71,22 @@ function saJwt(scope) { const sa = _SA; if (!sa || !sa.private_key) return null;
 async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv; const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt("https://www.googleapis.com/auth/cloud-platform"))}` }); const t = (await r0.json()).access_token; const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } }); if (!r.ok) return null; return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim(); }
 let EP, KEY, DEP, FB_EP, FB_KEY, FB_DEP;   // Foundry-only (LLM_PROVIDER=foundry/azure)
 let OAI_KEY, OAI_DEP, OAI_FB_DEP;          // OpenAI-only (LLM_PROVIDER=openai, the default)
-async function initModel() {
+async function _initModel() {
   if (LLM_PROVIDER === "openai") {
-    // OpenAI direct (2026-08-28 port): same secret name memory-librarian.mjs already uses
-    // (openai-api-key, via kvSecret -> AWS SSM by default), same api.openai.com endpoint. Model
-    // names reuse this file's existing REFLECT_MODEL/REFLECT_FALLBACK_MODEL env vars unchanged --
-    // gpt-4.1/gpt-4o are real OpenAI models, not merely Azure deployment aliases, so this is a
-    // drop-in provider swap, not a model change.
+    // OpenAI direct (2026-08-28 port; model resolution fixed 2026-08-29): same secret name
+    // memory-librarian.mjs already uses (openai-api-key, via kvSecret -> AWS SSM by default), same
+    // api.openai.com endpoint. REFLECT_MODEL/REFLECT_FALLBACK_MODEL now resolve through
+    // setup/model-routing.mjs's OPENAI_TIERS (standard = mid tier, quality = top tier) instead of the
+    // hardcoded literals 'gpt-4.1'/'gpt-4o' this file shipped with on 2026-08-28 -- those were a
+    // point-in-time snapshot of what OPENAI_TIERS.standard/.quality happened to be THEN, not a link to
+    // the tier itself, so this file would have stayed frozen on stale model names through every future
+    // OPENAI_TIERS refresh (see the 2026-08-29 model-routing.mjs header note) had it not been fixed.
+    // 'standard' (mid), never 'cheap': reflect is quality-critical lesson-extraction work (see this
+    // file's own header, "the ban targets quality summarization work ... not this task" -- read
+    // narrowly as "not banned from mid", not as "belongs on cheap"), never downgraded below mid/top.
     OAI_KEY = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
-    OAI_DEP = process.env.REFLECT_MODEL || "gpt-4.1";
-    OAI_FB_DEP = process.env.REFLECT_FALLBACK_MODEL || "gpt-4o";
+    OAI_DEP = resolveTier(process.env.REFLECT_MODEL || "standard", "openai").deployment;
+    OAI_FB_DEP = resolveTier(process.env.REFLECT_FALLBACK_MODEL || "quality", "openai").deployment;
     return;
   }
   // LLM_PROVIDER=foundry/azure: the ORIGINAL path, kept intact (not deleted) for a future
@@ -90,13 +97,21 @@ async function initModel() {
   // (blocked_calls)" Datadog page, 2026-08-01). See setup/model-routing.mjs LEGACY_STANDARD. Never
   // swap these back so the legacy resource is primary. NOTE: as of 2026-08-13 this whole estate is
   // permanently gone (Foundry returns HTTP 401) -- this branch only runs when explicitly selected.
-  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = process.env.REFLECT_MODEL || "gpt-4.1";
-  // Last-resort fallback only (see note above): the legacy resource, gpt-4o.
-  FB_EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-openai-key"); FB_DEP = process.env.REFLECT_FALLBACK_MODEL || "gpt-4o";
+  // Resolved via resolveTier()/LEGACY_STANDARD (2026-08-29 fix, value-identical to the prior hardcoded
+  // 'gpt-4.1'/'gpt-4o' literals -- TIERS is untouched by the OpenAI-side refresh, so this is a pure
+  // no-op behavior change that just stops duplicating the tier table's own values here).
+  EP = (await sm("azure-foundry-openai-endpoint") || "").replace(/\/$/, ""); KEY = await sm("azure-foundry-key"); DEP = resolveTier(process.env.REFLECT_MODEL || "standard", "azure").deployment;
+  // Last-resort fallback only (see note above): the legacy resource.
+  FB_EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-openai-key"); FB_DEP = process.env.REFLECT_FALLBACK_MODEL || LEGACY_STANDARD.deployment;
 }
 async function callChat(ep, key, dep, system, user, maxTokens, tries) {
+  // chatBody() picks the family-correct request shape (2026-08-29 fix): the prior hardcoded
+  // {max_tokens, temperature} literal here only "worked" because gpt-4.1/gpt-4o were both chat-family;
+  // it would 400 the instant DEP resolved to a reasoning-family model (which OPENAI_TIERS.standard/
+  // .quality now are, per the 2026-08-29 gpt-5.6 refresh -- see model-routing.mjs's header).
+  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, temperature: 0.3 });
   for (let a = 0; a < tries; a++) {
-    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.3 }) });
+    const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status); return (await r.json()).choices[0].message.content;
   }
@@ -126,11 +141,17 @@ async function askFoundry(system, user, maxTokens = 700) {
 // Mirrors memory-librarian.mjs's openaiChat() exactly for this same reason: this is the SAME
 // provider, called the SAME way, from a sibling file in the SAME 2026-08-27/28 porting effort.
 async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
+  // Same chatBody() family-aware shaping as callChat() above (2026-08-29 fix) -- required now that
+  // OAI_DEP/OAI_FB_DEP resolve through OPENAI_TIERS, which moved 'standard'/'cheap' to reasoning-family
+  // (see model-routing.mjs's header). model-routing.mjs is provider-agnostic, so the same helper works
+  // for both the Foundry URL-based call above and this OpenAI body-based one. Named `reqBody` (not
+  // `body`) to avoid shadowing the `const body = await r.text()...` a few lines below in the error path.
+  const reqBody = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, temperature: 0.3 }), model: dep };
   for (let a = 0; a < tries; a++) {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: dep, messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.3 }),
+      body: JSON.stringify(reqBody),
     });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) { const body = await r.text().catch(() => ""); throw new Error("chat " + r.status + (body ? " " + body.slice(0, 160) : "")); }
@@ -159,7 +180,11 @@ async function askOpenAI(system, user, maxTokens = 700) {
 
 // Provider dispatch. Default LLM_PROVIDER=openai (see the file-header note); LLM_PROVIDER=foundry/
 // azure selects the original Foundry-then-legacy path above, kept intact for a re-provisioned estate.
-async function ask(system, user, maxTokens = 700) {
+// initModel/ask exported (2026-08-29) so the model-resolution + request-shape fix above is directly
+// regression-tested (mocking global.fetch), the same pattern skills/shark-tank/shark-round.mjs and the
+// signal-radar detectors already use for their own OpenAI-port tests.
+export async function initModel() { return _initModel(); }
+export async function ask(system, user, maxTokens = 700) {
   return LLM_PROVIDER === "openai" ? askOpenAI(system, user, maxTokens) : askFoundry(system, user, maxTokens);
 }
 

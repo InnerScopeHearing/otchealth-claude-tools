@@ -51,7 +51,7 @@
 //   node brain.mjs rooms                      # list the indexes it can search
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { TIERS, LEGACY_STANDARD, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, resolveTier, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { RING_DENY } from "../kb-memory/dedupe.mjs";
 // OpenAI-direct embeddings + credential resolution, reused from the module that already owns them
@@ -150,18 +150,22 @@ async function init() {
   // ---- CHAT SYNTHESIS ---------------------------------------------------------------------------
   // Two providers in order so a transient throttle on one never silences the brain. gpt-4.1-mini is
   // BANNED for quality/summarization work (setup/model-routing.mjs) and the brain's whole job IS
-  // quality synthesis, so the fallback is the shared 'quality' tier (gpt-5.1, reasoning-family).
+  // quality synthesis, so the fallback is the shared 'quality' tier (top reasoning tier).
   if (LLM_PROVIDER === "openai") {
-    // api.openai.com. The model ids default to the SAME strings as the Foundry tier deployment names
-    // -- the identical documented judgement call the gateway makes (otchealth-mcp-server
-    // src/azure/foundry.ts openaiModelForTier): a bet that the Azure deployment was named after its
-    // real underlying model. If the bet is wrong, OpenAI returns a fast, loud 404 model_not_found,
-    // never a silently-wrong answer from a different model, so a bad guess fails safely. Override
-    // with BRAIN_MODEL / BRAIN_FALLBACK_MODEL (or OPENAI_CHAT_MODEL / OPENAI_HIGH_MODEL, the gateway's
-    // own names) the moment the real ids are confirmed.
+    // api.openai.com. FIXED 2026-08-29: this used to default to TIERS.standard/TIERS.quality
+    // (the AZURE deployment-name table) as a documented "bet that the Azure deployment was named
+    // after its real underlying model" -- see git history for the original comment. That bet is now
+    // moot: OPENAI_TIERS is the fleet's own, independently-live-verified OpenAI tier table (see
+    // setup/model-routing.mjs's 2026-08-29 header note), so this resolves against it directly via
+    // resolveTier(tier, "openai") instead of reading the Azure-named table and hoping the string
+    // happens to also be a real OpenAI model id. This is the SAME "obvious misfit" class documented on
+    // every other ported caller in this toolkit (critic-pass, shark-round, the signal-radar
+    // detectors, ...) -- brain.mjs was the one caller still bypassing OPENAI_TIERS for its default.
+    // Override with BRAIN_MODEL / BRAIN_FALLBACK_MODEL (or OPENAI_CHAT_MODEL / OPENAI_HIGH_MODEL, the
+    // gateway's own names) same as before; an explicit override still wins over the tier default.
     const key = await resolveOpenAIKey();
-    const dep = process.env.BRAIN_MODEL || process.env.OPENAI_CHAT_MODEL || TIERS.standard.deployment;
-    const fbDep = process.env.BRAIN_FALLBACK_MODEL || process.env.OPENAI_HIGH_MODEL || TIERS.quality.deployment;
+    const dep = process.env.BRAIN_MODEL || process.env.OPENAI_CHAT_MODEL || resolveTier("standard", "openai").deployment;
+    const fbDep = process.env.BRAIN_FALLBACK_MODEL || process.env.OPENAI_HIGH_MODEL || resolveTier("quality", "openai").deployment;
     CHAT_PROVIDERS.push({ kind: "openai", key, dep, label: `openai/${dep}`, modelFamily: modelFamilyOf(dep) });
     if (fbDep !== dep) CHAT_PROVIDERS.push({ kind: "openai", key, dep: fbDep, label: `openai/${fbDep}`, modelFamily: modelFamilyOf(fbDep) });
   } else {

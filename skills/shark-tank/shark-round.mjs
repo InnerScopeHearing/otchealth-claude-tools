@@ -17,7 +17,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { TIERS, resolveTier } from "../../setup/model-routing.mjs";
+import { TIERS, resolveTier, chatBody } from "../../setup/model-routing.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const argv = process.argv.slice(2);
@@ -65,7 +65,15 @@ export async function ask(system, user, maxTokens = 700) {
   const headers = openai
     ? { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" }
     : { "api-key": KEY, "Content-Type": "application/json" };
-  const body = { messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.7 };
+  // chatBody() picks the request shape (max_tokens+temperature vs max_completion_tokens/no-temperature)
+  // by inspecting DEP itself -- REQUIRED, not cosmetic, since 2026-08-29: OPENAI_TIERS.standard moved
+  // from a chat-family model (gpt-4.1) to a reasoning-family one (gpt-5.6-terra), and the old hardcoded
+  // {max_tokens, temperature} literal here would 400 ("Unsupported parameter: max_tokens") the instant
+  // DEP resolved to it. temperature:0.7 (the shark persona's creative variance) still applies on any
+  // chat-family model (e.g. an explicit SHARK_MODEL override to gpt-4o); a reasoning-family model
+  // silently drops it, since those models reject a temperature override entirely -- an inherent
+  // consequence of the tier's model family, not a bug in this call.
+  const body = chatBody(DEP, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, temperature: 0.7 });
   if (openai) body.model = DEP;
   for (let a = 0; a < 5; a++) {
     const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });

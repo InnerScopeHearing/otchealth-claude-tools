@@ -147,3 +147,56 @@ test("no em-dash or en-dash characters appear in critic.mjs output strings", () 
   assert.ok(!p.includes("—"), "no em dash");
   assert.ok(!p.includes("–"), "no en dash");
 });
+
+// ---- prompt-caching ordering (2026-08-29): static rubric/schema first, variable task/draft after ----
+
+test("buildCriticPrompt puts EVERY static instruction (rubric + JSON schema) before the variable ORIGINAL TASK/DRAFT content", () => {
+  const p = buildCriticPrompt("some specific task text", "some specific draft text");
+  const taskIdx = p.indexOf("ORIGINAL TASK:");
+  const draftIdx = p.indexOf("DRAFT ANSWER TO REVIEW:");
+  assert.ok(taskIdx > -1 && draftIdx > -1);
+  for (const staticMarker of [
+    "unsupported claims",
+    "logical gaps",
+    "missed constraints",
+    "math or factual errors",
+    "unstated assumptions",
+    "STRICT JSON",
+    '"verdict"',
+    "verdict \"revise\" only",
+  ]) {
+    const idx = p.toLowerCase().indexOf(staticMarker.toLowerCase());
+    assert.ok(idx > -1, `expected to find "${staticMarker}" in the prompt at all`);
+    assert.ok(idx < taskIdx, `"${staticMarker}" (at ${idx}) must appear BEFORE ORIGINAL TASK (at ${taskIdx}) for prompt-cache-friendly ordering`);
+  }
+});
+
+test("buildCriticPrompt's static prefix is BYTE-IDENTICAL across calls with different task/draft/context/constraints (the actual cache-hit invariant)", () => {
+  const a = buildCriticPrompt("task A", "draft A");
+  const b = buildCriticPrompt("a totally different task B, much longer, with different words entirely", "an unrelated draft B");
+  const c = buildCriticPrompt("task C", "draft C", { constraints: ["must be fast"], context: "prior PR context" });
+  const cutA = a.indexOf("ORIGINAL TASK:");
+  const cutB = b.indexOf("ORIGINAL TASK:");
+  const cutC = c.indexOf("ORIGINAL TASK:");
+  assert.ok(cutA > 0 && cutB > 0 && cutC > 0);
+  const prefixA = a.slice(0, cutA);
+  const prefixB = b.slice(0, cutB);
+  const prefixC = c.slice(0, cutC);
+  assert.equal(prefixA, prefixB, "the static prefix must not depend on task/draft content");
+  assert.equal(prefixA, prefixC, "the static prefix must not depend on whether constraints/context are present");
+});
+
+test("buildCriticPrompt reordering did not change any semantic content vs the pre-reorder shape: same five categories, same schema, same approve/revise instructions, same task/draft placement markers", () => {
+  const p = buildCriticPrompt("t", "d", { constraints: ["c1"], context: "ctx1" });
+  // Every marker the pre-existing tests above already assert on must still be present verbatim --
+  // this test exists specifically to catch an accidental wording change during the reorder, which the
+  // task's own constraint (order only, no semantic change) forbids.
+  assert.ok(p.includes("You are a cheap, fast CRITIC pass reviewing a draft answer BEFORE it is committed."));
+  assert.ok(p.includes("This is a report-mode check: your job is to catch problems early, not to rewrite the draft."));
+  assert.ok(p.includes("ORIGINAL TASK:"));
+  assert.ok(p.includes("DRAFT ANSWER TO REVIEW:"));
+  assert.ok(p.includes("KNOWN CONSTRAINTS (the draft must satisfy all of these):"));
+  assert.ok(p.includes("ADDITIONAL CONTEXT:"));
+  assert.ok(p.includes('If you find no material problems, respond with verdict "approve" and an empty issues array.'));
+  assert.ok(p.includes('Use verdict "revise" only when at least one issue would change the answer if fixed.'));
+});

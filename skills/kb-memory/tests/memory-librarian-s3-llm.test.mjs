@@ -80,7 +80,9 @@ globalThis.fetch = async (url, opts) => {
 
   if (u === "https://api.openai.com/v1/chat/completions") {
     const body = JSON.parse(opts.body);
-    const content = body.model === "gpt-4o"
+    // QUALITY_MODEL/CHEAP_MODEL resolve through setup/model-routing.mjs's OPENAI_TIERS (2026-08-29
+    // fix) -- gpt-5.6-terra (standard/mid) for the digest, gpt-5.6-luna (cheap) for the distillation.
+    const content = body.model === "gpt-5.6-terra"
       ? "# fixture digest\\nWorked on the S3 port."
       : "[]"; // cheap-tier distillation: nothing new to extract in this fixture
     return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
@@ -129,7 +131,7 @@ test("THE SILENT-SUCCESS FIX: with OPENAI_API_KEY unset AND unresolvable via SSM
   assert.deepEqual(r.calls.filter((c) => c.url === "https://api.openai.com/v1/chat/completions"), [], "must never attempt a chat call with no key");
 });
 
-test("the daily digest uses the QUALITY-tier model (gpt-4o), and writes to S3 at _JOURNAL/<agent>/<date>/_DIGEST.md, with ZERO Azure calls", async () => {
+test("the daily digest uses the QUALITY-tier model (gpt-5.6-terra, 2026-08-29 OPENAI_TIERS refresh) shaped for its reasoning family, and writes to S3 at _JOURNAL/<agent>/<date>/_DIGEST.md, with ZERO Azure calls", async () => {
   const rows = [
     { ts: "2026-08-27T01:00:00Z", dir: "IN", agent: "porttest", session: "s1", len: 20, text: "please port the S3 cluster" },
     { ts: "2026-08-27T01:05:00Z", dir: "OUT", agent: "porttest", session: "s1", len: 30, text: "ported heartbeat and dispatch, working on the rest now" },
@@ -138,20 +140,31 @@ test("the daily digest uses the QUALITY-tier model (gpt-4o), and writes to S3 at
   const r = await runLibrarian(["--agents", "porttest", "--days", "1", "--no-reindex"], { presetStore, envExtra: { OPENAI_API_KEY: "sk-test-fake-not-real" } });
   assert.equal(r.status, 0, `expected a clean exit; stderr: ${r.stderr}`);
   assert.deepEqual(r.calls.filter((c) => AZURE_HOST_RE.test(c.url)), [], "must never reach any Azure host (Blob or Foundry)");
-  const digestCall = r.calls.find((c) => c.url === "https://api.openai.com/v1/chat/completions" && JSON.parse(c.body).model === "gpt-4o");
-  assert.ok(digestCall, "the digest must have been generated with the quality-tier model (gpt-4o)");
+  const digestCall = r.calls.find((c) => c.url === "https://api.openai.com/v1/chat/completions" && JSON.parse(c.body).model === "gpt-5.6-terra");
+  assert.ok(digestCall, "the digest must have been generated with the quality/mid-tier model (gpt-5.6-terra)");
+  // gpt-5.6-terra is reasoning-family (2026-08-29 refresh) -- chatBody() must use max_completion_tokens
+  // with NO temperature override, never the old hardcoded {max_tokens, temperature} literal that would
+  // 400 on this model.
+  const digestBody = JSON.parse(digestCall.body);
+  assert.equal("max_completion_tokens" in digestBody, true, "reasoning-family (gpt-5.6-terra) must use max_completion_tokens");
+  assert.equal("temperature" in digestBody, false, "reasoning-family models reject a temperature override");
   const digestKey = "/" + S3_KEY_PREFIX + `_JOURNAL/porttest/${TODAY}/_DIGEST.md`;
   assert.ok(r.store[digestKey], "the digest must have been written to the exact expected S3 key");
   assert.match(r.store[digestKey], /Worked on the S3 port/);
 });
 
-test("the distillation step uses the CHEAP-tier model (gpt-4o-mini), not the quality model used for the digest", async () => {
+test("the distillation step uses the CHEAP-tier model (gpt-5.6-luna, 2026-08-29 OPENAI_TIERS refresh), not the quality model used for the digest, and is shaped for its reasoning family", async () => {
   const rows = [{ ts: "2026-08-27T01:00:00Z", dir: "IN", agent: "porttest", session: "s1", len: 10, text: "hello there" }];
   const presetStore = seedJournal("x", "porttest", TODAY, "s1", rows);
   const r = await runLibrarian(["--agents", "porttest", "--days", "1", "--no-reindex"], { presetStore, envExtra: { OPENAI_API_KEY: "sk-test-fake-not-real" } });
   assert.equal(r.status, 0, `expected a clean exit; stderr: ${r.stderr}`);
-  const distillCall = r.calls.find((c) => c.url === "https://api.openai.com/v1/chat/completions" && JSON.parse(c.body).model === "gpt-4o-mini");
-  assert.ok(distillCall, "the distillation step must use the cheap-tier model (gpt-4o-mini)");
+  const distillCall = r.calls.find((c) => c.url === "https://api.openai.com/v1/chat/completions" && JSON.parse(c.body).model === "gpt-5.6-luna");
+  assert.ok(distillCall, "the distillation step must use the cheap-tier model (gpt-5.6-luna)");
+  // gpt-5.6-luna is ALSO reasoning-family now (2026-08-29: cheap moved off chat-family, unlike its
+  // gpt-4o-mini predecessor) -- same family-aware shaping requirement as the digest call above.
+  const distillBody = JSON.parse(distillCall.body);
+  assert.equal("max_completion_tokens" in distillBody, true, "reasoning-family (gpt-5.6-luna) must use max_completion_tokens");
+  assert.equal("temperature" in distillBody, false, "reasoning-family models reject a temperature override");
 });
 
 test("initModel resolves the OpenAI key via the SSM fleet-secret path when OPENAI_API_KEY is unset (kvSecret's SSM-first default), not just from env", async () => {

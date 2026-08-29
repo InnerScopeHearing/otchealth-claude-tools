@@ -65,8 +65,15 @@ test("THE OPENAI PATH WORKS: makeChecker() with OPENAI_API_KEY set calls api.ope
     }));
   assert.equal(captured.url, "https://api.openai.com/v1/chat/completions");
   assert.equal(captured.headers.Authorization, "Bearer sk-test-fake-not-real");
-  assert.equal(captured.body.model, "gpt-4o-mini", "default GROUNDEDNESS_MODEL resolves to the OpenAI cheap tier (gpt-4o-mini), not the Azure deployment name gpt-4.1-mini");
+  assert.equal(captured.body.model, "gpt-5.6-luna", "default GROUNDEDNESS_MODEL resolves to the OpenAI cheap tier (gpt-5.6-luna, 2026-08-29 refresh), not the Azure deployment name gpt-4.1-mini");
   assert.equal(captured.body.response_format.type, "json_object");
+  // gpt-5.6-luna is reasoning-family (2026-08-29: the 'cheap' tier moved off chat-family, unlike its
+  // gpt-4o-mini predecessor) -- chatBody() must therefore use max_completion_tokens with NO temperature
+  // override, proving the OpenAI port's family-aware body shaping tracks the ACTUAL default, not a
+  // stale chat-family assumption.
+  assert.equal("max_completion_tokens" in captured.body, true, "reasoning-family (gpt-5.6-luna) must use max_completion_tokens");
+  assert.equal("max_tokens" in captured.body, false);
+  assert.equal("temperature" in captured.body, false, "reasoning-family models reject a temperature override");
   assert.deepEqual(verdict, { rowId: ROW.id, label: "supported", reason: "directly stated" });
 });
 
