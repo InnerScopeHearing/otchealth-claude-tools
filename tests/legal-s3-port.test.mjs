@@ -3,7 +3,7 @@
 // ../skills/kb-memory/s3-blob.mjs (the same relationship skills/kb-memory/commons-store.mjs has), so
 // the useful thing to pin here is that legal.mjs targets the RIGHT (account, container) -> bucket for
 // company vs personal, that a storage failure never masquerades as "empty" or "saved", and that the
-// personal-write-is-IAM-gated posture is a real thrown error, never a caught no-op. s3-blob.mjs's own
+// personal-write 403 posture (a regression signal since the 2026-08-29 grant) is a real thrown error, never a caught no-op. s3-blob.mjs's own
 // wire protocol (SigV4, single-encode, 404-vs-403 handling) is already covered by
 // skills/kb-memory/tests/s3-blob-*.test.mjs and s3-mirror-table.test.mjs; this file does not re-test
 // that layer.
@@ -175,7 +175,7 @@ test("putBlob(personal) REJECTS on a 403 AccessDenied rather than reporting a si
   assert.ok(called, "the write must actually have been attempted against S3, not short-circuited");
 });
 
-test("putBlob(company) succeeds cleanly on a normal 200 (writes are not universally broken, only personal is IAM-gated)", async () => {
+test("putBlob(company) succeeds cleanly on a normal 200 (a 403 elsewhere is a specific denial, not a broken write path)", async () => {
   await withEnv(FAKE_CREDS, () =>
     withStubbedFetch(async () => ({ ok: true, status: 200, headers: new Map([["etag", '"abc"']]), text: async () => "" }),
       () => putBlob("company", matterBlob("ainnova-deal"), JSON.stringify({ id: "ainnova-deal" }))));

@@ -28,14 +28,12 @@
 // READ/WRITE ASYMMETRY IS DELIBERATE. READS stay fail-open, matching every other credential-touching
 // module in this fleet: a missing object or an unreachable store degrades to an empty/no-op result
 // and a clear log line, never a thrown error, so a store outage can never crash the sweep. WRITES do
-// NOT fail open. As of this port the live IAM grant on the personal-legal DR bucket is intentionally
-// GetObject+ListBucket ONLY for every toolkit/job identity ("PersonalLegalRingReadOnly" -- see
-// otchealth-mcp-server's src/legal/s3-blob-store.ts header and blob-store.ts's
-// S3_WRITABLE_CONTAINERS comment for the full history; a Terraform-only rename to
-// "PersonalLegalRingReadWrite" describes a PROPOSED widening, never yet applied to the live account),
-// pending an explicit Matt approval to widen it. A write therefore reaches AWS for real and gets a
-// genuine 403 AccessDenied. That is an EXPECTED, PERMANENT-UNTIL-APPROVED condition, not a transient
-// outage, so it is surfaced LOUD (thrown, with a distinct message naming the gate) rather than folded
+// NOT fail open. Since 2026-08-29 the live IAM grant on the personal-legal DR bucket is
+// "PersonalLegalRingReadWrite" (GetObject+PutObject+ListBucket, Matt-approved, applied to
+// otchealthTaskRole's runtime-access policy and live-verified the same day) -- writes WORK. A 403
+// here now means that grant has REGRESSED (a policy edit or role swap), which is a condition worth
+// paging about, so it is surfaced LOUD (thrown, with a distinct message naming the regression)
+// rather than folded
 // into the same silent "treat as empty/no-op" path reads use -- never add a catch here that turns a
 // write failure back into a quiet `false`. The caller (pager.mjs's runSweep) already wraps this call
 // in its own `.catch()` for its documented fail-open SWEEP semantics, so a thrown error here changes
@@ -47,11 +45,12 @@ const ACCT = process.env.AZURE_LEGAL_STORAGE_ACCOUNT || "otchealthlegalstore";
 const CONTAINER = "personal";
 const BLOB_NAME = "pager-state/cooldown.json";
 
-/** The exact, standing reason a personal-legal WRITE is refused as of this port. Exported so tests
- *  (and any future caller that wants to detect this specific condition) assert against this constant
- *  rather than duplicating the literal string. */
+/** The exact message a personal-legal WRITE 403 carries. Writes were owner-approved and granted
+ *  2026-08-29 (PersonalLegalRingReadWrite on otchealthTaskRole), so a 403 today is a POLICY
+ *  REGRESSION, not a standing gate. Exported so tests (and any caller that wants to detect this
+ *  specific condition) assert against this constant rather than duplicating the literal string. */
 export const PERSONAL_WRITE_IAM_GATE_MESSAGE =
-  "personal-legal S3 writes are IAM-gated pending owner approval (PersonalLegalRingReadOnly)";
+  "personal-legal S3 write DENIED by IAM (403): the PersonalLegalRingReadWrite grant (owner-approved 2026-08-29) is missing or regressed on this identity";
 
 /** Shape-based scrub applied to every upstream error message this module logs or rethrows --
  *  defense in depth on the attorney-privileged ring (the redact-at-output lesson from
