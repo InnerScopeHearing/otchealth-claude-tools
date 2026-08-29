@@ -768,3 +768,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-29T04:41:55.195Z
 - **Closed:** (open)
+
+### finding:FND-20260829-f7fa severity:medium status:open | otchealth-brain: ALL 15 indices un-quantized (fp32 3072-dim faiss, ~29GB total; finance 13GB, legal-personal 9.1GB, legal-company 4.4GB) on OpenSearch 2.19 - disk-optimized/quantized vectors would cut memory sharply and likely the $64/mo domain line; requires per-index reindex with recall check, coordinate with gateway single-write-path
+
+- **Source audit doc:** in-VPC ECS one-off audit task 0a4ef3d5ae604bfeb0d35269ed2b2dee, 2026-08-29 (QAUDIT log lines in /ecs/otchealth)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-29T05:17:26.171Z
+- **Closed:** (open)
