@@ -681,13 +681,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:36:10.307Z
 - **Closed:** (open)
 
-### finding:FND-20260828-fe09 severity:medium status:open | deep-pass selectTodo still uses the blanket _-prefix eligibility filter that #463 replaced in enrich.mjs with isPipelineInternal(); legal-company alone lost +183 real docs to this bug class -- port selectTodo to the explicit prefix list (accepted, documented gap in PR #472)
+### finding:FND-20260828-fe09 severity:medium status:fixed | deep-pass selectTodo still uses the blanket _-prefix eligibility filter that #463 replaced in enrich.mjs with isPipelineInternal(); legal-company alone lost +183 real docs to this bug class -- port selectTodo to the explicit prefix list (accepted, documented gap in PR #472)
 
 - **Source audit doc:** PR #472 deep-pass port (builder report + CTO review)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 25568e7774b9a2e315c3b35cb43ed2fe3f8b177b
+- **Verified by:** CTO: PR #491 diff reviewed line-by-line; 102/102 deep-pass suites re-run from the seat in a clean worktree; CI run 33223664484 success; builder live-measured 188 newly-eligible _NOTION objects on legal/company
 - **Opened:** 2026-08-28T02:17:50.650Z
-- **Closed:** (open)
+- **Closed:** 2026-08-29T00:38:04.280Z
 
 ### finding:FND-20260828-06f4 severity:high status:open | Customer.io Track Basic credential embedded in the otchealth-ops n8n workflow export (cnGH ElevenLabs post-call receiver) - a committed secret VALUE in git and now live on the recovery host; rotate the CIO Track pair, then replace the embedded header with an n8n credential
 
