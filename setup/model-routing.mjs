@@ -180,12 +180,18 @@ export function resolveTier(tierOrDeployment, provider = 'azure') {
 
 /**
  * Build the correctly-shaped chat/completions request body for a given deployment.
- *   chatBody(deployment, { messages, maxTokens, temperature, jsonMode })
+ *   chatBody(deployment, { messages, maxTokens, temperature, jsonMode, serviceTier })
  * Reasoning-family: { messages, max_completion_tokens } (no temperature override, ever - the API
  * rejects a non-default value). Chat-family: { messages, max_tokens, temperature } (temperature
  * defaults to 0.2 when not given, matching the fleet's existing synthesis/judge callers).
+ * `serviceTier` (2026-08-29, OpenAI Flex processing lane -- see the FLEX PROCESSING section below
+ * for the full contract): when truthy, adds `service_tier: <value>` to the body (e.g. "flex"); when
+ * falsy/omitted (the default for every pre-existing call site in this fleet), the key is NOT added
+ * at all, so every caller that does not pass it gets a byte-identical body to before this option
+ * existed. Never inferred from env here -- resolve the value with serviceTierFor() first and pass
+ * it in explicitly, keeping this function pure (no I/O, no env reads) like the rest of the module.
  */
-export function chatBody(deployment, { messages, maxTokens = 900, temperature, jsonMode } = {}) {
+export function chatBody(deployment, { messages, maxTokens = 900, temperature, jsonMode, serviceTier } = {}) {
   const isReasoning = modelFamilyOf(deployment) === 'reasoning';
   const body = { messages };
   if (isReasoning) {
@@ -195,7 +201,156 @@ export function chatBody(deployment, { messages, maxTokens = 900, temperature, j
     body.temperature = typeof temperature === 'number' ? temperature : 0.2;
   }
   if (jsonMode) body.response_format = { type: 'json_object' };
+  if (serviceTier) body.service_tier = serviceTier;
   return body;
+}
+
+// =============================================================================================
+// FLEX PROCESSING (2026-08-29) -- an OpenAI `service_tier: "flex"` lane for nightly/background,
+// latency-tolerant callers (agent-evals persona+judge calls, the recall-evals miners, the
+// signal-radar detectors, critic-pass). Live-verified against OpenAI's current flex-processing
+// guide (https://platform.openai.com/docs/guides/flex-processing, fetched 2026-08-29):
+//
+//   - Set `service_tier: "flex"` on a Chat Completions (or Responses) request body. Tokens are then
+//     priced at Batch API rates (plus prompt-caching discounts on top) -- roughly half of standard
+//     synchronous pricing for the same model. Beta, limited model availability (see the pricing page
+//     for which models currently support it); an unsupported model/tier combination is rejected by
+//     OpenAI itself (a normal HTTP error), never silently ignored by this module.
+//   - Slower, best-effort latency. OpenAI's own SDKs default their client timeout to 10 minutes and
+//     the guide explicitly recommends raising it to 15 minutes for flex requests specifically (their
+//     own code samples: `timeout: 15 * 1000 * 60` / `timeout=900.0`). This fleet's callers use the
+//     bare Node `fetch()`, which has no such SDK-level default timeout knob -- OPENAI_FLEX_TIMEOUT_MS
+//     below (default 900000ms = 15 min) is applied via `AbortSignal.timeout()` on each attempt, the
+//     direct native-fetch equivalent of the SDK `timeout` parameter shown in OpenAI's own examples.
+//     KNOWN LIMITATION (documented, not silently assumed away): Node's built-in fetch is backed by an
+//     internal (non-importable as of this Node version) undici dispatcher, which may itself enforce
+//     its own default header/body socket timeouts independent of any AbortSignal. If a flex-tier
+//     nightly job is later observed failing near that mark rather than the 15-minute AbortSignal
+//     bound, the fix is a scoped `undici` dependency (Guardian/cooldown-reviewed) to set a custom
+//     dispatcher with longer `headersTimeout`/`bodyTimeout` on these specific calls -- not yet done
+//     here because it is unverified whether it is actually needed, and it is a new dependency this
+//     PR deliberately does not add speculatively.
+//   - Flex may return `429 Resource Unavailable` when capacity is tight. OpenAI's own docs: "You will
+//     not be charged when this occurs." Their recommended handling is one of: (a) retry with
+//     exponential backoff on the SAME tier, or (b) retry with `service_tier` set to "auto" (or
+//     omitted) to fall through to standard-priced processing. This lane implements ONLY (a) -- it
+//     never silently reissues a declined flex request at standard price, because a caller that opted
+//     into flex specifically to save ~50% must not have that savings silently defeated without a
+//     deliberate decision; a caller that wants (b) can catch the `.throttled` error this lane raises
+//     on exhaustion and retry itself with `tier: "auto"`/no tier.
+//
+// Fully additive and env-gated: OPENAI_SERVICE_TIER unset (the fleet-wide default today, everywhere)
+// means serviceTierFor() returns `undefined`, chatBody() adds no `service_tier` key, and
+// flexRetryPolicy() returns the caller's own values completely untouched -- so every existing call
+// site's behavior is byte-identical until an operator sets the env var. Ship dark; arm per job.
+// =============================================================================================
+
+// Per-caller override env var name, e.g. serviceTierEnvVar("agent-evals") -> "OPENAI_SERVICE_TIER_AGENT_EVALS".
+// Pure string transform (uppercase, non-alnum runs -> single underscore, trimmed) -- never throws,
+// returns null for an empty/missing caller name (serviceTierFor treats that as "no per-caller var").
+export function serviceTierEnvVar(caller) {
+  const slug = String(caller || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return slug ? `OPENAI_SERVICE_TIER_${slug}` : null;
+}
+
+/**
+ * Resolve the effective OpenAI `service_tier` for a named caller: a per-caller env var
+ * (OPENAI_SERVICE_TIER_<CALLER>) wins over the global OPENAI_SERVICE_TIER default; `caller` is
+ * optional (omit it to resolve only the global default). Both unset -- the case for every caller in
+ * this fleet until an operator opts in -- resolves to `undefined`, meaning "no service_tier at all,"
+ * never the literal string "undefined" or an empty string (chatBody()'s `if (serviceTier)` treats
+ * both identically, but downstream code that does `=== undefined` should not have to special-case
+ * an empty string too). Values are trimmed and lowercased ("Flex" / " flex " both resolve to "flex").
+ */
+export function serviceTierFor(caller) {
+  const perCallerVar = serviceTierEnvVar(caller);
+  const raw = (perCallerVar && process.env[perCallerVar]) || process.env.OPENAI_SERVICE_TIER || '';
+  const tier = raw.trim().toLowerCase();
+  return tier || undefined;
+}
+
+/** True when a resolved tier value is the flex lane. Defensive against case/whitespace even though
+ *  serviceTierFor() already normalizes, since a caller may pass a raw literal instead. */
+export function isFlexTier(tier) {
+  return String(tier || '').trim().toLowerCase() === 'flex';
+}
+
+// Flex-specific retry-count and timeout FLOORS, both env-overridable fleet-wide (one redeploy, no
+// code change). These are floors applied ONLY when the resolved tier is "flex" -- flexRetryPolicy()
+// below never lengthens or otherwise touches a non-flex call.
+export const OPENAI_FLEX_TIMEOUT_MS = Number(process.env.OPENAI_FLEX_TIMEOUT_MS) || 900000; // 15 min (OpenAI's own flex guidance, raised from their SDK's 10-min default)
+export const OPENAI_FLEX_MIN_RETRIES = Number(process.env.OPENAI_FLEX_MIN_RETRIES) || 6; // floor; most existing per-file retry loops pass tries=3-5 today, which this raises only under flex
+
+/**
+ * flexRetryPolicy(tier, { tries, timeoutMs }) -> { tries, timeoutMs }
+ * The caller-visible retry contract this module signals for the flex lane: when `tier` is "flex",
+ * floors `tries` to OPENAI_FLEX_MIN_RETRIES (never lowers a caller's own higher value) and defaults
+ * `timeoutMs` to OPENAI_FLEX_TIMEOUT_MS (a caller-supplied `timeoutMs` still wins outright, so an
+ * unusual caller can pick its own budget). For any other tier (undefined, "", "auto", ...) this
+ * returns `{ tries, timeoutMs }` EXACTLY as passed in -- including `timeoutMs: undefined` when the
+ * caller never asked for one -- so a non-flex call is byte-identical to before this function existed
+ * (no AbortSignal, no extra retries). Pure: returns plain numbers, never constructs an AbortSignal
+ * itself, so it stays trivially unit-testable and composable by any caller's own fetch loop (see
+ * fetchOpenAIWithFlexRetry below for the one that also performs the actual retrying fetch).
+ */
+export function flexRetryPolicy(tier, { tries, timeoutMs } = {}) {
+  if (!isFlexTier(tier)) return { tries, timeoutMs };
+  return {
+    tries: Math.max(Number(tries) || 0, OPENAI_FLEX_MIN_RETRIES),
+    timeoutMs: Number(timeoutMs) || OPENAI_FLEX_TIMEOUT_MS,
+  };
+}
+
+const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
+
+/**
+ * fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, maxTokens, temperature, jsonMode, tier,
+ *                            caller, tries }) -> Promise<string>
+ * The ONE shared OpenAI chat-completions caller for anything that wants the flex lane through a
+ * single call, built for callers that do not already hand-roll their own retry loop (the
+ * recall-evals miners had NONE before this -- a bare `if (!r.ok) throw`, so adopting this here is a
+ * strict improvement under flex and BYTE-IDENTICAL in the default/non-flex case, never a behavior
+ * change to an existing retry contract). Builds the request body via chatBody() (the fleet's single
+ * request-shape source of truth) and resolves `service_tier` via `tier` if given, else
+ * `serviceTierFor(caller)`.
+ *
+ * DEFAULT (non-flex) BEHAVIOR IS BYTE-IDENTICAL TO A SINGLE PLAIN FETCH: `tries` defaults to 1 (no
+ * retry at all), no `service_tier` key is added, and no AbortSignal is attached -- a 429 or any other
+ * non-2xx throws immediately with the exact `chat ${status}: ${body}` message shape every existing
+ * per-file callChatOpenAI/callOpenAI helper in this toolkit already uses. Only when the resolved tier
+ * is "flex" does flexRetryPolicy() floor `tries` upward and attach a per-attempt timeout, and ONLY
+ * then does a 429 get retried with backoff (honoring a `Retry-After` header when present, else
+ * 1500ms * attempt-number) -- this is the "callers should retry 429 with backoff" contract flex
+ * signals, and it activates ONLY under flex so a non-flex caller's timing is never touched.
+ *
+ * A non-429 HTTP failure NEVER retries (fails loud immediately, any tier) -- a flex-lane failure must
+ * never masquerade as a completed judgement. On genuine 429 exhaustion under flex, the thrown error
+ * carries `.throttled = true` (the same tag every existing per-file helper already uses so a caller
+ * can distinguish "gave up after real retries" and, e.g., fall back to a different model/tier).
+ */
+export async function fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, maxTokens, temperature, jsonMode, tier, caller, tries = 1 } = {}) {
+  const resolvedTier = tier !== undefined ? tier : serviceTierFor(caller);
+  const policy = flexRetryPolicy(resolvedTier, { tries });
+  const effTries = Math.max(1, Number(policy.tries) || tries || 1);
+  const body = { ...chatBody(deployment, { messages, maxTokens, temperature, jsonMode, serviceTier: resolvedTier }), model: deployment };
+  for (let attempt = 0; attempt < effTries; attempt++) {
+    const init = { method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
+    const r = await fetch(OPENAI_CHAT_COMPLETIONS_URL, init);
+    if (r.status === 429) {
+      if (attempt < effTries - 1) {
+        const ra = +(r.headers.get('retry-after') || 0);
+        await new Promise((resolveWait) => setTimeout(resolveWait, ra ? ra * 1000 : 1500 * (attempt + 1)));
+        continue;
+      }
+      const errBody = (await r.text()).slice(0, 160);
+      throw Object.assign(new Error(`chat ${r.status}: ${errBody}`), effTries > 1 ? { throttled: true } : {});
+    }
+    if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    return (await r.json()).choices?.[0]?.message?.content || '';
+  }
+  /* c8 ignore next -- unreachable: every loop iteration above either continues, throws, or returns */
+  throw Object.assign(new Error('chat 429 exhausted'), { throttled: true });
 }
 
 export default {
@@ -208,4 +363,11 @@ export default {
   chatBody,
   warnIfImplausibleOpenAIModel,
   verifyOpenAITiers,
+  serviceTierEnvVar,
+  serviceTierFor,
+  isFlexTier,
+  flexRetryPolicy,
+  fetchOpenAIWithFlexRetry,
+  OPENAI_FLEX_TIMEOUT_MS,
+  OPENAI_FLEX_MIN_RETRIES,
 };

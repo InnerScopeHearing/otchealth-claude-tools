@@ -33,7 +33,7 @@ import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { makeSignal, isMnpiSubject, isPhiExcluded } from "../schema.mjs";
-import { TIERS, LEGACY_STANDARD, chatBody, resolveTier } from "../../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, chatBody, resolveTier, serviceTierFor, flexRetryPolicy } from "../../../setup/model-routing.mjs";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 export const NAME = "contradiction-staleness";
@@ -323,6 +323,14 @@ async function readSharedFeed() {
 // skills/critic-pass/run.mjs's identical dispatch shape.
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
 const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
+// FLEX PROCESSING (2026-08-29): this detector's entailment check is a bounded, report-mode, nightly-
+// scan call -- exactly the latency-tolerant shape the flex lane targets. Caller label
+// "signal-radar-contradiction-staleness" -> env override
+// OPENAI_SERVICE_TIER_SIGNAL_RADAR_CONTRADICTION_STALENESS (or the fleet-wide OPENAI_SERVICE_TIER).
+// UNSET (the default everywhere today) resolves to undefined, so CONTRADICTION_TIER is undefined and
+// callOpenAI below is byte-identical to before this lane existed -- see setup/model-routing.mjs's own
+// header for the full contract.
+const CONTRADICTION_TIER = serviceTierFor("signal-radar-contradiction-staleness");
 
 // OpenAI-direct call, the same retry/429-backoff shape as the Foundry callOne() below (chatBody() is
 // provider-agnostic; OpenAI just wants the model NAME in the body instead of the URL, and a bearer
@@ -330,9 +338,13 @@ const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 // gpt-5.1 via chatBody()'s own modelFamilyOf() check, so no gpt-5.1-specific branch is needed here).
 // Mirrors critic-pass/run.mjs's callChatOpenAI exactly.
 async function callOpenAI(key, dep, system, user, maxTokens, tries) {
-  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true }), model: dep };
-  for (let a = 0; a < tries; a++) {
-    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const policy = flexRetryPolicy(CONTRADICTION_TIER, { tries });
+  const effTries = policy.tries || tries;
+  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true, serviceTier: CONTRADICTION_TIER }), model: dep };
+  for (let a = 0; a < effTries; a++) {
+    const init = { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) };
+    if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
+    const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status);
     return (await r.json()).choices[0].message.content;

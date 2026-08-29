@@ -196,6 +196,240 @@ test("verifyOpenAITiers never throws on a network failure or a non-2xx response 
   assert.match(http500.error, /HTTP 500/);
 });
 
+// ============================================================================================
+// FLEX PROCESSING (2026-08-29) -- serviceTierEnvVar / serviceTierFor / isFlexTier / flexRetryPolicy /
+// chatBody's serviceTier option / fetchOpenAIWithFlexRetry. Every "default" assertion below proves
+// the fleet-wide byte-identical-until-opted-in contract: with OPENAI_SERVICE_TIER* completely unset
+// (the state of every real deployment today), nothing here changes shape, timing, or retry count.
+// ============================================================================================
+
+function withEnvVars(vars, fn) {
+  const saved = {};
+  for (const k of Object.keys(vars)) { saved[k] = process.env[k]; if (vars[k] === undefined) delete process.env[k]; else process.env[k] = vars[k]; }
+  return (async () => {
+    try { return await fn(); }
+    finally { for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } }
+  })();
+}
+function withStubbedFetch(stub, fn) {
+  const original = globalThis.fetch;
+  globalThis.fetch = stub;
+  return (async () => { try { return await fn(); } finally { globalThis.fetch = original; } })();
+}
+const CLEAR_TIER_ENV = {
+  OPENAI_SERVICE_TIER: undefined,
+  OPENAI_SERVICE_TIER_AGENT_EVALS: undefined,
+  OPENAI_SERVICE_TIER_TEST_CALLER: undefined,
+  OPENAI_FLEX_TIMEOUT_MS: undefined,
+  OPENAI_FLEX_MIN_RETRIES: undefined,
+};
+
+// ---- serviceTierEnvVar ----------------------------------------------------------------------
+
+test("serviceTierEnvVar slugifies a caller name into OPENAI_SERVICE_TIER_<CALLER>", async () => {
+  const { serviceTierEnvVar } = await freshImport();
+  assert.equal(serviceTierEnvVar("agent-evals"), "OPENAI_SERVICE_TIER_AGENT_EVALS");
+  assert.equal(serviceTierEnvVar("recall-evals-mine-hard-negatives"), "OPENAI_SERVICE_TIER_RECALL_EVALS_MINE_HARD_NEGATIVES");
+  assert.equal(serviceTierEnvVar("signal-radar-groundedness"), "OPENAI_SERVICE_TIER_SIGNAL_RADAR_GROUNDEDNESS");
+});
+
+test("serviceTierEnvVar returns null for an empty/missing caller name", async () => {
+  const { serviceTierEnvVar } = await freshImport();
+  assert.equal(serviceTierEnvVar(""), null);
+  assert.equal(serviceTierEnvVar(undefined), null);
+  assert.equal(serviceTierEnvVar(null), null);
+});
+
+// ---- serviceTierFor: THE byte-identical-by-default lock --------------------------------------
+
+test("serviceTierFor resolves undefined (never an empty string) when nothing is set -- today's behavior everywhere", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { serviceTierFor } = await freshImport();
+    assert.equal(serviceTierFor("agent-evals"), undefined);
+    assert.equal(serviceTierFor(), undefined);
+  }));
+
+test("serviceTierFor: the global OPENAI_SERVICE_TIER applies to any caller (or none)", async () =>
+  withEnvVars({ ...CLEAR_TIER_ENV, OPENAI_SERVICE_TIER: "flex" }, async () => {
+    const { serviceTierFor } = await freshImport();
+    assert.equal(serviceTierFor("agent-evals"), "flex");
+    assert.equal(serviceTierFor("some-other-caller"), "flex");
+    assert.equal(serviceTierFor(), "flex");
+  }));
+
+test("serviceTierFor: a per-caller override wins over the global default", async () =>
+  withEnvVars({ ...CLEAR_TIER_ENV, OPENAI_SERVICE_TIER: "flex", OPENAI_SERVICE_TIER_AGENT_EVALS: "auto" }, async () => {
+    const { serviceTierFor } = await freshImport();
+    assert.equal(serviceTierFor("agent-evals"), "auto", "the per-caller var must win over the global one");
+    assert.equal(serviceTierFor("some-other-caller"), "flex", "an unrelated caller still gets the global default");
+  }));
+
+test("serviceTierFor: a per-caller override works even with no global default set", async () =>
+  withEnvVars({ ...CLEAR_TIER_ENV, OPENAI_SERVICE_TIER_AGENT_EVALS: "flex" }, async () => {
+    const { serviceTierFor } = await freshImport();
+    assert.equal(serviceTierFor("agent-evals"), "flex");
+    assert.equal(serviceTierFor("some-other-caller"), undefined);
+  }));
+
+test("serviceTierFor trims and lowercases the resolved value", async () =>
+  withEnvVars({ ...CLEAR_TIER_ENV, OPENAI_SERVICE_TIER: " FLEX  " }, async () => {
+    const { serviceTierFor } = await freshImport();
+    assert.equal(serviceTierFor("agent-evals"), "flex");
+  }));
+
+// ---- isFlexTier -------------------------------------------------------------------------------
+
+test("isFlexTier is true only for the flex lane, case/whitespace-insensitive", async () => {
+  const { isFlexTier } = await freshImport();
+  assert.equal(isFlexTier("flex"), true);
+  assert.equal(isFlexTier("Flex"), true);
+  assert.equal(isFlexTier("  FLEX "), true);
+  assert.equal(isFlexTier("auto"), false);
+  assert.equal(isFlexTier(""), false);
+  assert.equal(isFlexTier(undefined), false);
+  assert.equal(isFlexTier(null), false);
+});
+
+// ---- chatBody's serviceTier option --------------------------------------------------------------
+
+test("chatBody omits service_tier entirely when serviceTier is not passed (byte-identical to every pre-existing call site)", async () => {
+  const { chatBody } = await freshImport();
+  const body = chatBody("gpt-4.1", { messages: [{ role: "user", content: "hi" }] });
+  assert.equal("service_tier" in body, false);
+});
+
+test("chatBody omits service_tier for a falsy value (undefined/empty string), never emits the literal 'undefined'", async () => {
+  const { chatBody } = await freshImport();
+  assert.equal("service_tier" in chatBody("gpt-4.1", { messages: [], serviceTier: undefined }), false);
+  assert.equal("service_tier" in chatBody("gpt-4.1", { messages: [], serviceTier: "" }), false);
+});
+
+test("chatBody adds service_tier verbatim when passed, on both chat-family and reasoning-family deployments", async () => {
+  const { chatBody } = await freshImport();
+  const chatFamily = chatBody("gpt-4.1", { messages: [], serviceTier: "flex" });
+  assert.equal(chatFamily.service_tier, "flex");
+  assert.equal(chatFamily.max_tokens, 900); // unaffected by serviceTier
+  const reasoningFamily = chatBody("gpt-5.6-terra", { messages: [], maxTokens: 50, serviceTier: "flex" });
+  assert.equal(reasoningFamily.service_tier, "flex");
+  assert.equal(reasoningFamily.max_completion_tokens, 50);
+  assert.equal("temperature" in reasoningFamily, false, "serviceTier must not resurrect a temperature key on a reasoning-family body");
+});
+
+// ---- flexRetryPolicy ----------------------------------------------------------------------------
+
+test("flexRetryPolicy is a pure passthrough for any non-flex tier -- byte-identical to the caller's own values", async () => {
+  const { flexRetryPolicy } = await freshImport();
+  for (const tier of [undefined, "", "auto", "standard"]) {
+    assert.deepEqual(flexRetryPolicy(tier, { tries: 4 }), { tries: 4, timeoutMs: undefined });
+    assert.deepEqual(flexRetryPolicy(tier, { tries: 4, timeoutMs: 12345 }), { tries: 4, timeoutMs: 12345 });
+    assert.deepEqual(flexRetryPolicy(tier, {}), { tries: undefined, timeoutMs: undefined });
+  }
+});
+
+test("flexRetryPolicy floors tries to OPENAI_FLEX_MIN_RETRIES under flex, but never lowers a higher caller value", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { flexRetryPolicy, OPENAI_FLEX_MIN_RETRIES, OPENAI_FLEX_TIMEOUT_MS } = await freshImport();
+    assert.equal(flexRetryPolicy("flex", { tries: 1 }).tries, OPENAI_FLEX_MIN_RETRIES);
+    assert.equal(flexRetryPolicy("flex", { tries: 4 }).tries, OPENAI_FLEX_MIN_RETRIES, "4 < the floor -> raised");
+    const higher = OPENAI_FLEX_MIN_RETRIES + 10;
+    assert.equal(flexRetryPolicy("flex", { tries: higher }).tries, higher, "a caller value ABOVE the floor is never lowered");
+    assert.equal(flexRetryPolicy("flex", {}).timeoutMs, OPENAI_FLEX_TIMEOUT_MS, "defaults the timeout when the caller does not supply one");
+  }));
+
+test("flexRetryPolicy respects an explicit timeoutMs override under flex instead of the default floor", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { flexRetryPolicy } = await freshImport();
+    assert.equal(flexRetryPolicy("flex", { timeoutMs: 42000 }).timeoutMs, 42000);
+  }));
+
+test("OPENAI_FLEX_TIMEOUT_MS / OPENAI_FLEX_MIN_RETRIES are env-overridable fleet-wide", async () =>
+  withEnvVars({ ...CLEAR_TIER_ENV, OPENAI_FLEX_TIMEOUT_MS: "60000", OPENAI_FLEX_MIN_RETRIES: "9" }, async () => {
+    const { OPENAI_FLEX_TIMEOUT_MS, OPENAI_FLEX_MIN_RETRIES, flexRetryPolicy } = await freshImport();
+    assert.equal(OPENAI_FLEX_TIMEOUT_MS, 60000);
+    assert.equal(OPENAI_FLEX_MIN_RETRIES, 9);
+    assert.equal(flexRetryPolicy("flex", { tries: 1 }).tries, 9);
+    assert.equal(flexRetryPolicy("flex", {}).timeoutMs, 60000);
+  }));
+
+// ---- fetchOpenAIWithFlexRetry -------------------------------------------------------------------
+
+test("fetchOpenAIWithFlexRetry DEFAULT (no tier/caller, no env set): a single attempt, no service_tier, no AbortSignal -- byte-identical to a plain fetch", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { fetchOpenAIWithFlexRetry } = await freshImport();
+    let calls = 0, captured = null;
+    const result = await withStubbedFetch(async (url, init) => {
+      calls++; captured = { url: String(url), init };
+      return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "hello" } }] }) };
+    }, () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-4.1", messages: [{ role: "user", content: "hi" }] }));
+    assert.equal(result, "hello");
+    assert.equal(calls, 1);
+    assert.equal(captured.url, "https://api.openai.com/v1/chat/completions");
+    const body = JSON.parse(captured.init.body);
+    assert.equal("service_tier" in body, false);
+    assert.equal(captured.init.signal, undefined, "no AbortSignal must be attached for a non-flex call");
+  }));
+
+test("fetchOpenAIWithFlexRetry DEFAULT: a 429 with no flex tier throws IMMEDIATELY (no retry) with the exact pre-existing 'chat <status>: <body>' shape and no .throttled tag", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { fetchOpenAIWithFlexRetry } = await freshImport();
+    let calls = 0;
+    await assert.rejects(
+      () => withStubbedFetch(async () => { calls++; return { ok: false, status: 429, headers: new Map(), text: async () => "rate limited" }; },
+        () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-4.1", messages: [] })),
+      (e) => { assert.match(e.message, /^chat 429: rate limited$/); assert.equal(e.throttled, undefined); return true; }
+    );
+    assert.equal(calls, 1, "must not retry a 429 when the tier is not flex (byte-identical to the pre-existing miner behavior)");
+  }));
+
+test("fetchOpenAIWithFlexRetry DEFAULT: a non-429 failure also throws immediately, any tier", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { fetchOpenAIWithFlexRetry } = await freshImport();
+    let calls = 0;
+    await assert.rejects(
+      () => withStubbedFetch(async () => { calls++; return { ok: false, status: 500, headers: new Map(), text: async () => "server error" }; },
+        () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-4.1", messages: [], tier: "flex" })),
+      (e) => { assert.equal(e.message, "chat 500: server error"); return true; }
+    );
+    assert.equal(calls, 1, "a genuine non-429 failure must never be retried, even under flex -- fail loud, never masquerade as a completed judgement");
+  }));
+
+test("fetchOpenAIWithFlexRetry FLEX (explicit tier param): adds service_tier, attaches an AbortSignal, and retries 429 with backoff until it succeeds", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { fetchOpenAIWithFlexRetry } = await freshImport();
+    let calls = 0, lastBody = null, sawSignal = false;
+    const result = await withStubbedFetch(async (url, init) => {
+      calls++; lastBody = JSON.parse(init.body); sawSignal = init.signal instanceof AbortSignal;
+      if (calls < 3) return { ok: false, status: 429, headers: new Map([["retry-after", "0.01"]]), text: async () => "no capacity" };
+      return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "flex answer" } }] }) };
+    }, () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-4.1", messages: [{ role: "user", content: "hi" }], tier: "flex" }));
+    assert.equal(result, "flex answer");
+    assert.equal(calls, 3, "must actually retry through the 429s before succeeding");
+    assert.equal(lastBody.service_tier, "flex");
+    assert.equal(sawSignal, true, "a flex attempt must carry an AbortSignal (the native-fetch equivalent of the SDK timeout override)");
+  }));
+
+test("fetchOpenAIWithFlexRetry FLEX via caller + per-caller env var (not just the explicit tier param)", async () =>
+  withEnvVars({ ...CLEAR_TIER_ENV, OPENAI_SERVICE_TIER_TEST_CALLER: "flex" }, async () => {
+    const { fetchOpenAIWithFlexRetry } = await freshImport();
+    const result = await withStubbedFetch(async (url, init) => {
+      assert.equal(JSON.parse(init.body).service_tier, "flex");
+      return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "ok" } }] }) };
+    }, () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-4.1", messages: [], caller: "test-caller" }));
+    assert.equal(result, "ok");
+  }));
+
+test("fetchOpenAIWithFlexRetry FLEX exhaustion: throws .throttled=true after the floored retry count, never masquerading as a completed judgement", async () =>
+  withEnvVars({ ...CLEAR_TIER_ENV, OPENAI_FLEX_MIN_RETRIES: "3" }, async () => {
+    const { fetchOpenAIWithFlexRetry } = await freshImport();
+    let calls = 0;
+    await assert.rejects(
+      () => withStubbedFetch(async () => { calls++; return { ok: false, status: 429, headers: new Map([["retry-after", "0.01"]]), text: async () => "no capacity" }; },
+        () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-4.1", messages: [], tier: "flex" })),
+      (e) => { assert.match(e.message, /^chat 429:/); assert.equal(e.throttled, true); return true; }
+    );
+    assert.equal(calls, 3, "must exhaust the floored retry count, not just one attempt");
+  }));
+
 test("verifyOpenAITiers refuses cleanly (no network call) when no API key is resolvable", async () => {
   // Explicitly clear OPENAI_API_KEY for this one assertion regardless of the ambient environment
   // (a real key may be present in a dev sandbox or CI) -- apiKey:"" alone would otherwise silently

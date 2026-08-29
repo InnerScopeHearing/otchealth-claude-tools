@@ -58,13 +58,15 @@ import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { cGet, cList, commonsConfigured } from "../kb-memory/commons-store.mjs";
 import { tokenize, jaccard } from "../kb-memory/dedupe.mjs";
-import { chatBody, resolveTier } from "../../setup/model-routing.mjs";
+import { chatBody, resolveTier, fetchOpenAIWithFlexRetry } from "../../setup/model-routing.mjs";
 import { hitAtK, groupHitLines } from "./scoring.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SEMANTIC = join(HERE, "..", "kb-memory", "semantic.mjs");
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
-const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
+// NOTE: the OpenAI chat-completions URL is now owned by setup/model-routing.mjs's
+// fetchOpenAIWithFlexRetry() (2026-08-29, the flex-processing adoption below) -- no local
+// OPENAI_CHAT_URL constant is needed here any more.
 
 const argv = process.argv.slice(2);
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -232,15 +234,25 @@ export async function fetchAllSharedRows({ cListFn = cList, cGetFn = cGet, commo
 
 // ---- IO: Azure OpenAI chat (mirrors mine-cases.mjs's callChat exactly) -----------------------------
 
-async function callChat(system, user) {
+// FLEX PROCESSING (2026-08-29, see setup/model-routing.mjs's own header for the full contract): this
+// miner had NO retry-on-429 at all before (a bare `if (!r.ok) throw`), so routing the OpenAI branch
+// through the shared fetchOpenAIWithFlexRetry() is a strict improvement under flex (adds a retry
+// contract that never existed) and BYTE-IDENTICAL in the default/non-flex case -- its default
+// `tries:1` reproduces the exact original single-attempt, immediate-throw, same-message-shape
+// behavior (`chat ${status}: ${body}`). Caller label "recall-evals-mine-hard-negatives" -> env
+// override OPENAI_SERVICE_TIER_RECALL_EVALS_MINE_HARD_NEGATIVES (or the fleet-wide
+// OPENAI_SERVICE_TIER). Both unset (the default everywhere today) means this miner's shape and
+// timing are untouched by this change.
+export async function callChat(system, user) {
   if (LLM_PROVIDER === "openai") {
     const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
     if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
     const dep = process.env.MINE_MODEL || resolveTier("standard", "openai").deployment;
-    const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 500, jsonMode: true }), model: dep };
-    const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
-    return (await r.json()).choices?.[0]?.message?.content || "";
+    return fetchOpenAIWithFlexRetry({
+      apiKey: key, deployment: dep,
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      maxTokens: 500, jsonMode: true, caller: "recall-evals-mine-hard-negatives",
+    });
   }
   // Azure/Foundry path, unchanged, selectable via LLM_PROVIDER=foundry|azure. Foundry, not the legacy
   // azure-openai resource: TIERS.standard.deployment ('gpt-4.1') only exists on Foundry (2,000K TPM
