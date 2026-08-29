@@ -71,13 +71,19 @@
 // chunk even when the room is otherwise readable. See metadata-schema.mjs for the full design note and
 // the pure, unit-tested merge logic (sanitizeSegments/encodeSegments/buildSegmentFields).
 //
-// Credentials: Azure Key Vault only (managed identity -> AZURE_SP_* -> az-CLI/OIDC via fleetSecret()).
-// Non-PHI ring; INND content is MNPI (confidentiality/mnpi_flag exist precisely so a room that carries
-// MNPI can be gated on it); the legal `personal` container is privileged/confidential.
+// Credentials: fleetSecret() (AWS SSM -> Key Vault) for storage/search/openai/azure secrets. The
+// `--llm-provider bedrock` lane (2026-08-29) is the one exception -- it authenticates to AWS Bedrock
+// directly via awsCreds() (ECS task role -> AWS_ACCESS_KEY_ID/SECRET -> OTC_AWS_ACCESS_KEY_ID/SECRET;
+// see bedrock-client.mjs), not fleetSecret(), the same credential chain the S3 storage path already
+// uses. Non-PHI ring; INND content is MNPI (confidentiality/mnpi_flag exist precisely so a room that
+// carries MNPI can be gated on it); the legal `personal` container is privileged/confidential and is
+// EXCLUDED from this pipeline's per-profile STORAGE_PROFILES/room targets entirely (see the legal
+// profile below, which only ever names the `company` container).
 //
 // Usage:
 //   node enrich.mjs ensure-schema --profile commerce [--domain-pack commerce]
 //   node enrich.mjs run           --profile commerce [--limit n] [--concurrency 4] [--reindex]
+//   node enrich.mjs run           --profile finance --llm-provider bedrock --limit 5   (see PILOT-bedrock-enrich.md before a real backfill)
 //   node enrich.mjs reindex-room  --profile commerce [--full-reset] [--wait-minutes 3]
 //   node enrich.mjs verify        --profile commerce --path "shopify-library/00-index.md"
 //
@@ -140,12 +146,19 @@ import crypto from "node:crypto";
 // (no Azure managed identity) every one of these resolved null. See fleet-secret.mjs.
 import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
-import { isPipelineInternal } from "./pipeline-paths.mjs";
+import { isPipelineInternal, isLegalPersonalRoom } from "./pipeline-paths.mjs";
 import * as MS from "./metadata-schema.mjs";
 import { osSearch, osBulkUpdate, osRefresh } from "./opensearch-client.mjs";
 // STORAGE_BACKEND (2026-08-19): the same S3 mirror layer indexer.mjs already uses. See the
 // STORAGE_BACKEND note in this file's header for why this exists and why the default flipped.
 import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+// LLM_PROVIDER=bedrock (2026-08-29): provider/model/rate selection + the Bedrock Converse adapter +
+// the shared JSON-extraction fallback all live in enrich-llm.mjs, a pure/injectable module so they
+// are unit-testable without importing this whole argv-parsing CLI script (see that file's own
+// header). callBedrockChat() reuses deep-pass.mjs's ALREADY-MERGED bedrock-client.mjs converseJson
+// (PR #472) -- the fleet's one Bedrock Converse signer/transport -- rather than a second one; see
+// this file's own "LLM PROVIDER" section below for why the Bedrock lane is opt-in only.
+import { VALID_PROVIDERS, DEFAULT_PROVIDER, defaultModelFor, estCostFor, extractJsonObject, callBedrockChat } from "./enrich-llm.mjs";
 
 // ============================ CLI ============================
 const argv = process.argv.slice(2);
@@ -160,13 +173,19 @@ const CONCURRENCY = Math.max(1, parseInt(takeVal("--concurrency", process.env.EN
 const MAX_MIN = parseInt(takeVal("--max-minutes", process.env.ENRICH_MAX_MINUTES || "0"), 10) || 0;
 // LLM provider + model. The default model follows the provider, because a deployment name that is
 // valid on one is meaningless on the other ("gpt-4.1-mini" is an Azure DEPLOYMENT name; OpenAI wants
-// a real model id). An explicit --model still wins over both.
-const LLM_PROVIDER = (takeVal("--llm-provider", process.env.ENRICH_LLM_PROVIDER || "openai") || "openai").toLowerCase();
-if (LLM_PROVIDER !== "openai" && LLM_PROVIDER !== "azure") {
-  console.error(`--llm-provider must be "openai" or "azure" (got "${LLM_PROVIDER}").`);
+// a real model id; Bedrock wants an inference-profile ARN-shaped id). An explicit --model still wins
+// over all of it. ENRICH_LLM_PROVIDER is the original env name for this flag; ENRICH_PROVIDER is
+// accepted as an alias (checked first) so either spelling works -- see PILOT-bedrock-enrich.md.
+const LLM_PROVIDER = (takeVal("--llm-provider", process.env.ENRICH_PROVIDER || process.env.ENRICH_LLM_PROVIDER || DEFAULT_PROVIDER) || DEFAULT_PROVIDER).toLowerCase();
+if (!VALID_PROVIDERS.includes(LLM_PROVIDER)) {
+  console.error(`--llm-provider must be one of ${VALID_PROVIDERS.join("|")} (got "${LLM_PROVIDER}").`);
   process.exit(2);
 }
-const MODEL = takeVal("--model", process.env.ENRICH_MODEL || (LLM_PROVIDER === "openai" ? "gpt-4o-mini" : "gpt-4.1-mini"));
+// LLM_PROVIDER=bedrock (2026-08-29, opt-in only -- see this file's "Bedrock (AWS)" LLM-provider
+// section below for the full rationale). Region follows deep-pass.mjs's own --bedrock-region /
+// BEDROCK_REGION flag name so the two Bedrock-calling scripts in this pipeline stay consistent.
+const BEDROCK_REGION = takeVal("--bedrock-region", process.env.BEDROCK_REGION || "us-east-1");
+const MODEL = takeVal("--model", process.env.ENRICH_MODEL || defaultModelFor(LLM_PROVIDER, process.env.ENRICH_BEDROCK_MODEL));
 const VERIFY_PATH = takeVal("--path");
 const WAIT_MIN = parseInt(takeVal("--wait-minutes", "0"), 10) || 0;
 const BACKEND = (takeVal("--search-backend", process.env.SEARCH_BACKEND || "azure") || "azure").toLowerCase();
@@ -339,7 +358,7 @@ async function acquireLock() { try { const b = await getBuf(LOCK); if (b) { cons
 async function refreshLock() { try { await putBuf(LOCK, Buffer.from(JSON.stringify({ ts: Date.now(), id: LOCK_ID })), "application/json"); } catch {} }
 async function releaseLock() { try { await delBuf(LOCK); } catch {} }
 
-// ============================ Azure OpenAI (Foundry) chat, gpt-4.1-mini only ============================
+// ============================ LLM chat: OpenAI (default) | Azure Foundry (history) | Bedrock (AWS, opt-in) ============================
 let FEP, FKEY;
 // LLM PROVIDER (2026-08-19). The Azure Foundry deployment this file used exclusively now returns
 // HTTP 401 ("invalid subscription key or wrong API endpoint") -- verified by direct probe, the same
@@ -348,12 +367,23 @@ let FEP, FKEY;
 //
 // `openai` is the default because it is the one that answers. Probed live before this was written:
 // OpenAI direct HTTP 200, and AWS Bedrock reachable too (44 models). OpenAI was chosen over Bedrock
-// because Azure OpenAI and OpenAI share the request/response schema, including
+// AS THE DEFAULT because Azure OpenAI and OpenAI share the request/response schema, including
 // `response_format: {type:"json_object"}`, which this prompt depends on -- so this is a genuine
-// drop-in rather than a rewrite. Bedrock's Converse API would need its own request shaping and a
-// separate JSON-mode strategy; it stays the documented fallback if OpenAI is ever the dead one.
+// drop-in rather than a rewrite. `azure` remains selectable so the old path is one flag away if the
+// estate ever returns.
 //
-// `azure` remains selectable so the old path is one flag away if the estate ever returns.
+// `bedrock` (2026-08-29, opt-in -- NOT the default, and not armed on any scheduled job by this
+// change) is the answer to this file's own "OPEN -- Matt's call before the big backfill" note
+// (otchealth-cto/CLAUDE.md, 2026-08-19): the two PRIVILEGED rooms this pipeline can reach
+// (finance-cfo-source-docs, legal-company) currently send document TEXT to OpenAI-direct, a
+// non-BAA third-party processor, when the OLD Azure Foundry path sat inside the enterprise
+// agreement. Bedrock in this fleet's OWN AWS account (900915535335) -- the SAME account the source
+// documents already live in via the S3 storage mirror -- introduces no new data boundary at all.
+// See PILOT-bedrock-enrich.md for the bounded pilot to run BEFORE flipping any librarian schedule
+// onto this provider. Converse has no `response_format: json_object` knob (unlike OpenAI/Azure
+// chat-completions), so the Bedrock branch below forces a tool call instead -- see enrich-llm.mjs's
+// callBedrockChat() for the full JSON-output-discipline rationale and the deep-pass.mjs precedent
+// (bedrock-client.mjs, PR #472, already merged) this reuses rather than a second Bedrock client.
 async function resolveLlm() {
   if (LLM_PROVIDER === "azure") {
     FEP = (process.env.AZURE_FOUNDRY_OPENAI_ENDPOINT || (await fleetSecret("azure-foundry-openai-endpoint")) || "").replace(/\/$/, "");
@@ -361,11 +391,34 @@ async function resolveLlm() {
     if (!FKEY) { console.error("Missing azure-foundry-key"); process.exit(2); }
     return;
   }
+  if (LLM_PROVIDER === "bedrock") {
+    // No API key to resolve here: callBedrockChat()/converseJson() resolve AWS credentials
+    // themselves on every call (ECS task role first, then AWS_ACCESS_KEY_ID/SECRET, then
+    // OTC_AWS_ACCESS_KEY_ID/SECRET -- see bedrock-client.mjs's own header). A synchronous
+    // credential-presence check here would just be a second, possibly-stale copy of that same
+    // resolution logic. If credentials are genuinely absent, the first live call throws a clearly
+    // labeled "AWS credentials unavailable" error, which callEnrichLLM's existing catch turns into
+    // `_callFailed` -- the SAME loud, non-zero-exit-on-total-failure path every other unreachable-
+    // model scenario already goes through (see cmdRun's "FATAL: all N LLM call(s) failed" check).
+    return;
+  }
   FKEY = process.env.OPENAI_API_KEY || (await fleetSecret("openai-api-key"));
   if (!FKEY) { console.error("Missing openai-api-key (env OPENAI_API_KEY or the fleet secret)."); process.exit(2); }
 }
 async function chatJson(messages, max_tokens) {
   const body = { messages, max_tokens, temperature: 0, response_format: { type: "json_object" } };
+  if (LLM_PROVIDER === "bedrock") {
+    // Bedrock branch: pull the exact same system/user content the OpenAI/Azure branches below get
+    // (enrichSystemPrompt()'s domain schema first, the document-text-last `context` string second --
+    // callEnrichLLM's own message-building is untouched, so ordering/content stay byte-identical
+    // across all three providers) and hand it to callBedrockChat(). A throw from callBedrockChat
+    // (network/auth/non-retryable-status/retries-exhausted) is NOT caught here -- it propagates to
+    // callEnrichLLM's own try/catch exactly like an openai/azure `fetch` throw or a non-ok response
+    // above would, which is what turns it into `_callFailed` rather than a silently swallowed retry.
+    const system = messages.find((m) => m.role === "system")?.content || "";
+    const user = messages.find((m) => m.role === "user")?.content || "";
+    return callBedrockChat({ modelId: MODEL, region: BEDROCK_REGION, system, user, maxTokens: max_tokens, temperature: 0 });
+  }
   if (LLM_PROVIDER === "openai") {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -389,15 +442,19 @@ async function chatJson(messages, max_tokens) {
   }
   throw new Error("enrich chat: no working Foundry endpoint");
 }
-const J = (t) => { try { return JSON.parse(t); } catch { try { return JSON.parse(String(t).slice(String(t).indexOf("{"), String(t).lastIndexOf("}") + 1)); } catch { return null; } } };
+// J is enrich-llm.mjs's extractJsonObject, shared (not reimplemented) so the openai/azure/bedrock
+// lanes all go through the identical "parse, else salvage the first {...} substring, else null"
+// contract -- see that function's own doc comment.
+const J = extractJsonObject;
 // Rates follow the PROVIDER, because the default model now does too. Reporting Azure gpt-4.1-mini
 // prices ($0.40/$1.60 per 1M) for an OpenAI gpt-4o-mini run ($0.15/$0.60) would overstate a backfill
 // by ~2.6x, and a cost line that quietly prices a different model than the one that ran is its own
 // small version of reporting something untrue. Illustrative either way -- confirm against live
-// pricing before committing real budget to a large backfill.
+// pricing before committing real budget to a large backfill. See enrich-llm.mjs's ratesFor() for the
+// env-overridable constants (ENRICH_OPENAI_RATE_IN/OUT, ENRICH_AZURE_RATE_IN/OUT,
+// ENRICH_BEDROCK_RATE_IN/OUT) this delegates to.
 function estCost(tin, tout) {
-  const [rin, rout] = LLM_PROVIDER === "openai" ? [0.15, 0.60] : [0.4, 1.6];
-  return (tin / 1e6) * rin + (tout / 1e6) * rout;
+  return estCostFor(LLM_PROVIDER, tin, tout);
 }
 
 // ============================ room name (shared by every Azure AI Search AND OpenSearch call) ============================
@@ -740,6 +797,20 @@ async function enrichOne(r) {
 
 // ============================ run command ============================
 async function cmdRun() {
+  // HARD, code-enforced exclusion (2026-08-29): checked FIRST, before resolveStorage()/resolveLlm()
+  // or any lock/network/secret call, so there is no code path that reaches an LLM with legal-personal
+  // content by accident -- mirrors deep-pass.mjs's isLlmExcludedRoom() check, which runs at the exact
+  // same point in its own main() for the identical reason. Computed independently of resolveStorage()
+  // (which has not run yet) using the SAME `containerOverride || profile default` formula it uses, so
+  // this check sees the true effective container even when --container overrides the profile's
+  // default -- see isLegalPersonalRoom's own doc comment in pipeline-paths.mjs for why that override
+  // is a real, reachable eligibility surface and not a hypothetical one.
+  const effectiveContainer = containerOverride || (STORAGE_PROFILES[PROFILE] || STORAGE_PROFILES.commerce).azContainer;
+  if (isLegalPersonalRoom(PROFILE, effectiveContainer)) {
+    console.error(`[enrich] REFUSED: --profile legal --container personal (attorney-client-privileged) may never reach an LLM call ` +
+      `in this pipeline, regardless of --llm-provider (openai/azure/bedrock all refused). This is a hard, code-enforced exclusion, not a flag.`);
+    process.exit(2);
+  }
   await resolveStorage();
   await resolveLlm();
   if (BACKEND === "opensearch") await resolveOpenSearch();
@@ -826,7 +897,12 @@ async function cmdRun() {
     const out = ["path,doc_type,extraction_confidence,reasons", ...flaggedRows.map((r) => [csv(r.path), csv(r.doc_type), csv(r.extraction_confidence), csv((r.enrich_reasons || []).join("; "))].join(","))].join("\n");
     await putBuf("_REVIEW/metadata-review-queue.csv", Buffer.from(out, "utf8"), "text/csv");
     const osSummary = BACKEND === "opensearch" ? `, opensearch: ${osSynced} doc(s) synced (${osChunks} chunk writes), ${osErrors} error(s)` : "";
-    const llmSummary = llmCalls ? `, llm: ${llmCalls - llmFailed}/${llmCalls} calls ok` : "";
+    // tokens_in/out come straight from each provider's own usage block (OpenAI/Azure
+    // prompt_tokens/completion_tokens, or Bedrock's Converse inputTokens/outputTokens via
+    // callBedrockChat's identical-shape mapping) -- printed alongside the cost estimate (not only
+    // inside it) so a Bedrock run's honesty is directly checkable against AWS's own billing console
+    // rather than trusting this file's RATES table alone.
+    const llmSummary = llmCalls ? `, llm: ${llmCalls - llmFailed}/${llmCalls} calls ok, tokens_in=${tin} tokens_out=${tout} provider=${LLM_PROVIDER} model=${MODEL}` : "";
     console.log(`[enrich] +${n} docs processed (${flagged} flagged low-confidence -> _REVIEW/metadata-review-queue.csv), ~$${estCost(tin, tout).toFixed(3)}${llmSummary}${osSummary}${budgetHit ? " (time budget hit -- resumable, rerun for the tail)" : ""}.`);
 
     // EXIT NON-ZERO WHEN EVERY LLM CALL FAILED. Without this the run reports "+N docs processed"
@@ -984,7 +1060,9 @@ try {
   else {
     console.error(`commands: run | ensure-schema | reindex-room [--full-reset] [--wait-minutes n] | verify --path "<catalog path>"
 flags: --profile finance|legal|commerce|commons --domain-pack <name> --azure-account a --container c --key-secret s
-       --limit n --concurrency n --max-minutes n --model gpt-4.1-mini --reindex
+       --limit n --concurrency n --max-minutes n --model <id> --reindex
+       --llm-provider openai|azure|bedrock (default openai; also ENRICH_PROVIDER/ENRICH_LLM_PROVIDER)
+       --bedrock-region r (default us-east-1; also BEDROCK_REGION) -- see PILOT-bedrock-enrich.md before using bedrock on a real backfill
        --search-backend azure|opensearch (default azure; opensearch supported by 'run' and 'verify' only)`);
     process.exit(2);
   }
