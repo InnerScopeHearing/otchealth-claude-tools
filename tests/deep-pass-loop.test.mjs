@@ -135,3 +135,69 @@ test("selectTodo: a row with no `path` is never selected", () => {
   const rows = [{ deep: false }];
   assert.equal(selectTodo(rows, {}).length, 0);
 });
+
+// ---- FND-20260828-fe09: selectTodo ported from the blanket `!path.startsWith("_")` rule to the same
+// isPipelineInternal() explicit prefix list enrich.mjs's #463 fix already uses (pipeline-paths.mjs).
+// The header's own former "A KNOWN, EXPLICIT, NON-SILENT GAP" note (this file, and the PR #472 gap it
+// tracked) is retired by this change; see pipeline-paths.mjs / pipeline-internal-paths.test.mjs for the
+// underlying predicate's own dedicated coverage. These cases are the SAME production shapes enrich.mjs's
+// own regression suite uses, applied to deep-pass's selectTodo rather than isPipelineInternal directly,
+// so a revert of THIS file's wiring (not just a break in pipeline-paths.mjs itself) is caught here too.
+test("selectTodo: underscore-prefixed CONTENT paths (e.g. _NOTION/, _RESEARCH/) are now ELIGIBLE -- the "
+  + "same regression class enrich.mjs's #463 fix closed (measured there: legal-company alone lost +183 "
+  + "real docs to the identical blanket rule)", () => {
+  const rows = [
+    { path: "_NOTION/some-legal-page.md" },
+    { path: "_RESEARCH/cro/2026-07-15/report.md" },
+    { path: "_DOCS/platform-connectivity/chatgpt.md" },
+    { path: "_JOURNAL/2026-08-01.md" },
+  ];
+  const todo = selectTodo(rows, {});
+  assert.deepEqual(
+    todo.map((r) => r.path).sort(),
+    rows.map((r) => r.path).sort(),
+    "every underscore-prefixed CONTENT path must be selected, not silently dropped"
+  );
+});
+
+test("selectTodo: the full pipeline-internal prefix list (_TEXT/, _CATALOG/, _REVIEW/, _MEMORY/, "
+  + "_STATE/, _ARCHIVE/) stays excluded after the isPipelineInternal port -- the narrowing is not a "
+  + "loosening of intent, only of scope", () => {
+  const rows = [
+    { path: "_TEXT/foo.pdf.txt" },
+    { path: "_CATALOG/catalog.jsonl" },
+    { path: "_CATALOG/.enrich.lock" },
+    { path: "_REVIEW/review-queue.csv" },
+    { path: "_MEMORY/_exec/cto.jsonl" },
+    { path: "_STATE/last-run.json" },
+    { path: "_ARCHIVE/otchealth-brain-snapshot-2026-07-14.jsonl" },
+  ];
+  assert.equal(selectTodo(rows, {}).length, 0);
+});
+
+test("selectTodo: a bare prefix without its trailing slash is not treated as bookkeeping (mirrors "
+  + "isPipelineInternal's own contract -- '_TEXTBOOK/...' must not match '_TEXT/')", () => {
+  const rows = [{ path: "_TEXTBOOK/chapter-1.md" }, { path: "_CATALOGUE/2026-spring.pdf" }];
+  assert.equal(selectTodo(rows, {}).length, 2);
+});
+
+test("fail-on-old-code proof: the blanket `!path.startsWith('_')` rule this replaced disagrees on the "
+  + "content cases -- run against the UNMODIFIED selectTodo (before the isPipelineInternal port) this "
+  + "assertion on the real, imported selectTodo fails; it only passes once selectTodo is ported", () => {
+  const oldSelectTodo = (rows, opts = {}) => {
+    let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (opts.reindex || !r.deep || unresolved(r)));
+    if (opts.prefix) todo = todo.filter((r) => (r.path || '').startsWith(opts.prefix));
+    if (opts.limit) todo = todo.slice(0, opts.limit);
+    return todo;
+  };
+  const contentRows = [{ path: "_NOTION/some-legal-page.md" }, { path: "_RESEARCH/cro/2026-07-15/report.md" }];
+  // The old rule (reproduced verbatim, not imported -- it no longer exists in the module) wrongly
+  // excludes real content. This documents exactly what changed, mirroring
+  // pipeline-internal-paths.test.mjs's own "fail-on-old-code proof" test for isPipelineInternal itself.
+  assert.equal(oldSelectTodo(contentRows).length, 0, "the old blanket rule wrongly excluded real content");
+  assert.equal(selectTodo(contentRows, {}).length, 2, "the fixed rule correctly includes it");
+  // and both agree on genuine bookkeeping, so the change is a narrowing, not a loosening, of intent
+  const bookkeepingRows = [{ path: "_TEXT/a.txt" }, { path: "_CATALOG/catalog.jsonl" }, { path: "_REVIEW/q.csv" }];
+  assert.equal(oldSelectTodo(bookkeepingRows).length, 0);
+  assert.equal(selectTodo(bookkeepingRows, {}).length, 0);
+});
