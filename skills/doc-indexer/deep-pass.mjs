@@ -53,15 +53,20 @@
 // checked first thing in main()), not left as a documentation-only convention. See that function's own
 // comment for the reasoning.
 //
-// A KNOWN, EXPLICIT, NON-SILENT GAP (verify pass REQUIRED FIX #4, kept as an accepted decision rather
-// than fixed in this PR): selectTodo()'s eligibility filter is still the blanket `!path.startsWith("_")`
-// pattern-match that enrich.mjs's #463 fix (2026-08-19) replaced with an explicit isPipelineInternal()
-// prefix list after finding it silently excluded ~2,900 real documents in the commons room alone.
-// deep-pass.mjs's rooms (finance/legal) lose fewer documents to this than commons did, but legal-company
-// alone lost +183 real docs to the identical bug per that same fix's measurement. Porting selectTodo to
-// isPipelineInternal() is out of this PR's scope (it is a selection-logic change orthogonal to the
-// provider/storage port, and touches the pure, separately regression-tested selectTodo/unresolved
-// contract tests/deep-pass-loop.test.mjs pins) -- recorded here as an accepted, tracked gap, not silence.
+// FND-20260828-fe09, CLOSED (2026-08-29): selectTodo()'s eligibility filter used to be the blanket
+// `!path.startsWith("_")` pattern-match that enrich.mjs's #463 fix (2026-08-19) replaced with an
+// explicit isPipelineInternal() prefix list after finding it silently excluded ~2,900 real documents
+// in the commons room alone. deep-pass.mjs's rooms (finance/legal) lost fewer documents to this than
+// commons did, but legal-company alone lost +183 real docs to the identical bug per that same fix's
+// measurement. selectTodo now imports the SAME isPipelineInternal() predicate from pipeline-paths.mjs
+// (a pure, dependency-free module -- no coupling to enrich.mjs's CLI/argv machinery is introduced),
+// so both scripts agree on exactly what counts as pipeline bookkeeping vs. real content. This was
+// previously recorded here as an accepted, tracked gap (verify pass REQUIRED FIX #4 on PR #472,
+// findings-ledger FND-20260828-fe09) rather than fixed in that PR; it is fixed now. See
+// tests/deep-pass-loop.test.mjs's FND-20260828-fe09 block for the counterfactual proof (a
+// _NOTION/_RESEARCH-style content path is selected; _TEXT/_CATALOG/_REVIEW/_MEMORY/_STATE/_ARCHIVE
+// pipeline-internal paths stay excluded) and pipeline-internal-paths.test.mjs for the predicate's own
+// dedicated coverage.
 //
 // Usage: node deep-pass.mjs --profile legal|finance
 //          [--container company|personal|cfo-source-docs] [--account <acct>] [--key-secret <sm>]
@@ -81,6 +86,11 @@ import { kvSecret, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import { fleetSecret } from "./fleet-secret.mjs";
 import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
 import { converseJson } from "./bedrock-client.mjs";
+// isPipelineInternal (FND-20260828-fe09): the SAME predicate enrich.mjs's #463 fix uses, imported
+// rather than re-derived so the two scripts can never silently disagree on what counts as pipeline
+// bookkeeping. pipeline-paths.mjs is pure (no IO, no argv, no top-level side effects), so importing it
+// here does not pull in enrich.mjs's CLI/argv-parsing machinery -- see that module's own header.
+import { isPipelineInternal } from "./pipeline-paths.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 const argv = process.argv.slice(2);
@@ -496,16 +506,16 @@ let flushing = false;
 async function flush(rows) { if (flushing) return; flushing = true; try { await putBuf(CATALOG, Buffer.from(rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8'), 'application/x-ndjson'); } finally { flushing = false; } }
 
 // ---------- selection logic (pure, exported for regression testing -- see tests/deep-pass-loop.test.mjs) ----------
-// KNOWN, TRACKED, EXPLICIT GAP (verify pass REQUIRED FIX #4, deliberately NOT fixed in this PR -- see
-// the file header's "A KNOWN, EXPLICIT, NON-SILENT GAP" note): this filter is still the blanket
-// `!path.startsWith("_")` pattern-match enrich.mjs's #463 fix replaced with isPipelineInternal()
-// elsewhere in this pipeline. Left as-is here because this PR's scope is the storage/LLM-provider
-// port and the flood-guard fix, and selectTodo/unresolved carry their own separately-pinned regression
-// contract (tests/deep-pass-loop.test.mjs) this port must not disturb.
+// FND-20260828-fe09, CLOSED: this filter now uses the SAME isPipelineInternal() explicit prefix list
+// enrich.mjs's #463 fix uses, rather than the blanket `!path.startsWith("_")` pattern-match that used
+// to live here (see this file's header for the full history). It was previously left as-is because
+// PR #472's scope was the storage/LLM-provider port and the flood-guard fix; selectTodo/unresolved
+// still carry their own separately-pinned regression contract (tests/deep-pass-loop.test.mjs), now
+// extended with the counterfactual proof for this change.
 const REOCR_RE = /thin|re-?OCR/i;
 const unresolved = (r) => (r.review_reasons || []).some((x) => REOCR_RE.test(x)) && !r.non_text_asset && !r.reocr && !r.reocr_tried;
 function selectTodo(rows, { reindex = false, prefix = '', limit = 0 } = {}) {
-  let todo = rows.filter((r) => r.path && !r.path.startsWith('_') && (reindex || !r.deep || unresolved(r)));
+  let todo = rows.filter((r) => r.path && !isPipelineInternal(r.path) && (reindex || !r.deep || unresolved(r)));
   if (prefix) todo = todo.filter((r) => (r.path || '').startsWith(prefix));
   if (limit) todo = todo.slice(0, limit);
   return todo;
@@ -670,7 +680,11 @@ async function main() {
   // before this port. A direct OpenSearch projection (the design doc's C10) is a tracked follow-up,
   // NOT built in this PR -- every completed room will print the WARN below every time until it lands;
   // that WARN is expected noise, not a new regression.
-  const remaining = rows.filter((r) => r.path && !r.path.startsWith('_') && !r.deep).length;
+  // FND-20260828-fe09: this reporting-only count must use the SAME eligibility predicate as
+  // selectTodo, or it silently under-reports "remaining" work on rooms with underscore-prefixed
+  // content paths (e.g. a budget-hit run that leaves some _NOTION/_RESEARCH-style rows un-deep-ed
+  // would otherwise be misreported as fully complete for those rows).
+  const remaining = rows.filter((r) => r.path && !isPipelineInternal(r.path) && !r.deep).length;
   const deepCount = rows.filter((r) => r.deep).length;
   const reocrCount = rows.filter((r) => r.reocr).length;
   const nonText = rows.filter((r) => r.non_text_asset).length;
