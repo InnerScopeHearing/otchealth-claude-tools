@@ -59,12 +59,15 @@ const CRITIC_SYSTEM =
 // (observed reasoning-token spend ranged 339-1657 across repeated calls on the SAME input -- itself
 // non-deterministic, so this needs real margin, not just "one more than what failed once"). 3000
 // leaves that margin. Env-overridable (CRITIC_MAX_TOKENS) like every other tunable in this file.
-// positiveInt() guards that override: an unset, empty, zero, negative, fractional, or non-finite
-// value (e.g. "0", "-1", "Infinity", a typo) falls back to the safe default instead of being sent to
-// the API as-is, which would either silently disable the budget or throw a confusing provider error.
+// positiveInt() guards that override: an unset, empty, zero, negative, or non-finite value (e.g.
+// "0", "-1", "Infinity", a typo) falls back to the safe default instead of being sent to the API
+// as-is, which would either silently disable the budget or throw a confusing provider error. Floors
+// FIRST, then validates the floored result, not the raw input: a raw value strictly between 0 and 1
+// (e.g. "0.7") is positive before flooring but floors to 0, which is exactly the degenerate value
+// this guard exists to prevent -- validating the pre-floor value would have let it through.
 function positiveInt(raw, fallback) {
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 const CRITIC_MAX_TOKENS = positiveInt(process.env.CRITIC_MAX_TOKENS, 3000);
 

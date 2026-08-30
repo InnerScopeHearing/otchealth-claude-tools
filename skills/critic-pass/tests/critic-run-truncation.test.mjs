@@ -72,8 +72,11 @@ test("the default token budget is well above the historical 700 that truncated r
     );
   }));
 
-test("CRITIC_MAX_TOKENS input validation: unset/zero/negative/fractional/non-finite overrides all fall back to the safe default rather than reaching the API as-is", async () => {
-  for (const bad of ["0", "-1", "Infinity", "not-a-number", ""]) {
+test("CRITIC_MAX_TOKENS input validation: unset/zero/negative/sub-one-fractional/non-finite overrides all fall back to the safe default rather than reaching the API as-is", async () => {
+  // "0.7" and "0.999" are POSITIVE before flooring but floor to 0 -- exactly the trap of validating
+  // the raw value instead of the floored one (caught live by this very critic pass reviewing this PR:
+  // the first version of positiveInt() validated pre-floor and let max_completion_tokens:0 through).
+  for (const bad of ["0", "-1", "Infinity", "not-a-number", "", "0.7", "0.999", "-0.5"]) {
     await withEnvVars({ ...BASE_ENV, CRITIC_MAX_TOKENS: bad }, async () => {
       const { runCriticPass } = await freshRunModule();
       let sentBody = null;
