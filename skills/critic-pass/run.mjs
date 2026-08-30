@@ -59,7 +59,14 @@ const CRITIC_SYSTEM =
 // (observed reasoning-token spend ranged 339-1657 across repeated calls on the SAME input -- itself
 // non-deterministic, so this needs real margin, not just "one more than what failed once"). 3000
 // leaves that margin. Env-overridable (CRITIC_MAX_TOKENS) like every other tunable in this file.
-const CRITIC_MAX_TOKENS = Number(process.env.CRITIC_MAX_TOKENS) || 3000;
+// positiveInt() guards that override: an unset, empty, zero, negative, fractional, or non-finite
+// value (e.g. "0", "-1", "Infinity", a typo) falls back to the safe default instead of being sent to
+// the API as-is, which would either silently disable the budget or throw a confusing provider error.
+function positiveInt(raw, fallback) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+const CRITIC_MAX_TOKENS = positiveInt(process.env.CRITIC_MAX_TOKENS, 3000);
 
 // ---- creds (same JWT-SA -> Secret Manager pattern the rest of the toolkit uses) ----
 function resolveSa() {

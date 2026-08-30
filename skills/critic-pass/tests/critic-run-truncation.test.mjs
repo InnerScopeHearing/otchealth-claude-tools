@@ -72,6 +72,30 @@ test("the default token budget is well above the historical 700 that truncated r
     );
   }));
 
+test("CRITIC_MAX_TOKENS input validation: unset/zero/negative/fractional/non-finite overrides all fall back to the safe default rather than reaching the API as-is", async () => {
+  for (const bad of ["0", "-1", "Infinity", "not-a-number", ""]) {
+    await withEnvVars({ ...BASE_ENV, CRITIC_MAX_TOKENS: bad }, async () => {
+      const { runCriticPass } = await freshRunModule();
+      let sentBody = null;
+      await withStubbedFetch(async (url, init) => {
+        sentBody = JSON.parse(init.body);
+        return okResponse(approveJson);
+      }, () => runCriticPass({ task: "t", draft: "d" }));
+      assert.equal(sentBody.max_completion_tokens, 3000, `CRITIC_MAX_TOKENS=${JSON.stringify(bad)} must fall back to the default, not reach the API as-is`);
+    });
+  }
+  // a genuinely valid override is still honored, and non-integer values are floored (max_completion_tokens must be a whole number).
+  await withEnvVars({ ...BASE_ENV, CRITIC_MAX_TOKENS: "1500.7" }, async () => {
+    const { runCriticPass } = await freshRunModule();
+    let sentBody = null;
+    await withStubbedFetch(async (url, init) => {
+      sentBody = JSON.parse(init.body);
+      return okResponse(approveJson);
+    }, () => runCriticPass({ task: "t", draft: "d" }));
+    assert.equal(sentBody.max_completion_tokens, 1500, "a valid fractional override is floored to a whole number, not passed through raw");
+  });
+});
+
 test("TRUNCATED-EMPTY (finish_reason:length, empty content): auto-escalates the budget ONCE and still returns a real, non-malformed verdict", async () =>
   withEnvVars({ ...BASE_ENV, CRITIC_MAX_TOKENS: "1000" }, async () => {
     const { runCriticPass } = await freshRunModule();
