@@ -777,10 +777,10 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-29T05:17:26.171Z
 - **Closed:** (open)
 
-### finding:FND-20260830-ccb9 severity:high status:open | doc-indexer jobs cannot read opensearch-endpoint: kv-secret falls through DEAD Azure auth paths (identity/sp/azcli), task defs have SECRET_BACKEND unset and zero injected secrets, job still exits 0 -- silent-success; brain room freshness may be silently dead
+### finding:FND-20260830-ccb9 severity:high status:fixed | doc-indexer jobs cannot read opensearch-endpoint: kv-secret falls through DEAD Azure auth paths (identity/sp/azcli), task defs have SECRET_BACKEND unset and zero injected secrets, job still exits 0 -- silent-success; brain room freshness may be silently dead
 
 - **Source audit doc:** CTO ARM64 proof run 2026-08-30 (librarian-commerce task 13a70411d18741a391d3c1307adf77bb, /ecs/otchealth)
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** DISPROVEN on its own hypothesis, then superseded by the real cause. kvSecret() default IS ssm and IS tried first (PR #466/e917525, 2026-08-27); doc-indexer:latest pushed 2026-08-29T22:51Z is FRESH (2 days after that fix); the alarming '[kv-secret] READ failed via all auth paths' line only reports the Key Vault FALLBACK tier and fires whenever an SSM param is simply absent -- /otchealth/opensearch-endpoint and -region were NEVER created (both ParameterNotFound, CTO-verified live), and opensearch-write.mjs resolveOpenSearchConfig() has a documented DEFAULT_HOST fallback byte-identical to the live otchealth-brain endpoint (CTO-verified by reading origin/main). Doc rooms are NOT stale: legal-company backfill logged os synced=7944 chunks=74695 and finance logged os synced=9999 chunks=101038 through this exact path/image while the finding was open. REAL cause of actual staleness found instead: FND-20260830-ring (ring-memory-index azure/foundry defaults), fixed in claude-tools #499 squash 9b2381c.
 - **Opened:** 2026-08-30T01:51:00.770Z
-- **Closed:** (open)
+- **Closed:** 2026-08-30T02:19:23.140Z
