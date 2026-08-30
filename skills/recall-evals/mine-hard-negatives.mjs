@@ -58,7 +58,7 @@ import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { cGet, cList, commonsConfigured } from "../kb-memory/commons-store.mjs";
 import { tokenize, jaccard } from "../kb-memory/dedupe.mjs";
-import { chatBody, resolveTier, fetchOpenAIWithFlexRetry } from "../../setup/model-routing.mjs";
+import { chatBody, resolveTier, fetchOpenAIWithFlexRetry, positiveIntEnv } from "../../setup/model-routing.mjs";
 import { hitAtK, groupHitLines } from "./scoring.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -234,6 +234,16 @@ export async function fetchAllSharedRows({ cListFn = cList, cGetFn = cGet, commo
 
 // ---- IO: Azure OpenAI chat (mirrors mine-cases.mjs's callChat exactly) -----------------------------
 
+// MINE_HARDNEG_MAX_TOKENS 500 -> 2000 (2026-08-30, FND-20260830-e927): resolveTier('standard','openai')
+// is gpt-5.6-terra since the 2026-08-29 refresh (reasoning-family; was gpt-4.1, chat-family). Live-
+// tested this exact single-pair prompt shape 4 times at 500 with no truncation (max total completion
+// observed: 240), but the SAME model family truncated 6/6 times on a harder company-brain prompt in
+// this same sweep, so a clean small sample here is not proof against a longer or more tangled real
+// ledger correction. 2000 leaves real margin at effectively no extra cost on the easy majority of
+// pairs (max_completion_tokens is billed on tokens actually generated, not requested). Env-overridable
+// (MINE_HARDNEG_MAX_TOKENS).
+const MINE_HARDNEG_MAX_TOKENS = positiveIntEnv("MINE_HARDNEG_MAX_TOKENS", 2000);
+
 // FLEX PROCESSING (2026-08-29, see setup/model-routing.mjs's own header for the full contract): this
 // miner had NO retry-on-429 at all before (a bare `if (!r.ok) throw`), so routing the OpenAI branch
 // through the shared fetchOpenAIWithFlexRetry() is a strict improvement under flex (adds a retry
@@ -243,6 +253,14 @@ export async function fetchAllSharedRows({ cListFn = cList, cGetFn = cGet, commo
 // override OPENAI_SERVICE_TIER_RECALL_EVALS_MINE_HARD_NEGATIVES (or the fleet-wide
 // OPENAI_SERVICE_TIER). Both unset (the default everywhere today) means this miner's shape and
 // timing are untouched by this change.
+//
+// REASONING-TRUNCATION (2026-08-30, FND-20260830-e927): fetchOpenAIWithFlexRetry() now throws
+// (tagged `.reasoningExhausted`) instead of returning "" when the response is truncated-empty (see
+// that function's own comment in setup/model-routing.mjs). This callChat()'s own OpenAI branch does
+// not need its own catch for that -- main()'s loop below already treats ANY thrown error from
+// callChat() as "skip this candidate, log why, continue" (see the `catch (e)` around this call), so
+// the throw is caught there and reported with a precise reason instead of the generic "unparseable/
+// incomplete candidate" message parseHardNegCandidate("") used to produce for the exact same event.
 export async function callChat(system, user) {
   if (LLM_PROVIDER === "openai") {
     const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
@@ -251,18 +269,19 @@ export async function callChat(system, user) {
     return fetchOpenAIWithFlexRetry({
       apiKey: key, deployment: dep,
       messages: [{ role: "system", content: system }, { role: "user", content: user }],
-      maxTokens: 500, jsonMode: true, caller: "recall-evals-mine-hard-negatives",
+      maxTokens: MINE_HARDNEG_MAX_TOKENS, jsonMode: true, caller: "recall-evals-mine-hard-negatives",
     });
   }
   // Azure/Foundry path, unchanged, selectable via LLM_PROVIDER=foundry|azure. Foundry, not the legacy
   // azure-openai resource: TIERS.standard.deployment ('gpt-4.1') only exists on Foundry (2,000K TPM
   // GlobalStandard); the legacy resource's gpt-4o deployment is capped at 50K TPM with zero headroom
-  // (see setup/model-routing.mjs LEGACY_STANDARD).
+  // (see setup/model-routing.mjs LEGACY_STANDARD). gpt-4.1 is CHAT-family, so this branch carries none
+  // of the reasoning-truncation risk the OpenAI branch above does; left unchanged.
   const ep = (await kvSecret("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
   const key = await kvSecret("azure-foundry-key");
   const dep = process.env.MINE_MODEL || resolveTier("standard", "azure").deployment;
   if (!ep || !key) throw new Error("missing azure-foundry endpoint/key");
-  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 500, jsonMode: true });
+  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: MINE_HARDNEG_MAX_TOKENS, jsonMode: true });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-08-01-preview`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
   return (await r.json()).choices?.[0]?.message?.content || "";

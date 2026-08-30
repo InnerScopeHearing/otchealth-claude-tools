@@ -25,7 +25,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { chatBody, resolveTier, fetchOpenAIWithFlexRetry } from "../../setup/model-routing.mjs";
+import { chatBody, resolveTier, fetchOpenAIWithFlexRetry, positiveIntEnv } from "../../setup/model-routing.mjs";
 import { hitAtK, groupHitLines } from "./scoring.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -67,6 +67,16 @@ function corpus() {
   return uniq;
 }
 
+// MINE_CASES_MAX_TOKENS 1500 -> 4000 (2026-08-30, FND-20260830-e927): resolveTier('standard','openai')
+// is gpt-5.6-terra since the 2026-08-29 refresh (reasoning-family; was gpt-4.1, chat-family). Live-
+// tested this exact batch-of-8-facts prompt shape 4 times at 1500: no truncation, but real variance
+// (reasoning 157-553, total completion 566-945 -- one run used 63% of the budget on an EASY, clearly-
+// worded batch of facts). A harder or longer real batch from the actual ledger tail could plausibly
+// exceed 1500; a same-family sibling (company-brain) truncated 6/6 times on a harder prompt in this
+// same sweep. 4000 leaves real margin for an 8-item JSON array at effectively no extra cost on the
+// easy majority of batches. Env-overridable (MINE_CASES_MAX_TOKENS).
+const MINE_CASES_MAX_TOKENS = positiveIntEnv("MINE_CASES_MAX_TOKENS", 4000);
+
 // FLEX PROCESSING (2026-08-29, see setup/model-routing.mjs's own header for the full contract): this
 // miner had NO retry-on-429 at all before (a bare `if (!r.ok) throw`), so routing the OpenAI branch
 // through the shared fetchOpenAIWithFlexRetry() is a strict improvement under flex (adds a retry
@@ -75,6 +85,12 @@ function corpus() {
 // behavior (`chat ${status}: ${body}`). Caller label "recall-evals-mine-cases" -> env override
 // OPENAI_SERVICE_TIER_RECALL_EVALS_MINE_CASES (or the fleet-wide OPENAI_SERVICE_TIER). Both unset
 // (the default everywhere today) means this miner's shape and timing are untouched by this change.
+//
+// REASONING-TRUNCATION (2026-08-30, FND-20260830-e927): fetchOpenAIWithFlexRetry() now throws
+// (tagged `.reasoningExhausted`) instead of returning "" when the response is truncated-empty (see
+// that function's own comment in setup/model-routing.mjs). main()'s batch loop below already treats
+// ANY thrown error from callChat() as "log it, skip this batch, continue" (see its own `catch (e)`),
+// so this surfaces with a precise reason instead of a silently-empty batch of zero mined cases.
 export async function callChat(system, user) {
   if (LLM_PROVIDER === "openai") {
     const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
@@ -83,18 +99,19 @@ export async function callChat(system, user) {
     return fetchOpenAIWithFlexRetry({
       apiKey: key, deployment: dep,
       messages: [{ role: "system", content: system }, { role: "user", content: user }],
-      maxTokens: 1500, jsonMode: true, caller: "recall-evals-mine-cases",
+      maxTokens: MINE_CASES_MAX_TOKENS, jsonMode: true, caller: "recall-evals-mine-cases",
     });
   }
   // Azure/Foundry path, unchanged, selectable via LLM_PROVIDER=foundry|azure. Foundry, not the legacy
   // azure-openai resource: TIERS.standard.deployment ('gpt-4.1') only exists on Foundry (2,000K TPM
   // GlobalStandard); the legacy resource's gpt-4o deployment is capped at 50K TPM with zero headroom
-  // (see setup/model-routing.mjs LEGACY_STANDARD).
+  // (see setup/model-routing.mjs LEGACY_STANDARD). gpt-4.1 is CHAT-family, so this branch carries none
+  // of the reasoning-truncation risk the OpenAI branch above does; left unchanged.
   const ep = (await kvSecret("azure-foundry-openai-endpoint") || "").replace(/\/$/, "");
   const key = await kvSecret("azure-foundry-key");
   const dep = process.env.MINE_MODEL || resolveTier("standard", "azure").deployment;
   if (!ep || !key) throw new Error("missing azure-foundry endpoint/key");
-  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 1500, jsonMode: true });
+  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: MINE_CASES_MAX_TOKENS, jsonMode: true });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-08-01-preview`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
   return (await r.json()).choices?.[0]?.message?.content || "";

@@ -51,7 +51,7 @@
 //   node brain.mjs rooms                      # list the indexes it can search
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { TIERS, LEGACY_STANDARD, resolveTier, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, resolveTier, modelFamilyOf, chatBody, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { RING_DENY } from "../kb-memory/dedupe.mjs";
 // OpenAI-direct embeddings + credential resolution, reused from the module that already owns them
@@ -269,18 +269,56 @@ export function chatRequestFor(p, body) {
     body,
   };
 }
-async function callChat(p, system, user, tries) {
+// BRAIN_MAX_TOKENS 900 -> 6000 (2026-08-30, FND-20260830-e927): live-reproduced against this tool's
+// OWN synthesis shape (14 real sources, a genuinely demanding "walk through every incident and
+// explain the connections" question, the exact prompt shape ask() builds below): 900 tokens
+// truncated 6/6 times and 2000 tokens truncated 3/3 times, EVERY time finish_reason:"length" with
+// ZERO visible content -- an HTTP 200, not an error. This tool is the fleet's GROUND-FIRST source of
+// truth (every repo's CLAUDE.md instructs every agent to answer company questions ONLY from this
+// tool's output); a silently blank answer printed between a correct header and a correct "grounded
+// in N sources" footer does not read as a failure to a human or another agent, it reads as an
+// authoritative non-answer. 3000+ succeeded reliably in the same live test (visible completion up to
+// ~2400 tokens on the hardest question tried). 6000 leaves real margin over that observed ceiling; it
+// costs nothing extra on the easy majority of questions (max_completion_tokens is a CAP billed on
+// tokens actually generated, not a floor -- the very first, simpler test question in this same sweep
+// used only ~300-340 total tokens even against a 900 cap) and only matters the moment a question
+// genuinely needs the room. Env-overridable (BRAIN_MAX_TOKENS) for a future re-tuning with no code
+// change.
+const BRAIN_MAX_TOKENS = positiveIntEnv("BRAIN_MAX_TOKENS", 6000);
+
+// Exported (2026-08-30, alongside the BRAIN_MAX_TOKENS fix) purely for direct unit testing of the
+// real HTTP path with a mocked fetch and a synthetic provider object -- mirrors this file's existing
+// pattern of exporting pure/testable pieces (chatRequestFor, assessSearchOutcome, ...) rather than
+// leaving the whole network path only reachable through the CLI's ask()/init() flow. No behavior change.
+export async function callChat(p, system, user, tries) {
   // Request-body shape (max_completion_tokens vs max_tokens+temperature) is decided ONCE, centrally,
   // in setup/model-routing.mjs so every caller in the fleet (and the gateway) agrees. It keys off the
   // model NAME, so it is correct for both providers: gpt-5.x/o-series are reasoning-family and reject
   // max_tokens + a non-default temperature on api.openai.com exactly as they do on Foundry.
-  const shaped = chatBody(p.dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 900 });
-  const req = chatRequestFor(p, shaped);
+  let curTokens = BRAIN_MAX_TOKENS;
+  let escalated = false;
   for (let a = 0; a < tries; a++) {
+    const shaped = chatBody(p.dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: curTokens });
+    const req = chatRequestFor(p, shaped);
     const r = await fetch(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(req.body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error(`chat ${p.label} ${r.status} ${(await r.text()).slice(0, 160)}`);
-    return (await r.json()).choices[0].message.content;
+    const choice = (await r.json()).choices[0];
+    // On truncated-empty (the reasoning-budget-exhaustion shape, see BRAIN_MAX_TOKENS's comment
+    // above), retry within the SAME existing `tries` budget the 429 path already uses, escalating
+    // the token budget 2x on the FIRST such occurrence only (never repeatedly). If it is STILL
+    // truncated-empty on the final attempt, THROW a clear, distinct error instead of silently
+    // returning "" as if it were a real (blank) answer -- ask()/diffCmd() below have no try/catch of
+    // their own around this call, so this surfaces as an unmistakable top-level "ERROR: ..." on the
+    // CLI rather than a blank line between two structurally-correct-looking output lines.
+    if (truncatedEmpty(choice) && a < tries - 1) { if (!escalated) { escalated = true; curTokens = curTokens * 2; } continue; }
+    if (truncatedEmpty(choice)) {
+      throw Object.assign(
+        new Error(`chat ${p.label}: reasoning model exhausted its token budget (${curTokens}) on hidden reasoning with no visible output (finish_reason=length) even after retry+escalation -- this is an infra failure, not a real (blank) answer`),
+        { reasoningExhausted: true }
+      );
+    }
+    return choice.message.content;
   }
   throw Object.assign(new Error("429"), { throttled: true });
 }

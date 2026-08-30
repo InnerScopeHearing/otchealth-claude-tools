@@ -58,7 +58,7 @@ import { execFileSync } from "node:child_process";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { diffScorecards } from "./promptcheck.mjs";
-import { TIERS, chatBody, resolveTier } from "../../setup/model-routing.mjs";
+import { TIERS, chatBody, resolveTier, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 // LLM_PROVIDER (2026-08-27, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
@@ -452,16 +452,43 @@ function loadTaskRubric(agent, taskId) {
 // calls llm() synchronously): callers that need the network use rewriteCmd's async wrapper, which
 // resolves the hunk first and hands proposeRewrite a closure returning that resolved string.
 // defaultRewriteLLM is the async resolver used to build that closure.
-async function defaultRewriteLLM(promptText) {
+// REASONING-TRUNCATION (2026-08-30, FND-20260830-e927): resolveTier('quality','openai') is
+// gpt-5.6-sol, reasoning-family both before and after the 2026-08-29 refresh (gpt-5.1 was already
+// reasoning-family). Live-tested this exact rewrite-a-prompt-hunk shape 4 times at the existing 1200
+// budget: no truncation (max observed completion 188, reasoning 51-70), so 1200 is left unchanged
+// here rather than bumped speculatively. Added anyway: a `truncatedEmpty()` check on the response,
+// so a rare reasoning-budget exhaustion THROWS a precise, tagged error instead of returning "" --
+// proposeRewrite()'s existing `catch (e)` (see above) already converts ANY thrown error into an
+// honest `abstained:true` proposal with the error message folded into `abstain_reason`, so this was
+// already fail-SAFE (an empty string already hit `if (!hunk.trim())` and abstained honestly too);
+// this only makes the RECORDED reason precise ("reasoning model exhausted its token budget..."
+// instead of the generic "LLM caller returned no usable rewrite text"), which matters when a human
+// is deciding whether to just re-run this with a bigger SELFREPAIR_REWRITE_MAX_TOKENS or investigate
+// something else entirely.
+//
+// Exported (2026-08-30, alongside this fix) for direct unit testing with a mocked fetch, mirroring
+// the same export-for-testability pattern applied to callChat/callChatOpenAI elsewhere in this sweep.
+// No behavior change.
+export async function defaultRewriteLLM(promptText) {
   const sys = "You rewrite a prompt hunk to recover failed rubric criteria while keeping the PR's intended change. Output ONLY the replacement hunk text, no commentary, no code fences.";
   if (LLM_PROVIDER === "openai") {
     const dep = process.env.SELFREPAIR_REWRITE_MODEL || resolveTier("quality", "openai").deployment;
     const key = process.env.OPENAI_API_KEY || (await smGet("openai-api-key"));
     if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
-    const body = { ...chatBody(dep, { messages: [{ role: "system", content: sys }, { role: "user", content: promptText }], maxTokens: 1200 }), model: dep };
+    // positiveIntEnv(), not a hand-rolled Number(env) > 0 check: the raw check accepts any positive
+    // value INCLUDING a sub-1 fraction and Infinity, so SELFREPAIR_REWRITE_MAX_TOKENS="0.7" would send
+    // a literal fractional token budget and "Infinity" would pass straight through. That is the same
+    // class the shared guard exists to close (see its floor-before-check comment) -- re-checking it by
+    // hand here is exactly how the class survives its own fix.
+    const maxTokens = positiveIntEnv("SELFREPAIR_REWRITE_MAX_TOKENS", 1200);
+    const body = { ...chatBody(dep, { messages: [{ role: "system", content: sys }, { role: "user", content: promptText }], maxTokens }), model: dep };
     const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error("rewrite chat " + r.status + " " + (await r.text()).slice(0, 160));
-    return (await r.json()).choices[0].message.content;
+    const choice = (await r.json()).choices[0];
+    if (truncatedEmpty(choice)) {
+      throw Object.assign(new Error(`reasoning model "${dep}" exhausted its token budget (${maxTokens}) on hidden reasoning with no visible output (finish_reason=length)`), { reasoningExhausted: true });
+    }
+    return choice.message.content;
   }
   // Azure/Foundry path, unchanged, selectable via LLM_PROVIDER=foundry|azure.
   // TIERS.quality.deployment (gpt-5.1, reasoning-family) only exists on the Foundry resource -- the
@@ -474,7 +501,11 @@ async function defaultRewriteLLM(promptText) {
   const body = chatBody(dep, { messages: [{ role: "system", content: sys }, { role: "user", content: promptText }], maxTokens: 1200 });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error("rewrite chat " + r.status + " " + (await r.text()).slice(0, 160));
-  return (await r.json()).choices[0].message.content;
+  const choice = (await r.json()).choices[0];
+  if (truncatedEmpty(choice)) {
+    throw Object.assign(new Error(`reasoning model "${dep}" exhausted its token budget (1200) on hidden reasoning with no visible output (finish_reason=length)`), { reasoningExhausted: true });
+  }
+  return choice.message.content;
 }
 
 // Minimal GCP Secret Manager read (same JWT->token->access path run-evals.mjs uses), local to the CLI
@@ -529,7 +560,15 @@ async function rewriteCmd() {
   }
   const llm = (offline || llmErr) ? undefined : () => resolvedHunk;
   const proposal = proposeRewrite({ regression, basePromptText, headPromptText, failedRubric }, { llm });
-  if (llmErr && !proposal.abstain_reason) proposal.abstain_reason = `rewrite model call failed: ${llmErr.message}`;
+  // A REAL error (llmErr set) always overrides proposeRewrite()'s generic Guard-3 abstain_reason
+  // ("no LLM caller injected; rewrite hunk not synthesized (report-only offline path)"), which fires
+  // for ANY non-function `llm` including this one -- so the `!proposal.abstain_reason` guard this line
+  // used to carry was DEAD CODE (Guard 3 always populates a non-empty string first, so the condition
+  // was never true) and every real failure, including a reasoning-budget exhaustion, silently surfaced
+  // as the generic offline-path message instead of the actual reason. Fixed: an actual error always
+  // wins, since knowing WHY the call failed is strictly more useful than "no caller was injected" when
+  // a caller WAS injected and DID run.
+  if (llmErr) proposal.abstain_reason = `rewrite model call failed: ${llmErr.message}`;
 
   const md = renderRewriteMarkdown(proposal);
   const outPath = val("--out", ""); const jsonPath = val("--json", "");

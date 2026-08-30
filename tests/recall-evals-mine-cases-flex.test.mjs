@@ -49,7 +49,10 @@ test("DEFAULT (OPENAI_SERVICE_TIER* unset): a single attempt, no service_tier, n
     assert.equal(captured.signal, undefined);
     // resolveTier("standard", "openai") resolves to gpt-5.6-terra (reasoning-family, 2026-08-29
     // refresh), so chatBody() uses max_completion_tokens, not max_tokens -- see model-routing.mjs.
-    assert.equal(captured.body.max_completion_tokens, 1500);
+    // 1500 -> 4000 (2026-08-30, FND-20260830-e927): see MINE_CASES_MAX_TOKENS's own comment in
+    // mine-cases.mjs and tests/recall-evals-mine-cases-truncation.test.mjs for the reasoning-
+    // truncation fix this budget bump is part of.
+    assert.equal(captured.body.max_completion_tokens, 4000);
   }));
 
 test("DEFAULT: a 429 throws IMMEDIATELY (no retry) with the exact pre-existing 'chat <status>: <body>' message shape", async () =>

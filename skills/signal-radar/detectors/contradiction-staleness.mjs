@@ -33,7 +33,7 @@ import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { makeSignal, isMnpiSubject, isPhiExcluded } from "../schema.mjs";
-import { TIERS, LEGACY_STANDARD, chatBody, resolveTier, serviceTierFor, flexRetryPolicy } from "../../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, chatBody, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv } from "../../../setup/model-routing.mjs";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 export const NAME = "contradiction-staleness";
@@ -332,22 +332,51 @@ const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 // header for the full contract.
 const CONTRADICTION_TIER = serviceTierFor("signal-radar-contradiction-staleness");
 
+// CONTRADICTION_MAX_TOKENS 400 -> 3000 (2026-08-30, FND-20260830-e927): this detector's entailment
+// call resolves the 'quality' tier (gpt-5.6-sol as of the 2026-08-29 refresh, reasoning-family both
+// before and after that refresh -- gpt-5.1 was already reasoning-family). Live-reproduced against
+// this exact prompt shape (one NEW statement + up to 20 same-entity PRIOR statements): 1 of 4 initial
+// live calls at 400 tokens came back finish_reason:"length" with ZERO visible content (reasoning
+// alone consumed the entire budget); a further 24 calls across 400-2000 tokens on the same prompt
+// did not repeat it, confirming the spend is genuinely NON-DETERMINISTIC (observed reasoning tokens
+// ranged 81-310, completion up to 362) rather than a fixed per-input cost. At a default MAX_LLM_CALLS
+// of 40 rows scanned per run, even a low single-digit-percent per-call failure rate compounds to a
+// real chance of at least one silent miss per scan. 3000 leaves generous margin over the observed
+// ceiling; env-overridable (CONTRADICTION_MAX_TOKENS) for a future re-tuning with no code change.
+const CONTRADICTION_MAX_TOKENS = positiveIntEnv("CONTRADICTION_MAX_TOKENS", 3000);
+
 // OpenAI-direct call, the same retry/429-backoff shape as the Foundry callOne() below (chatBody() is
 // provider-agnostic; OpenAI just wants the model NAME in the body instead of the URL, and a bearer
 // token instead of an api-key header -- it also auto-selects the reasoning-family body shape for
 // gpt-5.1 via chatBody()'s own modelFamilyOf() check, so no gpt-5.1-specific branch is needed here).
-// Mirrors critic-pass/run.mjs's callChatOpenAI exactly.
+// Mirrors critic-pass/run.mjs's callChatOpenAI exactly, including its truncated-empty escalate-then-
+// throw handling (see CONTRADICTION_MAX_TOKENS's comment above for the incident this closes): on a
+// reasoning-budget-exhausted response, escalate the token budget 2x ONCE and retry within the SAME
+// existing `tries` allowance; if STILL truncated-empty on the final attempt, throw a distinct,
+// non-throttled error instead of returning "". makeEntailer()'s entail() below already re-throws any
+// non-throttled failure prefixed "detector ERROR:", and scanRows()'s per-row catch already pushes
+// that into `notes` -- so this row's failure becomes a VISIBLE line in the scan's own notes, rather
+// than silently degrading to a fabricated "agree" verdict that looks identical to a genuine clean
+// finding (the fail-quiet path below is reserved for a real 429 throttle, a distinct, already-known,
+// intentionally-silent condition -- see that branch's own comment).
 async function callOpenAI(key, dep, system, user, maxTokens, tries) {
   const policy = flexRetryPolicy(CONTRADICTION_TIER, { tries });
   const effTries = policy.tries || tries;
-  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true, serviceTier: CONTRADICTION_TIER }), model: dep };
+  let curTokens = maxTokens;
+  let escalated = false;
   for (let a = 0; a < effTries; a++) {
+    const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: curTokens, jsonMode: true, serviceTier: CONTRADICTION_TIER }), model: dep };
     const init = { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) };
     if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
     const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status);
-    return (await r.json()).choices[0].message.content;
+    const choice = (await r.json()).choices[0];
+    if (truncatedEmpty(choice) && a < effTries - 1) { if (!escalated) { escalated = true; curTokens = curTokens * 2; } continue; }
+    if (truncatedEmpty(choice)) {
+      throw Object.assign(new Error(`reasoning model exhausted its token budget (${curTokens}) on hidden reasoning with no visible output (finish_reason=length) even after retry+escalation`), { reasoningExhausted: true });
+    }
+    return choice.message.content;
   }
   throw Object.assign(new Error("429"), { throttled: true });
 }
@@ -379,7 +408,7 @@ Be CONSERVATIVE: prefer "supersede" or "agree" unless the conflict is unambiguou
         slice.map((p) => `[${p.id}] (${(p.ts || "").slice(0, 10)}) ${p.type}: "${clip(p.text, 300)}"${p.was ? ` (was: "${clip(p.was, 120)}")` : ""}`).join("\n");
       let raw;
       try {
-        raw = await callOpenAI(key, dep, SYS, user, 400, 4);
+        raw = await callOpenAI(key, dep, SYS, user, CONTRADICTION_MAX_TOKENS, 4);
       } catch (e) {
         // FAIL LOUD, DISTINCT from "no issues found": a throttle still fail-quiets to 'agree' (same
         // posture as before -- a busy fleet must never fabricate a verdict), but ANY OTHER failure is a

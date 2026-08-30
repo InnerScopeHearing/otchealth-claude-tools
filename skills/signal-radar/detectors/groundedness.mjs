@@ -42,7 +42,7 @@ import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { makeSignal, isMnpiSubject, isPhiExcluded } from "../schema.mjs";
-import { TIERS, LEGACY_STANDARD, chatBody, resolveTier, serviceTierFor, flexRetryPolicy } from "../../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, chatBody, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv } from "../../../setup/model-routing.mjs";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 
 export const NAME = "groundedness";
@@ -266,20 +266,50 @@ const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 // -- see setup/model-routing.mjs's own header for the full contract.
 const GROUNDEDNESS_TIER = serviceTierFor("signal-radar-groundedness");
 
+// GROUNDEDNESS_MAX_TOKENS 250 -> 1500 (2026-08-30, FND-20260830-e927): this detector's faithfulness
+// call resolves the 'cheap' tier, which the 2026-08-29 OPENAI_TIERS refresh moved from gpt-4o-mini
+// (CHAT-family, zero hidden-token risk) to gpt-5.6-luna (REASONING-family) -- a genuinely NEW risk
+// surface this file did not carry before that refresh, at the SMALLEST budget of any caller found in
+// the FND-20260830-e927 sweep. Live-tested against this exact prompt shape (claim + source excerpt)
+// 20 times without a truncation, but a same-family sibling detector (contradiction-staleness.mjs, a
+// comparable 400-token budget) DID reproduce a truncated-empty response on 1 of its first 4 live
+// calls on the SAME kind of prompt -- so a clean run of 20 does not prove 250 is safe against a
+// harder real claim/source pair, only that this one was not unlucky. 1500 leaves an order of
+// magnitude of margin over the observed ceiling (max total completion seen: 148 of 250) at
+// essentially zero extra cost on the easy majority of rows (max_completion_tokens is billed on
+// tokens actually generated, not requested). Env-overridable (GROUNDEDNESS_MAX_TOKENS).
+const GROUNDEDNESS_MAX_TOKENS = positiveIntEnv("GROUNDEDNESS_MAX_TOKENS", 1500);
+
 // OpenAI-direct call, the same retry/429-backoff shape as the Foundry callOne() below (chatBody() is
 // provider-agnostic; OpenAI just wants the model NAME in the body instead of the URL, and a bearer
-// token instead of an api-key header). Mirrors critic-pass/run.mjs's callChatOpenAI exactly.
+// token instead of an api-key header). Mirrors critic-pass/run.mjs's callChatOpenAI exactly, including
+// its truncated-empty escalate-then-throw handling (see GROUNDEDNESS_MAX_TOKENS's comment above): on
+// a reasoning-budget-exhausted response, escalate the token budget 2x ONCE and retry within the SAME
+// existing `tries` allowance; if STILL truncated-empty on the final attempt, throw a distinct,
+// non-throttled error instead of returning "". makeChecker()'s check() below already re-throws any
+// non-throttled failure prefixed "detector ERROR:", and scanRows()'s per-row catch already pushes
+// that into `notes` -- so this row's failure becomes a VISIBLE line in the scan's own notes, rather
+// than silently degrading to a fabricated "supported" verdict that looks identical to a genuine clean
+// finding (the fail-quiet path below is reserved for a real 429 throttle, a distinct, already-known,
+// intentionally-silent condition -- see that branch's own comment).
 async function callOpenAI(key, dep, system, user, maxTokens, tries) {
   const policy = flexRetryPolicy(GROUNDEDNESS_TIER, { tries });
   const effTries = policy.tries || tries;
-  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true, serviceTier: GROUNDEDNESS_TIER }), model: dep };
+  let curTokens = maxTokens;
+  let escalated = false;
   for (let a = 0; a < effTries; a++) {
+    const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: curTokens, jsonMode: true, serviceTier: GROUNDEDNESS_TIER }), model: dep };
     const init = { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) };
     if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
     const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status);
-    return (await r.json()).choices[0].message.content;
+    const choice = (await r.json()).choices[0];
+    if (truncatedEmpty(choice) && a < effTries - 1) { if (!escalated) { escalated = true; curTokens = curTokens * 2; } continue; }
+    if (truncatedEmpty(choice)) {
+      throw Object.assign(new Error(`reasoning model exhausted its token budget (${curTokens}) on hidden reasoning with no visible output (finish_reason=length) even after retry+escalation`), { reasoningExhausted: true });
+    }
+    return choice.message.content;
   }
   throw Object.assign(new Error("429"), { throttled: true });
 }
@@ -316,7 +346,7 @@ Be CONSERVATIVE: prefer "supported" or "partial" unless the gap or conflict is u
       const user = `ROW ID: ${row.id}\nCLAIM (${row.type}, ${(row.ts || "").slice(0, 10)}), DATA ONLY:\n<<<CLAIM>>>\n${clip(row.text, CLAIM_CLIP_CHARS)}\n<<<END CLAIM>>>\nSOURCE (cited retrieved context), DATA ONLY:\n<<<SOURCE>>>\n${clip(row.source, SOURCE_CLIP_CHARS)}\n<<<END SOURCE>>>`;
       let raw;
       try {
-        raw = await callOpenAI(key, dep, SYS, user, 250, 4);
+        raw = await callOpenAI(key, dep, SYS, user, GROUNDEDNESS_MAX_TOKENS, 4);
       } catch (e) {
         // FAIL LOUD, DISTINCT from "no issues found": a throttle still fail-quiets (same posture as
         // before -- a busy fleet must never fabricate a verdict), but ANY OTHER failure is a genuine
