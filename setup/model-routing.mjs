@@ -293,14 +293,25 @@ export function isFlexTier(tier) {
 // 400 tokens but not on 24 further calls at 400-2000 on the same prompt. A single passing probe
 // proves nothing, and a budget needs real margin, not just "one more than what failed once."
 //
-// Deliberately NOT wired into fetchOpenAIWithFlexRetry's retry LOOP below: every current caller of
-// that function passes tries:1 by default (flex is opt-in and unset fleet-wide today), so a
-// retry-on-truncation loop would only ever fire under flex and would be an awkward, low-value
-// refactor of an already-nontrivial retry/timeout contract. fetchOpenAIWithFlexRetry instead only
-// gets the narrower fix: never silently RETURN a truncated-empty response as if it were content.
-// Each fixed sibling with its own hand-rolled retry loop (signal-radar's detectors, company-brain,
-// agent-evals) calls truncatedEmpty() itself and escalates+retries within its OWN existing budget,
-// mirroring critic-pass/run.mjs's pattern directly (that file's local copy is unchanged by this).
+// fetchOpenAIWithFlexRetry DOES retry a truncated-empty response while attempts remain, in the same
+// loop that already retries a 429, and throws (tagged .reasoningExhausted) only once the allowance is
+// spent. It retries at the SAME budget rather than escalating it, which is the useful thing to do
+// precisely because the spend is non-deterministic (above): the identical request often succeeds on a
+// later attempt.
+//
+// An earlier revision of this comment claimed the opposite -- that truncation was deliberately left
+// OUT of the retry loop, because "every current caller passes tries:1, so it would only ever fire
+// under flex." That reasoning was wrong on its own terms. flexRetryPolicy() FLOORS tries to
+// OPENAI_FLEX_MIN_RETRIES (6) whenever the resolved tier is flex, and flex is armed per caller by a
+// live env switch, not a code change. So arming it silently granted six attempts, of which the old
+// code burned one and discarded five, at exactly the moment retrying works. "Only fires under flex"
+// describes a reachable configuration, not an unreachable one.
+//
+// Each sibling with its OWN hand-rolled retry loop (signal-radar's detectors, company-brain,
+// agent-evals) additionally ESCALATES its budget between attempts inside that loop, mirroring
+// critic-pass/run.mjs's pattern (that file's local copy is unchanged by this). This shared helper
+// deliberately does not escalate: it has no caller-specific sense of what a safe larger budget is,
+// and a caller that wants escalation has the tagged error to act on.
 
 /** True when a chat-completions `choice` is the specific "reasoning model spent its entire
  *  max_completion_tokens budget on hidden reasoning and returned no visible output" shape: NOT an
@@ -390,9 +401,17 @@ const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions'
  * (recall-evals/mine-hard-negatives.mjs, recall-evals/mine-cases.mjs) already treat a thrown error
  * from this call as "skip this candidate, log why, continue" (their own try/catch predates this
  * change), so throwing here costs nothing and turns a generic "unparseable/incomplete candidate"
- * diagnosis into a precise one. Deliberately NOT retried-with-escalation inline (see this file's
- * REASONING-BUDGET SIBLINGS section above for why); a caller that wants that raises its own
- * `maxTokens` before calling, or catches `.reasoningExhausted` and calls again itself.
+ * diagnosis into a precise one.
+ *
+ * A truncated-empty response BEFORE the final attempt is RETRIED, in the same loop that retries a
+ * 429, at the SAME budget -- reasoning spend is non-deterministic on identical input, so a plain
+ * retry frequently succeeds (see this file's REASONING-BUDGET SIBLINGS section for the measurements).
+ * With the default `tries: 1` there is no attempt after the first, so a truncated-empty throws
+ * immediately and behavior is unchanged; the retry matters once a caller resolves to flex, where
+ * flexRetryPolicy() floors `tries` to OPENAI_FLEX_MIN_RETRIES. What this helper does NOT do is
+ * ESCALATE the budget between attempts -- it has no caller-specific sense of a safe larger budget, so
+ * a caller wanting escalation raises its own `maxTokens`, or catches `.reasoningExhausted` and
+ * decides for itself.
  */
 export async function fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, maxTokens, temperature, jsonMode, tier, caller, tries = 1 } = {}) {
   const resolvedTier = tier !== undefined ? tier : serviceTierFor(caller);
