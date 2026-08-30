@@ -809,13 +809,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-30T02:25:17.191Z
 - **Closed:** 2026-08-30T04:24:45.049Z
 
-### finding:FND-20260830-e927 severity:high status:open | LATENT SIBLINGS of the critic reasoning-budget bug: the 2026-08-29 tier refresh moved OPENAI_TIERS.standard to a reasoning-family model, but other callers still carry chat-era token budgets that reasoning tokens can exhaust before any visible output (intermittent empty response -> silent fail-safe). Concrete candidates with small budgets: recall-evals/mine-hard-negatives (500), signal-radar/detectors/contradiction-staleness, kb-memory/nightly-reflection, legal/deadline-extract, company-brain/brain.mjs. agent-evals/judge-bedrock-nova (400) is Bedrock Nova not OpenAI so likely exempt. Each needs its budget checked against real production input sizes, not trivial probes.
+### finding:FND-20260830-e927 severity:high status:fixed | LATENT SIBLINGS of the critic reasoning-budget bug: the 2026-08-29 tier refresh moved OPENAI_TIERS.standard to a reasoning-family model, but other callers still carry chat-era token budgets that reasoning tokens can exhaust before any visible output (intermittent empty response -> silent fail-safe). Concrete candidates with small budgets: recall-evals/mine-hard-negatives (500), signal-radar/detectors/contradiction-staleness, kb-memory/nightly-reflection, legal/deadline-extract, company-brain/brain.mjs. agent-evals/judge-bedrock-nova (400) is Bedrock Nova not OpenAI so likely exempt. Each needs its budget checked against real production input sizes, not trivial probes.
 
 - **Source audit doc:** CTO sibling sweep 2026-08-30 after critic-pass FND-20260830-e7c1 / claude-tools #500
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** c4cb398
+- **Verified by:** claude-tools #503 merged: company-brain 900->6000, contradiction-staleness 400->3000, groundedness, mine-hard-negatives 500->2000, mine-cases 1500->4000, agent-evals run-evals + selfrepair; each with truncatedEmpty detection and a dedicated regression suite. Budgets set from live measurement against real production prompt shapes (repeated, because spend is non-deterministic: 339-1657 tokens on identical input), not trivial probes. Two CTO-verified critic findings fixed before merge: same-budget retry in the shared fetchOpenAIWithFlexRetry (was throwing on the first truncation while flexRetryPolicy had granted 6 attempts), and selfrepair re-typing a hand-rolled Number(env)>0 budget guard instead of the shared positiveIntEnv (0.7 sent a fractional budget; Infinity serialized to null, dropping max_completion_tokens entirely). Fail-on-old-code proof for both. Toolkit gate 2124 pass.
 - **Opened:** 2026-08-30T02:50:23.501Z
-- **Closed:** (open)
+- **Closed:** 2026-08-30T04:24:47.501Z
 
 ### finding:FND-20260830-4753 severity:high status:fixed | critic-pass gate byte-truncated its own input (head -c 80000) and reported the cut as code defects; fixed in #504
 
