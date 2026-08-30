@@ -53,8 +53,8 @@ const SM = "otchealth-shared-prod";
 const API = "2023-11-01";
 const DIMS = 3072;
 const EMBED_BATCH = 16;
-const BACKEND = (process.env.SEARCH_BACKEND || "azure").toLowerCase(); // 'azure' | 'opensearch'
-const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "foundry").toLowerCase(); // 'foundry' | 'openai'
+const BACKEND = (process.env.SEARCH_BACKEND || "opensearch").toLowerCase(); // 'opensearch' (default since 2026-08-30; Azure AI Search died with sub 55c84f6b) | 'azure'
+const EMBEDDINGS_PROVIDER = (process.env.EMBEDDINGS_PROVIDER || "openai").toLowerCase(); // 'openai' (default since 2026-08-30; Azure Foundry died with sub 55c84f6b) | 'foundry'
 const BLOB_BACKEND = (process.env.BLOB_BACKEND || "s3").toLowerCase(); // 's3' is authoritative after Azure retirement
 const PUSH_BATCH = 48;
 
