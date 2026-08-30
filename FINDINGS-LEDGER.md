@@ -776,3 +776,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-29T05:17:26.171Z
 - **Closed:** (open)
+
+### finding:FND-20260830-ccb9 severity:high status:open | doc-indexer jobs cannot read opensearch-endpoint: kv-secret falls through DEAD Azure auth paths (identity/sp/azcli), task defs have SECRET_BACKEND unset and zero injected secrets, job still exits 0 -- silent-success; brain room freshness may be silently dead
+
+- **Source audit doc:** CTO ARM64 proof run 2026-08-30 (librarian-commerce task 13a70411d18741a391d3c1307adf77bb, /ecs/otchealth)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-30T01:51:00.770Z
+- **Closed:** (open)
