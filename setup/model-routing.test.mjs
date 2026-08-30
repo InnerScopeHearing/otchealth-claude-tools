@@ -507,6 +507,34 @@ test("fetchOpenAIWithFlexRetry: a truncated-empty (finish_reason:length, empty c
     assert.equal(calls, 1, "default tries:1 means this is the FINAL (only) attempt -- the throw must fire immediately, not after a retry that never happens here");
   }));
 
+test("fetchOpenAIWithFlexRetry: a truncated-empty response RETRIES while attempts remain and succeeds on a later one -- reasoning spend is non-deterministic, so the same budget often works on retry", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { fetchOpenAIWithFlexRetry } = await freshImport();
+    let calls = 0;
+    const result = await withStubbedFetch(async () => {
+      calls++;
+      // First attempt burns the whole budget on hidden reasoning; the second returns real content at
+      // the SAME budget. That is the observed real-world shape (339-1657 reasoning tokens across
+      // repeat calls on identical input), and it is why throwing on the first occurrence is wrong.
+      if (calls === 1) return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "", refusal: null }, finish_reason: "length" }], usage: { completion_tokens: 500, completion_tokens_details: { reasoning_tokens: 500 } } }) };
+      return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "real verdict" }, finish_reason: "stop" }] }) };
+    }, () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-5.6-terra", messages: [{ role: "user", content: "hi" }], maxTokens: 500, tries: 3 }));
+    assert.equal(result, "real verdict", "a later attempt's real answer must be returned, not discarded by a first-occurrence throw");
+    assert.equal(calls, 2, "must retry after a truncated-empty while attempts remain, mirroring the 429 branch");
+  }));
+
+test("fetchOpenAIWithFlexRetry: truncated-empty on EVERY attempt still throws .reasoningExhausted once the allowance is spent", async () =>
+  withEnvVars(CLEAR_TIER_ENV, async () => {
+    const { fetchOpenAIWithFlexRetry } = await freshImport();
+    let calls = 0;
+    await assert.rejects(
+      () => withStubbedFetch(async () => { calls++; return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "", refusal: null }, finish_reason: "length" }], usage: { completion_tokens: 500, completion_tokens_details: { reasoning_tokens: 500 } } }) }; },
+        () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-5.6-terra", messages: [{ role: "user", content: "hi" }], maxTokens: 500, tries: 3 })),
+      (e) => { assert.equal(e.reasoningExhausted, true); return true; }
+    );
+    assert.equal(calls, 3, "exhausting the allowance must consume every attempt before throwing");
+  }));
+
 test("fetchOpenAIWithFlexRetry: a normal (non-truncated) empty string is still returned as before -- the fix is scoped to finish_reason:length specifically", async () =>
   withEnvVars(CLEAR_TIER_ENV, async () => {
     const { fetchOpenAIWithFlexRetry } = await freshImport();
@@ -523,24 +551,24 @@ test("fetchOpenAIWithFlexRetry: a non-empty response at finish_reason:length is 
     assert.equal(result, "a real, if truncated, answer");
   }));
 
-test("fetchOpenAIWithFlexRetry: even under flex with multiple tries available, a truncated-empty 2xx throws on the FIRST such response (this narrow fix does not add a continue-on-truncation branch to the retry loop)", async () =>
+test("fetchOpenAIWithFlexRetry: under flex, a truncated-empty 2xx RETRIES through the tries the flex policy granted and returns a later attempt's real answer", async () =>
   withEnvVars(CLEAR_TIER_ENV, async () => {
     const { fetchOpenAIWithFlexRetry } = await freshImport();
     let calls = 0;
-    // NOTE: a truncated-empty response is not a 429, so the existing 429-only backoff/continue branch
-    // never sees it -- the loop reaches the (now updated) throw-or-return decision on the very first
-    // 2xx it gets, regardless of how many tries remain. This is a DELIBERATE, documented scope limit
-    // (see fetchOpenAIWithFlexRetry's own doc comment): a caller that wants retry-on-truncation raises
-    // its own maxTokens up front or catches `.reasoningExhausted` and calls again itself. Captured here
-    // as a counterfactual so a future attempt to add an inline retry-on-truncation loop to this shared
-    // function changes this test deliberately, not by accident.
-    await assert.rejects(
-      () => withStubbedFetch(async () => {
-        calls++;
-        if (calls < 3) return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "" }, finish_reason: "length" }] }) };
-        return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "recovered" }, finish_reason: "stop" }] }) };
-      }, () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-5.6-terra", messages: [], tier: "flex", tries: 5 })),
-      (e) => { assert.match(e.message, /reasoning model "gpt-5\.6-terra" exhausted its token budget/); assert.equal(e.reasoningExhausted, true); return true; }
-    );
-    assert.equal(calls, 1, "throws on the very first truncated-empty 2xx, never reaching the later calls that would have recovered");
+    // This test previously asserted the OPPOSITE (throw on the first truncated-empty, calls === 1),
+    // framed as a deliberate scope limit on the grounds that a caller wanting retry-on-truncation
+    // should raise its own maxTokens or catch .reasoningExhausted itself. That reasoning does not
+    // survive contact with flexRetryPolicy(): under flex it FLOORS tries to OPENAI_FLEX_MIN_RETRIES
+    // (6), so the caller never asked for those attempts and has no way to know they exist -- the old
+    // behavior silently discarded five granted attempts at exactly the moment retrying works, since
+    // reasoning spend is non-deterministic on identical input. The old test's own assertion message
+    // ("never reaching the later calls that would have recovered") named the harm it was pinning.
+    // Changed deliberately, which is precisely what that counterfactual existed to force.
+    const result = await withStubbedFetch(async () => {
+      calls++;
+      if (calls < 3) return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "" }, finish_reason: "length" }] }) };
+      return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "recovered" }, finish_reason: "stop" }] }) };
+    }, () => fetchOpenAIWithFlexRetry({ apiKey: "sk-test", deployment: "gpt-5.6-terra", messages: [], tier: "flex", tries: 5 }));
+    assert.equal(result, "recovered", "the third attempt's real answer must be returned, not thrown away by a first-occurrence throw");
+    assert.equal(calls, 3, "retries through truncated-empty responses while the flex-granted allowance remains");
   }));

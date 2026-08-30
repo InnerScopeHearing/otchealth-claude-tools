@@ -415,8 +415,20 @@ export async function fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, m
     if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
     const choice = (await r.json()).choices?.[0];
     if (truncatedEmpty(choice)) {
+      // RETRY while attempts remain, mirroring the 429 branch above -- do NOT throw on the first
+      // occurrence. Reasoning-token spend is NON-DETERMINISTIC on identical input (339-1657 observed
+      // across repeat calls), so a plain retry at the same budget frequently succeeds; throwing
+      // immediately discards exactly the recovery this helper exists to provide.
+      //
+      // "every caller passes tries:1 so a retry loop is moot" is true only of the tries ARGUMENT.
+      // flexRetryPolicy() FLOORS tries to OPENAI_FLEX_MIN_RETRIES (6) whenever the resolved tier is
+      // flex, so arming flex on either recall-evals miner (per-caller OPENAI_SERVICE_TIER_* or the
+      // fleet-wide OPENAI_SERVICE_TIER) silently makes effTries 6 -- and the old code would have
+      // burned the first attempt and thrown away the other five, precisely when the non-determinism
+      // above means retrying is most likely to work.
+      if (attempt < effTries - 1) continue;
       throw Object.assign(
-        new Error(`chat: reasoning model "${deployment}" exhausted its token budget (${maxTokens}) on hidden reasoning with no visible output (finish_reason=length) -- this is an infra failure, not a real empty answer`),
+        new Error(`chat: reasoning model "${deployment}" exhausted its token budget (${maxTokens}) on hidden reasoning with no visible output (finish_reason=length) after ${effTries} attempt(s) -- this is an infra failure, not a real empty answer`),
         { reasoningExhausted: true }
       );
     }

@@ -55,6 +55,29 @@ test("defaultRewriteLLM: SELFREPAIR_REWRITE_MAX_TOKENS is honored as an override
     assert.equal(sentBody.max_completion_tokens, 2500);
   }));
 
+// The budget guard must FLOOR before it checks positivity, not after. A hand-rolled `Number(env) > 0`
+// passes any positive value straight through, including the two shapes below, and the damage is silent:
+// a fractional budget is a nonsense field the API may reject or round to 0, and Infinity serializes to
+// `null` in JSON, which drops max_completion_tokens entirely and uncaps the spend on a reasoning model.
+// Both cases are why this file imports the shared positiveIntEnv() instead of re-typing the check --
+// the same off-by-order bug critic-pass carried until PR #501. Sub-1 and non-finite overrides are
+// nonsense, so the correct response is the documented default, not the caller's bad value.
+test("defaultRewriteLLM: a sub-1 fractional SELFREPAIR_REWRITE_MAX_TOKENS falls back to the default, never sends a fractional budget", async () =>
+  withEnv({ ...BASE_ENV, SELFREPAIR_REWRITE_MAX_TOKENS: "0.7" }, async () => {
+    let sentBody = null;
+    await withStubbedFetch(async (url, init) => { sentBody = JSON.parse(init.body); return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "hunk" }, finish_reason: "stop" }] }) }; },
+      () => defaultRewriteLLM("rewrite this prompt hunk"));
+    assert.equal(sentBody.max_completion_tokens, 1200, "0.7 floors to 0, fails the positivity check, and yields the 1200 default -- a raw `Number(env) > 0` would have sent 0.7");
+  }));
+
+test("defaultRewriteLLM: a non-finite SELFREPAIR_REWRITE_MAX_TOKENS falls back to the default, never uncaps the budget", async () =>
+  withEnv({ ...BASE_ENV, SELFREPAIR_REWRITE_MAX_TOKENS: "Infinity" }, async () => {
+    let sentBody = null;
+    await withStubbedFetch(async (url, init) => { sentBody = JSON.parse(init.body); return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "hunk" }, finish_reason: "stop" }] }) }; },
+      () => defaultRewriteLLM("rewrite this prompt hunk"));
+    assert.equal(sentBody.max_completion_tokens, 1200, "Infinity fails Number.isFinite -- a raw `Number(env) > 0` would have passed it through, and JSON.stringify turns it into null, silently removing the cap");
+  }));
+
 test("defaultRewriteLLM: TRUNCATED-EMPTY (finish_reason:length, empty content) THROWS a distinct, tagged error instead of returning ''", async () =>
   withEnv(BASE_ENV, async () => {
     const stub = async () => ({ ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "", refusal: null }, finish_reason: "length" }], usage: { completion_tokens: 1200, completion_tokens_details: { reasoning_tokens: 1200 } } }) });

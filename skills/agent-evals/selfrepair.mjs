@@ -58,7 +58,7 @@ import { execFileSync } from "node:child_process";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { diffScorecards } from "./promptcheck.mjs";
-import { TIERS, chatBody, resolveTier, truncatedEmpty } from "../../setup/model-routing.mjs";
+import { TIERS, chatBody, resolveTier, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 // LLM_PROVIDER (2026-08-27, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
@@ -475,7 +475,12 @@ export async function defaultRewriteLLM(promptText) {
     const dep = process.env.SELFREPAIR_REWRITE_MODEL || resolveTier("quality", "openai").deployment;
     const key = process.env.OPENAI_API_KEY || (await smGet("openai-api-key"));
     if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
-    const maxTokens = Number(process.env.SELFREPAIR_REWRITE_MAX_TOKENS) > 0 ? Number(process.env.SELFREPAIR_REWRITE_MAX_TOKENS) : 1200;
+    // positiveIntEnv(), not a hand-rolled Number(env) > 0 check: the raw check accepts any positive
+    // value INCLUDING a sub-1 fraction and Infinity, so SELFREPAIR_REWRITE_MAX_TOKENS="0.7" would send
+    // a literal fractional token budget and "Infinity" would pass straight through. That is the same
+    // class the shared guard exists to close (see its floor-before-check comment) -- re-checking it by
+    // hand here is exactly how the class survives its own fix.
+    const maxTokens = positiveIntEnv("SELFREPAIR_REWRITE_MAX_TOKENS", 1200);
     const body = { ...chatBody(dep, { messages: [{ role: "system", content: sys }, { role: "user", content: promptText }], maxTokens }), model: dep };
     const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error("rewrite chat " + r.status + " " + (await r.text()).slice(0, 160));
