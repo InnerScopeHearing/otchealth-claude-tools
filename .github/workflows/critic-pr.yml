@@ -83,49 +83,11 @@ jobs:
           # huge PR never blows the critic model's context. ~80k chars leaves room for the critic prompt.
           git diff --no-color "${BASE_SHA}...${HEAD_SHA}" > /tmp/diff.full.txt 2>/dev/null \
             || git diff --no-color "${BASE_SHA}" "${HEAD_SHA}" > /tmp/diff.full.txt
-          git diff --no-color --numstat "${BASE_SHA}...${HEAD_SHA}" > /tmp/diff.stat.txt 2>/dev/null \
-            || git diff --no-color --numstat "${BASE_SHA}" "${HEAD_SHA}" > /tmp/diff.stat.txt || true
-
-          # ALWAYS lead with --numstat (the complete list of changed files, ~1-2KB even for a large PR;
-          # --numstat, not --stat, because --stat ABBREVIATES long paths to "..." -- exactly the deeply
-          # nested files most likely to fall past the cut). THEN the bounded hunks. Truncating the hunks
-          # alone made the model report the cut itself as a
-          # code defect: on 2026-08-30 a 129,975-byte diff was cut to 80,000 mid-identifier, and the
-          # critic returned confidence-0.99 REVISE with "critical: the draft is syntactically incomplete,
-          # it ends mid-statement at `const MINE_HARDNEG_MAX_TOKENS = positi`" (that is exactly the byte
-          # the cap landed on) plus "high: it omits the two signal-radar detectors" (both were modified,
-          # with tests, in the 8 of 18 files that fell past the cut). Both findings were artifacts of the
-          # truncation, stated as confident findings about the code. The --numstat header prevents the
-          # absence-of-evidence half outright: the model sees every changed file listed even when its
-          # hunks are cut.
-          MAX_DIFF_BYTES="${MAX_DIFF_BYTES:-80000}"
-          {
-            printf 'FILES CHANGED IN THIS PR (complete list, authoritative; added<TAB>deleted<TAB>path):\n'
-            cat /tmp/diff.stat.txt
-            printf '\n'
-          } > /tmp/diff.txt
-          if [ "$(wc -c < /tmp/diff.full.txt)" -gt "${MAX_DIFF_BYTES}" ]; then
-            # Cut on a LINE boundary (head -c alone severs mid-token, which is what produced the bogus
-            # "syntactically incomplete" finding), then say plainly that the input was cut.
-            head -c "${MAX_DIFF_BYTES}" /tmp/diff.full.txt | sed '$d' >> /tmp/diff.txt
-            {
-              printf '\n\n===== DIFF TRUNCATED =====\n'
-              printf 'Only the first %s bytes of a %s-byte diff are shown, cut at a line boundary.\n' \
-                "${MAX_DIFF_BYTES}" "$(wc -c < /tmp/diff.full.txt)"
-              printf 'The hunks above are INCOMPLETE. Do NOT report the end of this text as a syntax\n'
-              printf 'error, an unterminated statement, or an incomplete file: that is where the input\n'
-              printf 'was cut, not where the code ends. Do NOT report a file as unmodified or missing\n'
-              printf 'because its hunks are absent here: consult the authoritative FILES CHANGED list\n'
-              printf 'at the top. Review only what is visible, and say so if the visible portion is\n'
-              printf 'insufficient to judge.\n'
-            } >> /tmp/diff.txt
-          else
-            cat /tmp/diff.full.txt >> /tmp/diff.txt
-          fi
+          head -c 80000 /tmp/diff.full.txt > /tmp/diff.txt
           [ -s /tmp/diff.txt ] || printf '(no file changes detected in this PR)' > /tmp/diff.txt
           printf '%s' "${PR_TITLE}" > /tmp/task.txt
           printf '%s' "${PR_BODY}"  > /tmp/context.txt
-          echo "diff bytes: $(wc -c < /tmp/diff.txt) (full: $(wc -c < /tmp/diff.full.txt), cap: ${MAX_DIFF_BYTES})"
+          echo "diff bytes: $(wc -c < /tmp/diff.txt)"
 
       - name: Run the real critic pass on the diff (credentialed runner)
         continue-on-error: true
