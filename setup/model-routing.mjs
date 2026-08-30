@@ -275,6 +275,59 @@ export function isFlexTier(tier) {
   return String(tier || '').trim().toLowerCase() === 'flex';
 }
 
+// =============================================================================================
+// REASONING-BUDGET SIBLINGS (2026-08-30, FND-20260830-e927): shared helpers factored out while
+// fixing the SIBLINGS of critic-pass/run.mjs's own reasoning-truncation fix (FND-20260830-e7c1),
+// so every OTHER caller that resolves a tier through this module gets them once instead of
+// re-deriving (and risking re-bugging) them per file. See critic-pass/run.mjs's header for the
+// full incident writeup; the summary: a reasoning-family model (gpt-5.x/o-series) spends part of
+// its max_completion_tokens budget on HIDDEN reasoning tokens before any visible output. A budget
+// sized for the prior CHAT-family default (no hidden cost) can come back with
+// finish_reason:"length" and EMPTY content -- an HTTP 200, not an error -- so a caller that does
+// not check for this treats the empty string as a real (if blank) answer.
+//
+// Observed reasoning-token spend is NON-DETERMINISTIC even on the IDENTICAL input (live-measured
+// during the FND-20260830-e927 sweep): a single company-brain synthesis question truncated 6/6
+// times at 900 tokens and 3/3 times at 2000, but succeeded reliably at 3000+ (visible completion
+// up to ~2400 tokens); a signal-radar entailment call truncated on 1 of 4 initial live calls at
+// 400 tokens but not on 24 further calls at 400-2000 on the same prompt. A single passing probe
+// proves nothing, and a budget needs real margin, not just "one more than what failed once."
+//
+// Deliberately NOT wired into fetchOpenAIWithFlexRetry's retry LOOP below: every current caller of
+// that function passes tries:1 by default (flex is opt-in and unset fleet-wide today), so a
+// retry-on-truncation loop would only ever fire under flex and would be an awkward, low-value
+// refactor of an already-nontrivial retry/timeout contract. fetchOpenAIWithFlexRetry instead only
+// gets the narrower fix: never silently RETURN a truncated-empty response as if it were content.
+// Each fixed sibling with its own hand-rolled retry loop (signal-radar's detectors, company-brain,
+// agent-evals) calls truncatedEmpty() itself and escalates+retries within its OWN existing budget,
+// mirroring critic-pass/run.mjs's pattern directly (that file's local copy is unchanged by this).
+
+/** True when a chat-completions `choice` is the specific "reasoning model spent its entire
+ *  max_completion_tokens budget on hidden reasoning and returned no visible output" shape: NOT an
+ *  HTTP error, NOT a 429 -- the call itself succeeded -- so it needs its own detection, distinct
+ *  from a throttle or a genuine (non-empty) malformed response. Pure; identical in shape and
+ *  intent to critic-pass/run.mjs's own local truncatedEmpty() (kept there unchanged -- that file
+ *  has its own settled fix); this is the shared copy every OTHER caller in this sweep imports. */
+export function truncatedEmpty(choice) {
+  return choice?.finish_reason === 'length' && !String(choice?.message?.content ?? '').trim();
+}
+
+/**
+ * positiveIntEnv(envVar, fallback) -> a positive integer read from process.env[envVar], or
+ * `fallback` when unset/blank/non-finite/zero/negative/fractional-below-1. FLOORS BEFORE the
+ * positivity check (not after): a sub-1 fractional override such as "0.7" or "0.001" would
+ * otherwise pass a `> 0` test on the raw value and only THEN floor to 0, silently sending a
+ * zero-token budget to the API. This is the exact off-by-order bug critic-pass/run.mjs's own
+ * positiveInt() carried until FND-20260830 fixed it (PR #501, squash 230b596); defined here,
+ * correctly ordered from the start, so every OTHER file in this sweep that needs an
+ * env-overridable token-budget guard reuses ONE already-correct implementation instead of each
+ * re-typing (and risking re-introducing) the same off-by-order mistake.
+ */
+export function positiveIntEnv(envVar, fallback) {
+  const n = Math.floor(Number(process.env[envVar]));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 // Flex-specific retry-count and timeout FLOORS, both env-overridable fleet-wide (one redeploy, no
 // code change). These are floors applied ONLY when the resolved tier is "flex" -- flexRetryPolicy()
 // below never lengthens or otherwise touches a non-flex call.
@@ -327,6 +380,19 @@ const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions'
  * never masquerade as a completed judgement. On genuine 429 exhaustion under flex, the thrown error
  * carries `.throttled = true` (the same tag every existing per-file helper already uses so a caller
  * can distinguish "gave up after real retries" and, e.g., fall back to a different model/tier).
+ *
+ * REASONING-TRUNCATION (2026-08-30, FND-20260830-e927): on the FINAL attempt (no more retries left
+ * in `effTries`), a truncatedEmpty() response now THROWS (tagged `.reasoningExhausted = true`)
+ * instead of falling through to `return ... || ''`. Before this, a reasoning-family model that
+ * spent its entire max_completion_tokens budget on hidden reasoning came back as an ordinary HTTP
+ * 200 with empty content, and this function handed that empty string back to the caller as if it
+ * were a real (if blank) answer -- both of this function's two current callers
+ * (recall-evals/mine-hard-negatives.mjs, recall-evals/mine-cases.mjs) already treat a thrown error
+ * from this call as "skip this candidate, log why, continue" (their own try/catch predates this
+ * change), so throwing here costs nothing and turns a generic "unparseable/incomplete candidate"
+ * diagnosis into a precise one. Deliberately NOT retried-with-escalation inline (see this file's
+ * REASONING-BUDGET SIBLINGS section above for why); a caller that wants that raises its own
+ * `maxTokens` before calling, or catches `.reasoningExhausted` and calls again itself.
  */
 export async function fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, maxTokens, temperature, jsonMode, tier, caller, tries = 1 } = {}) {
   const resolvedTier = tier !== undefined ? tier : serviceTierFor(caller);
@@ -347,7 +413,14 @@ export async function fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, m
       throw Object.assign(new Error(`chat ${r.status}: ${errBody}`), effTries > 1 ? { throttled: true } : {});
     }
     if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
-    return (await r.json()).choices?.[0]?.message?.content || '';
+    const choice = (await r.json()).choices?.[0];
+    if (truncatedEmpty(choice)) {
+      throw Object.assign(
+        new Error(`chat: reasoning model "${deployment}" exhausted its token budget (${maxTokens}) on hidden reasoning with no visible output (finish_reason=length) -- this is an infra failure, not a real empty answer`),
+        { reasoningExhausted: true }
+      );
+    }
+    return choice?.message?.content || '';
   }
   /* c8 ignore next -- unreachable: every loop iteration above either continues, throws, or returns */
   throw Object.assign(new Error('chat 429 exhausted'), { throttled: true });
@@ -359,6 +432,8 @@ export default {
   OPENAI_TIER_ENV_VARS,
   LEGACY_STANDARD,
   modelFamilyOf,
+  truncatedEmpty,
+  positiveIntEnv,
   resolveTier,
   chatBody,
   warnIfImplausibleOpenAIModel,

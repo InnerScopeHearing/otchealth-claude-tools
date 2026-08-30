@@ -26,7 +26,7 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { chatBody, LEGACY_STANDARD, resolveTier, serviceTierFor, flexRetryPolicy } from "../../setup/model-routing.mjs";
+import { chatBody, LEGACY_STANDARD, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL } from "./judge-bedrock-nova.mjs";
 import { compareJudgeRow, aggregateJudgeComparison, renderJudgeComparisonReport } from "./judge-compare.mjs";
@@ -94,13 +94,24 @@ async function initModel() {
   FB_EP = (await sm("azure-openai-endpoint") || "").replace(/\/$/, ""); FB_KEY = await sm("azure-openai-key"); FB_DEP = process.env.AGENT_FALLBACK_MODEL || LEGACY_STANDARD.deployment;
   if (!EP || !KEY) throw new Error("missing azure-foundry endpoint/key");
 }
-async function callChat(ep, key, dep, system, user, maxTokens, tries) {
-  const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens });
+// Exported (2026-08-30, alongside the reasoning-truncation fix) for direct unit testing with a
+// mocked fetch, mirroring callChatOpenAI's own existing export for the same reason. No behavior change.
+export async function callChat(ep, key, dep, system, user, maxTokens, tries) {
+  let curTokens = maxTokens;
+  let escalated = false;
   for (let a = 0; a < tries; a++) {
+    const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: curTokens });
     const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
-    return (await r.json()).choices[0].message.content;
+    const choice = (await r.json()).choices[0];
+    // Reasoning-truncation handling (2026-08-30, FND-20260830-e927), same pattern as
+    // callChatOpenAI's own copy below -- see that function's comment for the incident this closes.
+    if (truncatedEmpty(choice) && a < tries - 1) { if (!escalated) { escalated = true; curTokens = curTokens * 2; } continue; }
+    if (truncatedEmpty(choice)) {
+      throw Object.assign(new Error(`chat: reasoning model "${dep}" exhausted its token budget (${curTokens}) on hidden reasoning with no visible output (finish_reason=length) even after retry+escalation`), { reasoningExhausted: true });
+    }
+    return choice.message.content;
   }
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
@@ -118,14 +129,31 @@ async function callChat(ep, key, dep, system, user, maxTokens, tries) {
 export async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
   const policy = flexRetryPolicy(AGENT_EVALS_TIER, { tries });
   const effTries = policy.tries || tries;
-  const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, serviceTier: AGENT_EVALS_TIER }), model: dep };
+  let curTokens = maxTokens;
+  let escalated = false;
   for (let a = 0; a < effTries; a++) {
+    const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: curTokens, serviceTier: AGENT_EVALS_TIER }), model: dep };
     const init = { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) };
     if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
     const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
-    return (await r.json()).choices[0].message.content;
+    const choice = (await r.json()).choices[0];
+    // Reasoning-truncation handling (2026-08-30, FND-20260830-e927): on a truncated-empty response
+    // (see chat()'s own comment below for the incident + measurements), escalate the token budget 2x
+    // ONCE and retry within the SAME existing `effTries` allowance; if STILL truncated-empty on the
+    // final attempt, THROW a distinct, non-throttled error instead of silently returning "" as a real
+    // (blank) answer/verdict. Both of this function's callers below (chat()'s persona-answer path and
+    // judgeDefault()'s judge path) have NO try/catch of their own around this call -- the throw
+    // propagates to main()'s per-task `try { ... } catch (e) { console.error(...); continue; }`, the
+    // SAME path an ordinary network failure already takes, so the task is skipped and logged instead
+    // of silently scoring 0%/FAIL (the exact conflation FND-20260830-e927 flagged: a judge that could
+    // not run must never look identical to a judge that ran and found the answer wanting).
+    if (truncatedEmpty(choice) && a < effTries - 1) { if (!escalated) { escalated = true; curTokens = curTokens * 2; } continue; }
+    if (truncatedEmpty(choice)) {
+      throw Object.assign(new Error(`chat: reasoning model "${dep}" exhausted its token budget (${curTokens}) on hidden reasoning with no visible output (finish_reason=length) even after retry+escalation`), { reasoningExhausted: true });
+    }
+    return choice.message.content;
   }
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
@@ -137,10 +165,13 @@ export async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
 // zero visible content -- a wasted API call that scores 0% for producing nothing, not for a bad
 // answer); at 4000 it succeeded cleanly (only 59 reasoning tokens, ~2800 completion tokens of real
 // content). `reasoning_effort:"low"` did NOT fix the 1200-token case in the same probe. 4000 is the
-// live-verified working floor for this fleet's persona-answering prompts on this model; it is NOT a
-// fleet-wide fix -- every OTHER caller in this toolkit with a tight maxTokens budget (250-1600 range)
-// on the same 'standard'/'cheap' tiers carries the SAME risk and needs its own empirical check, which
-// is out of scope for this change (see the PR description).
+// live-verified working floor for this fleet's persona-answering prompts on this model.
+//
+// 2026-08-30 UPDATE (FND-20260830-e927, the sibling sweep this same comment once deferred): every
+// OTHER tight-budget caller in this toolkit was individually measured and fixed (company-brain,
+// signal-radar's two detectors, the recall-evals miners) -- this function's own escalate-then-throw
+// handling above (added in the same sweep) is the fleet-wide-consistent mechanism, not a re-tuned
+// static number; 4000 remains this specific caller's live-verified working floor.
 async function chat(system, user, maxTokens = 4000) {
   if (LLM_PROVIDER === "openai") {
     try { return await callChatOpenAI(KEY, DEP, system, user, maxTokens, 4); }
@@ -154,15 +185,23 @@ async function chat(system, user, maxTokens = 4000) {
 // judgeDefault: the ORIGINAL judge, byte-for-byte unchanged (2026-08-29: only renamed from `judge` so
 // judge() below can dispatch on JUDGE_PROVIDER; every line of logic here is identical to before this
 // file had a second judge provider). Scores via the SAME chat()/DEP the agent persona ran on.
+const JUDGE_MAX_TOKENS = positiveIntEnv("AGENT_EVALS_JUDGE_MAX_TOKENS", 1500);
 async function judgeDefault(task, rubric, answer) {
   const sys = "You are a strict eval judge. Given a task, a rubric (list of criteria), and a candidate answer, decide for EACH criterion whether the answer satisfies it. Return ONLY compact JSON: {\"met\":[true/false per criterion in order],\"notes\":\"one line\"}.";
   const user = `TASK:\n${task}\n\nRUBRIC:\n${rubric.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\nANSWER:\n${answer}`;
-  // 400 -> 800 (2026-08-29, same reasoning-family risk as chat()'s own note above): the judge call is a
-  // much simpler bounded classification than the open-ended persona answer, so it did not truncate in
-  // the live smoke test this session, but a real 400-token budget on a reasoning-family model has ZERO
-  // margin the moment a rubric is longer or a verdict genuinely needs more deliberation. A modest bump,
-  // not a fully re-tuned value -- see chat()'s comment for the caveat that this is not a fleet-wide fix.
-  const out = await chat(sys, user, 800);
+  // 400 -> 800 -> 1500 (2026-08-29 then 2026-08-30, FND-20260830-e927): live-tested this exact judge
+  // prompt shape, including a deliberately AMBIGUOUS/hedging candidate answer meant to force real
+  // per-criterion deliberation rather than an obvious all-pass: 10 live calls across an easy and a hard
+  // case never truncated at 800 (max completion observed 145 of 800), so this budget was not the
+  // dominant risk chat()'s own persona-answer call was. Bumped anyway for real margin, consistent with
+  // every other sibling in this sweep, and because callChatOpenAI()/callChat() (chat()'s own transport,
+  // shared by every caller in this file) now escalate-then-throw on a truncated-empty response instead
+  // of silently returning "" -- so an empty judge response no longer degrades to a fabricated 0%/FAIL
+  // that is indistinguishable from a genuine rubric failure in the console output, the JSON scorecard,
+  // AND the PostHog eval_result payload (whose properties never included `notes`); it now throws and
+  // is caught by main()'s existing per-task catch, which skips the task entirely rather than scoring it.
+  // Env-overridable (AGENT_EVALS_JUDGE_MAX_TOKENS).
+  const out = await chat(sys, user, JUDGE_MAX_TOKENS);
   let j; try { j = JSON.parse(out.match(/\{[\s\S]*\}/)[0]); } catch { j = { met: rubric.map(() => false), notes: "judge parse failed" }; }
   const met = (j.met || []).slice(0, rubric.length); while (met.length < rubric.length) met.push(false);
   const score = met.filter(Boolean).length / rubric.length;
