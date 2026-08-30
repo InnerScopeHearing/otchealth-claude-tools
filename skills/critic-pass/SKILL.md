@@ -111,13 +111,21 @@ node skills/critic-pass/run.mjs --task "<task>" --draft-file <path> [--constrain
   signal-radar signals) and RUN the pass only when it recommends `useCritic=true`; otherwise print
   `{ran:false}` and spend nothing. This is the compute-allocator -> critic-pass wiring.
 - **Fail-safe / report-mode, two DISTINCT failure shapes**: a model that answered with junk JSON
-  degrades to `{verdict:"approve", malformed:true}` (report-mode fail-safe, matches critic.mjs's own
-  parse fallback); a model that was **never reached at all** (no creds, network, exhausted throttle)
-  reports `{verdict:null, unreachable:true, note:"critic did not run (LLM unreachable)"}` instead —
-  it is never labeled `approve`, because nothing was reviewed. Both are non-blocking (`shouldRevise`
-  stays `false`); `.github/workflows/critic-pr.yml` renders the unreachable case as a loud "critic
-  did not run" note, not a green checkmark. Exit 0 by default; `--fail-on-revise` exits 3 when the
-  verdict is `revise` (hard CI gate).
+  degrades to `{verdict:"approve", malformed:true, note:"critic ran but its response could not be
+  parsed..."}` (report-mode fail-safe, matches critic.mjs's own parse fallback); a model that was
+  **never reached at all** (no creds, network, exhausted throttle) reports `{verdict:null,
+  unreachable:true, note:"critic did not run (LLM unreachable)"}` instead. Neither is ever labeled a
+  plain `approve` without its accompanying `note` — nothing was reviewed either way. Both are
+  non-blocking (`shouldRevise` stays `false`); `.github/workflows/critic-pr.yml` renders BOTH cases
+  as an equally loud "no review was performed" comment, never a green checkmark (see
+  FND-20260830-e7c1: the malformed case used to read soft enough — "fail-safe approve", "informational
+  only" — that it could be mistaken for a real pass). Exit 0 by default; `--fail-on-revise` exits 3
+  when the verdict is `revise` (hard CI gate).
+- **`CRITIC_MAX_TOKENS` (default 3000, was 700):** `OPENAI_TIERS.standard` is now a REASONING-family
+  model (gpt-5.6-terra); its hidden reasoning tokens count against the completion-token budget and
+  are spent BEFORE any visible output, so a too-small budget comes back `finish_reason:"length"` with
+  EMPTY content (this was FND-20260830-e7c1's actual root cause — not a parser bug). `run.mjs` also
+  auto-escalates (doubles the budget, once) on that exact empty-truncation shape before giving up.
 
 ### Programmatic API
 ```js

@@ -129,8 +129,13 @@ jobs:
               lines.push(`🔴 **CRITIC DID NOT RUN** (LLM unreachable). ${v.error ? '`' + v.error + '`' : ''}`.trim());
               lines.push('', '**No review was performed.** This is not an approval — treat this PR as unreviewed by the auto critic until the credentials/model issue is fixed.');
             } else if (v.malformed) {
-              lines.push(`⚠️ The critic ran but its response could not be parsed (fail-safe **approve**). ${v.error ? '`' + v.error + '`' : ''}`.trim());
-              lines.push('', 'A broken critic never blocks — this is informational only.');
+              // As loud and unambiguous as the `unreachable` branch above, on purpose (see
+              // FND-20260830-e7c1): the model DID answer here, but never produced a parseable
+              // verdict, so exactly as much review happened as when it was never reached at all --
+              // zero. The old wording ("fail-safe approve" / "informational only") read soft enough
+              // that a human skimming the PR could mistake this for a real, if uneventful, pass.
+              lines.push(`🔴 **CRITIC RESPONSE COULD NOT BE PARSED** (model \`${v.model || 'n/a'}\`). ${v.error ? '`' + v.error + '`' : ''}`.trim());
+              lines.push('', '**No review was performed.** This is not an approval — treat this PR as unreviewed by the auto critic until this is fixed.');
             } else {
               const badge = v.verdict === 'revise' ? '🔴 **REVISE**' : '🟢 **APPROVE**';
               lines.push(`**Verdict:** ${badge}  ·  model \`${v.model || 'n/a'}\`  ·  confidence ${typeof v.confidence === 'number' ? v.confidence.toFixed(2) : 'n/a'}  ·  shouldRevise: \`${!!v.shouldRevise}\``);

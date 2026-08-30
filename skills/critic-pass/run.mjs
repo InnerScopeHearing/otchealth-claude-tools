@@ -45,6 +45,29 @@ const CRITIC_TIER = serviceTierFor("critic-pass");
 const CRITIC_SYSTEM =
   "You are a cheap, fast CRITIC pass. Review the draft strictly against the task and return STRICT JSON only, exactly as the prompt specifies. Do not rewrite the draft.";
 
+// CRITIC_MAX_TOKENS (2026-08-30, root cause of FND-20260830-e7c1): OPENAI_TIERS.standard moved to a
+// REASONING-family model (gpt-5.6-terra, model-routing.mjs's 2026-08-29 refresh). A reasoning model's
+// hidden "thinking" tokens count against max_completion_tokens and are spent BEFORE any visible
+// output -- so the old 700 default (tuned for the prior CHAT-family gpt-4.1, which had no hidden
+// token cost) let the model burn its ENTIRE budget on reasoning and return finish_reason:"length"
+// with an EMPTY content string. parseCriticVerdict("") then fails safe to malformed:true, which is
+// exactly how every claude/* PR's auto critic silently stopped producing a real review overnight
+// (reproduced live against the actual PR #499 diff that triggered the finding: 700 tokens -> 700
+// reasoning_tokens -> empty content -> malformed:true; verified this is the SAME failure, not a
+// coincidence). Live-tested against both a small real diff (7.7KB) and critic-pr.yml's own maximum
+// (80KB, `head -c 80000`): 2000-4000 tokens reliably produced a real, parseable verdict every time
+// (observed reasoning-token spend ranged 339-1657 across repeated calls on the SAME input -- itself
+// non-deterministic, so this needs real margin, not just "one more than what failed once"). 3000
+// leaves that margin. Env-overridable (CRITIC_MAX_TOKENS) like every other tunable in this file.
+// positiveInt() guards that override: an unset, empty, zero, negative, fractional, or non-finite
+// value (e.g. "0", "-1", "Infinity", a typo) falls back to the safe default instead of being sent to
+// the API as-is, which would either silently disable the budget or throw a confusing provider error.
+function positiveInt(raw, fallback) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+const CRITIC_MAX_TOKENS = positiveInt(process.env.CRITIC_MAX_TOKENS, 3000);
+
 // ---- creds (same JWT-SA -> Secret Manager pattern the rest of the toolkit uses) ----
 function resolveSa() {
   if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
@@ -65,13 +88,33 @@ async function sm(id, saRaw) { const _kv = await kvSecret(id); if (_kv != null) 
   return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
 }
 
+// truncatedEmpty(choice) -> true when a reasoning-family model spent its ENTIRE token budget on
+// hidden reasoning and returned no visible output at all (finish_reason:"length" + empty/whitespace
+// content). This is NOT an HTTP error and NOT a 429 -- the call itself succeeded -- so it needs its
+// own detection, distinct from both existing retry branches below. See CRITIC_MAX_TOKENS's doc
+// comment above for the incident this fixes (FND-20260830-e7c1).
+function truncatedEmpty(choice) {
+  return choice?.finish_reason === "length" && !String(choice?.message?.content ?? "").trim();
+}
+
 async function callChat(ep, key, dep, system, user, maxTokens, tries) {
   const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true });
+  const tokenKey = body.max_completion_tokens != null ? "max_completion_tokens" : "max_tokens";
+  let escalated = false;
   for (let a = 0; a < tries; a++) {
     const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-02-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
-    return (await r.json()).choices[0].message.content;
+    const choice = (await r.json()).choices[0];
+    // On truncated-empty, retry within the SAME existing `tries` budget the 429 path already uses
+    // (so this never costs more worst-case calls than that pre-existing retry allowance) -- but
+    // double the token budget only the FIRST time this happens (`escalated` latches permanently),
+    // never on every subsequent attempt. Reasoning-token spend is stochastic per call (observed
+    // 339-1657 tokens on the SAME real input across repeated live calls), so a later attempt at the
+    // SAME escalated budget can still succeed even without escalating again. See truncatedEmpty's
+    // doc comment for the incident this fixes.
+    if (truncatedEmpty(choice) && a < tries - 1) { if (!escalated) { escalated = true; body[tokenKey] = body[tokenKey] * 2; } continue; }
+    return choice.message.content;
   }
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
@@ -90,13 +133,22 @@ async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
   const policy = flexRetryPolicy(CRITIC_TIER, { tries });
   const effTries = policy.tries || tries;
   const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens, jsonMode: true, serviceTier: CRITIC_TIER }), model: dep };
+  const tokenKey = body.max_completion_tokens != null ? "max_completion_tokens" : "max_tokens";
+  let escalated = false;
   for (let a = 0; a < effTries; a++) {
     const init = { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) };
     if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
     const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
-    return (await r.json()).choices[0].message.content;
+    const choice = (await r.json()).choices[0];
+    // On truncated-empty, retry within the SAME existing `effTries` budget the 429 path already
+    // uses (never more worst-case calls than that pre-existing retry allowance) -- but double the
+    // token budget only the FIRST time this happens (`escalated` latches permanently), never on
+    // every subsequent attempt. See truncatedEmpty's doc comment on the Azure callChat() above
+    // (same failure, same fix shape, same reasoning about why a same-budget retry can still help).
+    if (truncatedEmpty(choice) && a < effTries - 1) { if (!escalated) { escalated = true; body[tokenKey] = body[tokenKey] * 2; } continue; }
+    return choice.message.content;
   }
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }
@@ -108,7 +160,7 @@ async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
 // that does not exist on the legacy resource) and it was also the direct cause of the fleet-wide Datadog
 // "Azure OpenAI throttled (blocked_calls)" flap (see model-routing.mjs LEGACY_STANDARD comment).
 // Mirrors agent-evals/run-evals.mjs's chat() so the whole fleet agrees on endpoints + throttle handling.
-async function defaultAzureChat({ system, user, tier, maxTokens = 700 }) {
+async function defaultAzureChat({ system, user, tier, maxTokens = CRITIC_MAX_TOKENS }) {
   const saRaw = resolveSa(); // may be null post-GCP-exit; sm() then resolves via Key Vault (OIDC on CI)
   const dep = resolveTier(process.env.CRITIC_MODEL || tier || "standard", "azure").deployment;
   const [ep, key] = await Promise.all([sm("azure-foundry-openai-endpoint", saRaw), sm("azure-foundry-key", saRaw)]);
@@ -138,7 +190,7 @@ async function defaultAzureChat({ system, user, tier, maxTokens = 700 }) {
 // fallback shape as the Foundry path above, resolved against OPENAI_TIERS instead of TIERS. Key comes
 // from env first (a caller/CI may already have it resolved), else the fleet secret store (SSM primary
 // per kvSecret()'s SECRET_BACKEND default, Key Vault fallback).
-async function defaultOpenAIChat({ system, user, tier, maxTokens = 700 }) {
+async function defaultOpenAIChat({ system, user, tier, maxTokens = CRITIC_MAX_TOKENS }) {
   const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
   if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
   const dep = resolveTier(process.env.CRITIC_MODEL || tier || "standard", "openai").deployment;
@@ -176,7 +228,18 @@ export async function runCriticPass({ task, draft, constraints, context, tier, m
     const call = chatFn || defaultChat;
     const raw = await call({ system: CRITIC_SYSTEM, user: prompt, tier: tier || "standard" });
     const verdict = parseCriticVerdict(raw);
-    return { ran: true, ...verdict, unreachable: false, shouldRevise: shouldRevise(verdict, { minSeverity }), model };
+    // HONESTY (2026-08-30, FND-20260830-e7c1): a malformed verdict's own `verdict` field reads
+    // "approve" (parseCriticVerdict's fail-safe, kept as-is -- see the module header, this must never
+    // become a hard block). Without an explicit signal alongside it, a caller/renderer can mistake
+    // that for a real, passing review -- which is exactly what happened: critic-pr.yml rendered a
+    // malformed response as "the critic ran... fail-safe approve" and "informational only," soft
+    // enough to read as a real (if uneventful) review. Give malformed the SAME unmistakable `note`
+    // shape unreachable already carries, so nothing downstream has to re-derive "was this a real
+    // review" from `malformed` alone.
+    const note = verdict.malformed
+      ? "critic ran but its response could not be parsed into a valid verdict — treat this PR as NOT reviewed by the auto critic"
+      : undefined;
+    return { ran: true, ...verdict, unreachable: false, shouldRevise: shouldRevise(verdict, { minSeverity }), model, ...(note ? { note } : {}) };
   } catch (e) {
     // UNREACHABLE, not malformed. Nothing inside the try above throws except `call()` itself
     // (buildCriticPrompt/parseCriticVerdict/shouldRevise are pure and never throw) — so every catch
