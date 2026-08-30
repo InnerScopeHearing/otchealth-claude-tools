@@ -62,6 +62,17 @@ test("fail-safe: malformed (non-JSON) model output degrades to approve, not a th
   assert.equal(r.shouldRevise, false);
 });
 
+test("HONESTY (FND-20260830-e7c1): a malformed verdict carries an unmistakable 'not reviewed' note, mirroring unreachable's, so it can never render as a soft/informational approve", async () => {
+  const chatFn = async () => "the model rambled without any json";
+  const r = await runCriticPass({ task: "t", draft: "d", chatFn });
+  assert.equal(r.malformed, true);
+  assert.match(
+    r.note,
+    /could not be parsed|not.*reviewed/i,
+    "a malformed verdict must carry an explicit note (like unreachable's) -- without it, critic-pr.yml rendered this as 'fail-safe approve' / 'informational only', soft enough to be mistaken for a real pass",
+  );
+});
+
 test("the resolved model tier is reported (default standard = a gpt-4o-class model, never the banned mini)", async () => {
   const chatFn = async () => approveJson;
   const r = await runCriticPass({ task: "t", draft: "d", chatFn });
