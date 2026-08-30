@@ -800,3 +800,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-30T02:19:28.118Z
 - **Closed:** (open)
+
+### finding:FND-20260830-e7c1 severity:high status:open | Auto critic-pass returns malformed:true and posts a FAKE 'fail-safe approve' on every PR: model IS reached (OPENAI_API_KEY present, unreachable:false, model=gpt-5.6-terra) but its response never parses, so every claude/* PR merged tonight got an auto-review that never actually happened
+
+- **Source audit doc:** CTO live investigation 2026-08-30, critic run 33287697213 on claude-tools PR #499
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-30T02:25:17.191Z
+- **Closed:** (open)
