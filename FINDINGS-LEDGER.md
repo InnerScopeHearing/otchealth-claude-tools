@@ -816,3 +816,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-30T02:50:23.501Z
 - **Closed:** (open)
+
+### finding:FND-20260830-4753 severity:high status:fixed | critic-pass gate byte-truncated its own input (head -c 80000) and reported the cut as code defects; fixed in #504
+
+- **Source audit doc:** otchealth-claude-tools PR #503 auto critic pass, 2026-08-30
+- **Fix commit:** b58e0a5
+- **Verified by:** A/B on identical branch content the same hour: truncating gate returned confidence-0.99 REVISE citing a syntax error at 'const MINE_HARDNEG_MAX_TOKENS = positi' (exactly the byte the 80000 cap landed on) plus 'omits the two signal-radar detectors' (modified with tests, among the 8 of 18 files past the cut); fixed gate on #504 returned APPROVE. Fix: lead with git diff --numstat file list always, cut on line boundary, explicit truncation marker.
+- **Opened:** 2026-08-30T04:18:50.737Z
+- **Closed:** 2026-08-30T04:18:50.737Z
