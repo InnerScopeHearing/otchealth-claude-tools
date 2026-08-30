@@ -784,3 +784,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** DISPROVEN on its own hypothesis, then superseded by the real cause. kvSecret() default IS ssm and IS tried first (PR #466/e917525, 2026-08-27); doc-indexer:latest pushed 2026-08-29T22:51Z is FRESH (2 days after that fix); the alarming '[kv-secret] READ failed via all auth paths' line only reports the Key Vault FALLBACK tier and fires whenever an SSM param is simply absent -- /otchealth/opensearch-endpoint and -region were NEVER created (both ParameterNotFound, CTO-verified live), and opensearch-write.mjs resolveOpenSearchConfig() has a documented DEFAULT_HOST fallback byte-identical to the live otchealth-brain endpoint (CTO-verified by reading origin/main). Doc rooms are NOT stale: legal-company backfill logged os synced=7944 chunks=74695 and finance logged os synced=9999 chunks=101038 through this exact path/image while the finding was open. REAL cause of actual staleness found instead: FND-20260830-ring (ring-memory-index azure/foundry defaults), fixed in claude-tools #499 squash 9b2381c.
 - **Opened:** 2026-08-30T01:51:00.770Z
 - **Closed:** 2026-08-30T02:19:23.140Z
+
+### finding:FND-20260830-1912 severity:high status:fixed | ring-memory-index-daily defaulted SEARCH_BACKEND=azure + EMBEDDINGS_PROVIDER=foundry (both dead) while its task def sets NEITHER var, so all 7 per-ring -memory indices went unwritten and exit 0 anyway: measured staleness cpo 47.8d, cco 44.8d, legal-personal-memory 18.2d, cfo 13.7d, coo 13.3d, cro 10.9d, developer 10.9d
+
+- **Source audit doc:** brain-freshness investigation 2026-08-30 (superseding FND-20260830-ccb9); fix merged claude-tools #499 / 9b2381c
+- **Fix commit:** 9b2381c99a13a099692c3c5912bd448a3410b3be
+- **Verified by:** CTO independently verified the MECHANISM by construction: live task def otchealth-job-ring-memory-index-daily has SEARCH_BACKEND and EMBEDDINGS_PROVIDER both UNSET, so the code default applied, and that default was azure/foundry (read in the diff) which are permanently dead. Staleness DAY-COUNTS come from the subagent's in-VPC OpenSearch max(ts) queries and were NOT independently re-measured by the CTO.
+- **Opened:** 2026-08-30T02:19:25.584Z
+- **Closed:** 2026-08-30T02:19:25.584Z
