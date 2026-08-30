@@ -808,3 +808,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-30T02:25:17.191Z
 - **Closed:** (open)
+
+### finding:FND-20260830-e927 severity:high status:open | LATENT SIBLINGS of the critic reasoning-budget bug: the 2026-08-29 tier refresh moved OPENAI_TIERS.standard to a reasoning-family model, but other callers still carry chat-era token budgets that reasoning tokens can exhaust before any visible output (intermittent empty response -> silent fail-safe). Concrete candidates with small budgets: recall-evals/mine-hard-negatives (500), signal-radar/detectors/contradiction-staleness, kb-memory/nightly-reflection, legal/deadline-extract, company-brain/brain.mjs. agent-evals/judge-bedrock-nova (400) is Bedrock Nova not OpenAI so likely exempt. Each needs its budget checked against real production input sizes, not trivial probes.
+
+- **Source audit doc:** CTO sibling sweep 2026-08-30 after critic-pass FND-20260830-e7c1 / claude-tools #500
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-30T02:50:23.501Z
+- **Closed:** (open)
