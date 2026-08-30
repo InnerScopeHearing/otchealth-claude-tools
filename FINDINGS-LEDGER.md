@@ -792,3 +792,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** CTO independently verified the MECHANISM by construction: live task def otchealth-job-ring-memory-index-daily has SEARCH_BACKEND and EMBEDDINGS_PROVIDER both UNSET, so the code default applied, and that default was azure/foundry (read in the diff) which are permanently dead. Staleness DAY-COUNTS come from the subagent's in-VPC OpenSearch max(ts) queries and were NOT independently re-measured by the CTO.
 - **Opened:** 2026-08-30T02:19:25.584Z
 - **Closed:** 2026-08-30T02:19:25.584Z
+
+### finding:FND-20260830-6a1a severity:medium status:open | daily-digest nightly.sh still hardcodes --azure for the commons room STORAGE backend and fails every night with 'blob put 403 AccountIsDisabled' on the dead otchealthcommons account, after generating the digest; sibling librarian.sh was migrated to S3 on 2026-08-18 but this script's header never was. Fix needs the same per-room S3-mirror verification librarian.sh's audit did.
+
+- **Source audit doc:** brain-freshness investigation 2026-08-30 (secondary gap, NOT fixed)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-08-30T02:19:28.118Z
+- **Closed:** (open)
