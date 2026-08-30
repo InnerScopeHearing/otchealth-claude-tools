@@ -60,11 +60,19 @@ const CRITIC_SYSTEM =
 // non-deterministic, so this needs real margin, not just "one more than what failed once"). 3000
 // leaves that margin. Env-overridable (CRITIC_MAX_TOKENS) like every other tunable in this file.
 // positiveInt() guards that override: an unset, empty, zero, negative, fractional, or non-finite
-// value (e.g. "0", "-1", "Infinity", a typo) falls back to the safe default instead of being sent to
+// value below 1 (e.g. "0", "-1", "0.7", "Infinity", a typo) falls back to the safe default instead of
+// being sent to
 // the API as-is, which would either silently disable the budget or throw a confusing provider error.
+// A fractional value >= 1 is floored to a usable integer rather than discarded (1500.7 -> 1500).
 function positiveInt(raw, fallback) {
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  // Floor BEFORE the >0 test, not after. Testing first and flooring second let any value in (0,1)
+  // -- e.g. CRITIC_MAX_TOKENS="0.7" -- pass the >0 check and then floor to 0, sending
+  // max_completion_tokens:0 to the provider: exactly the "silently disable the budget" outcome this
+  // guard exists to prevent, and the opposite of what the comment above promised. Flooring first
+  // makes a sub-1 override collapse to 0 and fall back, while a fractional value >=1 still floors
+  // to a usable integer (1500.7 -> 1500).
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 const CRITIC_MAX_TOKENS = positiveInt(process.env.CRITIC_MAX_TOKENS, 3000);
 

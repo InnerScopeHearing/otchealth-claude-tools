@@ -73,7 +73,11 @@ test("the default token budget is well above the historical 700 that truncated r
   }));
 
 test("CRITIC_MAX_TOKENS input validation: unset/zero/negative/fractional/non-finite overrides all fall back to the safe default rather than reaching the API as-is", async () => {
-  for (const bad of ["0", "-1", "Infinity", "not-a-number", ""]) {
+  // "0.7"/"0.001" are the regression cases for the 2026-08-30 floor-order bug: positiveInt() used to
+  // test >0 BEFORE flooring, so any value in (0,1) passed the check and then floored to 0, sending
+  // max_completion_tokens:0 to the provider. The original list tested no sub-1 fractional value at
+  // all, which is exactly why the bug shipped despite this test claiming to cover "fractional".
+  for (const bad of ["0", "-1", "0.7", "0.001", "Infinity", "not-a-number", ""]) {
     await withEnvVars({ ...BASE_ENV, CRITIC_MAX_TOKENS: bad }, async () => {
       const { runCriticPass } = await freshRunModule();
       let sentBody = null;
