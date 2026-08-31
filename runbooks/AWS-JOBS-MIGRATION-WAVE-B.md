@@ -9,7 +9,13 @@
 > or as something to reconcile a live system against.
 >
 > The migration this document plans is DONE. Verified live 2026-08-31 against AWS EventBridge
-> Scheduler: **33 schedules, 24 ENABLED, 9 DISABLED.** Note this does NOT reconcile to a tidy
+> Scheduler: **33 schedules, 24 ENABLED, 9 DISABLED.** This supersedes the "32 schedules, all
+> DISABLED" state described in the body below and in this PR's original description, which was
+> accurate on 2026-08-16 and is not now. Reproduce it yourself rather than trusting this line
+> (`aws scheduler list-schedules --max-results 100`, paginating on `NextToken`, in account
+> `900915535335` / `us-east-1`; the counts below are that response grouped by `State`). Every
+> claim in this correction block was taken from that call or from a per-schedule `GetSchedule`,
+> not from any document. Note this does NOT reconcile to a tidy
 > 22 + 10 = 32: schedules were added by later work after this wave closed (`otchealth-image-canary`
 > is one such: its schedule was created 2026-08-28 and is ENABLED, distinct from the 2026-08-21 date
 > the canary skill itself landed, since building it and scheduling it were separate gated actions),
@@ -99,8 +105,13 @@ document:
   not silently marked safe.
 - A prior, unmerged capture exists at `otchealth-mcp-server` branch `claude/aws-iac`
   (Terraform, adopt-only, built ~14 hours before this session by a concurrent effort on the same
-  emergency). It was used as a **cross-check and pattern reference** — five of its existing-22 task
-  definitions were spot-read to derive the exact Azure→AWS translation rules below — but every number
+  emergency). It was used as a **cross-check and pattern reference** — four of its existing-22 task
+  definitions were spot-read to derive the exact Azure→AWS translation rules below
+  (`otchealth-job-brain-reindex`, `otchealth-daily-digest`, `otchealth-innd-stock-daily`,
+  `otchealth-os-anomaly-watch` — the same four named under "Methodology" below), plus one schedule
+  (`GetSchedule` on `otchealth-librarian-commerce`) for the schedule shape. An earlier revision of this
+  line said "five task definitions", which overcounted by folding that schedule read into the
+  task-definition count — but every number
   in this report was independently re-verified live, not copied from it. One live drift was found in
   that window: a 27th task-definition family (`otchealth-agentstate-verify`) had been added by another
   concurrent session since that capture; it is a one-shot utility, outside this wave's recurring-job

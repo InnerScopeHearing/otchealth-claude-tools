@@ -7,11 +7,15 @@
 // script has no code path that can change that.
 //
 // IDEMPOTENT: if a schedule with the target name already exists (by any means -- a prior run of this
-// script, or hand-built the way the original 22 were), it is left untouched and skipped, never
-// re-created or overwritten. Task definitions ARE re-registered on every run (ECS task-definition
-// registration is inherently additive -- it always creates a new revision, never mutates one), but a
-// schedule that already exists keeps pointing at whatever revision it was created against; re-run
-// this script and inspect the diff before manually repointing a schedule at a newer revision.
+// script, or hand-built the way the original 22 were), the whole job is skipped before ANY mutation:
+// no schedule is re-created or overwritten, and no task definition is registered for it either. An
+// earlier version of this comment said "task definitions ARE re-registered on every run"; that is
+// wrong and always was, because the existing-schedule branch `continue`s before RegisterTaskDefinition.
+// Task definitions are registered ONLY for jobs that pass the existence check as confirmed-absent.
+// (Registration itself is inherently additive -- it always creates a new revision, never mutates one --
+// which is why an unnecessary registration is silent churn rather than a loud failure, and therefore
+// worth preventing rather than tolerating.) A schedule that already exists keeps pointing at whatever
+// revision it was created against; inspect the diff before manually repointing one at a newer revision.
 //
 // Usage:
 //   node build-missing-schedules.mjs                 create every JOB below that has no schedule yet
