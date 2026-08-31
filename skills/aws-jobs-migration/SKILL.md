@@ -13,6 +13,15 @@ description: HISTORICAL (Wave B of the Azure-exit emergency, 2026-08-16; migrati
 > STATUS CORRECTION at the top of `runbooks/AWS-JOBS-MIGRATION-WAVE-B.md`, including one unresolved
 > date discrepancy flagged there rather than silently reconciled. `inventory-aws-jobs.mjs` and
 > `build-missing-schedules.mjs` remain useful and correct.
+>
+> **Why the two AWS scripts still work although they import `kvSecret` from
+> `../kb-memory/azure-secret.mjs` (a reasonable thing to misread, so stating it):** that module is
+> named for its origin, not its current behavior. It imports `ssmSecret` from `./aws-secret.mjs` and
+> resolves from AWS SSM Parameter Store under `SECRET_BACKEND=ssm`, which is the fleet default and is
+> pinned by `setup/session-start.sh`. The Azure half is dead and unused. Verified by execution rather
+> than by reading the import graph: `node inventory-aws-jobs.mjs` returns the live task-definition
+> inventory today, with Azure permanently deleted. Under an explicit `SECRET_BACKEND=keyvault` they
+> WOULD fail, which is the only configuration in which the import path means what it looks like.
 
 Wave B answer to "does every Azure Container Apps Job that keeps the company running have a
 working AWS twin, ready to flip on the moment Azure is billing-blocked." Read
