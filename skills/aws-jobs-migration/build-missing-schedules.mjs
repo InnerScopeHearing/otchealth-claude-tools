@@ -180,10 +180,27 @@ async function main() {
   const results = [];
   for (const j of targets) {
     const schedName = `otchealth-${j.name}`;
+    // Existence check is THREE-valued, not two. `200 -> skip, anything else -> create` is
+    // fail-OPEN: it silently reclassifies "I could not determine" (403 expired creds, 429
+    // throttle, 5xx AWS blip) into "it does not exist", and then MUTATES AWS on that basis --
+    // registering a redundant task-definition revision, then attempting a create that the
+    // real schedule will reject. That breaks the idempotency this script's own SKILL.md and
+    // runbook promise, and the damage (a spurious task-def revision) lands BEFORE the
+    // conflicting create is refused. Only a confirmed 404 is proof of absence; everything
+    // else fails closed and leaves the job for a human, because a re-run after a transient
+    // error is exactly when this path gets exercised.
     const existing = await schedulerGet(schedName);
     if (existing.status === 200) {
       console.log('SKIP (already exists)', schedName);
       results.push({ name: j.name, ok: true, skipped: true });
+      continue;
+    }
+    if (existing.status !== 404) {
+      console.log('EXISTENCE CHECK INCONCLUSIVE', schedName, existing.status, existing.text.slice(0, 300));
+      results.push({
+        name: j.name, ok: false, stage: 'exists-check', status: existing.status,
+        error: `GetSchedule returned ${existing.status} (not 200, not 404), so absence is unproven; refusing to create. ${existing.text.slice(0, 300)}`,
+      });
       continue;
     }
 

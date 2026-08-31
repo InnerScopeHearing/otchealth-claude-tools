@@ -9,8 +9,14 @@
 > or as something to reconcile a live system against.
 >
 > The migration this document plans is DONE. Verified live 2026-08-31 against AWS EventBridge
-> Scheduler: **33 schedules, 24 ENABLED, 9 DISABLED** (22 pre-existing + the 10 this wave
-> registered, less consolidation since). The nine still disabled are deliberate, not forgotten:
+> Scheduler: **33 schedules, 24 ENABLED, 9 DISABLED.** Note this does NOT reconcile to a tidy
+> 22 + 10 = 32: schedules were added by later work after this wave closed (`otchealth-image-canary`
+> is one such: its schedule was created 2026-08-28 and is ENABLED, distinct from the 2026-08-21 date
+> the canary skill itself landed, since building it and scheduling it were separate gated actions),
+> so the 33 is 22 pre-existing plus this wave's
+> 10 plus later additions, net of anything retired since. Do not read the 33 as evidence about
+> what THIS wave did — for that, the body below is the record. The nine still disabled are
+> deliberate, not forgotten:
 > `xero-run` (held by FND-20260816-5539 below, enabling it is new financial automation going live,
 > not a like-for-like cutover), `deep-legal-personal` (attorney-privileged ring, excluded by
 > design), `fleet-secret-custodian` (the skill itself was retired 2026-08-28 as a rewrite-not-port,
