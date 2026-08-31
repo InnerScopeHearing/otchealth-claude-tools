@@ -260,12 +260,21 @@ real accounting ledger** — start running on a daily cron.
 > adds a SECOND daily run against a real accounting ledger — the exact incident the notes warn about.
 > The question below is therefore not "is the daily cron intended" alone, but "what already invokes
 > this job, and would the AWS cron duplicate it."
-That is not a cutover, it is new financial automation going live for the first time, and per the
-standing accounting-objects rule (**reverse, never void, with readback on every object**), this needs
-a CFO/Matt decision before it is ever enabled on either cloud: is the daily 7am cron the intended
-behavior (Azure's Feb-30 cron is the bug), or does `xero-run` intentionally run some other way (manual
-dispatch, an external trigger) and neither cron should be enabled? **Flagged, not decided, not
-touched.** Logged as `FND-20260816-5539` in the findings-ledger so it cannot silently vanish.
+Either way it is not a like-for-like cutover, and per the standing accounting-objects rule
+(**reverse, never void, with readback on every object**), it needs a CFO/Matt decision before it is
+ever enabled on either cloud. Which of two shapes it is decides how bad the failure mode is, and the
+2026-08-14 execution above means we do not currently know which:
+
+- If nothing else invokes `xero-run`, enabling the AWS cron starts daily posting to a real ledger for
+  the first time — automation going live, not a migration.
+- If something already invokes it daily at 07:00 (which the recorded execution time matches exactly),
+  enabling the AWS cron **duplicates** an existing run — a double-post against a real accounting
+  ledger, which is worse.
+
+So: is the daily 7am cron the intended behavior (Azure's Feb-30 cron being the bug), or does
+`xero-run` intentionally run some other way (manual dispatch, an external trigger, another
+orchestrator) and neither cron should be enabled? **Flagged, not decided, not touched.** Logged as
+`FND-20260816-5539` in the findings-ledger so it cannot silently vanish.
 
 ## Full matrix
 
