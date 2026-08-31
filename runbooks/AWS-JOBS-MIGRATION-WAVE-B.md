@@ -161,8 +161,11 @@ platform-level bound and can run until it is noticed. The builder does not set o
 mention the omission. In practice the doc-indexer-family jobs impose their OWN soft budget
 (`--max-minutes`, which is why the finance backfill exits cleanly at its limit rather than being
 killed), so for those the gap is covered at the application layer — but that is a property of those
-scripts, not of the migration, and it does not hold for the rest. Before enabling any job whose
-Azure `replica_timeout_s` was meaningful, decide where its bound now lives.
+scripts, not of the migration, and it does not hold for the rest. **Before enabling ANY of the ten,
+decide where that job's execution bound now lives** — including the ones whose Azure
+`replica_timeout_s` looks generous or uninteresting, since "this timeout did not matter on Azure" is
+itself a per-job judgement and not a reason to skip the question. Stating it as "any job whose
+timeout was meaningful" would let the gate be self-assessed away, which is the opposite of a gate.
 
 **2. `build-missing-schedules.mjs` is not idempotent across a CreateSchedule failure.** It registers
 the ECS task definition BEFORE creating the schedule (it needs the ARN), so if CreateSchedule
@@ -265,8 +268,11 @@ Either way it is not a like-for-like cutover, and per the standing accounting-ob
 ever enabled on either cloud. Which of two shapes it is decides how bad the failure mode is, and the
 2026-08-14 execution above means we do not currently know which:
 
-- If nothing else invokes `xero-run`, enabling the AWS cron starts daily posting to a real ledger for
-  the first time — automation going live, not a migration.
+- If nothing else invokes `xero-run` **on a recurring daily basis** — the 2026-08-14 run having been
+  a one-off, a manual dispatch or a backfill rather than a standing job — then enabling the AWS cron
+  starts daily posting to a real ledger for the first time: automation going live, not a migration.
+  (Note this branch is not "nothing invokes it." The recorded execution proves something did. The
+  open question is whether that something recurs.)
 - If something already invokes it daily at 07:00 (which the recorded execution time matches exactly),
   enabling the AWS cron **duplicates** an existing run — a double-post against a real accounting
   ledger, which is worse.
