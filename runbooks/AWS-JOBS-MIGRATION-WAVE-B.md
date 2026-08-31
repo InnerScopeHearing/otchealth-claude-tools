@@ -1,7 +1,34 @@
 # AWS jobs migration — Wave B: the scheduled automation (2026-08-16)
 
-**Status: matrix complete, 10 missing schedules built and DISABLED, cutover order recommended.
-Nothing enabled. No Azure job touched.**
+> **STATUS CORRECTION, 2026-08-31 (read before anything below).** This document was written on
+> 2026-08-16 and describes Azure as a LIVE system it was reading. **Azure is gone.** Subscription
+> `55c84f6b-ef90-4259-a58b-50835cc4cab4` was permanently deleted and every Azure resource named
+> below (Container Apps Jobs, Key Vault, AI Search, Blob, Foundry) is unreachable forever. Treat
+> every Azure column, cron, and env value here as a **HISTORICAL SNAPSHOT of a deleted estate**,
+> useful as the record of what once ran and why each AWS twin exists, and never as current state
+> or as something to reconcile a live system against.
+>
+> The migration this document plans is DONE. Verified live 2026-08-31 against AWS EventBridge
+> Scheduler: **33 schedules, 24 ENABLED, 9 DISABLED** (22 pre-existing + the 10 this wave
+> registered, less consolidation since). The nine still disabled are deliberate, not forgotten:
+> `xero-run` (held by FND-20260816-5539 below, enabling it is new financial automation going live,
+> not a like-for-like cutover), `deep-legal-personal` (attorney-privileged ring, excluded by
+> design), `fleet-secret-custodian` (the skill itself was retired 2026-08-28 as a rewrite-not-port,
+> so this schedule should be deleted rather than enabled), `os-healthz-monitor` (watches the
+> retired os-chat app, same, delete not enable), plus `growth-room-nightly`, `sentinel-os-eval`,
+> `decision-clock`, `agent-memory-worker`, `ledger-compaction`.
+>
+> **One unresolved discrepancy, flagged rather than silently reconciled:** this wave recorded live
+> Azure job executions on 2026-08-14, 08-15 and 08-16 (see the `sentinel-os-eval` evidence and
+> FND-20260816-1aa3), which postdates the 2026-08-13 deletion date asserted in the fleet CLAUDE.md
+> files. Both cannot be right. The execution records are too specific and internally consistent to
+> be fabricated, so the likeliest reading is that 08-13 was the EVACUATION date and final deletion
+> landed a few days later. Not resolved here because it changes no current action, and guessing a
+> date into the durable record is how the drift starts.
+
+**Status when written (2026-08-16, now superseded by the correction above): matrix complete,
+10 missing schedules built and DISABLED, cutover order recommended. Nothing enabled. No Azure
+job touched.**
 
 Companion docs: `otchealth-cto/runbooks/AWS-CUTOVER-2026-08-14.md` (the DNS/compute/search cutover
 this wave feeds into), `otchealth-cto/runbooks/AZURE-EVACUATION-2026-08-13.md`, the

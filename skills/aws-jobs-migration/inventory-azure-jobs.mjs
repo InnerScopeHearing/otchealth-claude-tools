@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+// SUPERSEDED 2026-08-31 -- DO NOT RUN, DO NOT PORT. Kept only as the provenance of
+// data/matrix.json (it is the script that produced the Azure half of that snapshot).
+//
+// Azure subscription 55c84f6b-ef90-4259-a58b-50835cc4cab4 was permanently deleted. Every ARM call
+// below now fails, and the azure-sp credentials it reads no longer exist in the secret store, so
+// this exits with an auth error rather than an empty inventory. That distinction matters: an
+// empty inventory would read as "there are no Azure jobs" instead of "Azure is gone."
+//
+// AWS successor: inventory-aws-jobs.mjs (in this same directory) enumerates the live EventBridge
+// Scheduler + ECS estate, which is now the whole picture. There is nothing left to diff against.
+//
+// This file is deliberately NOT deleted. data/matrix.json is cited as evidence by open findings
+// (FND-20260816-5539, FND-20260816-1aa3), and a snapshot whose generator has vanished is a weaker
+// artifact than one you can still read the collection method of.
+//
+// ---- original header, describing behavior against the now-deleted estate ----
 // Pulls the full, live, authoritative inventory of every Azure Container Apps Job across both
 // production resource groups (rg-otchealth-apps-prod, otchealth-automation-rg), read-only.
 //

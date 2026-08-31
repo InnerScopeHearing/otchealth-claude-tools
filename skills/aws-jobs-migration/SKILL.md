@@ -1,21 +1,30 @@
 ---
 name: aws-jobs-migration
-description: Wave B of the Azure-exit emergency (2026-08-16) — the authoritative Azure Container Apps Jobs <-> AWS EventBridge Scheduler matrix, the tooling that built it, and the 10 ECS task definitions + DISABLED schedules it registered for every recurring job that had no AWS twin. Use inventory-azure-jobs.mjs / inventory-aws-jobs.mjs to re-pull live state, build-missing-schedules.mjs (idempotent, --dry-run supported) to close any new gap the same way, and data/matrix.json as the structured source of truth behind runbooks/AWS-JOBS-MIGRATION-WAVE-B.md. Every schedule this tooling creates is born DISABLED; nothing here ever enables one — cutover is a deliberate, per-job, human-gated action documented in the runbook's recommended order.
+description: HISTORICAL (Wave B of the Azure-exit emergency, 2026-08-16; migration COMPLETE, Azure permanently deleted). The Azure Container Apps Jobs <-> AWS EventBridge Scheduler matrix, the tooling that built it, and the 10 ECS task definitions + DISABLED schedules it registered for every recurring job that had no AWS twin. Use inventory-aws-jobs.mjs to enumerate the live AWS estate and build-missing-schedules.mjs (idempotent, --dry-run supported) to close any new gap the same way; data/matrix.json is a historical snapshot of a deleted estate, cited as evidence by open findings, NOT current state. inventory-azure-jobs.mjs is SUPERSEDED and must not be run — Azure is gone and it fails on auth. Every schedule this tooling creates is born DISABLED; nothing here ever enables one — cutover is a deliberate, per-job, human-gated action.
 ---
 
 # aws-jobs-migration
+
+> **HISTORICAL, 2026-08-31.** The migration this skill was built to drive is COMPLETE and Azure is
+> permanently deleted. Live AWS state as of 2026-08-31: 33 EventBridge schedules, 24 ENABLED, 9
+> deliberately DISABLED. `data/matrix.json` and the runbook are a snapshot of a deleted estate, kept
+> because open findings cite them as evidence; they are not current state and nothing should be
+> reconciled against them. `inventory-azure-jobs.mjs` is SUPERSEDED and fails on auth — see the
+> STATUS CORRECTION at the top of `runbooks/AWS-JOBS-MIGRATION-WAVE-B.md`, including one unresolved
+> date discrepancy flagged there rather than silently reconciled. `inventory-aws-jobs.mjs` and
+> `build-missing-schedules.mjs` remain useful and correct.
 
 Wave B answer to "does every Azure Container Apps Job that keeps the company running have a
 working AWS twin, ready to flip on the moment Azure is billing-blocked." Read
 `runbooks/AWS-JOBS-MIGRATION-WAVE-B.md` for the full narrative (verdict per job, blast-radius
 classification, the recommended cutover order, and every gap found). This directory is the
-re-runnable tooling + data behind that report.
+tooling + data behind that report.
 
 ## Scripts
 
 ```bash
-# Live, authoritative pull of every Azure Container Apps Job (both prod resource groups):
-# name, cron, image, command/args, env, secretRefs, identity, last 5 executions.
+# SUPERSEDED -- DO NOT RUN. Azure is permanently deleted; this fails on auth. Kept only as the
+# provenance of data/matrix.json's Azure half.
 node inventory-azure-jobs.mjs [--out data/azure-jobs.json]
 
 # Live pull of every AWS EventBridge schedule + ECS task-definition family.
