@@ -246,7 +246,11 @@ No task-definition changes were made or are needed — the fix lives entirely in
 job is **de facto disabled on Azure today**, confirmed live (not inferred from a doc), and matches
 the CTO CLAUDE.md's own 2026-08-01 flag ("`xero-run`'s schedule trigger also looks empty/disabled").
 
-Its AWS twin instead carries a real, live daily cron: `cron(0 7 * * ? *)`. **These are not
+Its AWS twin instead carries a valid daily cron expression, `cron(0 7 * * ? *)` — one that WOULD run
+every day, on a schedule that is currently **DISABLED** and has therefore never fired. (An earlier
+revision called it "real, live", which overstated present exposure: the distinction that matters is
+between Azure's Feb-30 expression, which could never fire even if enabled, and this one, which is
+armed the moment somebody enables it.) **These are not
 equivalent.** Enabling the AWS schedule as it stands would make `xero-run` — a job that **posts to a
 real accounting ledger** — start running on a daily cron.
 
@@ -276,6 +280,12 @@ ever enabled on either cloud. Which of two shapes it is decides how bad the fail
 - If something already invokes it daily at 07:00 (which the recorded execution time matches exactly),
   enabling the AWS cron **duplicates** an existing run — a double-post against a real accounting
   ledger, which is worse.
+
+These two are the bounding cases, not an exhaustive list. A single recorded execution constrains very
+little: the real invoker could run weekly, at a different hour, irregularly, or be several triggers at
+once, and 07:00Z on one day is a suggestive coincidence with the AWS cron rather than proof of a daily
+cadence. Treat "what invokes it, and how often" as the thing to go and find out, not as a choice
+between two options.
 
 So: is the daily 7am cron the intended behavior (Azure's Feb-30 cron being the bug), or does
 `xero-run` intentionally run some other way (manual dispatch, an external trigger, another
