@@ -162,6 +162,27 @@ parallel. It adds an automatic Key-Vault-then-SSM cross-cloud fallback **inside 
 — every job script that already calls `kvSecret(name)` gets the fallback for free, no task-definition
 change required.
 
+> **RUNTIME EVIDENCE ADDED 2026-08-31.** As written above, this section proved the fix from a SOURCE
+> COMMIT plus SSM reads made with the authoring session's own credentials. Neither establishes what
+> actually matters: that the **deployed** `doc-indexer:latest` image (a mutable tag) contains
+> `aws-secret.mjs`, or that it resolves secrets at runtime under the **ECS task role** rather than
+> under a human's credentials. Those are different claims, and the gap between them is the same
+> "source commit is not a deployed artifact" shape this fleet has been bitten by repeatedly.
+>
+> That gap is now closed by execution, not inference. ECS task `b3a8f859` ran
+> `otchealth-job-librarian-finance:6` on image `doc-indexer:latest` on 2026-08-30/31 and completed
+> **16,145 documents with 16,043/16,043 LLM calls succeeding**, writing to both Amazon Bedrock and
+> the OpenSearch brain. Every one of those calls required credentials resolved through `kvSecret()`
+> inside the container, with no Azure reachable anywhere. The mechanism therefore works in the
+> deployed image, under the task role, at scale.
+>
+> **What this does NOT prove, stated plainly:** it is evidence for the pre-existing definitions that
+> share this image and role, not per-definition proof for the **nine new ones**, which have never
+> executed because they were created DISABLED by design and remain so. They inherit the same image
+> and the same task-role pattern, which is a strong prior, but "inherits the pattern" is an argument
+> and the 16,043 calls are an observation. Enabling any of the nine is still a per-job gated action
+> whose first run is its own first proof.
+
 **This was verified live, not merely read from the code**, before writing this note: a real
 SigV4-signed `GetParameter` call against AWS SSM, using the `aws-cto-*` credential path, successfully
 resolved `azure-foundry-key`, `azure-openai-key`, and `posthog-fleet-ingest-key` — three real fleet
