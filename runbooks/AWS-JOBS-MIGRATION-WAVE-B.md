@@ -121,6 +121,15 @@ document:
 
 Spot-checking `otchealth-job-brain-reindex`, `otchealth-daily-digest`, `otchealth-innd-stock-daily`,
 and `otchealth-os-anomaly-watch` against their Azure originals gives a mechanical, byte-for-byte rule,
+<!-- QUALIFIED 2026-08-31: "byte-for-byte" describes the FIELD-MAPPING rule below (cron syntax,
+image, command, cpu/memory shape), not the full job definition, and the unqualified phrasing
+overstated it. Two categories are deliberately NOT carried across and were not called out:
+(1) Azure env/secret inputs judged vestigial on AWS -- e.g. `agent-state-janitor` carries
+`GCP_CLAUDE_DRIVER_SA_JSON_B64` plus a `sab64` secretRef in the matrix, and its row's
+`classification_basis` is `inferred`, not `task-explicit`; (2) `replica_timeout_s`, see the
+execution-time gap noted below. Rows whose `classification_basis` is `inferred` are reasoned, not
+verified, and a cutover decision that depends on one should verify that job's script first. -->
+
 applied uniformly to build the 10 new jobs:
 
 | Azure Container App field | → | AWS ECS field |
@@ -139,6 +148,32 @@ clouds — content-addressable, no ECR mirror needed. `doc-indexer`-based jobs u
 already settled on (Azure pins some of these to a specific sha256 digest; the AWS twins uniformly use
 `:latest` — an existing precedent this wave followed rather than re-litigated).
 
+## Two known equivalence gaps (added 2026-08-31, unresolved by design)
+
+Both were unstated assumptions in the original write-up, surfaced by review. Neither is live
+exposure today, because all ten schedules this wave created remain DISABLED — but both must be
+answered per-job BEFORE any of them is enabled, and neither is answered here.
+
+**1. Azure `replica_timeout_s` is not carried into any AWS-side execution limit.** The matrix records
+Azure timeouts from 60 to 14,400 seconds. Azure Container Apps Jobs enforce that as a hard replica
+timeout; an ECS scheduled task has no direct equivalent, so a hung or runaway job has no
+platform-level bound and can run until it is noticed. The builder does not set one and does not
+mention the omission. In practice the doc-indexer-family jobs impose their OWN soft budget
+(`--max-minutes`, which is why the finance backfill exits cleanly at its limit rather than being
+killed), so for those the gap is covered at the application layer — but that is a property of those
+scripts, not of the migration, and it does not hold for the rest. Before enabling any job whose
+Azure `replica_timeout_s` was meaningful, decide where its bound now lives.
+
+**2. `build-missing-schedules.mjs` is not idempotent across a CreateSchedule failure.** It registers
+the ECS task definition BEFORE creating the schedule (it needs the ARN), so if CreateSchedule
+definitively fails, a re-run finds no schedule, proceeds, and registers a SECOND task-definition
+revision. Registration is additive rather than destructive, so the consequence is silent revision
+churn rather than damage — but the script's own docs advertise re-run safety without this caveat.
+The 2026-08-31 fail-closed fix addresses a different case (an INCONCLUSIVE existence check no longer
+authorizes any mutation); this one is a genuine create-failure path and is documented rather than
+fixed, because deduplicating by task-definition content is a larger change than this near-dormant
+script warrants.
+
 ## The Key Vault correction (found, then found already fixed, mid-session)
 
 Reading the pre-existing 22 twins' actual deployed environment variables turned up what looked like a
@@ -155,7 +190,11 @@ different — see below).
 
 This matches the dispatch's own warning almost exactly ("Note `kvSecret()` currently reads ONLY from
 Azure Key Vault, and 16 of the 22 Fargate jobs resolve their credentials through it... a separate
-agent is landing the AWS/SSM secret fallback"). **That separate fix has already landed** —
+agent is landing the AWS/SSM secret fallback"). *(The dispatch's "16 of the 22" is quoted verbatim
+and does not match this report's own count of 11 pre-existing twins plus 9 of the 10 new jobs. The
+quote is retained as written because it is someone else's text and is the reason this was
+investigated; where the two disagree, this report's enumerated list above is the measured number and
+the dispatch's figure is an estimate that prompted the check.)* **That separate fix has already landed** —
 `skills/kb-memory/aws-secret.mjs` merged to `main` in commit `6dee16d`, the same commit that shipped
 `skills/cutover-preflight/`, evidently a concurrent sibling wave working this exact emergency in
 parallel. It adds an automatic Key-Vault-then-SSM cross-cloud fallback **inside `kvSecret()` itself**
@@ -206,7 +245,21 @@ the CTO CLAUDE.md's own 2026-08-01 flag ("`xero-run`'s schedule trigger also loo
 
 Its AWS twin instead carries a real, live daily cron: `cron(0 7 * * ? *)`. **These are not
 equivalent.** Enabling the AWS schedule as it stands would make `xero-run` — a job that **posts to a
-real accounting ledger** — start running every day where it currently never runs on Azure at all.
+real accounting ledger** — start running on a daily cron.
+
+> **CORRECTION 2026-08-31 (raises the risk, does not lower it).** This paragraph originally said the
+> job "currently never runs on Azure at all." That is contradicted by this report's own matrix row,
+> which records `xero-run` `last_execution_status: Succeeded` at `2026-08-14T07:00:00Z`. A Feb-30 cron
+> proves the SCHEDULE never fires; it does not prove the JOB never runs. Something invoked it — manual
+> dispatch, an external trigger, or another orchestrator — and note the recorded execution time
+> (07:00Z) is exactly the AWS twin's `cron(0 7 * * ? *)`, which is worth explaining before anyone
+> enables anything.
+>
+> This makes the double-post exposure WORSE than the original text implied, not better: if some other
+> path already runs this job daily at 07:00, enabling the AWS cron does not start a dormant job, it
+> adds a SECOND daily run against a real accounting ledger — the exact incident the notes warn about.
+> The question below is therefore not "is the daily cron intended" alone, but "what already invokes
+> this job, and would the AWS cron duplicate it."
 That is not a cutover, it is new financial automation going live for the first time, and per the
 standing accounting-objects rule (**reverse, never void, with readback on every object**), this needs
 a CFO/Matt decision before it is ever enabled on either cloud: is the daily 7am cron the intended
