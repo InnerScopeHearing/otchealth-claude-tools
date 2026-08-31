@@ -824,3 +824,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** A/B on identical branch content the same hour: truncating gate returned confidence-0.99 REVISE citing a syntax error at 'const MINE_HARDNEG_MAX_TOKENS = positi' (exactly the byte the 80000 cap landed on) plus 'omits the two signal-radar detectors' (modified with tests, among the 8 of 18 files past the cut); fixed gate on #504 returned APPROVE. Fix: lead with git diff --numstat file list always, cut on line boundary, explicit truncation marker.
 - **Opened:** 2026-08-30T04:18:50.737Z
 - **Closed:** 2026-08-30T04:18:50.737Z
+
+### finding:FND-20260831-139c severity:low status:open | Unresolved: fleet docs assert Azure sub 55c84f6b deleted 2026-08-13, but Wave B recorded live Azure job executions on 08-14/15/16
+
+- **Source audit doc:** otchealth-claude-tools PR #439 critic rounds, 2026-08-31
+- **Fix commit:** (none yet)
+- **Verified by:** Both claims are in the durable record and cannot both be true. The execution evidence (sentinel-os-eval statuses across 08-12..08-16 incl. a 1h28m duration, FND-20260816-1aa3) is too specific and internally consistent to be fabricated, so 08-13 was likely the EVACUATION date with final deletion landing days later. NOT resolved because it changes no current action (Azure is definitively gone either way, verified 401 repeatedly) and guessing a date into the durable record is how drift starts. Flagged in the STATUS CORRECTION block of runbooks/AWS-JOBS-MIGRATION-WAVE-B.md.
+- **Opened:** 2026-08-31T17:40:01.992Z
+- **Closed:** (open)
