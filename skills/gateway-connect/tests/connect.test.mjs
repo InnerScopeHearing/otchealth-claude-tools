@@ -111,14 +111,26 @@ import { azureEnvPresent, credSource } from '../connect.mjs';
   });
 }
 
-test('azureEnvPresent + credSource: Key Vault when SP env is set, GCP fallback otherwise', () => {
-  const save = { id: process.env.AZURE_SP_CLIENT_ID, sec: process.env.AZURE_SP_CLIENT_SECRET, tn: process.env.AZURE_SP_TENANT_ID };
+test('azureEnvPresent + credSource: label mirrors kvSecret backend (SSM default), never names retired GCP as live', () => {
+  const save = { id: process.env.AZURE_SP_CLIENT_ID, sec: process.env.AZURE_SP_CLIENT_SECRET, tn: process.env.AZURE_SP_TENANT_ID, be: process.env.SECRET_BACKEND };
   delete process.env.AZURE_SP_CLIENT_ID; delete process.env.AZURE_SP_CLIENT_SECRET; delete process.env.AZURE_SP_TENANT_ID;
   assert.equal(azureEnvPresent(), false);
-  assert.equal(credSource(), 'gcp-secret-manager');
+  // Default (SECRET_BACKEND unset) = the fleet's store of record, AWS SSM. This is the line every
+  // prompt logs; it used to say 'gcp-secret-manager' while the read was served by SSM.
+  delete process.env.SECRET_BACKEND;
+  assert.equal(credSource(), 'aws-ssm:/otchealth');
+  process.env.SECRET_BACKEND = 'ssm';
+  assert.equal(credSource(), 'aws-ssm:/otchealth');
+  // The retired store must never be presented as the live source under any default.
+  assert.doesNotMatch(credSource(), /^gcp-secret-manager$/);
+  // Azure SP env alone no longer flips the label: the resolver keys off SECRET_BACKEND, not env presence.
   process.env.AZURE_SP_CLIENT_ID = 'x'; process.env.AZURE_SP_CLIENT_SECRET = 'y'; process.env.AZURE_SP_TENANT_ID = 'z';
   assert.equal(azureEnvPresent(), true);
+  assert.equal(credSource(), 'aws-ssm:/otchealth');
+  // Only an explicit keyvault backend yields the Key Vault label (a hypothetical future vault).
+  process.env.SECRET_BACKEND = 'keyvault';
   assert.match(credSource(), /^azure-keyvault:/);
+  if (save.be !== undefined) process.env.SECRET_BACKEND = save.be; else delete process.env.SECRET_BACKEND;
   // restore
   if (save.id !== undefined) process.env.AZURE_SP_CLIENT_ID = save.id; else delete process.env.AZURE_SP_CLIENT_ID;
   if (save.sec !== undefined) process.env.AZURE_SP_CLIENT_SECRET = save.sec; else delete process.env.AZURE_SP_CLIENT_SECRET;
