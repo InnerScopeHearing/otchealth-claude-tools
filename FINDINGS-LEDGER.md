@@ -832,3 +832,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Both claims are in the durable record and cannot both be true. The execution evidence (sentinel-os-eval statuses across 08-12..08-16 incl. a 1h28m duration, FND-20260816-1aa3) is too specific and internally consistent to be fabricated, so 08-13 was likely the EVACUATION date with final deletion landing days later. NOT resolved because it changes no current action (Azure is definitively gone either way, verified 401 repeatedly) and guessing a date into the durable record is how drift starts. Flagged in the STATUS CORRECTION block of runbooks/AWS-JOBS-MIGRATION-WAVE-B.md.
 - **Opened:** 2026-08-31T17:40:01.992Z
 - **Closed:** (open)
+
+### finding:FND-20260901-34de severity:low status:open | Route the 782-agent subagent-research corpus to S3 commons + brain index (currently parked on orphan branch claude/subagent-research-corpus)
+
+- **Source audit doc:** otchealth-cto PR #104 triage, 2026-09-01
+- **Fix commit:** (none yet)
+- **Verified by:** PR #104 closed 2026-09-01 in favour of #134 (tool only, merged fc1bc7f). Corpus NOT lost: 17MB / 782 distilled agent briefs+reports remain on origin branch claude/subagent-research-corpus, which is durable. NOT merged because the branch is an ORPHAN (main root 9fdabd56f6 vs branch root 258923836e, no merge base -- it is a full second copy of the repo), so merging would graft a parallel root onto main and every future clone would carry 17MB (agents re-clone constantly via repo-freshen/add-repo). Content verified safe: independent scan across 23 credential shapes found only a RevenueCat PUBLIC SDK key already in main's CLAUDE.md plus the redactor's own template; 54 REDACTED markers present; redactor proven to ACT via synthetic planted-secret test. TODO: upload research/ to S3 commons and decide whether to index into the brain -- note 782 agent transcripts could flood brain_search the way ops chatter did before the room-hygiene fix (mcp-server #110), so consider a dedicated room or exclusion.
+- **Opened:** 2026-09-01T14:20:58.738Z
+- **Closed:** (open)
