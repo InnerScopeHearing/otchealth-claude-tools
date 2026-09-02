@@ -561,13 +561,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:39.620Z
 - **Closed:** (open)
 
-### finding:FND-20260827-5b15 severity:medium status:open | Datadog monitor fleet + Notion vault registry + Hyperagent saved skills/schedules still carry Azure-era config; sweep once respective access is available
+### finding:FND-20260827-5b15 severity:medium status:fixed | Datadog monitor fleet + Notion vault registry + Hyperagent saved skills/schedules still carry Azure-era config; sweep once respective access is available
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Datadog part DONE: all 17 monitors listed 2026-09-02 via the datadog skill; zero match azure|foundry|container app|cosmos|aoai|key vault|dataroom (the Azure-era monitors were already replaced by the 2026-09-01/02 AWS monitor build). Residual is not config the CTO can reach: the Notion vault registry is retiring with Notion, and Hyperagent saved skills/schedules are UI-only (Matt). Recorded as accepted residue, not an open fleet risk.
 - **Opened:** 2026-08-27T19:00:42.311Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:59:24.934Z
 
 ### finding:FND-20260827-f61b severity:medium status:fixed | fourvault osv-scan red on main since 2026-08-12: nanoid 3.3.17 (GHSA-2v37-7h3g-55p8, High 8.2) and uuid 7.0.3 (GHSA-w5hq-g745-h8pq, High 7.5) in pnpm-lock.yaml; fix = pnpm override nanoid>=3.3.18 + trace parent pinning uuid@7; queued as its own supply-chain PR with Guardian lockfile-delta review
 
