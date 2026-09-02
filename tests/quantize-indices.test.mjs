@@ -404,15 +404,32 @@ test("verifyParity: a doc missing on the destination is reported and fails", asy
   assert.match(v.reason, /found on source=true dest=false/);
 });
 
-test("verifyParity: a _source mismatch (e.g. a corrupted vector value) is caught even though doc counts match", async () => {
+test("verifyParity: a _source mismatch on a NON-vector field (e.g. a corrupted text value) is caught even though doc counts match", async () => {
   const { client, indices } = makeFakeCluster({
-    a: { docs: { "1": { contentVector: [1, 0, 0, 0] } } },
-    b: { docs: { "1": { contentVector: [1, 0, 0, 0] } } },
+    a: { docs: { "1": { text: "hello", contentVector: [1, 0, 0, 0] } } },
+    b: { docs: { "1": { text: "hello", contentVector: [1, 0, 0, 0] } } },
   });
-  indices.get("b").docs.set("1", { contentVector: [9, 9, 9, 9] }); // simulate corruption
+  indices.get("b").docs.set("1", { text: "corrupted", contentVector: [1, 0, 0, 0] }); // simulate corruption
   const v = await Q.verifyParity(client, { sourceIndex: "a", destIndex: "b", vectorField: "contentVector" });
   assert.equal(v.ok, false);
   assert.match(v.reason, /_source differs/);
+});
+
+// 2026-09-02 live finding (commons-cco-memory on otchealth-brain 3.7): the twin is created with
+// index.knn.derived_source.enabled=true, so its `_source` vector is RECONSTRUCTED from the quantized
+// on-disk graph and is never byte-identical to the fp32 original. Every sampled doc failed as
+// "_source differs" while every non-vector field matched. The vector field is therefore excluded from
+// the _source parity check; vector fidelity is measured by the kNN top-k overlap probe instead.
+test("verifyParity: a derived (quantized) vector that differs from the fp32 source does NOT fail _source parity when every other field matches", async () => {
+  const { client } = makeFakeCluster({
+    a: { docs: { "1": { text: "hello", contentVector: [1, 0, 0, 0] } } },
+    b: { docs: { "1": { text: "hello", contentVector: [0.99, 0.01, 0, 0] } } },
+  });
+  const v = await Q.verifyParity(client, { sourceIndex: "a", destIndex: "b", vectorField: "contentVector" });
+  assert.equal(v.ok, true, v.reason);
+  assert.equal(v.mismatches.length, 0);
+  assert.deepEqual(Q.sourceWithoutVector({ text: "t", contentVector: [1] }, "contentVector"), { text: "t" });
+  assert.equal(Q.sourceWithoutVector(null, "contentVector"), null);
 });
 
 test("verifyParity: kNN overlap below the threshold fails with the overlap % reported (isolated from the doc-parity check)", async () => {

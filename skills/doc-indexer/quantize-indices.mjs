@@ -566,6 +566,21 @@ export async function reindexUntilCountsConverge(client, { source, dest }, { max
  * synthetic probe -- run against both indexes, requiring the top-K id sets to overlap by at least
  * `minOverlapPct`. Never mutates anything.
  */
+/**
+ * `_source` parity is checked with the vector field REMOVED from both sides. Live finding
+ * (otchealth-brain 3.7, 2026-09-02, commons-cco-memory): the twin is created with
+ * `index.knn.derived_source.enabled=true` + `mode:on_disk` + a compression level, so OpenSearch does
+ * not store the vector in `_source` at all -- it DERIVES it from the (quantized) k-NN index on read.
+ * A derived, quantized vector is never byte-identical to the fp32 original, so every sampled doc
+ * reported "_source differs" while every non-vector field matched exactly. Vector fidelity is what the
+ * k-NN top-k overlap probe below measures; the `_source` check is for everything else.
+ */
+export function sourceWithoutVector(src, vectorField) {
+  if (!src || typeof src !== "object") return src;
+  const { [vectorField]: _omitted, ...rest } = src;
+  return rest;
+}
+
 export async function verifyParity(client, { sourceIndex, destIndex, vectorField, minOverlapPct = DEFAULT_MIN_OVERLAP_PCT, sampleSize = SAMPLE_SIZE, k = KNN_K }) {
   const sampleRes = await client.search(sourceIndex, { size: sampleSize, _source: false, query: { match_all: {} } });
   if (!sampleRes.ok) return { ok: false, reason: `sampling ${sourceIndex} failed: ${describeErr(sampleRes)}` };
@@ -584,7 +599,7 @@ export async function verifyParity(client, { sourceIndex, destIndex, vectorField
   for (const id of ids) {
     const s = srcById.get(id), d = dstById.get(id);
     if (!s?.found || !d?.found) { mismatches.push({ id, reason: `found on source=${Boolean(s?.found)} dest=${Boolean(d?.found)}` }); continue; }
-    if (!deepEqual(s._source, d._source)) mismatches.push({ id, reason: "_source differs" });
+    if (!deepEqual(sourceWithoutVector(s._source, vectorField), sourceWithoutVector(d._source, vectorField))) mismatches.push({ id, reason: "_source differs" });
   }
   if (mismatches.length) {
     return { ok: false, reason: `${mismatches.length}/${ids.length} sampled doc(s) mismatched: ${JSON.stringify(mismatches.slice(0, 5))}`, sampleChecked: ids.length, mismatches };
