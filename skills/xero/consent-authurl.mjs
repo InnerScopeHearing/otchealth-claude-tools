@@ -21,12 +21,16 @@ async function sm(t,id){ const _kv = await kvSecret(id); if (_kv != null) return
  // scopes docs three times (kb-memory 20260710-044, 20260729-012, 20260730-007): connections created
  // from 29 April 2026 use the granular scope set, which does not include journal access; /Journals
  // moved behind Xero's Advanced tier (1,445 AUD/month) plus use-case approval and an initial + annual
- // security assessment. Only a CUSTOM CONNECTION created before that date keeps the scope (until
- // Sep 2027), and this integration is a standard OAuth2 app (refresh_token grant; see
- // isGrandfatheredForJournals in otchealth-mcp-server, which deliberately refuses to guess).
- // DECISION OF RECORD (CFO, 2026-07-29): DECLINE the Advanced tier. Every prior instruction to
- // "add accounting.journals.read and re-consent" is WITHDRAWN. `accounting.manualjournals` above is
- // a DIFFERENT endpoint (/ManualJournals, user-entered journals) and is unaffected.
+ // security assessment. Only a CUSTOM CONNECTION created before that date keeps the scope, and only
+ // until Xero's broad-scope deprecation date, 13 September 2027 (developer.xero.com/faq, "Can I
+ // access journals with a custom connection?"; developer.xero.com/changelog, entries of 4 March 2026
+ // and 6 August 2026; both re-read 2026-09-02). This integration is a standard OAuth2 app
+ // (refresh_token grant; see isGrandfatheredForJournals in otchealth-mcp-server, which deliberately
+ // refuses to guess). RECOMMENDATION OF RECORD (CFO lane, 2026-07-29, reaffirmed 2026-07-30):
+ // DECLINE the Advanced tier; the gateway's xero_gl_assemble was built on that basis. Every prior
+ // instruction to "add accounting.journals.read and re-consent" is WITHDRAWN.
+ // `accounting.manualjournals` above is a DIFFERENT endpoint (/ManualJournals, user-entered
+ // journals) and is unaffected.
  //
  // Sanctioned substitutes, no scope change needed: the gateway's xero_gl_assemble (Xero's own
  // TrialBalance period movement per account per month, granted scopes only), direct document reads
@@ -41,7 +45,7 @@ async function sm(t,id){ const _kv = await kvSecret(id); if (_kv != null) return
  // widened; if the experiment is ever run and fails, re-run WITHOUT the flag to restore the proven set.
  const WITH_JOURNALS = process.argv.includes("--with-journals");
  if (WITH_JOURNALS && process.env.XERO_JOURNALS_EXPERIMENT !== "1") {
-   console.error("REFUSED: --with-journals requests accounting.journals.read, which this app cannot be granted (Xero granular-scope cutover 2026-04-29; /Journals is Advanced-tier plus a security assessment; decision of record = DECLINE, kb-memory 20260729-012 / 20260730-007). Use xero_gl_assemble, direct document reads (GET /BankTransactions/{id}), or the Xero UI General Ledger export instead. To run the experiment anyway set XERO_JOURNALS_EXPERIMENT=1; a failed authorize does not revoke existing tokens, and re-running without the flag restores the proven set.");
+   console.error("REFUSED: --with-journals requests accounting.journals.read, which this app cannot be granted (Xero granular-scope cutover 2026-04-29; /Journals is Advanced-tier plus a security assessment; recommendation of record = DECLINE, kb-memory 20260729-012 / 20260730-007; Xero FAQ and changelog re-read 2026-09-02). Use xero_gl_assemble, direct document reads (GET /BankTransactions/{id}), or the Xero UI General Ledger export instead. To run the experiment anyway set XERO_JOURNALS_EXPERIMENT=1; a failed authorize does not revoke existing tokens, and re-running without the flag restores the proven set.");
    process.exit(2);
  }
  const SCOPE = WITH_JOURNALS ? `${BASE_SCOPE} accounting.journals.read` : BASE_SCOPE;
