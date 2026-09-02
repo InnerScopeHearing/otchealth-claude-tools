@@ -332,3 +332,36 @@ test("both discovery paths scan the IDENTICAL window: a conversation created in 
   assert.deepEqual([...search.ids].sort(), ["after", "boundary"], "search must cover the SAME window, boundary second included");
   assert.equal(search.ids.has("before"), false, "and must not widen the window either -- the second before it stays out");
 });
+
+test("the search path requests the caller's perPage on EVERY page, first page included -- and discovery passes it through", async () => {
+  // Before: pagination was attached only when a cursor already existed, and hardcoded
+  // DEFAULT_PER_PAGE when it was. So page one silently used Intercom's own smaller search default,
+  // and --per-page changed the list path's reach while leaving this one untouched. Both effects cut
+  // how far search gets before the page cap, on the path whose whole purpose is to cover what the
+  // list path misses -- so under-reach here is invisible by construction.
+  const seen = [];
+  const req = fakeRequest({
+    "POST /conversations/search": (_p, opts, n) => {
+      seen.push(opts.body?.pagination);
+      return { ok: true, status: 200, json: { conversations: [{ id: `s${n}` }], pages: n === 1 ? { next: { starting_after: "CUR" } } : {} } };
+    },
+  });
+  await searchConversationIds({ intercomRequest: req, sinceEpochSeconds: 0, perPage: 7, maxPages: 5 });
+  assert.equal(seen.length, 2, "two pages were served");
+  assert.equal(seen[0]?.per_page, 7, "the FIRST page must carry per_page, not fall back to the API default");
+  assert.equal(seen[0]?.starting_after, undefined, "and must not send a cursor it does not have");
+  assert.equal(seen[1]?.per_page, 7, "later pages must use the caller's value, not a hardcoded constant");
+  assert.equal(seen[1]?.starting_after, "CUR");
+
+  // And the value has to actually reach here from discovery, which previously dropped it.
+  const seen2 = [];
+  const req2 = fakeRequest({
+    "GET /conversations": { ok: true, status: 200, json: { conversations: [], pages: {} } },
+    "POST /conversations/search": (_p, opts) => {
+      seen2.push(opts.body?.pagination?.per_page);
+      return { ok: true, status: 200, json: { conversations: [], pages: {} } };
+    },
+  });
+  await discoverConversationIds({ intercomRequest: req2, sinceEpochSeconds: 0, perPage: 11, maxPages: 3, log: () => {} });
+  assert.deepEqual(seen2, [11], "discoverConversationIds must forward perPage to the search path too");
+});

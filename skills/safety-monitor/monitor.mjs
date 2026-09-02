@@ -215,7 +215,7 @@ export async function listConversationIds({ intercomRequest, sinceEpochSeconds, 
 /** Search discovery: POST /conversations/search over the same window, paginated. Kept as an
  *  independent SECOND path per FND-20260817-64f5 (see this file's header) -- never the sole source of
  *  discovery, always unioned with listConversationIds() above. */
-export async function searchConversationIds({ intercomRequest, sinceEpochSeconds, maxPages = DEFAULT_MAX_PAGES }) {
+export async function searchConversationIds({ intercomRequest, sinceEpochSeconds, maxPages = DEFAULT_MAX_PAGES, perPage = DEFAULT_PER_PAGE }) {
   const ids = new Set();
   const errors = [];
   let cursor = null;
@@ -230,7 +230,12 @@ export async function searchConversationIds({ intercomRequest, sinceEpochSeconds
     // misses (FND-20260817-64f5); if they scan different windows that cover is a fiction precisely
     // when list is the path that failed.
     const body = { query: { field: "created_at", operator: ">", value: sinceEpochSeconds - 1 } };
-    if (cursor) body.pagination = { per_page: DEFAULT_PER_PAGE, starting_after: cursor };
+    // Pagination goes on EVERY page, first included, and honours the caller's perPage. It used to be
+    // set only when a cursor existed and hardcoded DEFAULT_PER_PAGE, which had two effects: page one
+    // fell back to Intercom's own (smaller) search default, and --per-page silently did nothing to
+    // this path. Both shrink how far the search path reaches before the page cap -- on the path
+    // whose entire job is to cover what the list path misses.
+    body.pagination = cursor ? { per_page: perPage, starting_after: cursor } : { per_page: perPage };
     const res = await intercomRequest("/conversations/search", { method: "POST", body });
     if (!res.ok) {
       errors.push(`search page ${pages}: ${res.error || `http-${res.status}`}`);
@@ -258,7 +263,7 @@ export async function searchConversationIds({ intercomRequest, sinceEpochSeconds
 export async function discoverConversationIds({ intercomRequest, sinceEpochSeconds, maxPages, perPage, log = () => {} }) {
   const [listRes, searchRes] = await Promise.all([
     listConversationIds({ intercomRequest, sinceEpochSeconds, maxPages, perPage }),
-    searchConversationIds({ intercomRequest, sinceEpochSeconds, maxPages }),
+    searchConversationIds({ intercomRequest, sinceEpochSeconds, maxPages, perPage }),
   ]);
   const ids = new Set([...listRes.ids, ...searchRes.ids]);
   const onlyInSearch = [...searchRes.ids].filter((id) => !listRes.ids.has(id));
