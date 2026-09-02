@@ -137,10 +137,34 @@ from `../kb-memory/azure-secret.mjs` (which now defaults to the AWS SSM backend)
 2.11` is sent on every call. AWS credentials for the SNS publish resolve via the same `awsCreds()`
 chain (`../kb-memory/aws-secret.mjs`) every other AWS-touching skill in this repo already shares.
 
+## How it is scheduled
+
+Hourly, as an ECS Fargate task driven by EventBridge Scheduler (`otchealth-safety-monitor`), running
+`skills/safety-monitor/job/sweep.sh` out of the `doc-indexer` image. It is registered in
+`setup/heartbeat-registry.json` at a 90-minute SLO, 1.5x its own cadence, so one late run is
+tolerated and two are not. A monitor that goes silent looks exactly like a monitor reporting no
+hazards, which is why the heartbeat matters more here than on most jobs.
+
+The scheduled invocation passes `--commit`. The CLI's dry-run default exists to protect a human
+running it by hand; a scheduled sweep that stayed in dry-run would detect hazards and tell nobody,
+which is the failure this skill exists to end. `SAFETY_MONITOR_DRY_RUN=1` on the task definition
+forces detection-only without editing code.
+
+The default 72h lookback against an hourly cadence is deliberately ~72x overlap. Re-examining the
+same conversation dozens of times is free (an already-tagged one is skipped before the classifier
+runs), whereas a lookback that merely covered the gap would turn any missed run into a permanent
+blind spot.
+
+**Alerting is at-least-once, never at-most-once.** The SNS publish and the Intercom tag are two
+non-atomic writes, so no ordering makes them exactly-once without an outbox, and none is used. The
+order chosen (alert, then tag) puts the whole failure budget on the duplicate side: if the tag fails
+after a successful alert, the conversation stays untagged and the next run alerts again. A human
+being told twice is a cheap, visible annoyance; being told zero times is the outcome the monitor
+exists to prevent. `runSweep` also exits non-zero whenever any conversation failed, so a sweep that
+could not reach Intercom never resolves as a clean all-clear.
+
 ## What this skill deliberately does NOT do
 
-- It never scheduled itself as a job. Scheduling this (and choosing a production cadence + lookback
-  overlap) is a separate, deliberate follow-on decision, not bundled into this build.
 - It never contacts a customer, by any channel, under any condition -- see "The hard rule" above.
 - It does not widen detection to admin/teammate-authored content (the known limitation above).
 - It does not re-implement or replace the dead `D8NH3ITNIhvPyjfP` workflow's other behavior (routing
