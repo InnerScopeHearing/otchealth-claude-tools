@@ -872,3 +872,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-02T03:58:32.611Z
 - **Closed:** (open)
+
+### finding:FND-20260902-dcdf severity:medium status:fixed | Concurrent session clobbered merged CTO work via stale-base whole-file write (otchealth-cto aws-n8n-recovery.yml); git cannot detect this class
+
+- **Source audit doc:** https://github.com/InnerScopeHearing/otchealth-cto/pull/141
+- **Fix commit:** 5758d6b
+- **Verified by:** PR #141: reverse patch of 7529b78 minus its health-check hunk; proved by diffing result against 37ae475 showing only COOINND's 3 intended changes remain. Structural risk NOT resolved: multiple agent identities write this shared production workflow and git cannot flag a whole-file write from a stale base. Mitigation unchosen: branch protection requiring up-to-date-before-merge, or a CI check asserting option/allowlist parity.
+- **Opened:** 2026-09-02T04:24:06.497Z
+- **Closed:** 2026-09-02T04:24:06.497Z
