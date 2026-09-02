@@ -937,10 +937,10 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T15:01:48.219Z
 - **Closed:** (open)
 
-### finding:FND-20260902-b43e severity:critical status:open | n8n restore lost ALL pre-restore credentials: 6 dangling ids, 16 node-uses in ACTIVE workflows, incl. AWARE lifecycle email + signup tracking + AWARE/iHEARtest TTS
+### finding:FND-20260902-b43e severity:critical status:fixed | n8n restore lost ALL pre-restore credentials: 6 dangling ids, 16 node-uses in ACTIVE workflows, incl. AWARE lifecycle email + signup tracking + AWARE/iHEARtest TTS
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-02-n8n-restore-lost-credentials.md
 - **Fix commit:** (none yet)
-- **Verified by:** poller exec 2517 failed 'Credential with ID YRHmFdrrzUSK3deH does not exist'; /rest/credentials lists only 4 of 10 referenced ids, and all 4 were minted post-restore
+- **Verified by:** Full re-scan: 9 credentials on instance, 1 dangling id, 1 node-use, 0 in ACTIVE workflows (was 6 ids / 17 uses / 16 active). Restored from AWS SSM with ZERO rotation, each value live-probed before wiring: Intercom 6WR7MqyzzlfRwLLl, ElevenLabs 0Y25LI8BZvmOOBjp (xi-api-key, /v1/user/subscription 200), Customer.io App H56OT5IpnbgY8Izg (/v1/campaigns 200), Customer.io Track x6oPikpzbf9U1TVf (track/auth 200), Shopify XuXvPywHOZCknQfl (shop.json 200). Sole remainder v2mKRa83BIvkK05J is DELIBERATE: workflow J9tmSeY8W9boPmn9 is inactive and the credential name says PENDING ROTATION, so the rotation freeze holds it. NOTE the Shopify name/URL mismatch resolved on evidence not assumption: credential named OTCHealthMart but URL is hearingassist.myshopify.com; both hostnames return 200 reporting myshopify_domain=hearingassist, i.e. one store post-rename.
 - **Opened:** 2026-09-02T15:31:01.620Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T15:39:32.443Z
