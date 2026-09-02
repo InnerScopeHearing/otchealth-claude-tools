@@ -944,3 +944,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Full re-scan: 9 credentials on instance, 1 dangling id, 1 node-use, 0 in ACTIVE workflows (was 6 ids / 17 uses / 16 active). Restored from AWS SSM with ZERO rotation, each value live-probed before wiring: Intercom 6WR7MqyzzlfRwLLl, ElevenLabs 0Y25LI8BZvmOOBjp (xi-api-key, /v1/user/subscription 200), Customer.io App H56OT5IpnbgY8Izg (/v1/campaigns 200), Customer.io Track x6oPikpzbf9U1TVf (track/auth 200), Shopify XuXvPywHOZCknQfl (shop.json 200). Sole remainder v2mKRa83BIvkK05J is DELIBERATE: workflow J9tmSeY8W9boPmn9 is inactive and the credential name says PENDING ROTATION, so the rotation freeze holds it. NOTE the Shopify name/URL mismatch resolved on evidence not assumption: credential named OTCHealthMart but URL is hearingassist.myshopify.com; both hostnames return 200 reporting myshopify_domain=hearingassist, i.e. one store post-rename.
 - **Opened:** 2026-09-02T15:31:01.620Z
 - **Closed:** 2026-09-02T15:39:32.443Z
+
+### finding:FND-20260902-0532 severity:high status:open | Fielded AWARE builds still POST to automation.otchealth.app (NXDOMAIN since 2026-08-27), so AWARE signup tracking and lifecycle email receive zero traffic regardless of the now-restored credentials
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-02-n8n-restore-lost-credentials.md
+- **Fix commit:** (none yet)
+- **Verified by:** AWARE Lifecycle Emails aK7HZDAUTvX6d7MJ has exactly ONE execution in its entire history (id 16, 2026-08-28T22:38:24Z) and it only succeeded via the credential-free 'Unknown event' set-node branch; AWARE Signup Webhook a5EfSHYnHqxxb2cP likewise idle. Both are ACTIVE with working credentials as of 2026-09-02, so the remaining fault is upstream: the baked-in client URL resolves to nothing.
+- **Opened:** 2026-09-02T15:41:08.776Z
+- **Closed:** (open)
