@@ -17,23 +17,43 @@ Provider defaults to OpenAI-direct (`LLM_PROVIDER=openai`; Azure Foundry is perm
   (write a structured scorecard, used by the CI prompt-regression gate)
 - Exit code is non-zero if any task fails -> CI-gateable.
 
-## Judge provider (2026-08-29)
+## Judge provider (2026-08-29, extended 2026-09-02)
 The judge defaults to the SAME model the agent persona answered on (OpenAI, `resolveTier('standard',
-'openai')` via `setup/model-routing.mjs`) — unchanged from before this section existed. Two additions,
-both opt-in:
-- `JUDGE_PROVIDER=bedrock-nova` routes the judge through `judge-bedrock-nova.mjs` (Amazon Bedrock Nova
-  Lite, `us.amazon.nova-lite-v1:0`, via the Converse API in the fleet's own AWS account) instead — a
-  genuinely different model family from whatever answered the task, which removes the
+'openai')` via `setup/model-routing.mjs`) — unchanged from before this section existed.
+- `EVAL_JUDGE=openai|nova-micro|nova-lite` (2026-09-02, the CTO-facing selector) picks the judge.
+  `openai` (the default, unchanged) is the same-model judge above. `nova-micro`/`nova-lite` route
+  through `judge-bedrock-nova.mjs` (Amazon Bedrock, `us.amazon.nova-micro-v1:0` /
+  `us.amazon.nova-lite-v1:0`, via the Converse API in the fleet's own AWS account) instead — a
+  genuinely different, cheaper model family from whatever answered the task, removing the
   judge-shares-blind-spots-with-the-model-it-grades risk the default same-family judge carries. Needs
   AWS credentials resolvable the same way every other AWS-backed skill in this toolkit does (ECS task
-  role / `AWS_ACCESS_KEY_ID` / `OTC_AWS_ACCESS_KEY_ID`); override the model via `BEDROCK_NOVA_JUDGE_MODEL`.
-- `--judge-compare` runs BOTH judges (the default AND bedrock-nova) on every task's answer regardless of
-  `JUDGE_PROVIDER`, and prints an agreement report (per-task score delta + verdict agreement, plus a
-  fleet-wide summary: verdict agreement rate, mean/max score delta, mean per-criterion agreement) so the
-  swap is a decision made on evidence, not a guess. With `--json out.json` it also writes
+  role / `AWS_ACCESS_KEY_ID` / `OTC_AWS_ACCESS_KEY_ID`); override the model ids via
+  `BEDROCK_NOVA_JUDGE_MODEL` (lite) / `BEDROCK_NOVA_MICRO_JUDGE_MODEL` (micro).
+- `JUDGE_PROVIDER=bedrock-nova` is the ORIGINAL (2026-08-29) selector and keeps working unchanged for
+  backward compatibility -- with `EVAL_JUDGE` unset, it resolves to `EVAL_JUDGE=nova-lite`. Set
+  `EVAL_JUDGE` directly for anything new; it always wins when both are set.
+- `--judge-compare` (or its alias `--compare`, added 2026-09-02) runs BOTH the default OpenAI judge and
+  a Nova judge on every task's answer regardless of which is primary, and prints an agreement report
+  (per-task score delta + verdict agreement, plus a fleet-wide summary: verdict agreement rate, mean/max
+  score delta, mean per-criterion agreement) so a judge swap is a decision made on evidence, not a
+  guess. The Nova model compared against is whichever `EVAL_JUDGE` names (`nova-micro`/`nova-lite`), or
+  `nova-lite` by default when the primary judge is `openai`. With `--json out.json` it also writes
   `out.judge-compare.json`. A failure scoring the "other" judge for one task (e.g. no AWS creds) only
   drops that task's comparison row — it never invalidates that task's primary scorecard entry.
-  Example: `node run-evals.mjs --agent cto --judge-compare --json /tmp/cto-scorecard.json`.
+  Example: `node run-evals.mjs --agent cto --compare --json /tmp/cto-scorecard.json`.
+
+## OPENAI_BATCH (2026-09-02, cost lever)
+`OPENAI_BATCH=1` (or `OPENAI_BATCH_AGENT_EVALS=1` to arm this caller alone, fleet-wide default off)
+submits every selected task's persona-answer request as ONE OpenAI Batch API job (50% off vs
+synchronous pricing, up to a 24h turnaround, stacks with automatic prompt caching), then -- only when
+the judge is ALSO the default `openai` judge (a Nova judge is never batched; Bedrock has no
+relationship to OpenAI's Batch API) -- submits a SECOND batch for the judge calls once every answer is
+known. `--judge-compare`/`--compare`'s extra per-task comparison call stays synchronous even in batch
+mode (a manual, occasional diagnostic, not the nightly cost driver this lever targets). Provider must
+be `LLM_PROVIDER=openai` (the default); `LLM_PROVIDER=foundry/azure` never enters this lane. See
+`setup/model-routing.mjs`'s own BATCH API section for the shared `submitBatch`/`awaitBatch` contract
+this and five sibling callers (recall-evals' two miners, both signal-radar detectors, doc-indexer's
+enrich.mjs) all use.
 
 ## Tasks
 `evals/<agent>.json` = array of `{id, agent, task, rubric:[criteria...], callsite_id?, prompt_file?}`.

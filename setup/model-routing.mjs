@@ -457,6 +457,243 @@ export async function fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, m
   throw Object.assign(new Error('chat 429 exhausted'), { throttled: true });
 }
 
+// =============================================================================================
+// BATCH API (2026-09-02) -- OpenAI's `/v1/batches` lane for latency-tolerant nightly/scheduled
+// callers that submit MANY independent chat-completions requests per run (agent-evals' persona +
+// judge calls, the recall-evals miners, the signal-radar detectors, doc-indexer/enrich.mjs). Live-
+// verified against OpenAI's current Batch guide (https://developers.openai.com/api/docs/guides/batch,
+// fetched 2026-09-02):
+//   - Flat 50% cost discount vs the synchronous endpoint, a SEPARATE (larger) rate-limit pool, and a
+//     24-hour completion window ("often more quickly"). STACKS with prompt caching (a batched request
+//     with a cache-hit prefix still gets the 0.1x cached-input rate on top of the 50% batch discount).
+//   - Mechanics: POST a .jsonl file to /v1/files with purpose:"batch" (one line per request:
+//     {custom_id, method:"POST", url:"/v1/chat/completions", body}), POST /v1/batches with that
+//     file's id + endpoint + completion_window:"24h", then poll GET /v1/batches/{id} until status is
+//     terminal. Status enum (verbatim from the live doc): validating -> in_progress -> finalizing ->
+//     completed (success) | failed | expired | cancelling -> cancelled. On completed, download
+//     output_file_id (and error_file_id, if any lines errored) via GET /v1/files/{id}/content; each
+//     output line is {id, custom_id, response:{status_code, body:{...chat.completion...}}, error}.
+//     "The output line order may not match the input line order" (verbatim) -- every consumer here
+//     keys results by custom_id, NEVER by array position.
+//   - Per-batch limits (verbatim): up to 50,000 requests per batch, input file up to 200 MB, and
+//     "each input file can only include requests to a single model" -- submitBatch() below enforces
+//     that last one (fail loud on a mixed-model batch) since silently splitting or rejecting-late
+//     would be a worse failure mode than refusing up front.
+//
+// FAIL-LOUD CONTRACT (mirrors this file's existing fetchOpenAIWithFlexRetry/truncatedEmpty posture,
+// and the fleet's standing "a dead dependency must never look like a clean empty result" rule -- see
+// FND-20260819-c9bb): awaitBatch() THROWS on a terminal failed/expired/cancelled batch, THROWS if the
+// batch completed with a per-line error (the error text is surfaced, never swallowed), and every
+// caller in this sweep additionally calls assertAllBatchResultsPresent() so a custom_id that is simply
+// ABSENT from both the output and error files (never treated as identical to "errored") is caught too.
+//
+// Fully additive and OFF by default: nothing in this section runs unless a caller explicitly invokes
+// submitBatch()/awaitBatch(), which every caller in this sweep gates behind isBatchEnabled(<caller>)
+// (OPENAI_BATCH=1 fleet-wide, or OPENAI_BATCH_<CALLER>=1 per job) -- see that function's own doc
+// comment. Ship dark; arm per job once the CTO has reviewed the specific caller's batch integration.
+// =============================================================================================
+
+const OPENAI_FILES_URL = 'https://api.openai.com/v1/files';
+const OPENAI_BATCHES_URL = 'https://api.openai.com/v1/batches';
+const BATCH_TERMINAL_FAILURE_STATUSES = new Set(['failed', 'expired', 'cancelled']);
+
+/** batchEnvVar(caller) -> "OPENAI_BATCH_<CALLER>", or null for an empty/missing caller name. Same
+ *  slugification as serviceTierEnvVar() above (uppercase, non-alnum runs -> single underscore,
+ *  trimmed) so the two families of per-caller override names are visually consistent fleet-wide. */
+export function batchEnvVar(caller) {
+  const slug = String(caller || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return slug ? `OPENAI_BATCH_${slug}` : null;
+}
+
+function truthyEnvFlag(raw) {
+  return /^(1|true|yes|on)$/i.test(String(raw ?? '').trim());
+}
+
+/**
+ * isBatchEnabled(caller) -> boolean
+ * A per-caller override (OPENAI_BATCH_<CALLER>), when EXPLICITLY SET (even to "0"/"false"), always
+ * wins over the fleet-wide default -- this is a presence check, not a truthiness-of-empty-string
+ * check, so a job can force itself OFF even while OPENAI_BATCH=1 is set globally. When no per-caller
+ * override is set, falls back to the fleet-wide OPENAI_BATCH. Both unset (the state of every job
+ * today) resolves to false -- batch mode is opt-in, per job, never inferred.
+ */
+export function isBatchEnabled(caller) {
+  const perCallerVar = batchEnvVar(caller);
+  if (perCallerVar && process.env[perCallerVar] !== undefined) return truthyEnvFlag(process.env[perCallerVar]);
+  return truthyEnvFlag(process.env.OPENAI_BATCH);
+}
+
+/**
+ * buildBatchLine({ customId, deployment, messages, maxTokens, temperature, jsonMode, url }) -> line
+ * Builds ONE JSONL-ready batch-request object via chatBody() (the SAME family-aware request-shape
+ * source of truth every synchronous caller in this file already uses), so a request built for the
+ * batch lane is byte-identical in shape to the equivalent synchronous request except for the
+ * envelope (`custom_id`/`method`/`url` wrapping `body`, and `body.model` set explicitly the same way
+ * fetchOpenAIWithFlexRetry() does). `customId` is required and coerced to a string (OpenAI's
+ * custom_id is a string field); `url` defaults to the chat-completions endpoint.
+ */
+export function buildBatchLine({ customId, deployment, messages, maxTokens, temperature, jsonMode, url = '/v1/chat/completions' } = {}) {
+  if (customId == null || customId === '') throw new Error('buildBatchLine: customId is required');
+  const body = { ...chatBody(deployment, { messages, maxTokens, temperature, jsonMode }), model: deployment };
+  return { custom_id: String(customId), method: 'POST', url, body };
+}
+
+/**
+ * submitBatch(lines, { apiKey, completionWindow, metadata }) -> Promise<batchId>
+ * `lines` is an array of already-built batch-line objects (see buildBatchLine() above). Validates
+ * FIRST, before any network call: at least one line, every line has a non-empty custom_id, no
+ * duplicate custom_id (a duplicate would make the result impossible to disambiguate later), and every
+ * line targets the SAME model (OpenAI's own "single model per file" constraint -- see this section's
+ * header). Writes the JSONL, uploads it via POST /v1/files (purpose:"batch"), then creates the batch
+ * via POST /v1/batches. Returns the new batch's id. Throws with a descriptive message on any
+ * validation failure or non-2xx response at either step -- never returns a falsy/partial id.
+ */
+export async function submitBatch(lines, { apiKey, completionWindow = '24h', endpoint = '/v1/chat/completions', metadata, fetchImpl = fetch } = {}) {
+  if (!apiKey) throw new Error('submitBatch: missing apiKey');
+  if (!Array.isArray(lines) || !lines.length) throw new Error('submitBatch: no requests supplied (lines must be a non-empty array)');
+  const seen = new Set();
+  const models = new Set();
+  for (const line of lines) {
+    if (!line || !line.custom_id) throw new Error('submitBatch: every line needs a non-empty custom_id');
+    if (seen.has(line.custom_id)) throw new Error(`submitBatch: duplicate custom_id "${line.custom_id}"`);
+    seen.add(line.custom_id);
+    if (line.body?.model) models.add(line.body.model);
+  }
+  if (models.size > 1) {
+    throw new Error(`submitBatch: OpenAI batches may only target a single model per file, got ${models.size}: ${[...models].join(', ')}`);
+  }
+  const jsonl = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+  const form = new FormData();
+  form.append('purpose', 'batch');
+  form.append('file', new Blob([jsonl], { type: 'application/jsonl' }), 'batch-input.jsonl');
+  const upRes = await fetchImpl(OPENAI_FILES_URL, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form });
+  if (!upRes.ok) throw new Error(`submitBatch: file upload failed, HTTP ${upRes.status}: ${(await upRes.text()).slice(0, 200)}`);
+  const upJson = await upRes.json();
+  if (!upJson.id) throw new Error('submitBatch: file upload returned no file id');
+  const createRes = await fetchImpl(OPENAI_BATCHES_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ input_file_id: upJson.id, endpoint, completion_window: completionWindow, ...(metadata ? { metadata } : {}) }),
+  });
+  if (!createRes.ok) throw new Error(`submitBatch: batch create failed, HTTP ${createRes.status}: ${(await createRes.text()).slice(0, 200)}`);
+  const createJson = await createRes.json();
+  if (!createJson.id) throw new Error('submitBatch: batch create returned no batch id');
+  return createJson.id;
+}
+
+async function downloadBatchJsonl(fileId, apiKey, fetchImpl) {
+  const r = await fetchImpl(`${OPENAI_FILES_URL}/${fileId}/content`, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!r.ok) throw new Error(`awaitBatch: GET /v1/files/${fileId}/content -> HTTP ${r.status}`);
+  const text = await r.text();
+  return text.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+
+export const OPENAI_BATCH_POLL_MS = Number(process.env.OPENAI_BATCH_POLL_MS) || 30000; // 30s
+export const OPENAI_BATCH_TIMEOUT_MS = Number(process.env.OPENAI_BATCH_TIMEOUT_MS) || 24 * 60 * 60 * 1000; // 24h, matches completion_window
+
+/**
+ * awaitBatch(batchId, { apiKey, timeoutMs, pollIntervalMs, onPoll, sleepFn }) -> Promise<{ batch, results }>
+ * Polls GET /v1/batches/{id} until a terminal status. On "completed", downloads output_file_id (and
+ * error_file_id, if present) and returns `results`, a Map<custom_id, { error, content, raw }> where
+ * `content` is the assistant message text (choices[0].message.content) on success and `error` is a
+ * short human-readable string on failure (`content` is null in that case). A custom_id present ONLY
+ * in the error file still gets an entry here (never silently absent).
+ *
+ * FAIL LOUD (never treat a missing/ambiguous outcome as success):
+ *   - A terminal failed/expired/cancelled batch THROWS (tagged `.batchStatus`/`.batch`), never
+ *     returns a partial/empty result set silently.
+ *   - A completed batch with NO output_file_id and NO error_file_id (should not happen per the API
+ *     contract, but a network/response anomaly is not impossible) THROWS rather than returning `{}`.
+ *   - Exceeding `timeoutMs` while still non-terminal THROWS (tagged `.timedOut`) rather than
+ *     returning whatever partial state was last observed.
+ * A per-line error (in either file) is recorded in `results` as `{error, content:null}`, NOT thrown
+ * here -- the caller decides whether one bad line should fail the whole run; every caller in this
+ * sweep additionally calls assertAllBatchResultsPresent() and then fails loud per-item, matching the
+ * existing per-task/per-row error handling each of those callers already had for the synchronous path.
+ *
+ * `onPoll({ status, elapsedMs })` is an OPTIONAL heartbeat invoked once per poll iteration (including
+ * the first), before the terminal check -- useful for a caller that needs to do something during a
+ * potentially long wait (doc-indexer/enrich.mjs's batch mode uses it to refresh its Blob/S3 lock, which
+ * otherwise expires after 15 minutes; see that file for the concrete use). Never awaited for its
+ * return value and any exception it throws propagates (a caller's heartbeat failing is itself
+ * information the caller should decide how to handle, not something this generic poller should hide).
+ */
+export async function awaitBatch(batchId, { apiKey, timeoutMs = OPENAI_BATCH_TIMEOUT_MS, pollIntervalMs = OPENAI_BATCH_POLL_MS, onPoll, sleepFn, fetchImpl = fetch } = {}) {
+  if (!apiKey) throw new Error('awaitBatch: missing apiKey');
+  if (!batchId) throw new Error('awaitBatch: missing batchId');
+  const sleep = sleepFn || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const start = Date.now();
+  const deadline = start + timeoutMs;
+  let batch;
+  for (;;) {
+    const r = await fetchImpl(`${OPENAI_BATCHES_URL}/${batchId}`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    if (!r.ok) throw new Error(`awaitBatch: GET /v1/batches/${batchId} -> HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    batch = await r.json();
+    if (onPoll) onPoll({ status: batch.status, elapsedMs: Date.now() - start });
+    if (batch.status === 'completed') break;
+    if (BATCH_TERMINAL_FAILURE_STATUSES.has(batch.status)) {
+      const errDetail = batch.errors ? JSON.stringify(batch.errors).slice(0, 400) : '(no error detail on the batch object)';
+      throw Object.assign(new Error(`awaitBatch: batch ${batchId} ended in terminal status "${batch.status}": ${errDetail}`), { batchStatus: batch.status, batch });
+    }
+    if (Date.now() > deadline) {
+      throw Object.assign(new Error(`awaitBatch: timed out after ${timeoutMs}ms waiting on batch ${batchId} (last status "${batch.status}")`), { timedOut: true, batch });
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  const results = new Map();
+  if (batch.output_file_id) {
+    for (const line of await downloadBatchJsonl(batch.output_file_id, apiKey, fetchImpl)) {
+      const customId = line.custom_id;
+      if (!customId) continue;
+      const respBody = line.response?.body;
+      const choice = respBody?.choices?.[0];
+      const content = choice?.message?.content;
+      if (line.error || !respBody || content == null) {
+        results.set(customId, { error: line.error ? (line.error.message || JSON.stringify(line.error)) : `batch line "${customId}" had no usable response body`, content: null, raw: line });
+      } else if (truncatedEmpty(choice)) {
+        // Same failure class this file already guards on the SYNCHRONOUS path (see
+        // fetchOpenAIWithFlexRetry's own reasoningExhausted handling above): a reasoning-family model
+        // can spend its entire max_completion_tokens budget on hidden reasoning and return an HTTP-200
+        // batch line with finish_reason:"length" and EMPTY visible content. Batch has no retry-within-
+        // the-same-request mechanism (unlike the synchronous escalate-and-retry paths elsewhere in this
+        // file), so this is recorded as an ERROR rather than a real (blank) answer -- a caller decides
+        // whether to resubmit just this custom_id in a follow-up batch/synchronous call.
+        results.set(customId, { error: `batch line "${customId}": reasoning model exhausted its token budget on hidden reasoning with no visible output (finish_reason=length) -- an infra failure, not a real (blank) answer`, content: null, raw: line });
+      } else {
+        results.set(customId, { error: null, content, raw: line });
+      }
+    }
+  }
+  if (batch.error_file_id) {
+    for (const line of await downloadBatchJsonl(batch.error_file_id, apiKey, fetchImpl)) {
+      const customId = line.custom_id;
+      if (!customId || results.has(customId)) continue; // the output file (if any) is authoritative for a given custom_id
+      results.set(customId, { error: line.error ? (line.error.message || JSON.stringify(line.error)) : 'batch error-file entry with no detail', content: null, raw: line });
+    }
+  }
+  if (!batch.output_file_id && !batch.error_file_id) {
+    throw new Error(`awaitBatch: batch ${batchId} completed with neither an output_file_id nor an error_file_id -- cannot recover any result`);
+  }
+  return { batch, results };
+}
+
+/**
+ * assertAllBatchResultsPresent(customIds, results) -> void (throws on any gap)
+ * `results` is the Map returned by awaitBatch(). Throws if any of `customIds` has NO entry at all in
+ * `results` (distinct from an entry with `.error` set -- that is a known, surfaced per-line failure;
+ * a MISSING entry means the batch's own output/error files never mentioned that request at all, which
+ * must never be silently treated as success). Every caller in this sweep calls this immediately after
+ * awaitBatch() and before using any result, mirroring the task's own explicit requirement: "never
+ * treat a missing result as success."
+ */
+export function assertAllBatchResultsPresent(customIds, results) {
+  const missing = (customIds || []).filter((id) => !results.has(id));
+  if (missing.length) {
+    throw new Error(`batch: ${missing.length} custom_id(s) got NO result at all (missing from both the output and error files, not merely errored): ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ', ...' : ''}`);
+  }
+}
+
 export default {
   TIERS,
   OPENAI_TIERS,
@@ -476,4 +713,12 @@ export default {
   fetchOpenAIWithFlexRetry,
   OPENAI_FLEX_TIMEOUT_MS,
   OPENAI_FLEX_MIN_RETRIES,
+  batchEnvVar,
+  isBatchEnabled,
+  buildBatchLine,
+  submitBatch,
+  awaitBatch,
+  assertAllBatchResultsPresent,
+  OPENAI_BATCH_POLL_MS,
+  OPENAI_BATCH_TIMEOUT_MS,
 };

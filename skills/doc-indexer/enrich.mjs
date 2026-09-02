@@ -159,6 +159,11 @@ import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } fro
 // (PR #472) -- the fleet's one Bedrock Converse signer/transport -- rather than a second one; see
 // this file's own "LLM PROVIDER" section below for why the Bedrock lane is opt-in only.
 import { VALID_PROVIDERS, DEFAULT_PROVIDER, defaultModelFor, estCostFor, extractJsonObject, callBedrockChat } from "./enrich-llm.mjs";
+// OPENAI_BATCH (2026-09-02): the shared Batch API lane -- see setup/model-routing.mjs's own header
+// for the full contract. Bedrock is UNTOUCHED by this (buildAndSubmitEnrichBatch/BATCH_PREFETCH below
+// are only ever reached when LLM_PROVIDER === "openai").
+import { isBatchEnabled, buildBatchLine, submitBatch, awaitBatch, assertAllBatchResultsPresent } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 
 // ============================ CLI ============================
 const argv = process.argv.slice(2);
@@ -593,8 +598,10 @@ function enrichSystemPrompt(domain, needSummary) {
   return `You are a meticulous document cataloguing analyst for OTCHealth Inc./InnerScope. Output ONLY a JSON object, no prose, matching exactly this schema (use "" or [] for anything not present or not applicable; NEVER invent a fact not supported by the text; if genuinely unsure, say so via a lower "confidence" rather than guessing):
 ${schema}`;
 }
-async function callEnrichLLM(r, text, opts) {
-  const context = `Path: ${r.path}
+// Extracted (2026-09-02, unchanged wording) from callEnrichLLM's inline template so both the LIVE
+// call below and buildAndSubmitEnrichBatch()'s batch lines build the byte-identical document context.
+function buildEnrichContext(r, text) {
+  return `Path: ${r.path}
 Existing category: ${r.category || ""}
 Existing doc type (from an earlier pass): ${r.doc_type || ""}
 Existing summary (from an earlier pass, may be thin): ${(r.summary || "").slice(0, 800)}
@@ -602,6 +609,22 @@ Existing counterparty/amount (from an earlier pass): ${r.counterparty || ""} ${r
 
 Document text (may be truncated):
 ${text.slice(0, 7000)}`;
+}
+
+// OPENAI_BATCH (2026-09-02): when buildAndSubmitEnrichBatch() has already run (see cmdRun()), this
+// Map holds the pre-fetched LLM result for every row that needed one, keyed by catalog PATH (the
+// catalog's own stable identity). EMPTY (the default, always the case when batch mode is off) means
+// this guard is a pure no-op and every line below it runs EXACTLY as before this lever existed.
+const BATCH_PREFETCH = new Map();
+
+async function callEnrichLLM(r, text, opts) {
+  if (BATCH_PREFETCH.has(r.path)) return BATCH_PREFETCH.get(r.path);
+  const context = buildEnrichContext(r, text);
+  // Prompt-caching hygiene (2026-09-02): enrichSystemPrompt(DOMAIN, opts.needSummary) is IDENTICAL
+  // across every document in a run that shares the same needSummary value (fully static: DOMAIN is
+  // fixed per run, opts.needSummary is one of only two possible booleans) -- already sent first, with
+  // the per-document `context` (fully variable) last. Already cache-friendly order, observability only.
+  logPrefixForText("doc-indexer-enrich", enrichSystemPrompt(DOMAIN, opts.needSummary));
   try {
     const res = await chatJson([{ role: "system", content: enrichSystemPrompt(DOMAIN, opts.needSummary) }, { role: "user", content: context }], 1200);
     const parsed = J(res.text) || { _parseFailed: true };
@@ -674,9 +697,27 @@ async function applyPrefixToSidecar(path, prefix) {
   await putBuf(key, Buffer.from(updated, "utf8"), "text/plain; charset=utf-8");
 }
 
+// OPENAI_BATCH (2026-09-02): populated by buildAndSubmitEnrichBatch() with every row's sidecar text it
+// already had to fetch to build that row's batch request -- avoids a second Blob/S3 read for the SAME
+// path when enrichOne() runs its own (unrelated) deterministic-field pass afterward. EMPTY (the
+// default, always the case when batch mode is off) means fetchSidecarText() below is a pure pass-
+// through to the original getBuf() call, byte-identical to before this cache existed.
+const BATCH_TEXT_CACHE = new Map();
+async function fetchSidecarText(path) {
+  if (BATCH_TEXT_CACHE.has(path)) return BATCH_TEXT_CACHE.get(path);
+  const buf = await getBuf(TEXT_PREFIX + path + ".txt");
+  return buf ? buf.toString("utf8") : "";
+}
+
+/** Extracted (2026-09-02, unchanged value) from enrichOne()'s own inline expression so
+ *  buildAndSubmitEnrichBatch() can compute the SAME needSummary decision for a row before enrichOne()
+ *  itself ever runs. */
+function computeRichSummaryAvailable(r) {
+  return !!(r.deep && r.summary && r.summary.length > 120);
+}
+
 async function enrichOne(r) {
-  const sidecarBuf = await getBuf(TEXT_PREFIX + r.path + ".txt");
-  const text = sidecarBuf ? sidecarBuf.toString("utf8") : "";
+  const text = await fetchSidecarText(r.path);
 
   // ---- deterministic / code fields (zero LLM cost) ----
   const word_count = (text.match(/\S+/g) || []).length;
@@ -697,7 +738,7 @@ async function enrichOne(r) {
   const signed = !!r.has_signature;
   const signatories = Array.isArray(r.signatories) ? r.signatories : [];
   const extractionConfidenceRewired = r.sig_confidence || r.confidence || "";
-  const richSummaryAvailable = !!(r.deep && r.summary && r.summary.length > 120);
+  const richSummaryAvailable = computeRichSummaryAvailable(r);
 
   // ---- ONE cheap gpt-4.1-mini call for everything CU/deep-pass did not already compute ----
   const llm = await callEnrichLLM(r, text, { needSummary: !richSummaryAvailable });
@@ -795,6 +836,91 @@ async function enrichOne(r) {
   return { patch, usage: llm._usage || { tin: 0, tout: 0 }, meta: metaTrimmed, callFailed: !!llm._callFailed, callErr: llm._err || "" };
 }
 
+// ============================== BATCH MODE (2026-09-02, OPENAI_BATCH lever) ==============================
+// Opt-in: isBatchEnabled("doc-indexer-enrich"), OpenAI provider only (LLM_PROVIDER === "openai"; the
+// Bedrock/Azure lanes are entirely untouched -- see this file's own "LLM PROVIDER" section). Called
+// ONCE from cmdRun(), before the worker pool below starts: submits every row that needsEnrich() as ONE
+// Batch API job (50% off vs synchronous pricing, stacks with prompt caching -- enrichSystemPrompt(DOMAIN,
+// needSummary) is IDENTICAL across every row sharing the same needSummary value), pre-populates
+// BATCH_PREFETCH with each row's result and BATCH_TEXT_CACHE with each row's already-fetched sidecar
+// text (so enrichOne()'s own text fetch is a cache hit, never a second Blob/S3 read for the same row).
+//
+// The REST of cmdRun() -- the worker pool, lock refresh cadence, incremental catalog flush, MAX_MIN
+// budget, OpenSearch/Azure per-row sync -- is COMPLETELY UNCHANGED: from enrichOne()'s point of view,
+// its call into callEnrichLLM() just resolves instantly from the pre-fetched Map (via the BATCH_PREFETCH
+// guard at the top of callEnrichLLM) instead of making a live fetch. Rows that only needOsSync() (not
+// needsEnrich()) never call callEnrichLLM() at all, so they are correctly excluded from the batch.
+//
+// A per-row sidecar-text-fetch failure is caught PER ROW (mirroring callEnrichLLM's own _callFailed
+// shape) rather than aborting the whole batch build -- one bad blob must not cost every other
+// document's enrichment for the run, the same posture the live per-row worker() catch already has.
+//
+// OPEN, NON-BLOCKING GAP (disclosed): the Batch API's output line DOES carry a normal `usage` block
+// (verified against OpenAI's own documented output shape), so real per-row token counts ARE captured
+// below into `_usage` -- cost reporting (`~$X.XXX` in cmdRun's own summary line) is accurate under
+// batch mode, not estimated.
+async function buildAndSubmitEnrichBatch(todo) {
+  const rowsNeedingEnrich = todo.filter((r) => needsEnrich(r));
+  if (!rowsNeedingEnrich.length) return;
+  // FKEY is already resolved by resolveLlm() (cmdRun calls it before this function) -- reuse it rather
+  // than a second, redundant fleetSecret() round-trip that could in principle race a rotation and
+  // resolve a different value than what resolveLlm() already validated.
+  const key = FKEY;
+  if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret) -- OPENAI_BATCH requires it before any document is queued.");
+  console.error(`[enrich] OPENAI_BATCH: preparing ${rowsNeedingEnrich.length} document(s) for one Batch API job (50% off, up to 24h)...`);
+  const lines = [];
+  for (const r of rowsNeedingEnrich) {
+    let text;
+    try {
+      text = await fetchSidecarText(r.path);
+      BATCH_TEXT_CACHE.set(r.path, text);
+    } catch (e) {
+      // Pre-mark this row's eventual callEnrichLLM() result as failed (mirroring that function's own
+      // _callFailed shape) so it is skipped/retried on a future run rather than crashing the batch
+      // build for every OTHER document; do not add a line for it.
+      BATCH_PREFETCH.set(r.path, { _callFailed: true, _usage: { tin: 0, tout: 0 }, _err: `sidecar text fetch failed: ${String(e.message).slice(0, 160)}` });
+      continue;
+    }
+    const needSummary = !computeRichSummaryAvailable(r);
+    logPrefixForText("doc-indexer-enrich", enrichSystemPrompt(DOMAIN, needSummary));
+    lines.push(buildBatchLine({
+      customId: r.path,
+      deployment: MODEL,
+      messages: [{ role: "system", content: enrichSystemPrompt(DOMAIN, needSummary) }, { role: "user", content: buildEnrichContext(r, text) }],
+      maxTokens: 1200,
+      temperature: 0,
+      jsonMode: true,
+    }));
+  }
+  if (!lines.length) return; // every row's sidecar-text fetch failed; nothing left to submit
+  console.error(`[enrich] OPENAI_BATCH: submitting ${lines.length} enrichment request(s) as one Batch API job...`);
+  const batchId = await submitBatch(lines, { apiKey: key });
+  console.error(`[enrich] OPENAI_BATCH: batch ${batchId} submitted, waiting for it to complete...`);
+  const { results } = await awaitBatch(batchId, {
+    apiKey: key,
+    onPoll: ({ status, elapsedMs }) => {
+      console.error(`[enrich] OPENAI_BATCH: batch ${batchId} status=${status} (${Math.round(elapsedMs / 1000)}s elapsed)`);
+      // Best-effort: a failed refresh here never aborts the wait -- acquireLock()'s own 15-min TTL
+      // is the real safety net against a genuinely stuck/crashed run holding the lock forever.
+      refreshLock().catch(() => {});
+    },
+  });
+  assertAllBatchResultsPresent(lines.map((l) => l.custom_id), results);
+  console.error(`[enrich] OPENAI_BATCH: batch ${batchId} complete, applying ${results.size} result(s)...`);
+  for (const r of rowsNeedingEnrich) {
+    if (BATCH_PREFETCH.has(r.path)) continue; // already marked _callFailed above (sidecar fetch failure)
+    const res = results.get(r.path);
+    if (res.error) {
+      BATCH_PREFETCH.set(r.path, { _callFailed: true, _usage: { tin: 0, tout: 0 }, _err: String(res.error).slice(0, 200) });
+      continue;
+    }
+    const parsed = J(res.content) || { _parseFailed: true };
+    const usage = res.raw?.response?.body?.usage || {};
+    parsed._usage = { tin: usage.prompt_tokens || 0, tout: usage.completion_tokens || 0 };
+    BATCH_PREFETCH.set(r.path, parsed);
+  }
+}
+
 // ============================ run command ============================
 async function cmdRun() {
   // HARD, code-enforced exclusion (2026-08-29): checked FIRST, before resolveStorage()/resolveLlm()
@@ -825,6 +951,12 @@ async function cmdRun() {
     if (LIMIT) todo = todo.slice(0, LIMIT);
     console.error(`[enrich] domain=${DOMAIN} | search-backend=${BACKEND} | ${rows.length} catalog rows | ${todo.length} to (re)enrich/sync | model=${MODEL} conc=${CONCURRENCY}${MAX_MIN ? ` budget=${MAX_MIN}m` : ""}`);
     if (!todo.length) { console.log("[enrich] nothing to enrich (all caught up)."); return; }
+    // OPENAI_BATCH (2026-09-02): both unset (the state of every job today) means this is skipped
+    // entirely and the worker pool below takes the EXACT pre-existing live-call path, byte-identical
+    // to before this lever existed. See buildAndSubmitEnrichBatch()'s own header for the full contract.
+    if (LLM_PROVIDER === "openai" && isBatchEnabled("doc-indexer-enrich")) {
+      await buildAndSubmitEnrichBatch(todo);
+    }
     let next = 0, since = 0;
     const start = Date.now();
     async function worker() {

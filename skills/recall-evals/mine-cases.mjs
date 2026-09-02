@@ -25,7 +25,8 @@ import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { chatBody, resolveTier, fetchOpenAIWithFlexRetry, positiveIntEnv } from "../../setup/model-routing.mjs";
+import { chatBody, resolveTier, fetchOpenAIWithFlexRetry, positiveIntEnv, isBatchEnabled, buildBatchLine, submitBatch, awaitBatch, assertAllBatchResultsPresent } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { hitAtK, groupHitLines } from "./scoring.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -92,6 +93,10 @@ const MINE_CASES_MAX_TOKENS = positiveIntEnv("MINE_CASES_MAX_TOKENS", 4000);
 // ANY thrown error from callChat() as "log it, skip this batch, continue" (see its own `catch (e)`),
 // so this surfaces with a precise reason instead of a silently-empty batch of zero mined cases.
 export async function callChat(system, user) {
+  // Prompt-caching hygiene (2026-09-02): SYSTEM (this file's only caller of callChat) is a fully
+  // static module-level constant, already sent first with the per-chunk fact batch last -- already
+  // cache-friendly order, observability only, not a reorder.
+  logPrefixForText("recall-evals-mine-cases", system);
   if (LLM_PROVIDER === "openai") {
     const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
     if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
@@ -152,6 +157,73 @@ async function validateConcurrent(items, concurrency = 8) {
   return items.filter((_, i) => results[i]);
 }
 
+// ============================== BATCH MODE (2026-09-02, OPENAI_BATCH lever) ==============================
+// Opt-in: isBatchEnabled("recall-evals-mine-cases"). Submits EVERY chunk's generation request as ONE
+// Batch API job instead of one sequential fetch per chunk (50% off vs synchronous pricing, stacks with
+// prompt caching -- SYSTEM is fully static across every chunk in a run, the largest realistic shared
+// prefix this file has). OpenAI-provider only; LLM_PROVIDER=foundry/azure never reaches this function.
+//
+// ACCEPTED TRADE-OFF, disclosed rather than hidden: the SYNCHRONOUS path (below, unchanged) stops
+// submitting NEW generation calls once `kept.length - existing.length >= TARGET` validated cases have
+// been collected (its own for-loop condition, a real cost optimization for the common "just top up the
+// golden set a bit" invocation). Batch API has no equivalent -- every chunk in the ONE submitted batch
+// is billed and processed regardless of how many earlier chunks already produced enough validated
+// cases. Batch mode therefore generates candidates from the WHOLE corpus (still respecting
+// --corpus/--corpus-file's own size cap), then validates and keeps the first TARGET that hit, walking
+// chunks in the SAME order the synchronous path would have tried them -- so the OUTPUT contract ("the
+// first N validated cases encountered in corpus order") is identical; only the LLM-call cost/latency
+// shape differs. This is the deliberate trade a big overnight backfill run opts into by setting
+// OPENAI_BATCH=1; --max-minutes still bounds the (still-live, still per-item) VALIDATION phase that
+// runs after the batch resolves.
+export async function runBatchMode(facts, existing, kept, haveQ) {
+  const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+  if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
+  const dep = process.env.MINE_MODEL || resolveTier("standard", "openai").deployment;
+  const chunks = [];
+  for (let off = 0; off < facts.length; off += BATCH) chunks.push(facts.slice(off, off + BATCH));
+  logPrefixForText("recall-evals-mine-cases", SYSTEM);
+  const lines = chunks.map((chunk, i) => buildBatchLine({
+    customId: `chunk-${i}`,
+    deployment: dep,
+    messages: [{ role: "system", content: SYSTEM }, { role: "user", content: chunk.map((f, j) => `${j + 1}. ${f}`).join("\n\n") }],
+    maxTokens: MINE_CASES_MAX_TOKENS,
+    jsonMode: true,
+  }));
+  console.error(`[mine] OPENAI_BATCH: submitting ${lines.length} chunk-generation request(s) as one Batch API job (50% off, up to 24h)...`);
+  const batchId = await submitBatch(lines, { apiKey: key });
+  console.error(`[mine] OPENAI_BATCH: batch ${batchId} submitted, waiting for it to complete...`);
+  const { results } = await awaitBatch(batchId, {
+    apiKey: key,
+    onPoll: ({ status, elapsedMs }) => console.error(`[mine] OPENAI_BATCH: batch ${batchId} status=${status} (${Math.round(elapsedMs / 1000)}s elapsed)`),
+  });
+  assertAllBatchResultsPresent(lines.map((l) => l.custom_id), results);
+  console.error(`[mine] OPENAI_BATCH: batch ${batchId} complete, validating candidates...`);
+
+  let idn = existing.length, generated = 0, validated = 0;
+  const START = Date.now();
+  for (let i = 0; i < chunks.length && kept.length - existing.length < TARGET; i++) {
+    const r = results.get(`chunk-${i}`);
+    let cases = [];
+    if (r.error) { console.error(`[mine] OPENAI_BATCH: chunk ${i} generation error: ${r.error}`); continue; }
+    try { cases = (JSON.parse(r.content).cases || []); } catch (e) { console.error(`[mine] OPENAI_BATCH: chunk ${i} JSON parse error: ${e.message}`); continue; }
+    const candidates = [];
+    for (const c of cases) {
+      if (!c.query || !Array.isArray(c.expect) || !c.expect.length) continue;
+      if (PHI.test(`${c.query} ${c.expect.join(" ")}`)) continue;
+      const q = c.query.toLowerCase();
+      if (haveQ.has(q)) continue;
+      haveQ.add(q); generated++;
+      candidates.push({ id: `gm-${String(++idn).padStart(3, "0")}`, query: c.query, agent: AGENT, engine: "semantic", expect: c.expect.slice(0, 2), note: `mined+validated from real ${AGENT} ledger` });
+    }
+    const hits = await validateConcurrent(candidates, 10);
+    for (const h of hits) { if (kept.length - existing.length >= TARGET) break; kept.push(h); validated++; }
+    console.log(`[mine] OPENAI_BATCH chunk ${i + 1}/${chunks.length}: ${candidates.length} candidates -> ${hits.length} validated; new total ${kept.length - existing.length}/${TARGET}`);
+    writeFileSync(OUT, JSON.stringify(kept, null, 2) + "\n"); // incremental save, same as the synchronous path
+    if (MAX_MIN && Date.now() - START > MAX_MIN * 60000) { console.log(`[mine] --max-minutes ${MAX_MIN} budget reached during validation; stopping with ${kept.length - existing.length} new validated.`); break; }
+  }
+  return { generated, validated, batchesTried: chunks.length };
+}
+
 async function main() {
   const facts = corpus();
   console.log(`[mine] corpus: ${facts.length} real non-PHI ${AGENT} facts; target ${TARGET} validated hard cases.`);
@@ -160,33 +232,43 @@ async function main() {
   const existing = existsSync(OUT) ? JSON.parse(readFileSync(OUT, "utf8")) : [];
   const kept = [...existing];
   const haveQ = new Set(existing.map((c) => (c.query || "").toLowerCase()));
-  let idn = existing.length, generated = 0, validated = 0, batchesTried = 0;
-  const START = Date.now();
+  let generated = 0, validated = 0, batchesTried = 0;
 
-  for (let off = 0; off < facts.length && kept.length - existing.length < TARGET; off += BATCH) {
-    const batch = facts.slice(off, off + BATCH);
-    batchesTried++;
-    let cases = [];
-    try {
-      const raw = await callChat(SYSTEM, batch.map((f, i) => `${i + 1}. ${f}`).join("\n\n"));
-      cases = (JSON.parse(raw).cases || []);
-    } catch (e) { console.error(`[mine] batch ${batchesTried} gen error: ${e.message}`); continue; }
-    const candidates = [];
-    for (const c of cases) {
-      if (!c.query || !Array.isArray(c.expect) || !c.expect.length) continue;
-      if (PHI.test(`${c.query} ${c.expect.join(" ")}`)) continue;
-      const q = c.query.toLowerCase();
-      if (haveQ.has(q)) continue;
-      haveQ.add(q); generated++;
-      // note interpolates the REAL scanned agent (was hardcoded "commons" regardless of --agent, so
-      // every mined case's own documentation lied about its source lane once mined against cto/coo/etc).
-      candidates.push({ id: `gm-${String(++idn).padStart(3, "0")}`, query: c.query, agent: AGENT, engine: "semantic", expect: c.expect.slice(0, 2), note: `mined+validated from real ${AGENT} ledger` });
+  // BATCH_MODE (2026-09-02): OPENAI_BATCH unset (the state of every job today) means this branch never
+  // runs and the ELSE branch below is the EXACT pre-existing synchronous loop, byte-identical to
+  // before this lever existed. See runBatchMode()'s own header for the full contract and the one
+  // disclosed behavior difference (no early-stop on the generation calls themselves).
+  if (LLM_PROVIDER === "openai" && isBatchEnabled("recall-evals-mine-cases")) {
+    const r = await runBatchMode(facts, existing, kept, haveQ);
+    generated = r.generated; validated = r.validated; batchesTried = r.batchesTried;
+  } else {
+    let idn = existing.length;
+    const START = Date.now();
+    for (let off = 0; off < facts.length && kept.length - existing.length < TARGET; off += BATCH) {
+      const batch = facts.slice(off, off + BATCH);
+      batchesTried++;
+      let cases = [];
+      try {
+        const raw = await callChat(SYSTEM, batch.map((f, i) => `${i + 1}. ${f}`).join("\n\n"));
+        cases = (JSON.parse(raw).cases || []);
+      } catch (e) { console.error(`[mine] batch ${batchesTried} gen error: ${e.message}`); continue; }
+      const candidates = [];
+      for (const c of cases) {
+        if (!c.query || !Array.isArray(c.expect) || !c.expect.length) continue;
+        if (PHI.test(`${c.query} ${c.expect.join(" ")}`)) continue;
+        const q = c.query.toLowerCase();
+        if (haveQ.has(q)) continue;
+        haveQ.add(q); generated++;
+        // note interpolates the REAL scanned agent (was hardcoded "commons" regardless of --agent, so
+        // every mined case's own documentation lied about its source lane once mined against cto/coo/etc).
+        candidates.push({ id: `gm-${String(++idn).padStart(3, "0")}`, query: c.query, agent: AGENT, engine: "semantic", expect: c.expect.slice(0, 2), note: `mined+validated from real ${AGENT} ledger` });
+      }
+      const hits = await validateConcurrent(candidates, 10);
+      for (const h of hits) { if (kept.length - existing.length >= TARGET) break; kept.push(h); validated++; }
+      console.log(`[mine] batch ${batchesTried}: ${candidates.length} candidates -> ${hits.length} validated; new total ${kept.length - existing.length}/${TARGET}`);
+      writeFileSync(OUT, JSON.stringify(kept, null, 2) + "\n"); // incremental save: a crash or --max-minutes time-box keeps all work so far
+      if (MAX_MIN && Date.now() - START > MAX_MIN * 60000) { console.log(`[mine] --max-minutes ${MAX_MIN} budget reached; stopping with ${kept.length - existing.length} new validated.`); break; }
     }
-    const hits = await validateConcurrent(candidates, 10);
-    for (const h of hits) { if (kept.length - existing.length >= TARGET) break; kept.push(h); validated++; }
-    console.log(`[mine] batch ${batchesTried}: ${candidates.length} candidates -> ${hits.length} validated; new total ${kept.length - existing.length}/${TARGET}`);
-    writeFileSync(OUT, JSON.stringify(kept, null, 2) + "\n"); // incremental save: a crash or --max-minutes time-box keeps all work so far
-    if (MAX_MIN && Date.now() - START > MAX_MIN * 60000) { console.log(`[mine] --max-minutes ${MAX_MIN} budget reached; stopping with ${kept.length - existing.length} new validated.`); break; }
   }
   writeFileSync(OUT, JSON.stringify(kept, null, 2) + "\n");
   console.log(`[mine] DONE: generated ${generated}, VALIDATED ${validated} new hard cases -> ${OUT} now has ${kept.length} cases (was ${existing.length}). Batches tried: ${batchesTried}.`);

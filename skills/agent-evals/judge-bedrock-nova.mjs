@@ -35,10 +35,26 @@
 //      low-risk wrapper around an already-proven code path, not a new provider integration.
 //
 // Model id is env-overridable (BEDROCK_NOVA_JUDGE_MODEL) for a future rotation without a code change.
+//
+// NOVA MICRO (2026-09-02, the OpenAI cost-lever sweep's third lever): added a SECOND, cheaper Nova
+// option alongside the original nova-lite -- Amazon Nova Micro, a text-only, lower-cost/lower-latency
+// sibling in the SAME family confirmed present in the same live `GET /inference-profiles` sweep that
+// verified nova-lite above (alongside nova-pro/nova-premier/nova-2-lite). Nova Micro is text-only (no
+// image/document input), which is a non-issue here: this judge's own input (task + rubric + a text
+// answer) is text-only already. Both models go through the IDENTICAL judgeBedrockNova() function below
+// (same rubric schema, same forced-tool-use JSON-mode strategy, same fail-safe/fail-loud split) --
+// only the `model` argument differs, resolved by run-evals.mjs's EVAL_JUDGE selector
+// (openai | nova-micro | nova-lite) via the BEDROCK_NOVA_MODELS map exported below. Env-overridable
+// per model (BEDROCK_NOVA_JUDGE_MODEL for lite, BEDROCK_NOVA_MICRO_JUDGE_MODEL for micro) for a future
+// rotation without a code change, matching the existing convention.
 
 import { converseJson } from "../doc-indexer/bedrock-client.mjs";
 
 export const BEDROCK_NOVA_JUDGE_MODEL = process.env.BEDROCK_NOVA_JUDGE_MODEL || "us.amazon.nova-lite-v1:0";
+export const BEDROCK_NOVA_MICRO_JUDGE_MODEL = process.env.BEDROCK_NOVA_MICRO_JUDGE_MODEL || "us.amazon.nova-micro-v1:0";
+// Friendly-name -> live Bedrock inference-profile id, keyed the same way run-evals.mjs's EVAL_JUDGE
+// selector names its two Nova options. Used by run-evals.mjs so it never hardcodes a raw model id.
+export const BEDROCK_NOVA_MODELS = { "nova-micro": BEDROCK_NOVA_MICRO_JUDGE_MODEL, "nova-lite": BEDROCK_NOVA_JUDGE_MODEL };
 const BEDROCK_JUDGE_REGION = process.env.BEDROCK_REGION || process.env.AWS_REGION || "us-east-1";
 
 const JUDGE_TOOL_NAME = "record_verdict";
@@ -91,4 +107,4 @@ export async function judgeBedrockNova(task, rubric, answer, { model = BEDROCK_N
   return { met, score, notes: typeof j.notes === "string" ? j.notes : "" };
 }
 
-export default { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL };
+export default { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL, BEDROCK_NOVA_MICRO_JUDGE_MODEL, BEDROCK_NOVA_MODELS };
