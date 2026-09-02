@@ -960,3 +960,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** curl /v1/organization/costs with the SSM openai-api-key -> 'Missing scopes: api.usage.read'; ssm describe-parameters Contains=openai -> only openai-api-key + dead azure-openai-* names
 - **Opened:** 2026-09-02T17:32:12.311Z
 - **Closed:** 2026-09-02T20:32:21.517Z
+
+### finding:FND-20260902-3ab8 severity:low status:open | Xero map-by-identity write guard inspects only LineItems (BankTransactions/CreditNotes/Invoices); ManualJournal JournalLines coded by AccountCode pass untouched, so the cross-org wrong-account risk the guard exists for is unguarded on the one object type the CFO posts most. Not a refusal bug: the four CFO refusals were correct behaviour (AccountCode without AccountID); fix is AccountID on every line, guard extension is the follow-up.
+
+- **Source audit doc:** otchealth-mcp-server/src/tools/xero/write-guard.ts findAccountCodeViolations (CFO packet 2026-09-02, correlations 554a6006 / 94ec8338 / a97fa37a / ea2eb4b5)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-02T22:07:19.754Z
+- **Closed:** (open)
