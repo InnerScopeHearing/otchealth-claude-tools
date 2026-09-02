@@ -97,7 +97,10 @@ for (const abs of candidateFiles) {
     // unrelated I/O quirk.
     continue;
   }
-  if (!content.includes("api.openai.com")) continue;
+  // A source-text scan, not URL handling: match the literal host as a whole token in the file's
+  // contents (a regex rather than String#includes on a hostname literal, which CodeQL's
+  // js/incomplete-url-substring-sanitization would otherwise flag as if this were sanitizing a URL).
+  if (!/\bapi\.openai\.com\b/.test(content)) continue;
 
   test(`${rel}: references api.openai.com, so it must also call recordOpenAIUsage() or be an explicitly documented exception`, () => {
     const allowReason = ALLOWLIST[rel];
