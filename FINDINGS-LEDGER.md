@@ -161,13 +161,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-07-28T01:02:45.658Z
 - **Closed:** 2026-08-21T05:58:34.036Z
 
-### finding:safety-escalation-rota-gap-2026-08-06 severity:high status:open | Safety Escalations team (Intercom team_assignee_id 11247295) has no human member on rota; Safety Monitor tags/routes correctly but flagged conversations then age indefinitely with zero human notification beyond the next daily digest email
+### finding:safety-escalation-rota-gap-2026-08-06 severity:high status:fixed | Safety Escalations team (Intercom team_assignee_id 11247295) has no human member on rota; Safety Monitor tags/routes correctly but flagged conversations then age indefinitely with zero human notification beyond the next daily digest email
 
 - **Source audit doc:** CRO daily digest 2026-08-05 and 2026-08-06 (Intercom Safety Monitor live audit)
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Intercom read 2026-09-02: team 11247295 'Safety Escalations' now has admin 11167146 ('Care Team', matthew@otchealth.app, has_inbox_seat=true, primary team) as a member, and the AWS safety monitor sends an SNS alert (SAFETY_MONITOR_SNS_TOPIC_ARN -> the fleet alert topic to Matt) for every flagged conversation, so a human is notified per escalation rather than relying on inbox polling. Distribution is manual; a SECOND human seat remains a staffing decision for Matt, not a config gap.
 - **Opened:** 2026-08-06T18:21:03.936Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:54:20.294Z
 
 ### finding:safety-classifier-keyword-stem-false-positive-2026-08-08 severity:medium status:fixed | Safety classifier false-positives on bare keyword stem match: TikTok Shop marketing spam mentioning unrelated brand name 'Physician's Choice' in a case study triggered safety-escalation tag (hit: stem match on 'physician') and produced an automated 'please stop wearing the device' reply to a non-customer marketing address; same false-positive reproduced in local safety_gate.py reference classifier, not just the live n8n monitor
 
