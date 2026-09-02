@@ -15,26 +15,35 @@ async function sm(t,id){ const _kv = await kvSecret(id); if (_kv != null) return
  // offline_access mandatory for refresh token; openid/profile/email for identity.
  const BASE_SCOPE="openid profile email offline_access accounting.settings accounting.contacts accounting.attachments accounting.invoices accounting.banktransactions accounting.payments accounting.manualjournals accounting.budgets.read accounting.reports.profitandloss.read accounting.reports.balancesheet.read accounting.reports.trialbalance.read accounting.reports.aged.read accounting.reports.banksummary.read accounting.reports.executivesummary.read accounting.reports.budgetsummary.read accounting.reports.taxreports.read accounting.reports.tenninetynine.read payroll.employees payroll.payruns payroll.payslip payroll.settings payroll.timesheets files assets projects";
 
- // GET /Journals (the general-ledger journal feed) requires `accounting.journals.read`, which this
- // set has NEVER requested. `accounting.manualjournals` above is a DIFFERENT endpoint
- // (/ManualJournals, user-entered journals). That omission -- not a Xero cutoff -- is why
- // GET /Journals returns HTTP 401 AuthorizationUnsuccessful on every org (reproduced 2026-08-14 on
- // otchealth and hearingassist). The CFO needs that feed for the FY2022 close.
+ // GET /Journals (the general-ledger journal feed) requires `accounting.journals.read`. This set has
+ // never requested it, AND it cannot be granted to this app (CORRECTION 2026-09-02, superseding the
+ // 2026-08-14 note that called this a mere omission). Verified against Xero's own developer FAQ and
+ // scopes docs three times (kb-memory 20260710-044, 20260729-012, 20260730-007): connections created
+ // from 29 April 2026 use the granular scope set, which does not include journal access; /Journals
+ // moved behind Xero's Advanced tier (1,445 AUD/month) plus use-case approval and an initial + annual
+ // security assessment. Only a CUSTOM CONNECTION created before that date keeps the scope (until
+ // Sep 2027), and this integration is a standard OAuth2 app (refresh_token grant; see
+ // isGrandfatheredForJournals in otchealth-mcp-server, which deliberately refuses to guess).
+ // DECISION OF RECORD (CFO, 2026-07-29): DECLINE the Advanced tier. Every prior instruction to
+ // "add accounting.journals.read and re-consent" is WITHDRAWN. `accounting.manualjournals` above is
+ // a DIFFERENT endpoint (/ManualJournals, user-entered journals) and is unaffected.
  //
- // OPT-IN, NOT DEFAULT, deliberately. Xero rejects the WHOLE consent with
- // "access_denied: Requested wrong apps scopes" when a set contains a scope this app cannot hold,
- // and re-consent is how CFO Xero access gets RESTORED -- so silently widening the default set
- // risks locking the CFO out of everything to gain one endpoint. The base set above is
- // empirically proven grantable; this flag is the experiment, run deliberately.
+ // Sanctioned substitutes, no scope change needed: the gateway's xero_gl_assemble (Xero's own
+ // TrialBalance period movement per account per month, granted scopes only), direct document reads
+ // (GET /BankTransactions/{id}, /CreditNotes/{id}, ... show Type + LineItems, which fix the posting
+ // side), and the Xero web UI Journal Report / General Ledger export (org role, no API scope).
  //
- // By this file's own rule (write scope where a write twin exists, .read only where none does)
- // journals.read is the correct form: /Journals is read-only in Xero, so there is no write twin
- // to collide with. Expected to be granted -- but expected is not verified.
- //
- // IF Xero returns access_denied with this flag: re-run WITHOUT it to restore access immediately,
- // then treat journals-scope eligibility as an app-type question for the Xero Developer Portal
- // (see isGrandfatheredForJournals in otchealth-mcp-server, which deliberately refuses to guess).
+ // `--with-journals` is kept ONLY as an explicitly labelled experiment and now REFUSES unless
+ // XERO_JOURNALS_EXPERIMENT=1 is set, so no session repeats the withdrawn instruction by accident.
+ // Requesting a scope this app cannot hold makes Xero reject the WHOLE consent
+ // ("access_denied: Requested wrong apps scopes"). A failed authorize does not revoke existing
+ // refresh tokens, but re-consent is how CFO Xero access gets RESTORED, so the default set is never
+ // widened; if the experiment is ever run and fails, re-run WITHOUT the flag to restore the proven set.
  const WITH_JOURNALS = process.argv.includes("--with-journals");
+ if (WITH_JOURNALS && process.env.XERO_JOURNALS_EXPERIMENT !== "1") {
+   console.error("REFUSED: --with-journals requests accounting.journals.read, which this app cannot be granted (Xero granular-scope cutover 2026-04-29; /Journals is Advanced-tier plus a security assessment; decision of record = DECLINE, kb-memory 20260729-012 / 20260730-007). Use xero_gl_assemble, direct document reads (GET /BankTransactions/{id}), or the Xero UI General Ledger export instead. To run the experiment anyway set XERO_JOURNALS_EXPERIMENT=1; a failed authorize does not revoke existing tokens, and re-running without the flag restores the proven set.");
+   process.exit(2);
+ }
  const SCOPE = WITH_JOURNALS ? `${BASE_SCOPE} accounting.journals.read` : BASE_SCOPE;
  const u=new URLSearchParams({response_type:"code",client_id:cid,redirect_uri:REDIRECT,scope:SCOPE,state:"ha"});
  console.log("AUTHORIZE_URL:");
@@ -42,5 +51,5 @@ async function sm(t,id){ const _kv = await kvSecret(id); if (_kv != null) return
  console.log("\nredirect_uri used:",REDIRECT,"| scopes:",SCOPE);
  console.log(WITH_JOURNALS
    ? "\nMODE: +accounting.journals.read (unlocks GET /Journals). If Xero answers access_denied, re-run WITHOUT --with-journals to restore the proven set."
-   : "\nMODE: proven base set. GET /Journals will keep returning 401 -- re-run with --with-journals to request that scope.");
+   : "\nMODE: proven base set. GET /Journals returns 401 by design (accounting.journals.read is not grantable to this app; see the header comment for the sanctioned substitutes).");
 })().catch(e=>console.error("ERR",e.message));
