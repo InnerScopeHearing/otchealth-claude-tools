@@ -74,4 +74,16 @@ COPY skills/cfo-onedrive/ /app/skills/cfo-onedrive/
 # digest into the commons brain. Only needs kb-memory (already copied above) + cfo-store (already
 # copied above) for its own imports/execFileSync calls.
 COPY skills/growth-room/ /app/skills/growth-room/
+# innd-stock (EventBridge schedule otchealth-innd-stock-daily, cron 22:30 UTC Mon-Fri): appends the
+# day's INND close to the CFO price-history workbook in the S3 commons. Added 2026-09-01 because the
+# ECS job was running a STALE COPY of this script -- a pre-S3-port build baked into an S3 env file as
+# SKILL_MJS_B64 -- so the merged S3 port never reached production and every weekday run died on
+# `Azure download 403 AccountIsDisabled`. Baking the skill into the image is what every other job
+# here does and makes the deployed code track main (build-doc-indexer-ecr.yml rebuilds on merge).
+# The alternative, a runtime `git clone`, fails outright: node:24-slim ships no git (proved live,
+# task f0a5b0cf exit 127, "/bin/sh: 1: git: not found").
+COPY skills/innd-stock/ /app/skills/innd-stock/
+# Bake the one dependency (xlsx) so a scheduled run never npm-installs mid-job. innd-stock.mjs keeps
+# its lazy-install fallback for a fresh checkout, but production should never need it.
+RUN cd /app/skills/innd-stock && npm install --omit=dev --no-audit --no-fund
 ENTRYPOINT ["node", "/app/skills/doc-indexer/indexer.mjs"]

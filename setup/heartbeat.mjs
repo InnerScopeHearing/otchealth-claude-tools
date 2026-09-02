@@ -71,7 +71,21 @@ async function listBeats() {
   const rows = await cListMeta(PREFIX);
   return rows.filter((r) => r.name.endsWith(".json")).map((r) => r.name.slice(PREFIX.length));
 }
-function loadRegistry() { try { return JSON.parse(readFileSync(join(HERE, "heartbeat-registry.json"), "utf8")); } catch { return {}; } }
+// RETIRED-JOB CONVENTION (2026-09-01). A registry key beginning with "_" is documentation, not a
+// job to watch. Retiring a job by DELETING its row loses the reason it was retired; leaving a live
+// row is worse -- a DISABLED or deleted job can never beat, so `check` reports it DEAD forever and
+// every sentinel run pages on a job nobody intends to run, which trains the reader to ignore the
+// pager. claude-tools#487 hit exactly this when azure-canary's workflow was deleted while its
+// registry row stayed. So retire by renaming the key to "_retired_<name>" and recording why.
+// Note this filters the REGISTRY only: `check` also watches every job a beat file names, so a
+// retired job that somehow still beats stays visible instead of being silently ignored.
+export function isWatchedJobKey(key) { return !String(key).startsWith("_"); }
+function loadRegistry() {
+  try {
+    const raw = JSON.parse(readFileSync(join(HERE, "heartbeat-registry.json"), "utf8"));
+    return Object.fromEntries(Object.entries(raw).filter(([k]) => isWatchedJobKey(k)));
+  } catch { return {}; }
+}
 
 const DRY_RUN = argv.includes("--dry-run") || process.env.HEARTBEAT_RESTART_DRY_RUN === "1";
 // Kept only so a future real executor has the same knobs it had before; unused by the stub below.
