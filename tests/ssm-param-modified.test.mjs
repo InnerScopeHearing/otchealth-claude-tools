@@ -59,9 +59,16 @@ test("no AWS credentials resolvable THROWS -- unreadable is not the same answer 
   const prev = {
     ak: process.env.AWS_ACCESS_KEY_ID, sk: process.env.AWS_SECRET_ACCESS_KEY,
     rel: process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, full: process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI,
+    // OTC_AWS_* is the fleet's OWN fallback pair, read by kb-memory/aws-secret.mjs when the standard
+    // AWS_* vars are absent. Blanking only the standard names left this path open, so "no
+    // credentials resolvable" was unsimulatable from a credentialed seat -- green in CI, red locally.
+    oak: process.env.OTC_AWS_ACCESS_KEY_ID, osk: process.env.OTC_AWS_SECRET_ACCESS_KEY,
+    ost: process.env.OTC_AWS_SESSION_TOKEN,
   };
   delete process.env.AWS_ACCESS_KEY_ID; delete process.env.AWS_SECRET_ACCESS_KEY;
   delete process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI; delete process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI;
+  delete process.env.OTC_AWS_ACCESS_KEY_ID; delete process.env.OTC_AWS_SECRET_ACCESS_KEY;
+  delete process.env.OTC_AWS_SESSION_TOKEN;
   let fetchCalled = false;
   try {
     const original = globalThis.fetch;
@@ -75,7 +82,11 @@ test("no AWS credentials resolvable THROWS -- unreadable is not the same answer 
       assert.equal(fetchCalled, false, "must not attempt a signed call with no credentials to sign with");
     } finally { globalThis.fetch = original; }
   } finally {
-    for (const [k, v] of Object.entries({ AWS_ACCESS_KEY_ID: prev.ak, AWS_SECRET_ACCESS_KEY: prev.sk, AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: prev.rel, AWS_CONTAINER_CREDENTIALS_FULL_URI: prev.full })) {
+    // Restore EVERY var that was deleted above, OTC_AWS_* included. node --test shares one
+    // process across files, so a blanked credential that is never restored leaks into every
+    // test that runs after this one and silently changes their preconditions -- a worse bug
+    // than the one this blanking exists to fix.
+    for (const [k, v] of Object.entries({ AWS_ACCESS_KEY_ID: prev.ak, AWS_SECRET_ACCESS_KEY: prev.sk, AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: prev.rel, AWS_CONTAINER_CREDENTIALS_FULL_URI: prev.full, OTC_AWS_ACCESS_KEY_ID: prev.oak, OTC_AWS_SECRET_ACCESS_KEY: prev.osk, OTC_AWS_SESSION_TOKEN: prev.ost })) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
   }

@@ -21,7 +21,13 @@ async function withStubbedFetch(stub, run) {
 // every path kvSecret()/aws-secret.mjs's awsCreds() can succeed through, restores after.
 const CRED_ENV_KEYS = [
   "AZURE_SP_CLIENT_ID", "AZURE_SP_CLIENT_SECRET", "AZURE_SP_TENANT_ID", "IDENTITY_ENDPOINT", "IDENTITY_HEADER",
-  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  // OTC_AWS_* is the fleet's OWN fallback pair, read by kb-memory/aws-secret.mjs when the
+  // standard AWS_* vars are absent. Omitting it made this list look careful while leaving a
+  // live credential path open: the test passed in CI (a runner has no ambient OTC_AWS_*) and
+  // failed only from a credentialed CTO seat, which is the one place nobody re-runs it.
+  "OTC_AWS_ACCESS_KEY_ID", "OTC_AWS_SECRET_ACCESS_KEY", "OTC_AWS_SESSION_TOKEN",
 ];
 async function withNoAmbientCreds(run) {
   const prev = Object.fromEntries(CRED_ENV_KEYS.map((k) => [k, process.env[k]]));
