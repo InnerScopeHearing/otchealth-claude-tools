@@ -44,6 +44,7 @@ import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { awsCredsPresent } from "../kb-memory/aws-secret.mjs";
 import { cGet, cPut, cDel } from "../kb-memory/commons-store.mjs";
+import { ddMetric } from "../datadog/dd-emit.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MEDIC_PREFIX = "_MEDIC/";
@@ -189,6 +190,46 @@ async function emitDispatch(ingestKey, agent, item) {
   return false;
 }
 
+// otc.fleet.agent_error emission (2026-08-18) — closes the Datadog monitor "AI Fleet — agent errors
+// (1h)" (id 22893313, sum:otc.fleet.agent_error{*}.as_count() > 0), which has shown "No Data" since
+// it was created 2026-06-27 because nothing in the codebase ever emitted this metric (confirmed by a
+// repo-wide grep). fleet-medic's classify() is exactly "where errors are already known" for an
+// AGENT (as opposed to a scheduled JOB, which skills/azure-canary/canary.mjs already watches
+// separately) — DARK (an active session running with memory OFF) and NO-MEMORY (never initialized)
+// are real per-agent error conditions, not mere staleness (WATCH), so they map directly onto "agent
+// error" without inventing a new detection mechanism.
+//
+// Emits ONE point per agent EVERY scan, value 1 (errored this scan) or 0 (not errored), tagged
+// agent:<name>. This is deliberate, not merely "emit on error": a count metric with NOTHING
+// submitted during a healthy stretch reads as "No Data" in Datadog exactly like this monitor's
+// original bug, so a 0-value point is what keeps the monitor's data continuous through the common
+// case (zero errors) and lets `.as_count() > 0` mean what it says. Runs on every `scan` call
+// (dispatch or not) — the classification is already computed either way, and the existing production
+// job already runs `scan --dispatch` every ~30 min (skills/doc-indexer/job/fleet-medic.sh), so this
+// rides that schedule with NO change needed to the job itself. MEDIC_SKIP_METRICS=1 is an escape
+// hatch if this ever needs disabling without a code change.
+//
+// LOUD ON FAILURE: unlike emitDispatch()'s PostHog capture (which is also retried+checked, see its
+// own header), a Datadog send failure here does not change medic's overall fail-open exit-0 policy
+// (a broken medic must not be worse than none) — but it prints a distinct, greppable error line per
+// failed agent AND is counted into the run summary printed at the end of scan(), the same
+// "N ok, M failed" visibility pattern emitDispatch()'s fix established. A run that "Succeeded" while
+// silently losing this telemetry must never look identical to a real one in plain container logs.
+export async function emitAgentErrorMetrics(results) {
+  if (process.env.MEDIC_SKIP_METRICS === "1") return { emitted: 0, failed: 0, skipped: true };
+  let emitted = 0, failed = 0;
+  for (const r of results) {
+    const isError = r.condition === "DARK" || r.condition === "NO-MEMORY";
+    const res = await ddMetric("otc.fleet.agent_error", isError ? 1 : 0, {
+      tags: [`agent:${r.agent}`, "job:fleet-medic", `condition:${r.condition}`],
+      type: "count",
+    });
+    if (res.ok) emitted++;
+    else { failed++; console.error(`  [fleet-medic] METRIC EMIT FAILED for agent_error{agent:${r.agent}}: ${res.error}`); }
+  }
+  return { emitted, failed, skipped: false };
+}
+
 // ================================== commands ==================================
 async function scan() {
   if (!awsCredsPresent().any) { console.error("fleet-medic: no AWS credentials (checked the ECS task role, AWS_ACCESS_KEY_ID/SECRET, OTC_AWS_ACCESS_KEY_ID/SECRET); cannot reach the commons S3 store, so cannot scan."); process.exit(0); }
@@ -207,6 +248,17 @@ async function scan() {
       const act = r.dispatch ? " -> DISPATCH" : r.cooled_down ? " (cooldown)" : "";
       console.log(`[${tag}] ${r.agent.padEnd(11)} ${r.condition.padEnd(10)} ${act.padEnd(13)} ${r.reason}`);
     }
+  }
+
+  const metricSummary = await emitAgentErrorMetrics(results);
+  if (!metricSummary.skipped) {
+    // STDERR, not stdout, unconditionally. `scan --json` promises stdout is ONE JSON document and
+    // nothing else -- tests/fleet-medic-s3.test.mjs JSON.parse()s it whole, and so does anything
+    // else piping this command. An earlier draft of this line used console.log and appended a human
+    // sentence after the JSON, breaking every machine consumer while looking perfectly fine to a
+    // human reading the container log. This is diagnostic output about telemetry plumbing; it
+    // belongs on the same channel as the per-agent METRIC EMIT FAILED lines just above.
+    console.error(`[fleet-medic] agent_error metrics: ${metricSummary.emitted} emitted, ${metricSummary.failed} failed (of ${results.length} agents)`);
   }
 
   if (!dispatching) return;

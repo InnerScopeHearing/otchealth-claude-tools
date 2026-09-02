@@ -38,3 +38,15 @@ stay a human hard gate by Matt's 2026-06-21 directive; Mercury is a single token
 - Non-PHI ring only. Never store bank LOGIN credentials (bank linking stays human).
 - Never overwrite a good refresh token with a failed-refresh response (keeper keeps the old token on error).
 - Cost-neutral: Container App Job on existing Azure credits.
+
+## Telemetry: `otc.fleet.token_age_hours` (2026-08-18)
+`node skills/token-keeper/token-age-metrics.mjs [--dry-run] [--json]` emits one Datadog point per
+GENUINELY rotating refresh-token secret (derived from this file's own `PROVIDERS` registry, plus
+Microsoft Graph OneDrive), tagged `secret:<name>`, sourced from AWS SSM's real `LastModifiedDate` via
+`skills/kb-memory/aws-secret.mjs`'s `ssmParamModifiedMs()`. Closes Datadog monitor 22896070
+("Credential health — rotating token aging toward idle-expiry", `> 1200` = ~50d), which showed
+"No Data" since 2026-06-27. Xero is DELIBERATELY excluded — see the script's own header for why
+(the gateway owns Xero's live rotation in Cosmos since 2026-07-16; the SSM copy is a spent bootstrap
+whose age would be actively misleading). Scheduled: `.github/workflows/nightly-token-age-metrics.yml`
+(daily 09:05 UTC); a send failure fails the run loudly (non-zero exit -> pages via
+`setup/page-on-failure.mjs`), never silently dropped.
