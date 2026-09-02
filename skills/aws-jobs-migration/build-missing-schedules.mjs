@@ -22,10 +22,12 @@
 //   node build-missing-schedules.mjs --dry-run        print what would be created, touch nothing
 //   node build-missing-schedules.mjs --only <name>    build a single job by its Azure name
 //
-// Auth: aws-cto-access-key-id / aws-cto-secret-access-key (Key Vault), direct hand-rolled SigV4 --
-// no aws-cli, no AWS SDK, dependency-free (same convention as skills/kb-memory/aws-secret.mjs).
-import crypto from 'node:crypto';
+// Auth: aws-cto-access-key-id / aws-cto-secret-access-key (Key Vault), signed via ../../setup/
+// aws-sigv4.mjs (FND-20260828-5ca1, 2026-09-02 -- one of nine hand-rolled SigV4 implementations this
+// fleet had grown, consolidated into a single shared signer; see that file's header for the full
+// writeup, including a latent bug in the EventBridge Scheduler paths this file itself signs below).
 import { kvSecret } from '../kb-memory/azure-secret.mjs';
+import { awsFetch, canonicalUriPath } from '../../setup/aws-sigv4.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const onlyIdx = process.argv.indexOf('--only');
@@ -33,42 +35,22 @@ const ONLY = onlyIdx !== -1 ? process.argv[onlyIdx + 1] : null;
 
 const AK = (await kvSecret('aws-cto-access-key-id')).trim();
 const SK = (await kvSecret('aws-cto-secret-access-key')).trim();
+const CREDS = { accessKeyId: AK, secretAccessKey: SK };
 
-const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
-const hmac = (k, d) => crypto.createHmac('sha256', k).update(d).digest();
-
-/** Minimal SigV4 signer. Sorts the query string by key (unsigned/unsorted params sign a string AWS
- *  never reconstructs -> a 403 that a caller scanning for JSON results misreads as "empty", not
- *  "denied"), and always signs x-amz-content-sha256 (S3 rejects its absence; other services ignore
- *  it) plus X-Amz-Target for the ECS JSON-protocol calls. */
 async function awsCall({ service, region = 'us-east-1', host, method = 'GET', path = '/', query = '', body = '', headers = {} }) {
-  if (query) query = query.split('&').filter(Boolean).sort().join('&');
   host = host || `${service}.${region}.amazonaws.com`;
-  const amz = new Date().toISOString().replace(/[:-]|\..{3}/g, '');
-  const date = amz.slice(0, 8);
-  const hh = { host, 'x-amz-date': amz, 'x-amz-content-sha256': sha256(body), ...headers };
-  const keys = Object.keys(hh).map((k) => k.toLowerCase()).sort();
-  const canonH = keys.map((k) => `${k}:${String(hh[Object.keys(hh).find((x) => x.toLowerCase() === k)]).trim()}\n`).join('');
-  const signed = keys.join(';');
-  const creq = [method, path, query, canonH, signed, sha256(body)].join('\n');
-  const scope = `${date}/${region}/${service}/aws4_request`;
-  const sts = ['AWS4-HMAC-SHA256', amz, scope, sha256(creq)].join('\n');
-  let k = hmac('AWS4' + SK, date);
-  k = hmac(k, region); k = hmac(k, service); k = hmac(k, 'aws4_request');
-  const sig = crypto.createHmac('sha256', k).update(sts).digest('hex');
-  hh.Authorization = `AWS4-HMAC-SHA256 Credential=${AK}/${scope}, SignedHeaders=${signed}, Signature=${sig}`;
-  const url = `https://${host}${path}${query ? '?' + query : ''}`;
-  const r = await fetch(url, { method, headers: hh, body: method === 'GET' ? undefined : body });
-  return { status: r.status, text: await r.text() };
+  const url = `https://${host}${path}${query ? `?${query}` : ''}`;
+  const r = await awsFetch(url, { method, headers, body }, { service, region, credentials: CREDS });
+  return { status: r.status, text: r.text };
 }
 
 const ecs = (t, b) => awsCall({
   service: 'ecs', host: 'ecs.us-east-1.amazonaws.com', method: 'POST', body: JSON.stringify(b),
   headers: { 'X-Amz-Target': 'AmazonEC2ContainerServiceV20141113.' + t, 'Content-Type': 'application/x-amz-json-1.1' },
 });
-const schedulerGet = (name) => awsCall({ service: 'scheduler', method: 'GET', path: `/schedules/${encodeURIComponent(name)}`, query: 'groupName=default' });
+const schedulerGet = (name) => awsCall({ service: 'scheduler', method: 'GET', path: canonicalUriPath(`/schedules/${name}`), query: 'groupName=default' });
 const schedulerCreate = (name, body) => awsCall({
-  service: 'scheduler', method: 'POST', path: `/schedules/${encodeURIComponent(name)}`, body: JSON.stringify(body),
+  service: 'scheduler', method: 'POST', path: canonicalUriPath(`/schedules/${name}`), body: JSON.stringify(body),
   headers: { 'Content-Type': 'application/json' },
 });
 
