@@ -18,10 +18,18 @@
 // the way the original regression happened.
 //
 // FAILING-FIRST PROOF (run manually against the pre-fix content rather than embedded here, so this
-// file has no git-history dependency in a shallow-clone CI runner): every assertion below FAILS
-// against `git show 6f9624a731199e07725226ba8a63b11ab18f76eb:skills/doc-indexer/job/nightly.sh` (the
-// commit immediately before the fix) and PASSES against the current file. See the introducing PR's
-// description for the exact commands run and their real output.
+// file has no git-history dependency in a shallow-clone CI runner). Swapping in
+// `git show 6f9624a731199e07725226ba8a63b11ab18f76eb:skills/doc-indexer/job/nightly.sh` (the commit
+// immediately before the fix) and running this file gives **5 failures and 2 passes**, and all 7
+// pass against the current file.
+//
+// The two that pass against the pre-fix script are SUPPOSED to: the mirror-table assertion reads
+// s3-blob.mjs, not nightly.sh, and the `sh -n` assertion only parses the script -- neither one looks
+// at a backend flag, so neither can distinguish pre-fix from post-fix. The five that fail are
+// exactly the five that inspect invocation text. An earlier draft of this header claimed "every
+// assertion below FAILS", which was not true and contradicted the introducing PR's own reported
+// output; a regression lock whose stated evidence overstates itself is the same class of defect it
+// exists to catch, so the real count is recorded here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -70,25 +78,54 @@ test("both cfo-store/store.mjs 'put' invocations target otchealthcommons/company
   }
 });
 
-test("both doc-indexer/indexer.mjs calls for the commons profile (index, push-search) select --s3", () => {
-  const text = src();
+// Collects EVERY invocation line for a script+verb, not just the first. Taking only the first match
+// would let a second, differently-flagged call be added without failing anything -- and the point of
+// this file is that no invocation of these scripts can quietly select a dead backend.
+const invocations = (text, script, verb) =>
+  [...text.matchAll(new RegExp(`${script}\\.mjs["'\\s]+${verb}\\b[^\\n]*`, "g"))].map((m) => m[0]);
+
+test("each doc-indexer/indexer.mjs call for the commons profile (index, push-search) occurs exactly once and selects --s3", () => {
+  const text = stripComments(src());
   for (const verb of ["index", "push-search"]) {
-    const re = new RegExp(`indexer\\.mjs["'\\s]+${verb}\\b[^\\n]*`);
-    const m = text.match(re);
-    assert.ok(m, `nightly.sh must call indexer.mjs ${verb}`);
-    assert.match(m[0], /--profile commons\b/, `indexer.mjs ${verb} call must target the commons profile: ${m[0]}`);
-    assert.match(m[0], /--s3\b/, `indexer.mjs ${verb} call must pass --s3: ${m[0]}`);
+    const calls = invocations(text, "indexer", verb);
+    assert.equal(
+      calls.length,
+      1,
+      `expected exactly one live indexer.mjs ${verb} call in nightly.sh, found ${calls.length} -- ` +
+        "update this test deliberately if the script grows another, so a new call cannot inherit this lock without review",
+    );
+    assert.match(calls[0], /--profile commons\b/, `indexer.mjs ${verb} call must target the commons profile: ${calls[0]}`);
+    assert.match(calls[0], /--s3\b/, `indexer.mjs ${verb} call must pass --s3: ${calls[0]}`);
   }
 });
 
-test("both doc-indexer/enrich.mjs calls inside the opt-in ENRICH gate (ensure-schema, run) select --s3", () => {
-  const text = src();
+test("each doc-indexer/enrich.mjs call (ensure-schema, run) occurs exactly once, sits inside the opt-in ENRICH gate, and selects --s3", () => {
+  const text = stripComments(src());
+
+  // Locate the gate body rather than trusting the test's own name. Without this, the calls could be
+  // hoisted out of the `if [ "$ENRICH" = "1" ]` block -- turning an opt-in pass into an unconditional
+  // one on every nightly run -- and every other assertion here would still pass.
+  const lines = text.split("\n");
+  const gateStart = lines.findIndex((l) => /^\s*if\s+\[\s+"\$ENRICH"\s*=\s*"1"\s*\]/.test(l));
+  assert.notEqual(gateStart, -1, 'nightly.sh must keep the enrichment pass behind an `if [ "$ENRICH" = "1" ]` gate');
+  const gateEnd = lines.findIndex((l, i) => i > gateStart && /^\s*(else|fi)\b/.test(l));
+  assert.notEqual(gateEnd, -1, "the ENRICH gate must be closed by an else/fi");
+
   for (const verb of ["ensure-schema", "run"]) {
-    const re = new RegExp(`enrich\\.mjs["'\\s]+${verb}\\b[^\\n]*`);
-    const m = text.match(re);
-    assert.ok(m, `nightly.sh's ENRICH gate must call enrich.mjs ${verb}`);
-    assert.match(m[0], /--profile commons\b/, `enrich.mjs ${verb} call must target the commons profile: ${m[0]}`);
-    assert.match(m[0], /--s3\b/, `enrich.mjs ${verb} call must pass --s3: ${m[0]}`);
+    const calls = invocations(text, "enrich", verb);
+    assert.equal(
+      calls.length,
+      1,
+      `expected exactly one live enrich.mjs ${verb} call in nightly.sh, found ${calls.length}`,
+    );
+    const at = lines.findIndex((l) => l.includes(calls[0]));
+    assert.ok(
+      at > gateStart && at < gateEnd,
+      `enrich.mjs ${verb} must stay INSIDE the ENRICH gate (line ${at + 1} is outside ${gateStart + 1}..${gateEnd + 1}); ` +
+        "enrichment is opt-in and must not run on every nightly pass",
+    );
+    assert.match(calls[0], /--profile commons\b/, `enrich.mjs ${verb} call must target the commons profile: ${calls[0]}`);
+    assert.match(calls[0], /--s3\b/, `enrich.mjs ${verb} call must pass --s3: ${calls[0]}`);
   }
 });
 
@@ -105,6 +142,10 @@ test("the commons room nightly.sh writes to actually has a verified S3 mirror ma
   assert.equal(loc.bucket, "otchealth-brain-dr-55c84f6b");
 });
 
-test("sanity: the script itself still parses as valid POSIX sh (a content-only test could pass on a script nothing can execute)", () => {
+test("sanity: the script still parses under /bin/sh (a content-only test could pass on a script nothing can execute)", () => {
+  // Scope note: this runs `sh -n` against whichever implementation /bin/sh is on the host, so it
+  // catches syntax errors -- it does NOT establish strict POSIX portability, which would need a
+  // conformance checker or a second shell. Claiming the stronger property would be the same kind of
+  // overstatement this file's header now corrects.
   execFileSync("sh", ["-n", NIGHTLY_SH], { stdio: "pipe" });
 });
