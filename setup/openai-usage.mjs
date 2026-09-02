@@ -270,7 +270,7 @@ export function recordOpenAIUsage(opts) {
 function aggregate(records) {
   const byKey = new Map();
   for (const r of records) {
-    const key = [r.model, r.kind, r.caller, r.repo, r.unknown ? "1" : "0"].join("");
+    const key = [r.model, r.kind, r.caller, r.repo, r.unknown ? "1" : "0"].join("\u0000"); // NUL-separated: a bare concatenation could alias fields (model "a"+kind "bc" vs "ab"+"c")
     let agg = byKey.get(key);
     if (!agg) {
       agg = {
