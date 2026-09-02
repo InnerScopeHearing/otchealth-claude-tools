@@ -968,3 +968,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-02T22:07:19.754Z
 - **Closed:** (open)
+
+### finding:FND-20260902-f22e severity:low status:fixed | skills/xero/consent-authurl.mjs carried a 2026-08-14 header calling the /Journals 401 a mere scope omission and inviting a --with-journals re-consent, the exact instruction the 2026-07-29 record withdrew (accounting.journals.read is not grantable to the INND app: granular-scope cutover 2026-04-29, Advanced tier plus security assessment, decision of record DECLINE). Fixed: comment corrected, flag gated behind XERO_JOURNALS_EXPERIMENT=1, sanctioned substitutes named (xero_gl_assemble, GET /BankTransactions/{id}, Xero UI GL export).
+
+- **Source audit doc:** CFO packet 2026-09-02 (GET /Journals HTTP 401, org innd) reconciled against exec ledger 20260710-044 / 20260729-012 / 20260730-007
+- **Fix commit:** eff8055c2964d815d3873b34f6f2dde7cb8a8384
+- **Verified by:** node --check clean; claude-tools CI 8/8 green on #535; squash-merged eff8055; two ledger entries written (20260902-122-a304 fact, 20260902-123-e761 pitfall)
+- **Opened:** 2026-09-02T22:19:51.254Z
+- **Closed:** 2026-09-02T22:19:51.254Z
