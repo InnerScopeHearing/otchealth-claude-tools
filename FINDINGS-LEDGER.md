@@ -840,3 +840,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** PR #104 closed 2026-09-01 in favour of #134 (tool only, merged fc1bc7f). Corpus NOT lost: 17MB / 782 distilled agent briefs+reports remain on origin branch claude/subagent-research-corpus, which is durable. NOT merged because the branch is an ORPHAN (main root 9fdabd56f6 vs branch root 258923836e, no merge base -- it is a full second copy of the repo), so merging would graft a parallel root onto main and every future clone would carry 17MB (agents re-clone constantly via repo-freshen/add-repo). Content verified safe: independent scan across 23 credential shapes found only a RevenueCat PUBLIC SDK key already in main's CLAUDE.md plus the redactor's own template; 54 REDACTED markers present; redactor proven to ACT via synthetic planted-secret test. TODO: upload research/ to S3 commons and decide whether to index into the brain -- note 782 agent transcripts could flood brain_search the way ops chatter did before the room-hygiene fix (mcp-server #110), so consider a dedicated room or exclusion.
 - **Opened:** 2026-09-01T14:20:58.738Z
 - **Closed:** (open)
+
+### finding:FND-20260902-2cc5 severity:low status:open | innd-stock S3 tests npm-install xlsx at runtime, so they fail on main in any network-restricted runner (pre-existing, 2 of 2 tests provide no real coverage)
+
+- **Source audit doc:** PR #513 baseline run (otchealth-claude-tools, run-tests.sh gate, 2026-09-02)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-02T02:31:13.486Z
+- **Closed:** (open)
