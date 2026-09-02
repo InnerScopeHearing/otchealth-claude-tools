@@ -55,6 +55,83 @@ is ~80% cheaper than gpt-4.1. `cu-calibrate` reads CU's `usage` object for the r
   (never silently) when unconfigured. `--embeddings-provider openai|foundry` (default openai) is an
   independent axis. People browse the reorg'd taxonomy on **OneDrive** (`cfo-onedrive`) + `catalog.csv`.
 
+## k-NN vector quantization (fp32 -> disk-optimized, OpenSearch 3.x only)
+
+Closes FND-20260829-f7fa: every index on `otchealth-brain` was created fp32 (`in_memory` mode,
+3072-dim text-embedding-3-large, ~29GB total across ~15 indexes; finance ~13GB, legal-personal
+~9.1GB, legal-company ~4.4GB), and 7-day `KNNGraphMemoryUsagePercentage` peaked 96.9% on the single
+r6g.large.search node. `skills/doc-indexer/quantize-indices.mjs` migrates each index, one at a time,
+to OpenSearch's disk-optimized/quantized `knn_vector` mode (default `compression_level: "32x"`, a
+~97% cut in vector memory), per the official docs (fetched and quoted 2026-09-02,
+<https://docs.opensearch.org/latest/vector-search/optimizing-storage/disk-based-vector-search/> and
+<https://docs.opensearch.org/latest/mappings/supported-field-types/knn-vector/>).
+
+**REQUIRES OpenSearch 3.x.** `mode`/`compression_level` are 3.x mapping parameters; do not run this
+against a 2.19 domain (index creation will reject the mapping with a 400).
+
+**This seat cannot reach the OpenSearch data plane** (the egress proxy blocks `*.es.amazonaws.com`),
+so the tool runs as a one-off ECS Fargate task via `run-quantize-task.mjs`, reusing the existing
+`otchealth-job-brain-reindex` task definition with a container override (the image already carries
+both files -- no Dockerfile change needed, see quantize-indices.mjs's own header). Read-only ECS/AWS
+control-plane calls (DescribeTaskDefinition, etc.) ARE reachable from this seat and are how the
+container name (`job`), command shape, and log group/stream prefix (`/ecs/otchealth`,
+`brain-reindex/job/<taskId>`) below were verified live, without ever touching the data plane itself.
+
+**Sequence** (per the official docs' own recommended flow, adapted for a resumable per-index tool):
+1. `plan` (read-only audit; also the live evidence for FND-20260829-f7fa) --
+   `node run-quantize-task.mjs plan`
+2. Migrate ONE small, non-privileged index first, dry-run then commit --
+   `node run-quantize-task.mjs migrate --index commons-coo-memory` (review the printed plan), then
+   `node run-quantize-task.mjs migrate --index commons-coo-memory --commit`
+3. Check CloudWatch (`KNNGraphMemoryUsagePercentage`, `SearchLatency`) before and after -- this tool
+   does not automate that check.
+4. `migrate --all --commit` (smallest-first; privileged finance/legal rooms are excluded by default,
+   pass `--include-privileged` deliberately once ready for those, per Matt's own processor-choice
+   gate on privileged-room LLM/infra changes -- quantization itself is not an LLM call, but treat the
+   privileged rooms as a deliberate, separate step regardless).
+5. Once memory pressure is confirmed down, downsizing the instance type is a separate, manual
+   decision (domain config change, not this tool's job).
+
+**Design (see quantize-indices.mjs's own header for the full rationale):** a `knn_vector` field's
+method/engine/mode are fixed at index-creation time, so this creates a scratch twin (`<index>--q`),
+reindexes into it, independently verifies it (doc-count convergence, a real sampled-doc `_source`
+comparison, and a real kNN query's top-10 overlap), and ONLY THEN (gated on that verification, and
+only with `--commit`) swaps it onto the original name (delete original -> recreate under the
+quantized mapping -> reindex the twin back -> reverify -> delete the twin) -- there is no alias layer
+anywhere in this fleet's retrieval code, so this delete-and-recreate swap is the only option, not a
+choice; the original is NEVER deleted before its twin is proven. `_reindex` overwrites by `_id`, so
+re-running it (both forward and on resume) is always safe on a LIVE, still-being-written-to index --
+`reindexUntilCountsConverge()` retries (bounded) until source/dest doc counts agree rather than
+trusting a single pass. Resumable state lives in the S3 commons mirror
+(`_QUANTIZE_STATE/<index>.json`, via `skills/kb-memory/commons-store.mjs`) so a killed ECS task picks
+up exactly where it left off. Finance/legal-MNPI rooms (the gateway's real `INDEX_LANES`, not just
+the three names a first pass might guess) are excluded unless `--include-privileged` is passed.
+```
+node skills/doc-indexer/run-quantize-task.mjs plan [--json]
+node skills/doc-indexer/run-quantize-task.mjs migrate --index <name> [--commit] [--compression 32x] [--include-privileged] [--min-overlap-pct 90]
+node skills/doc-indexer/run-quantize-task.mjs migrate --all [--commit] [--compression 32x] [--include-privileged]
+node skills/doc-indexer/run-quantize-task.mjs rollback --index <name> [--commit] [--force]   # restores <name> from <name>--q if it is missing/broken
+# Runner-only flags: [--task-definition otchealth-job-brain-reindex] [--heartbeat-name quantize-indices]
+#                    [--max-wait-minutes 180] [--poll-interval-seconds 10] [--no-tail]
+```
+Without `--commit`, `migrate`/`rollback` are dry runs: they report exactly what they would do and
+mutate nothing beyond the scratch twin index. `quantize-indices.mjs` itself is also directly
+runnable (same subcommands) from anywhere that DOES resolve `resolveOpenSearchConfig()` (an ECS task
+via the task role, or a seat with real `OTC_AWS_*`/AWS credentials that can actually reach the data
+plane) -- `run-quantize-task.mjs` exists specifically for the seats that cannot.
+
+**Durable lesson from building this (2026-09-02):** while smoke-testing this tool's shell-argument
+wiring, one real (non-mutating) call reached the live domain by accident and caught two API-shape
+bugs before they could ever run for real: `_reindex`'s `slices` parameter is a QUERY-STRING
+parameter, not a body field (`x_content_parse_exception: unknown field [slices]`); and
+`opensearch-client.mjs`'s `osFetch()` had a latent bug, present since its SigV4 signer first grew a
+`service` parameter, where it re-derived the request URL from the caller's raw (pre-canonicalization)
+path instead of the canonical path it actually signed -- invisible for every prior caller because
+their paths (plain index names, literal segments like `_bulk`) happen to contain no character
+`canonicalUri()` ever changes, and would have produced a `SignatureDoesNotMatch` 403 the moment a
+caller with a real special character (a task id's `nodeId:taskNumber`) came along. Both are fixed and
+regression-tested (`tests/opensearch-client-sigv4.test.mjs`).
+
 ## Commands
 ```
 node skills/doc-indexer/indexer.mjs index   --profile <p> [--azure|--gcs] [--prefix x] [--limit n] [--reindex] \
