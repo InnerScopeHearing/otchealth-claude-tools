@@ -193,13 +193,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-11T00:28:18.999Z
 - **Closed:** 2026-09-02T17:52:32.277Z
 
-### finding:FND-20260811-17f2 severity:high status:open | Dedicated App Coders graph cannot carry explicit ownership for protected coordinator paths
+### finding:FND-20260811-17f2 severity:high status:wontfix | Dedicated App Coders graph cannot carry explicit ownership for protected coordinator paths
 
 - **Source audit doc:** /agent/workspace/aware-build-2026-08-09/control/control-plane-regressions-2026-08-10.md
 - **Fix commit:** (none yet)
-- **Verified by:** Reproduced in AWARE run 20260810T013200Z-72e2b84a: planned manifest/CLAUDE/HANDOFF writes rejected PROTECTED_PATH_NOT_EXPLICITLY_OWNED
+- **Verified by:** SUPERSEDED, control plane no longer exists (2026-09-02 verification): 'Dedicated App Coders' was the Hyperagent-hosted AWARE build orchestration of 2026-08-09..11; its source doc lives at a Hyperagent workspace path (/agent/workspace/aware-build-2026-08-09/control/...) that is gone with the Azure/Hyperagent CTO sunset. git grep across otchealth-cto, otchealth-claude-tools, aware-aural-rehab and aware-aural-rehab-ci finds ZERO code references (only the findings ledger and its library mirror). AWARE now builds under the 2026-08 exercise-program release contract with no such control plane. Nothing to fix; closing so the three highs stop implying live risk.
 - **Opened:** 2026-08-11T00:28:56.430Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:52:35.383Z
 
 ### finding:FND-20260812-c22a severity:high status:open | WISMO stager (n8n x2epOeluOYLTFgo7) rejects the real Shopify fulfillment webhook on HMAC signature mismatch -- first live fulfillment event since deploy (Aug 4) silently failed to stage, no draft exists for order #10673's real UPS shipment despite fulfillment succeeding in Shopify
 
