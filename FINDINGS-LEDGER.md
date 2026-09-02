@@ -921,13 +921,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T05:55:50.047Z
 - **Closed:** 2026-09-02T06:18:32.296Z
 
-### finding:FND-20260902-67ce severity:medium status:open | fleet-medic DARK has a startup false positive: beacon.mjs emits hooks_wired=false before session-start.sh installs the hooks, so every fresh session briefly reads DARK (verified 2026-09-02: cto DARK while whoami PASS on 2093 entries and hooksWired() true against live settings). Worked around at monitor 22893313 (sum(last_2h)>2 = 3 consecutive dark runs, mirroring medic ESCALATE_AFTER=3); real fix belongs in beacon.mjs (withhold or use a distinct 'starting' status until hooks exist) or medic (require 2 consecutive DARK before dispatch).
+### finding:FND-20260902-67ce severity:medium status:fixed | fleet-medic DARK has a startup false positive: beacon.mjs emits hooks_wired=false before session-start.sh installs the hooks, so every fresh session briefly reads DARK (verified 2026-09-02: cto DARK while whoami PASS on 2093 entries and hooksWired() true against live settings). Worked around at monitor 22893313 (sum(last_2h)>2 = 3 consecutive dark runs, mirroring medic ESCALATE_AFTER=3); real fix belongs in beacon.mjs (withhold or use a distinct 'starting' status until hooks exist) or medic (require 2 consecutive DARK before dispatch).
 
 - **Source audit doc:** skills/kb-memory/beacon.mjs hooksWired() + skills/fleet-medic/medic.mjs classify()
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 961bd24a8650d84e1c89efd813d7077006255468
+- **Verified by:** PR #527 (claude/medic-beacon-startup): beacon.mjs decideStatus() + medic.mjs classify() STARTING condition + MEDIC_DARK_CONSECUTIVE gate; 24 tests (10 new beacon, 4 new + 2 updated medic), full toolkit gate green
 - **Opened:** 2026-09-02T14:41:32.995Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:34:11.094Z
 
 ### finding:FND-20260902-4ed8 severity:low status:fixed | Datadog monitor 22896070 (otc.fleet.token_age_hours) still reports overall_state=No Data with 0 groups while its OWN query returns 5 populated series (max 470.7h, threshold 1200h). Metric verified live via /api/v1/query. Tried: forced re-evaluation by PUT (worked for sibling monitor 22893313), and new_host_delay 300->0 (the one evidence-based suppressor for newly-seen groups on a hostless metric). Neither flipped it. NOT urgent and cannot misfire: notify_no_data=false so it pages nobody, and the live max has 2.5x headroom under the threshold. Expect it to settle once the nightly 09:05 UTC emitter gives it continuous data across its last_2d window; if it is still No Data after two nightly runs (by 2026-09-04), the monitor definition itself needs replacing rather than nudging.
 
