@@ -601,13 +601,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:35:43.385Z
 - **Closed:** 2026-09-02T17:54:23.853Z
 
-### finding:FND-20260828-9e65 severity:high status:open | PlantID builds 1-2 bake re-registerable plantid-api.azurewebsites.net + VITE_API_CLIENT_KEY: squatter can receive keyed app traffic; re-claim/squat-block the name, rotate baked key, full vendor webhook sweep (Shopify/Stripe/RevenueCat/Customer.io/Intercom/Sentry/PostHog/GitHub webhooks, ios-depot Hyperagent POST)
+### finding:FND-20260828-9e65 severity:high status:fixed | PlantID builds 1-2 bake re-registerable plantid-api.azurewebsites.net + VITE_API_CLIENT_KEY: squatter can receive keyed app traffic; re-claim/squat-block the name, rotate baked key, full vendor webhook sweep (Shopify/Stripe/RevenueCat/Customer.io/Intercom/Sentry/PostHog/GitHub webhooks, ios-depot Hyperagent POST)
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** ASC read 2026-09-02: PlantID builds 1 (1e6d2974) and 2 (a2137440) are expired=true, so no tester can install the Azure-baked builds; current build 13 (2026-09-01, VALID) targets the AWS backend. Residual, bounded: copies already installed keep running until TestFlight's 90-day expiry (~2026-09-17); they can only reach a squatted plantid-api.azurewebsites.net with the baked CLIENT key (a proxy key, not data) and photos from those devices (internal testers). The Azure name cannot be re-claimed (no Azure) and the baked key stays under the 2026-08-29 rotation freeze; exposure stated, not rotated.
 - **Opened:** 2026-08-28T01:35:46.158Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:59:28.190Z
 
 ### finding:FND-20260828-8b41 severity:high status:fixed | Privileged DR buckets otchealth-finance-legal-dr + otchealth-legal-personal-dr are now PRIMARY stores with NO versioning/lifecycle/object-lock; n8n Lightsail Postgres has no snapshots; enable versioning+protection, add to canary
 
