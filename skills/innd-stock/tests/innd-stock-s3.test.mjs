@@ -2,15 +2,24 @@
 //
 // This script has no isMain guard and no exported pure helpers (its top-level code runs the CLI
 // directly on import), so every test here runs it as a real subprocess. The `xlsx` package is
-// lazily npm-installed by the skill itself on first run (skills/innd-stock/node_modules, gitignored);
-// these tests assume that install has already happened at least once in this environment (it has,
-// verified via a real `node innd-stock.mjs status` run against the live S3 mirror) -- if node_modules
-// is absent, the first affected test will trigger the same lazy install the skill always does.
-import { test } from "node:test";
+// lazily npm-installed by the skill itself on first run (skills/innd-stock/node_modules, gitignored).
+//
+// THAT LAZY INSTALL USED TO RUN INSIDE A TIMED SUBPROCESS, which made this suite pass or fail on the
+// state of a gitignored directory (2026-09-02). An earlier version of this header simply recorded the
+// assumption -- "these tests assume that install has already happened at least once in this
+// environment" -- which is not something a test may assume. On a warm checkout all five passed; on a
+// cold one the install consumed the 20-second subprocess budget and tests 3 and 4 failed at
+// `duration_ms: 20007` with `expected a clean exit; stderr: installing xlsx ...`, which reads as an
+// S3 or exit-code bug and was filed as one (FND-20260902-2cc5, "innd-stock S3 failure"). Nothing was
+// wrong with S3. The `before` hook below does the install once, outside any timeout, so the suite
+// behaves identically cold or warm. Production was never affected: the doc-indexer image bakes xlsx
+// with an explicit RUN npm install, so the lazy path never fires there.
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +35,16 @@ const S3_BUCKET = "otchealth-finance-legal-dr-55c84f6b";
 const S3_KEY_PREFIX = "otchealthcfodata/innd-stock/";
 const S3_HOST = `${S3_BUCKET}.s3.us-east-1.amazonaws.com`;
 const OFF_HOST_RE = /blob\.core\.windows\.net|storage\.googleapis\.com/i;
+
+// Warm the skill's lazily-installed dependency BEFORE any timed subprocess runs. Idempotent and a
+// no-op on a warm checkout; the generous timeout covers a cold npm install on a slow network.
+before(
+  () => {
+    if (existsSync(join(SKILL_DIR, "node_modules", "xlsx"))) return;
+    execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: SKILL_DIR, stdio: "ignore" });
+  },
+  { timeout: 300000 },
+);
 
 function isHost(u, host) { try { return new URL(u).host === host; } catch { return false; } }
 function pathOf(u) { try { return new URL(u).pathname; } catch { return ""; } }
