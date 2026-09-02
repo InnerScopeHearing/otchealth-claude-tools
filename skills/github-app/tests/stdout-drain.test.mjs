@@ -6,11 +6,11 @@
 // at the pipe buffer -- in practice a clean 65536 bytes.
 //
 // WHY IT MATTERED HERE. Agents consume this tool through pipes (`gh-app.mjs request ... | grep`).
-// `... > file.json` wrote all 306506 bytes of a large PR listing while `... | wc -c` returned
-// exactly 65536: a truncated PREFIX that still looks like plausible output. Counting PRs through
-// the pipe reported 1 open PR on a repo that had 8, and that wrong number was used in a
-// fleet-wide report before the suspiciously round byte count gave it away. JSON.parse at least
-// fails loudly on a truncated document; grep-based counting fails silently.
+// Measured on the same large PR listing: `... > file.json` wrote 306506 bytes; `... | wc -c`
+// returned exactly 65536. The pipe therefore delivered a truncated PREFIX that still looks like
+// plausible output, so anything counted or grepped out of it is silently wrong and gives no
+// indication that it is. JSON.parse at least fails loudly on a truncated document; grep-based
+// counting does not.
 //
 // The first test proves the MECHANISM is real on this Node build rather than assuming it, so this
 // file cannot quietly stop testing anything if the runtime's buffering behaviour changes. The
@@ -37,17 +37,28 @@ test("the failure mode is real on this runtime: console.log + process.exit() tru
   );
 });
 
-test("gh-app.mjs never calls process.exit() on a path that has written to stdout", () => {
+test("gh-app.mjs contains no process.exit() call at all -- an absolute rule, not a per-path judgement", () => {
+  // REWRITTEN after review. The first version of this test allowed process.exit() on paths it
+  // judged stderr-only, and looked back four lines for a stdout write to decide. Both halves were
+  // weak: the judgement is only as good as the window (a stdout write five lines up, or one behind
+  // a helper call, is invisible to it), and permitting ANY exception is what let the rule rot in
+  // the first place -- the source comment claimed every exit used exitCode while three argument
+  // guards still called process.exit(2).
+  //
+  // So the invariant is now total: zero call sites. That is checkable exactly rather than
+  // heuristically, and it means a future stdout write cannot be added above a surviving exit(),
+  // because there is no surviving exit(). The cost is one structural change in gh-app.mjs -- the
+  // dispatch is a function so its argument guards can `return` -- and that is the whole reason it
+  // is one.
   const src = readFileSync(new URL("../gh-app.mjs", import.meta.url), "utf8");
-  const lines = src.split("\n");
   const offenders = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (!/process\.exit\(/.test(lines[i])) continue;
-    // A usage/error path that only writes to stderr is safe: nothing is pending on stdout.
-    if (/console\.error\(/.test(lines[i]) && !/console\.log\(/.test(lines[i])) continue;
-    // Otherwise, look back a few lines for a stdout write that this exit would race.
-    const window = lines.slice(Math.max(0, i - 4), i + 1).join("\n");
-    if (/console\.log\(|process\.stdout\.write\(/.test(window)) offenders.push(`${i + 1}: ${lines[i].trim()}`);
-  }
-  assert.deepEqual(offenders, [], `use process.exitCode instead -- process.exit() here truncates the piped write above it:\n${offenders.join("\n")}`);
+  src.split("\n").forEach((line, i) => {
+    const code = line.replace(/\/\/.*$/, ""); // prose in comments may name process.exit(); code may not call it
+    if (/process\.exit\s*\(/.test(code)) offenders.push(`${i + 1}: ${line.trim()}`);
+  });
+  assert.deepEqual(
+    offenders,
+    [],
+    `gh-app.mjs must use process.exitCode (plus \`return\` where execution has to stop). Found:\n${offenders.join("\n")}`,
+  );
 });
