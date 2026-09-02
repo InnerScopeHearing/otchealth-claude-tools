@@ -63,6 +63,7 @@ import { tokenize, jaccard, ringSafeCross, PRIVILEGED_AGENTS } from "./dedupe.mj
 import { kvSecret } from "./azure-secret.mjs";
 import * as cosmosMemory from "./cosmos-memory-read.mjs";
 import { TIERS, LEGACY_STANDARD, modelFamilyOf, chatBody } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -157,6 +158,10 @@ export async function distillAgent(agent, clusters, { ask, knownRecentText = "",
   if (!clusters || !clusters.length) return [];
   if (typeof ask !== "function") throw new Error("distillAgent: an ask(system, user) function is required");
   const { system, user } = buildDistillPrompt(agent, clusters, knownRecentText, { maxItems });
+  // Prompt-caching hygiene (2026-09-02): `system` is static per agent (mirrors reflect.mjs's own
+  // per-agent system prompt), already sent first with the variable knownRecentText+cluster content
+  // last -- already cache-friendly order, observability only.
+  logPrefixForText(`kb-memory-nightly-reflection:${agent}`, system);
   let raw;
   try {
     raw = await ask(system, user);

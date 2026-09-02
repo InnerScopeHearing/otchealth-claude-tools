@@ -58,7 +58,8 @@ import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { cGet, cList, commonsConfigured } from "../kb-memory/commons-store.mjs";
 import { tokenize, jaccard } from "../kb-memory/dedupe.mjs";
-import { chatBody, resolveTier, fetchOpenAIWithFlexRetry, positiveIntEnv } from "../../setup/model-routing.mjs";
+import { chatBody, resolveTier, fetchOpenAIWithFlexRetry, positiveIntEnv, isBatchEnabled, buildBatchLine, submitBatch, awaitBatch, assertAllBatchResultsPresent } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { hitAtK, groupHitLines } from "./scoring.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -262,6 +263,10 @@ const MINE_HARDNEG_MAX_TOKENS = positiveIntEnv("MINE_HARDNEG_MAX_TOKENS", 2000);
 // the throw is caught there and reported with a precise reason instead of the generic "unparseable/
 // incomplete candidate" message parseHardNegCandidate("") used to produce for the exact same event.
 export async function callChat(system, user) {
+  // Prompt-caching hygiene (2026-09-02): SYSTEM (this file's only caller of callChat) is a fully
+  // static module-level constant, already sent first with the per-pair OLD/NEW notes last -- already
+  // cache-friendly order, observability only, not a reorder.
+  logPrefixForText("recall-evals-mine-hard-negatives", system);
   if (LLM_PROVIDER === "openai") {
     const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
     if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
@@ -324,6 +329,80 @@ function validatePair(item) {
 
 // ---- main --------------------------------------------------------------------------------------
 
+// ============================== BATCH MODE (2026-09-02, OPENAI_BATCH lever) ==============================
+// Opt-in: isBatchEnabled("recall-evals-mine-hard-negatives"). Mirrors mine-cases.mjs's runBatchMode()
+// exactly (see that file's own header for the full contract, including the accepted trade-off: batch
+// mode generates from every not-yet-known ELIGIBLE pair up front, since Batch API has no "stop once
+// enough are collected" concept, then validates/keeps the first TARGET that pass, in the SAME order
+// the synchronous path would try them -- the OUTPUT contract is identical, only the LLM-call cost/
+// latency shape differs). Pairs already in `haveOldNew` are filtered out BEFORE batching, exactly like
+// the synchronous loop's own `if (haveOldNew.has(key)) continue;` skip -- never pay to regenerate a
+// pair already mined.
+export async function runBatchMode(eligible, existing, kept, haveOldNew) {
+  const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+  if (!key) throw new Error("missing openai-api-key (env OPENAI_API_KEY or the fleet secret)");
+  const dep = process.env.MINE_MODEL || resolveTier("standard", "openai").deployment;
+  const toMine = eligible.filter((e) => !haveOldNew.has(`${e.oldRow.id}->${e.newRow.id}`));
+  if (!toMine.length) return { tried: 0, validated: 0 };
+  logPrefixForText("recall-evals-mine-hard-negatives", SYSTEM);
+  const lines = toMine.map((e, i) => buildBatchLine({
+    customId: `pair-${i}`,
+    deployment: dep,
+    messages: [{ role: "system", content: SYSTEM }, { role: "user", content: `OLD (superseded) note:\n${(e.oldRow.text || "").slice(0, 900)}\n\nNEW (current, correct) note:\n${(e.newRow.text || "").slice(0, 900)}` }],
+    maxTokens: MINE_HARDNEG_MAX_TOKENS,
+    jsonMode: true,
+  }));
+  console.error(`[mine-hardneg] OPENAI_BATCH: submitting ${lines.length} pair-generation request(s) as one Batch API job (50% off, up to 24h)...`);
+  const batchId = await submitBatch(lines, { apiKey: key });
+  console.error(`[mine-hardneg] OPENAI_BATCH: batch ${batchId} submitted, waiting for it to complete...`);
+  const { results } = await awaitBatch(batchId, {
+    apiKey: key,
+    onPoll: ({ status, elapsedMs }) => console.error(`[mine-hardneg] OPENAI_BATCH: batch ${batchId} status=${status} (${Math.round(elapsedMs / 1000)}s elapsed)`),
+  });
+  assertAllBatchResultsPresent(lines.map((l) => l.custom_id), results);
+  console.error(`[mine-hardneg] OPENAI_BATCH: batch ${batchId} complete, validating candidates...`);
+
+  let idn = existing.length, validated = 0, tried = 0;
+  const START = Date.now();
+  for (let i = 0; i < toMine.length && kept.length - existing.length < TARGET; i++) {
+    const { newRow, oldRow, reason } = toMine[i];
+    const okey = `${oldRow.id}->${newRow.id}`;
+    tried++;
+    const r = results.get(`pair-${i}`);
+    if (r.error) { console.error(`[mine-hardneg] OPENAI_BATCH: LLM error for ${okey}: ${r.error}`); continue; }
+    const cand = parseHardNegCandidate(r.content);
+    if (!cand) { console.error(`[mine-hardneg] OPENAI_BATCH: unparseable/incomplete candidate for ${okey}; skipped`); continue; }
+    if (!isContentSafe(cand.query) || !cand.expectNew.every(isContentSafe) || !cand.expectOld.every(isContentSafe)) {
+      console.error(`[mine-hardneg] OPENAI_BATCH: PHI/MNPI-flagged candidate text for ${okey}; skipped`);
+      continue;
+    }
+    const v = await validatePair(cand);
+    if (v.ok && v.newHit === 1 && v.oldLeak === 0) {
+      kept.push({
+        id: `hn-${String(++idn).padStart(3, "0")}`,
+        query: cand.query,
+        expect_new: cand.expectNew,
+        expect_old: cand.expectOld,
+        new_id: newRow.id,
+        old_id: oldRow.id,
+        agent: newRow.agent,
+        note: `mined+validated hard-negative: ${oldRow.id} (superseded) -> ${newRow.id} (current). ${reason || ""}`,
+      });
+      validated++;
+      haveOldNew.add(okey);
+      writeFileSync(OUT, JSON.stringify(kept, null, 2) + "\n"); // incremental save, same as the synchronous path
+      console.error(`[mine-hardneg] OPENAI_BATCH: VALIDATED ${okey} (new hit + no old leak) -> ${kept.length - existing.length}/${TARGET}`);
+    } else {
+      console.error(`[mine-hardneg] OPENAI_BATCH: REJECTED ${okey} (newHit=${v.newHit} oldLeak=${v.oldLeak}, ok=${v.ok}) -- current recall does not cleanly pass this case yet`);
+    }
+    if (MAX_MIN && Date.now() - START > MAX_MIN * 60000) {
+      console.error(`[mine-hardneg] --max-minutes ${MAX_MIN} budget reached during validation; stopping with ${kept.length - existing.length} new validated.`);
+      break;
+    }
+  }
+  return { tried, validated };
+}
+
 async function main() {
   console.error("[mine-hardneg] fetching the shared exec feed (read-only)...");
   const rows = await fetchAllSharedRows();
@@ -343,49 +422,58 @@ async function main() {
   const existing = existsSync(OUT) ? JSON.parse(readFileSync(OUT, "utf8")) : [];
   const haveOldNew = new Set(existing.map((c) => `${c.old_id}->${c.new_id}`));
   const kept = [...existing];
-  let idn = existing.length, validated = 0, tried = 0;
-  const START = Date.now();
+  let validated = 0, tried = 0;
 
-  for (const { newRow, oldRow } of eligible) {
-    if (kept.length - existing.length >= TARGET) break;
-    const key = `${oldRow.id}->${newRow.id}`;
-    if (haveOldNew.has(key)) continue;
-    tried++;
-    let cand;
-    try {
-      const raw = await callChat(SYSTEM, `OLD (superseded) note:\n${(oldRow.text || "").slice(0, 900)}\n\nNEW (current, correct) note:\n${(newRow.text || "").slice(0, 900)}`);
-      cand = parseHardNegCandidate(raw);
-    } catch (e) {
-      console.error(`[mine-hardneg] LLM error for ${key}: ${e.message}`);
-      continue;
-    }
-    if (!cand) { console.error(`[mine-hardneg] unparseable/incomplete candidate for ${key}; skipped`); continue; }
-    if (!isContentSafe(cand.query) || !cand.expectNew.every(isContentSafe) || !cand.expectOld.every(isContentSafe)) {
-      console.error(`[mine-hardneg] PHI/MNPI-flagged candidate text for ${key}; skipped`);
-      continue;
-    }
-    const v = await validatePair(cand);
-    if (v.ok && v.newHit === 1 && v.oldLeak === 0) {
-      kept.push({
-        id: `hn-${String(++idn).padStart(3, "0")}`,
-        query: cand.query,
-        expect_new: cand.expectNew,
-        expect_old: cand.expectOld,
-        new_id: newRow.id,
-        old_id: oldRow.id,
-        agent: newRow.agent,
-        note: `mined+validated hard-negative: ${oldRow.id} (superseded) -> ${newRow.id} (current). ${eligible.find((e) => e.newRow === newRow)?.reason || ""}`,
-      });
-      validated++;
-      haveOldNew.add(key);
-      writeFileSync(OUT, JSON.stringify(kept, null, 2) + "\n"); // incremental save
-      console.error(`[mine-hardneg] VALIDATED ${key} (new hit + no old leak) -> ${kept.length - existing.length}/${TARGET}`);
-    } else {
-      console.error(`[mine-hardneg] REJECTED ${key} (newHit=${v.newHit} oldLeak=${v.oldLeak}, ok=${v.ok}) -- current recall does not cleanly pass this case yet`);
-    }
-    if (MAX_MIN && Date.now() - START > MAX_MIN * 60000) {
-      console.error(`[mine-hardneg] --max-minutes ${MAX_MIN} budget reached; stopping with ${kept.length - existing.length} new validated.`);
-      break;
+  // BATCH_MODE (2026-09-02): OPENAI_BATCH unset (the state of every job today) means this branch never
+  // runs and the ELSE branch below is the EXACT pre-existing synchronous loop, byte-identical to
+  // before this lever existed. See runBatchMode()'s own header for the full contract.
+  if (LLM_PROVIDER === "openai" && isBatchEnabled("recall-evals-mine-hard-negatives")) {
+    const r = await runBatchMode(eligible, existing, kept, haveOldNew);
+    tried = r.tried; validated = r.validated;
+  } else {
+    let idn = existing.length;
+    const START = Date.now();
+    for (const { newRow, oldRow } of eligible) {
+      if (kept.length - existing.length >= TARGET) break;
+      const key = `${oldRow.id}->${newRow.id}`;
+      if (haveOldNew.has(key)) continue;
+      tried++;
+      let cand;
+      try {
+        const raw = await callChat(SYSTEM, `OLD (superseded) note:\n${(oldRow.text || "").slice(0, 900)}\n\nNEW (current, correct) note:\n${(newRow.text || "").slice(0, 900)}`);
+        cand = parseHardNegCandidate(raw);
+      } catch (e) {
+        console.error(`[mine-hardneg] LLM error for ${key}: ${e.message}`);
+        continue;
+      }
+      if (!cand) { console.error(`[mine-hardneg] unparseable/incomplete candidate for ${key}; skipped`); continue; }
+      if (!isContentSafe(cand.query) || !cand.expectNew.every(isContentSafe) || !cand.expectOld.every(isContentSafe)) {
+        console.error(`[mine-hardneg] PHI/MNPI-flagged candidate text for ${key}; skipped`);
+        continue;
+      }
+      const v = await validatePair(cand);
+      if (v.ok && v.newHit === 1 && v.oldLeak === 0) {
+        kept.push({
+          id: `hn-${String(++idn).padStart(3, "0")}`,
+          query: cand.query,
+          expect_new: cand.expectNew,
+          expect_old: cand.expectOld,
+          new_id: newRow.id,
+          old_id: oldRow.id,
+          agent: newRow.agent,
+          note: `mined+validated hard-negative: ${oldRow.id} (superseded) -> ${newRow.id} (current). ${eligible.find((e) => e.newRow === newRow)?.reason || ""}`,
+        });
+        validated++;
+        haveOldNew.add(key);
+        writeFileSync(OUT, JSON.stringify(kept, null, 2) + "\n"); // incremental save
+        console.error(`[mine-hardneg] VALIDATED ${key} (new hit + no old leak) -> ${kept.length - existing.length}/${TARGET}`);
+      } else {
+        console.error(`[mine-hardneg] REJECTED ${key} (newHit=${v.newHit} oldLeak=${v.oldLeak}, ok=${v.ok}) -- current recall does not cleanly pass this case yet`);
+      }
+      if (MAX_MIN && Date.now() - START > MAX_MIN * 60000) {
+        console.error(`[mine-hardneg] --max-minutes ${MAX_MIN} budget reached; stopping with ${kept.length - existing.length} new validated.`);
+        break;
+      }
     }
   }
   writeFileSync(OUT, JSON.stringify(kept, null, 2) + "\n");

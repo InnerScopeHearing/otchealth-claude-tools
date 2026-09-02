@@ -9,7 +9,7 @@
 // mechanics), via the same mechanism.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL } from "../judge-bedrock-nova.mjs";
+import { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL, BEDROCK_NOVA_MICRO_JUDGE_MODEL, BEDROCK_NOVA_MODELS } from "../judge-bedrock-nova.mjs";
 
 const FAKE_ENV = {
   AWS_ACCESS_KEY_ID: "AKIAUNITTESTFAKE0000",
@@ -50,6 +50,26 @@ const RUBRIC = ["mentions the root cause", "gives a concrete fix"];
 
 test("BEDROCK_NOVA_JUDGE_MODEL defaults to the exact live-verified inference profile id", () => {
   assert.equal(BEDROCK_NOVA_JUDGE_MODEL, "us.amazon.nova-lite-v1:0");
+});
+
+test("BEDROCK_NOVA_MICRO_JUDGE_MODEL (2026-09-02, the third cost-lever option) defaults to the Nova Micro inference profile id", () => {
+  assert.equal(BEDROCK_NOVA_MICRO_JUDGE_MODEL, "us.amazon.nova-micro-v1:0");
+});
+
+test("BEDROCK_NOVA_MODELS maps run-evals.mjs's EVAL_JUDGE friendly names to the two live model ids", () => {
+  assert.deepEqual(BEDROCK_NOVA_MODELS, { "nova-micro": "us.amazon.nova-micro-v1:0", "nova-lite": "us.amazon.nova-lite-v1:0" });
+});
+
+test("judgeBedrockNova against the Nova Micro model id (via BEDROCK_NOVA_MODELS['nova-micro']) uses the same Converse call shape as nova-lite", async () => {
+  let captured = null;
+  const result = await withStubbedFetch(async (url, opts) => {
+    captured = { url: String(url), body: JSON.parse(opts.body) };
+    return bedrockToolResponse({ met: [true, true], notes: "cheap judge agrees" });
+  }, FAKE_ENV, () => judgeBedrockNova("diagnose the OOM", RUBRIC, "answer text", { model: BEDROCK_NOVA_MODELS["nova-micro"] }));
+  assert.equal(captured.url, "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-micro-v1%3A0/converse");
+  assert.equal(captured.body.toolConfig.toolChoice.tool.name, "record_verdict");
+  assert.deepEqual(result.met, [true, true]);
+  assert.equal(result.score, 1);
 });
 
 test("judgeBedrockNova: happy path -- signs the Converse call to the DOUBLE-encoded canonical / SINGLE-encoded wire path, and returns the SAME {met,score,notes} shape as the default judge", async () => {

@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { buildCriticPrompt, parseCriticVerdict, shouldRevise } from "./critic.mjs";
 import { chatBody, resolveTier, LEGACY_STANDARD, serviceTierFor, flexRetryPolicy } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const SM = "otchealth-shared-prod";
@@ -233,6 +234,11 @@ export async function runCriticPass({ task, draft, constraints, context, tier, m
   const model = resolveTier(process.env.CRITIC_MODEL || tier || "standard", TIER_PROVIDER).deployment;
   try {
     const prompt = buildCriticPrompt(task, draft, { constraints, context });
+    // Prompt-caching hygiene (2026-09-02): CRITIC_SYSTEM is fully static and already sent as the
+    // system message FIRST, with buildCriticPrompt's own static-then-variable prompt (see that
+    // function's 2026-08-29 ordering fix) as the user message LAST -- already cache-friendly,
+    // observability only, not a reorder.
+    logPrefixForText("critic-pass", CRITIC_SYSTEM);
     const call = chatFn || defaultChat;
     const raw = await call({ system: CRITIC_SYSTEM, user: prompt, tier: tier || "standard" });
     const verdict = parseCriticVerdict(raw);
