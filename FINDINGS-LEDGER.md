@@ -209,13 +209,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-12T14:06:00.168Z
 - **Closed:** (open)
 
-### finding:FND-20260814-4fea severity:medium status:open | Gateway ECS task role has OpenSearch write+delete though the gateway adapter is read-only; all 25 task-def families share otchealthTaskRole so it cannot be tightened without splitting roles first
+### finding:FND-20260814-4fea severity:medium status:fixed | Gateway ECS task role has OpenSearch write+delete though the gateway adapter is read-only; all 25 task-def families share otchealthTaskRole so it cannot be tightened without splitting roles first
 
 - **Source audit doc:** otchealth-cto/runbooks/AWS-CUTOVER-2026-08-14.md
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** gateway task def otchealth-gateway:36 runs with taskRoleArn otchealthGatewayTaskRole (inline gateway-runtime: es Get/Head/Post/Put on domain/otchealth-brain/* with NO es:ESHttpDelete, ssm Get* /otchealth/*, kms:Decrypt, the 3 DR buckets, sns otchealth-alerts, bedrock InvokeModel* + ApplyGuardrail m7goqvo48q4m). The premise that the adapter is read-only was stale: opensearch-write.ts PUTs _doc and opensearch-backfill.ts POSTs _bulk, so PUT/POST stay; only DELETE was removed. ECS_STABLE 2/2, /health 200, brain_search + memory writes verified after cutover.
 - **Opened:** 2026-08-14T07:41:59.160Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T19:24:35.835Z
 
 ### finding:FND-20260814-b126 severity:medium status:open | Brain-load ring backstop drops legitimate INND finance docs on a bare 'custody' token (236+ so far, fail-safe, flagged for human review, needs CLO decision before narrowing)
 
