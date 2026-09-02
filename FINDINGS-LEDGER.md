@@ -952,3 +952,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** AWARE Lifecycle Emails aK7HZDAUTvX6d7MJ has exactly ONE execution in its entire history (id 16, 2026-08-28T22:38:24Z) and it only succeeded via the credential-free 'Unknown event' set-node branch; AWARE Signup Webhook a5EfSHYnHqxxb2cP likewise idle. Both are ACTIVE with working credentials as of 2026-09-02, so the remaining fault is upstream: the baked-in client URL resolves to nothing.
 - **Opened:** 2026-09-02T15:41:08.776Z
 - **Closed:** (open)
+
+### finding:FND-20260902-44af severity:medium status:open | OpenAI spend is INVISIBLE from the seat and has NO budget alarm: openai-api-key lacks api.usage.read (organization/costs returns 'insufficient permissions'), no admin/usage-scoped key exists in SSM, and OpenAI is now the fleet's primary LLM path after every Foundry caller was ported to it -- the same blind-spot class Bedrock had until the 2026-09-02 cost-category + anomaly monitor fix. Fix: mint a restricted key with api.usage.read into SSM, add a usage poller + PostHog/Datadog metric + monthly threshold; until then the only view is platform.openai.com/usage (Matt)
+
+- **Source audit doc:** otchealth-cto/cto-library/09-session-research/latest-openai-research.md
+- **Fix commit:** (none yet)
+- **Verified by:** curl /v1/organization/costs with the SSM openai-api-key -> 'Missing scopes: api.usage.read'; ssm describe-parameters Contains=openai -> only openai-api-key + dead azure-openai-* names
+- **Opened:** 2026-09-02T17:32:12.311Z
+- **Closed:** (open)
