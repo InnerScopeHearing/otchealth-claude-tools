@@ -29,6 +29,7 @@
 import { kvSecret } from '../kb-memory/azure-secret.mjs';
 import { mintToken } from '../gateway-connect/connect.mjs';
 import { awsFetch, canonicalUriPath } from '../../setup/aws-sigv4.mjs';
+import { recordOpenAIUsage } from '../../setup/openai-usage.mjs';
 
 const JSON_OUT = process.argv.includes('--json');
 const results = [];
@@ -173,7 +174,14 @@ async function runningTask() {
       body: JSON.stringify({ model: 'text-embedding-3-large', input: text }),
     });
     if (!r.ok) return { status: 'FAIL', evidence: `OpenAI embeddings HTTP ${r.status}` };
-    const v = (await r.json()).data?.[0]?.embedding ?? [];
+    const j = await r.json();
+    recordOpenAIUsage({
+      model: 'text-embedding-3-large',
+      kind: 'embedding',
+      promptTokens: j.usage?.prompt_tokens || j.usage?.total_tokens || 0,
+      caller: 'cutover-preflight',
+    });
+    const v = j.data?.[0]?.embedding ?? [];
     // 3072 is the dimensionality the OpenSearch index was built at. Anything else means the query
     // vector cannot be compared to the stored vectors, which degrades relevance without erroring.
     if (v.length !== 3072) return { status: 'FAIL', evidence: `got ${v.length} dims, index requires 3072` };

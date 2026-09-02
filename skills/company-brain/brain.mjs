@@ -55,6 +55,7 @@ import { TIERS, LEGACY_STANDARD, resolveTier, modelFamilyOf, chatBody, truncated
 import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { RING_DENY } from "../kb-memory/dedupe.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 // OpenAI-direct embeddings + credential resolution, reused from the module that already owns them
 // (it is imported, never edited). resolveOpenAIKey() checks env -> AWS SSM -> Key Vault in that
 // order, so it resolves with no Azure involvement at all.
@@ -312,7 +313,18 @@ export async function callChat(p, system, user, tries) {
     const r = await fetch(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(req.body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error(`chat ${p.label} ${r.status} ${(await r.text()).slice(0, 160)}`);
-    const choice = (await r.json()).choices[0];
+    const j = await r.json();
+    if (p.kind === "openai") {
+      recordOpenAIUsage({
+        model: p.dep,
+        kind: "chat",
+        promptTokens: j.usage?.prompt_tokens || 0,
+        completionTokens: j.usage?.completion_tokens || 0,
+        cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+        caller: "company-brain",
+      });
+    }
+    const choice = j.choices[0];
     // On truncated-empty (the reasoning-budget-exhaustion shape, see BRAIN_MAX_TOKENS's comment
     // above), retry within the SAME existing `tries` budget the 429 path already uses, escalating
     // the token budget 2x on the FIRST such occurrence only (never repeatedly). If it is STILL

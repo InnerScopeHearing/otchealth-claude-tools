@@ -73,6 +73,11 @@
 import { kvSecret } from "./azure-secret.mjs";
 import { ssmSecret } from "./aws-secret.mjs";
 import { osFetch, osSearch, osGetMapping, osRefresh, osCount } from "../doc-indexer/opensearch-client.mjs";
+// embedOpenAI() below is the ONE shared embedding call every fleet embedder (company-brain,
+// doc-indexer/indexer.mjs, kb-memory/index-one.mjs, semantic.mjs, ring-memory-index, embedding-drift-
+// monitor) ultimately reaches, so instrumenting it here gives fleet-wide embedding cost visibility
+// from one place instead of N. See setup/openai-usage.mjs's own header for the safety contract.
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 
 export const EMB_DIMS = 3072;
 // Matches doc-indexer/enrich.mjs's OS_DEFAULT_HOST exactly — the same live cluster, so a fresh
@@ -179,7 +184,10 @@ export async function resolveOpenAIKey() {
 /** Embed a batch of strings via api.openai.com, pinned to text-embedding-3-large (see this file's
  *  header). Mirrors semantic.mjs's own Azure embed()'s 429-retry contract exactly (6 attempts, 1.5s *
  *  attempt backoff) so swapping providers changes nothing about caller-visible retry behavior. */
-export async function embedOpenAI(texts) {
+// `caller` is OPTIONAL (every existing call site in the fleet passes only `texts`, and stays
+// byte-identical) -- pass it when the calling skill wants its own embedding spend broken out in
+// Datadog instead of folding into the generic "kb-memory-embed" bucket.
+export async function embedOpenAI(texts, caller = "kb-memory-embed") {
   const key = await resolveOpenAIKey();
   for (let a = 0; a < 6; a++) {
     const r = await fetch("https://api.openai.com/v1/embeddings", {
@@ -193,6 +201,12 @@ export async function embedOpenAI(texts) {
     }
     if (!r.ok) throw new Error("embed(openai) " + r.status + " " + (await r.text()).slice(0, 200));
     const j = await r.json();
+    recordOpenAIUsage({
+      model: OPENAI_EMBED_MODEL,
+      kind: "embedding",
+      promptTokens: j.usage?.prompt_tokens || j.usage?.total_tokens || 0,
+      caller,
+    });
     // Defensive re-sort by `.index` (mirrors otchealth-mcp-server/src/azure/foundry.ts's embedBatch):
     // OpenAI's own API guarantees input order, but trusting an explicit index when present is free and
     // makes this safe even if that ever changes.

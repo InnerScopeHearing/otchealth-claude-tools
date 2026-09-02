@@ -45,6 +45,7 @@ import { makeSignal, isMnpiSubject, isPhiExcluded } from "../schema.mjs";
 import { TIERS, LEGACY_STANDARD, chatBody, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv, isBatchEnabled, buildBatchLine, submitBatch, awaitBatch, assertAllBatchResultsPresent } from "../../../setup/model-routing.mjs";
 import { logPrefixForText } from "../../../setup/prompt-shape.mjs";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
+import { recordOpenAIUsage } from "../../../setup/openai-usage.mjs";
 
 export const NAME = "groundedness";
 export const OWNER = "cto"; // agent-output quality is an infra/portfolio concern; MNPI rows still hard-route to cfo centrally.
@@ -305,7 +306,16 @@ async function callOpenAI(key, dep, system, user, maxTokens, tries) {
     const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status);
-    const choice = (await r.json()).choices[0];
+    const j = await r.json();
+    recordOpenAIUsage({
+      model: dep,
+      kind: "chat",
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: "signal-radar-groundedness",
+    });
+    const choice = j.choices[0];
     if (truncatedEmpty(choice) && a < effTries - 1) { if (!escalated) { escalated = true; curTokens = curTokens * 2; } continue; }
     if (truncatedEmpty(choice)) {
       throw Object.assign(new Error(`reasoning model exhausted its token budget (${curTokens}) on hidden reasoning with no visible output (finish_reason=length) even after retry+escalation`), { reasoningExhausted: true });

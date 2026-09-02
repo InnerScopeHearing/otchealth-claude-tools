@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { TIERS, resolveTier, chatBody } from "../../setup/model-routing.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const argv = process.argv.slice(2);
@@ -79,7 +80,18 @@ export async function ask(system, user, maxTokens = 700) {
     const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
     if (r.status === 429) { await new Promise(s => setTimeout(s, 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 140));
-    return (await r.json()).choices[0].message.content;
+    const j = await r.json();
+    if (openai) {
+      recordOpenAIUsage({
+        model: DEP,
+        kind: "chat",
+        promptTokens: j.usage?.prompt_tokens || 0,
+        completionTokens: j.usage?.completion_tokens || 0,
+        cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+        caller: "shark-tank",
+      });
+    }
+    return j.choices[0].message.content;
   }
   throw new Error("chat 429 exhausted");
 }

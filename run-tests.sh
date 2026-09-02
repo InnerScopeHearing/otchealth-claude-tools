@@ -7,6 +7,18 @@ ROOT="$(cd -- "$(dirname -- "$0")" && pwd)"
 cd "$ROOT"
 fail=0; ran=0
 
+# setup/openai-usage.mjs is now wired into every real OpenAI call site (chat/embedding/image). Many of
+# those call sites' OWN existing tests exercise the real production code path (mocking `fetch` for the
+# OpenAI response only), which means they call the real recordOpenAIUsage() too. That function itself
+# never makes a network call (see its own file header), but it lazily installs a `beforeExit` hook that
+# DOES call the real Datadog emitter once this process exits -- and if a real `datadog-api-key` happens
+# to be resolvable in the ambient environment (e.g. an interactive session with fleet secrets already
+# hydrated), that would send test-fixture-derived token/cost numbers into PRODUCTION Datadog. This is a
+# hard kill-switch, not a per-file opt-out: it makes the toolkit gate itself categorically safe
+# regardless of ambient credentials. setup/openai-usage.test.mjs is the one file that needs to observe
+# the real (non-disabled) behavior, and clears this var for itself before its own tests run.
+export OPENAI_USAGE_DISABLE=1
+
 echo "== syntax gate (node --check on every skill .mjs) =="
 syntax_bad=0
 while IFS= read -r f; do

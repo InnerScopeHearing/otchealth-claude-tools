@@ -37,6 +37,7 @@ import { tmpdir } from "node:os";
 import { join, basename, extname, resolve, dirname } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 function fail(m){ console.error("[pdf] ERROR: " + m); process.exit(1); }
@@ -123,6 +124,16 @@ async function visionOCRImage(pngPath){
       }),
     });
     const j = await r.json();
+    if (r.ok) {
+      recordOpenAIUsage({
+        model: process.env.PDF_OCR_MODEL || "gpt-4o",
+        kind: "chat",
+        promptTokens: j.usage?.prompt_tokens || 0,
+        completionTokens: j.usage?.completion_tokens || 0,
+        cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+        caller: "pdf-ocr",
+      });
+    }
     if (j.choices?.[0]?.message?.content != null) return j.choices[0].message.content;
     console.error("[pdf] OpenAI vision error: " + JSON.stringify(j.error || j).slice(0, 200));
   }

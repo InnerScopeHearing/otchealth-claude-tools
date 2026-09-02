@@ -164,6 +164,7 @@ import { VALID_PROVIDERS, DEFAULT_PROVIDER, defaultModelFor, estCostFor, extract
 // are only ever reached when LLM_PROVIDER === "openai").
 import { isBatchEnabled, buildBatchLine, submitBatch, awaitBatch, assertAllBatchResultsPresent } from "../../setup/model-routing.mjs";
 import { logPrefixForText } from "../../setup/prompt-shape.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 
 // ============================ CLI ============================
 const argv = process.argv.slice(2);
@@ -433,6 +434,14 @@ async function chatJson(messages, max_tokens) {
     if (r.status === 429) { const ra = parseInt(r.headers.get("retry-after") || "0", 10); await sleep((ra > 0 ? ra * 1000 : 4000) + Math.floor(Math.random() * 1200)); return chatJson(messages, max_tokens); }
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error("chat " + r.status + " " + JSON.stringify(j).slice(0, 160));
+    recordOpenAIUsage({
+      model: MODEL,
+      kind: "chat",
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: "doc-indexer-enrich",
+    });
     return { text: j.choices?.[0]?.message?.content || "", usage: j.usage || {} };
   }
   for (const host of [FEP, "https://otchealth-foundry.cognitiveservices.azure.com"]) {

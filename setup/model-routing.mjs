@@ -15,6 +15,13 @@
 // they already do (GCP Secret Manager JWT, env, etc.) and pass the resolved deployment name in here
 // to get the tier defaults + the correctly-shaped request body. verifyOpenAITiers() below is the one
 // deliberate, OPT-IN exception (see its own doc comment) -- it is never called automatically.
+//
+// fetchOpenAIWithFlexRetry() below is the other exception (it always was -- it makes the actual
+// network call): it is instrumented with recordOpenAIUsage() (see setup/openai-usage.mjs) so every
+// caller that routes through this shared helper gets fleet cost visibility for free. That import adds
+// no network I/O or secret reads of its own at call time -- see openai-usage.mjs's own header for its
+// safety contract.
+import { recordOpenAIUsage } from './openai-usage.mjs';
 
 // Reasoning-family deployments (gpt-5.x, o-series) reject max_tokens + a non-default temperature;
 // they require max_completion_tokens and no temperature override. Chat-family (gpt-4o, gpt-4.1-mini,
@@ -432,7 +439,20 @@ export async function fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, m
       throw Object.assign(new Error(`chat ${r.status}: ${errBody}`), effTries > 1 ? { throttled: true } : {});
     }
     if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
-    const choice = (await r.json()).choices?.[0];
+    const j = await r.json();
+    // Record on every SUCCESSFUL (HTTP 200) response, including a truncated-empty one below -- OpenAI
+    // bills for tokens actually consumed (hidden reasoning tokens included) whether or not the call
+    // ultimately surfaces usable content, so this must not be gated on the truncatedEmpty()/return
+    // branches that follow. See setup/openai-usage.mjs's own header for the full contract.
+    recordOpenAIUsage({
+      model: deployment,
+      kind: 'chat',
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: caller || 'model-routing',
+    });
+    const choice = j.choices?.[0];
     if (truncatedEmpty(choice)) {
       // RETRY while attempts remain, mirroring the 429 branch above -- do NOT throw on the first
       // occurrence. Reasoning-token spend is NON-DETERMINISTIC on identical input (339-1657 observed
