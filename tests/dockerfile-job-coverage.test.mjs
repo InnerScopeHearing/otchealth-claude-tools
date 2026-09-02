@@ -72,3 +72,73 @@ test("every skill with a job/ entrypoint is COPY'd into the doc-indexer image, o
       `NOT_IN_IMAGE: ${staleExceptions.join(", ")}`,
   );
 });
+
+// SECOND CLASS, same root cause, found the hard way one merge later (2026-09-02). The test above
+// pins that a job-bearing skill is in the image. It does NOT pin that the skill can actually LOAD:
+// skills import each other by relative path (`../datadog/dd-emit.mjs`), and a copied skill importing
+// a NON-copied one dies at `ERR_MODULE_NOT_FOUND` on its first scheduled run -- the same invisible
+// death, one level down. fleet-medic (copied, runs every 30 min) gained an import of skills/datadog
+// (not copied) and would have started crash-looping on the next image build.
+//
+// This walks the TRANSITIVE closure rather than direct imports only: a copied skill may reach a
+// third skill through a second one, and the runtime follows the whole chain.
+function copiedSkills(dockerfile) {
+  return [...dockerfile.matchAll(/^COPY\s+skills\/([^/\s]+)\/\s+\/app\/skills\/\1\/?\s*$/gm)].map((m) => m[1]);
+}
+
+function mjsFilesUnder(dir) {
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...mjsFilesUnder(p));
+    else if (e.name.endsWith(".mjs") || e.name.endsWith(".js")) out.push(p);
+  }
+  return out;
+}
+
+/** Sibling skills this skill reaches directly, via a `../<skill>/...` specifier. */
+function siblingImports(skill) {
+  const dir = join(ROOT, "skills", skill);
+  if (!existsSync(dir)) return [];
+  const found = new Set();
+  for (const f of mjsFilesUnder(dir)) {
+    const src = readFileSync(f, "utf8");
+    for (const m of src.matchAll(/(?:from|import\()\s*["'`]\.\.\/([a-zA-Z0-9._-]+)\//g)) {
+      // `../../x` captures ".." -- a path escaping skills/, not a sibling skill. Excluded, or the
+      // test reports a phantom "skills/.." alongside its real findings and teaches people to skim it.
+      if (m[1] === "." || m[1] === "..") continue;
+      found.add(m[1]);
+    }
+  }
+  return [...found];
+}
+
+test("every skill reachable by import from a COPY'd skill is itself COPY'd -- a copied skill that imports a missing one dies MODULE_NOT_FOUND at runtime", () => {
+  const dockerfile = readFileSync(join(ROOT, "skills/doc-indexer/job/Dockerfile"), "utf8");
+  const copied = new Set(copiedSkills(dockerfile));
+  assert.ok(copied.size >= 15, `expected to parse the COPY list, parsed ${copied.size}`);
+
+  const seen = new Set();
+  const queue = [...copied];
+  const missing = new Map(); // needed skill -> the copied skill that reaches it
+  while (queue.length) {
+    const skill = queue.shift();
+    if (seen.has(skill)) continue;
+    seen.add(skill);
+    for (const dep of siblingImports(skill)) {
+      if (!existsSync(join(ROOT, "skills", dep))) continue; // not a skill dir (e.g. a relative data path)
+      if (!copied.has(dep)) { if (!missing.has(dep)) missing.set(dep, skill); continue; }
+      queue.push(dep);
+    }
+  }
+
+  assert.deepEqual(
+    [...missing.keys()],
+    [],
+    `these skills are imported from inside the image but never COPY'd into it, so the importing ` +
+      `job crashes on load: ` +
+      [...missing].map(([dep, via]) => `skills/${dep} (imported by skills/${via})`).join(", ") +
+      `. Add the COPY line to skills/doc-indexer/job/Dockerfile.`,
+  );
+});
