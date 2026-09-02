@@ -1038,7 +1038,10 @@ export async function main(argv, io = {}) {
     console.error(USAGE);
     return 2;
   }
-  const cfg = io.cfg || (await resolveOpenSearchConfig());
+  // An injected client (tests, or a caller that already built one) must never trigger live config
+  // resolution: resolveOpenSearchConfig() reaches for AWS credentials and throws where none exist
+  // (CI), which is exactly what the injected client is there to avoid.
+  const cfg = io.cfg || (io.client ? null : await resolveOpenSearchConfig());
   const client = io.client || makeClient(cfg);
   const stateStore = io.stateStore || makeStateStore();
 
