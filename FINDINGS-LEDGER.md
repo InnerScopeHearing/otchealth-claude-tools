@@ -201,13 +201,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-11T00:28:56.430Z
 - **Closed:** 2026-09-02T17:52:35.383Z
 
-### finding:FND-20260812-c22a severity:high status:open | WISMO stager (n8n x2epOeluOYLTFgo7) rejects the real Shopify fulfillment webhook on HMAC signature mismatch -- first live fulfillment event since deploy (Aug 4) silently failed to stage, no draft exists for order #10673's real UPS shipment despite fulfillment succeeding in Shopify
+### finding:FND-20260812-c22a severity:high status:fixed | WISMO stager (n8n x2epOeluOYLTFgo7) rejects the real Shopify fulfillment webhook on HMAC signature mismatch -- first live fulfillment event since deploy (Aug 4) silently failed to stage, no draft exists for order #10673's real UPS shipment despite fulfillment succeeding in Shopify
 
 - **Source audit doc:** CRO daily digest 2026-08-12
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Live production evidence, n8n workflow crDTSnQHM4G5FYDE (OTCHealth WISMO Fulfillment Stager, trigger-only design): rebuilt as an authenticated-re-fetch trigger stager (Shopify HMAC secret unavailable, rotation freeze in force, so the receiver never trusts the webhook body). Order #10673 / fulfillment 6860727877793 -- the exact fulfillment this finding names -- staged correctly end to end (exec 2734, data table row order_name=#10673, tracking_number=1Z6615490397619138, carrier=UPS matching a direct independent Shopify read, one internal Outlook email sent). Forged-order quarantine path proven with a genuine Shopify 404 (exec 2733, not the earlier undefined-URL false-positive). Duplicate replay proven to send zero second emails, row updatedAt unchanged (exec 2735). Shopify webhook subscription 1660974366881 repointed off the dead otc-wismo-stage path onto this workflow and independently read back. Full receipt: runbooks/2026-09-02-cs-rebuild-wismo.md.
 - **Opened:** 2026-08-12T14:06:00.168Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T20:14:33.847Z
 
 ### finding:FND-20260814-4fea severity:medium status:fixed | Gateway ECS task role has OpenSearch write+delete though the gateway adapter is read-only; all 25 task-def families share otchealthTaskRole so it cannot be tightened without splitting roles first
 
