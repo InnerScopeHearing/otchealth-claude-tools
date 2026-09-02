@@ -3,6 +3,7 @@
 // no real credentials, fully hermetic.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   verifySafetyTag,
   applyTag,
@@ -231,4 +232,21 @@ test("buildAlertMessage names the conversation, the matched rules, the snippet, 
   assert.match(msg, /my ear started bleeding/);
   assert.match(msg, /999\/conversations\/999|conversations\/999/);
   assert.match(msg, /No reply or other customer-facing action was taken/i);
+});
+
+// ---- CLI contract, review round 2 (2026-09-02) ---------------------------------------------------
+
+test("the CLI routes progress logs to stderr under --json, so stdout carries only the JSON document", () => {
+  // Pinned by source shape rather than by a live run: a --json sweep against real Intercom data
+  // (29 conversations, 7-day window) produced parseable JSON, but with no matches and no
+  // list/search disagreement the log callback never fired, so that run could not distinguish a
+  // working redirect from a quiet one. Asserting the wiring is the non-vacuous check available
+  // here; the live run is recorded in the PR as corroboration, not as the proof.
+  const src = readFileSync(new URL("../monitor.mjs", import.meta.url), "utf8");
+  const cliCall = src.slice(src.indexOf("summary = await runSweep({"));
+  assert.match(
+    cliCall.slice(0, 400),
+    /json \? \{ log: \(msg\) => console\.error\(msg\) \}/,
+    "under --json the CLI must pass a log that writes to stderr; without it runSweep's default logs to stdout and corrupts the JSON",
+  );
 });

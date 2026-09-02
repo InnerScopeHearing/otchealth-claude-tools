@@ -233,3 +233,20 @@ test("an escalation whose alert failed is STILL detected on a later run (the per
   assert.equal(second.matched[0]?.id, "A", "A must STILL be detected on a later run -- this is the entire point");
   assert.equal(second.alreadyTagged, 1, "only the fixture's pre-tagged conversation B, never A");
 });
+
+test("runSweep honours its never-throws contract even when a dependency THROWS rather than returning {ok:false}", async () => {
+  // The contract is documented on runSweep and relied on by the CLI. The per-conversation loop
+  // already caught failures, but the startup and discovery calls above it did not, so a throwing
+  // transport escaped past the summary entirely and surfaced as a bare stack.
+  const summary = await runSweep({
+    commit: false,
+    nowMs: () => Date.now(),
+    intercomRequest: async () => { throw new Error("socket hang up"); },
+    log: () => {},
+  });
+  assert.equal(summary.ok, false, "a thrown dependency must still produce a summary, not propagate");
+  assert.ok(
+    summary.errors.some((e) => /UNEXPECTED/.test(e) && /socket hang up/.test(e)),
+    `the throw must be reported as a distinct error, got: ${JSON.stringify(summary.errors)}`,
+  );
+});

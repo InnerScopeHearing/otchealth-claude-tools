@@ -386,6 +386,23 @@ export async function runSweep(opts = {}) {
 
   const summary = { ok: true, commit, errors: [], scanned: 0, alreadyTagged: 0, matched: [], tagged: 0, alerted: 0 };
 
+  // This function's contract is that it NEVER throws: every failure class comes back as a
+  // summary.errors entry with summary.ok=false, so one broken dependency cannot abort a safety
+  // sweep before the remaining conversations are examined. The per-conversation loop already
+  // honours that, but the startup and discovery calls above it did not -- an injected or real
+  // intercomRequest that THREW (rather than returning {ok:false}) escaped past the summary
+  // entirely. The CLI's outer FATAL handler still exited non-zero, so this was never a silent
+  // success, but it produced a bare stack instead of the documented per-failure report. Wrapping
+  // the whole body keeps the contract true rather than merely claimed.
+  try {
+    return await sweepBody();
+  } catch (e) {
+    summary.ok = false;
+    summary.errors.push(`UNEXPECTED: a dependency threw instead of returning a result: ${String((e && e.message) || e)}`);
+    return summary;
+  }
+
+  async function sweepBody() {
   const tagCheck = await verifySafetyTag(intercomRequest);
   if (!tagCheck.ok) {
     summary.ok = false;
@@ -471,6 +488,7 @@ export async function runSweep(opts = {}) {
   }
 
   return summary;
+  }
 }
 
 // ---- CLI ---------------------------------------------------------------------------------------
@@ -513,8 +531,23 @@ if (isMain) {
   const commit = argv.includes("--commit");
   const hoursArg = argv.find((a) => a.startsWith("--hours="));
   const maxPagesArg = argv.find((a) => a.startsWith("--max-pages="));
-  const hoursBack = hoursArg ? Number(hoursArg.split("=")[1]) : DEFAULT_HOURS_BACK;
-  const maxPages = maxPagesArg ? Number(maxPagesArg.split("=")[1]) : DEFAULT_MAX_PAGES;
+  // VALIDATE the numeric flags rather than letting Number() hand back NaN. `--hours=abc` used to
+  // yield NaN, which made sinceEpochSeconds NaN, which made discovery match nothing, which produced
+  // a clean summary and exit 0. On a customer-safety monitor a typo'd flag that reports "no
+  // escalations found" and succeeds is the worst kind of wrong: it looks exactly like a quiet day.
+  // A bad argument is now a distinct exit 2 before any network call.
+  function positiveNumber(arg, label, fallback) {
+    if (!arg) return fallback;
+    const raw = arg.split("=")[1];
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      console.error(`[safety-monitor] BAD ARGUMENT: ${label} must be a positive number, got ${JSON.stringify(raw)}. Refusing to run: an unusable window would scan nothing and report success.`);
+      process.exit(2);
+    }
+    return n;
+  }
+  const hoursBack = positiveNumber(hoursArg, "--hours", DEFAULT_HOURS_BACK);
+  const maxPages = positiveNumber(maxPagesArg, "--max-pages", DEFAULT_MAX_PAGES);
 
   (async () => {
     if (cmd === "verify") {
@@ -527,7 +560,16 @@ if (isMain) {
     }
     let summary;
     try {
-      summary = await runSweep({ commit, hoursBack, maxPages });
+      // With --json, stdout must carry ONLY the JSON document. runSweep's default log writes
+      // progress to stdout, so a consumer piping this into a parser previously received log lines
+      // followed by JSON and could not parse it. Diagnostics go to stderr instead of being
+      // discarded, so --json stays debuggable.
+      summary = await runSweep({
+        commit,
+        hoursBack,
+        maxPages,
+        ...(json ? { log: (msg) => console.error(msg) } : {}),
+      });
     } catch (e) {
       // Should be unreachable (runSweep is designed never to throw), but a genuinely unhandled
       // failure here must still exit non-zero with a distinct message, never a silent success.
