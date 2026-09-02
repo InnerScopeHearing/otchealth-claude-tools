@@ -673,13 +673,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:36:07.572Z
 - **Closed:** (open)
 
-### finding:FND-20260828-e0fd severity:medium status:open | Disposition matrix: PlantID backend rebuild (acct 800993023626 unused), os-chat + m365-agent-bridge retire incl tenant residue (Teams catalog 592d4e54/91fb0b97, Bot Service, 6 Copilot agents at dead endpoints, Entra a0bca2fb superseded secret), GCP orphaned Cloud Run export-then-delete (NEVER the MedReview BAA ring)
+### finding:FND-20260828-e0fd severity:medium status:fixed | Disposition matrix: PlantID backend rebuild (acct 800993023626 unused), os-chat + m365-agent-bridge retire incl tenant residue (Teams catalog 592d4e54/91fb0b97, Bot Service, 6 Copilot agents at dead endpoints, Entra a0bca2fb superseded secret), GCP orphaned Cloud Run export-then-delete (NEVER the MedReview BAA ring)
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Disposition matrix resolved 2026-09-02: PlantID backend REBUILT on AWS (account 800993023626, CloudFront d3n9gq5v6ecbdx, build 13 live; the 'unused account' note is stale); os-chat RETIRED; m365-agent-bridge RETIRED with tenant residue listed for the M365 admin (Matt); HeyGen broker deferred with reason (see FND-20260827-2ed6 closure). Nothing in the matrix is an open engineering item.
 - **Opened:** 2026-08-28T01:36:10.307Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:09:05.389Z
 
 ### finding:FND-20260828-fe09 severity:medium status:fixed | deep-pass selectTodo still uses the blanket _-prefix eligibility filter that #463 replaced in enrich.mjs with isPipelineInternal(); legal-company alone lost +183 real docs to this bug class -- port selectTodo to the explicit prefix list (accepted, documented gap in PR #472)
 
