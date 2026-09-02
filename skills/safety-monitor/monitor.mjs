@@ -223,7 +223,13 @@ export async function searchConversationIds({ intercomRequest, sinceEpochSeconds
   let stop = "cap";
   do {
     pages++;
-    const body = { query: { field: "created_at", operator: ">", value: sinceEpochSeconds } };
+    // Intercom search has no >= operator, so subtract a second to make this window INCLUSIVE and
+    // identical to listConversationIds' `created_at >= sinceEpochSeconds`. They differed: list was
+    // inclusive, search exclusive, so a conversation created in exactly the boundary second was
+    // visible to one path and invisible to the other. The two paths exist to cover each other's
+    // misses (FND-20260817-64f5); if they scan different windows that cover is a fiction precisely
+    // when list is the path that failed.
+    const body = { query: { field: "created_at", operator: ">", value: sinceEpochSeconds - 1 } };
     if (cursor) body.pagination = { per_page: DEFAULT_PER_PAGE, starting_after: cursor };
     const res = await intercomRequest("/conversations/search", { method: "POST", body });
     if (!res.ok) {
@@ -436,71 +442,83 @@ export async function runSweep(opts = {}) {
 
   for (const id of discovery.ids) {
     summary.scanned++;
-    const detail = await fetchConversationDetail(intercomRequest, id);
-    if (!detail.ok) {
-      summary.ok = false;
-      summary.errors.push(`conversation ${id}: ${detail.error}`);
-      continue;
-    }
-
-    let evalResult;
+    // Each iteration is self-contained. The outer wrapper added in the previous round catches a
+    // throw, but catching it THERE aborts every remaining conversation -- which is the opposite of
+    // this function's stated contract that one broken conversation cannot stop the sweep. That was
+    // a regression introduced by that fix and caught in review. The outer wrapper now only covers
+    // startup and discovery; anything thrown while handling a single conversation is recorded
+    // against that conversation and the scan continues.
     try {
-      evalResult = evaluate(detail.conversation);
+      const detail = await fetchConversationDetail(intercomRequest, id);
+      if (!detail.ok) {
+        summary.ok = false;
+        summary.errors.push(`conversation ${id}: ${detail.error}`);
+        continue;
+      }
+
+      let evalResult;
+      try {
+        evalResult = evaluate(detail.conversation);
+      } catch (e) {
+        summary.ok = false;
+        summary.errors.push(`CLASSIFIER ERROR for conversation ${id}: ${String((e && e.message) || e)}`);
+        continue;
+      }
+
+      // alreadyTagged must be checked BEFORE matched: evaluateConversation() returns matched:false for
+      // its already-tagged short-circuit too (it never even looks at the text in that case), so testing
+      // `!matched` first would swallow every already-tagged conversation into the generic "did not
+      // match" path and this counter would never move -- caught by monitor-sweep.test.mjs's dry-run
+      // assertion before this shipped.
+      if (evalResult.alreadyTagged) {
+        summary.alreadyTagged++;
+        continue;
+      }
+      if (!evalResult.matched) continue;
+
+      const ruleIds = evalResult.matches.map((m) => m.id);
+      const link = intercomConversationLink(id);
+      log(`[safety-monitor] MATCH conversation=${id} rules=${ruleIds.join(",")} action=${commit ? "TAG+ALERT" : "WOULD TAG+ALERT (dry run)"}`);
+      // Deliberately no snippet field here (or anywhere in `summary`) -- see this file's header
+      // "PRIVACY" note. The matched quote is used ONLY inside publishSnsAlert() below.
+      summary.matched.push({ id, rules: ruleIds, link });
+
+      if (!commit) continue;
+
+      // ALERT FIRST, THEN TAG. This order is load-bearing; it was the other way round originally.
+      //
+      // The tag is what makes a conversation invisible to every future run -- isAlreadyTagged() short-
+      // circuits it before the classifier ever sees the text. So if the tag lands and the alert then
+      // fails, the escalation becomes permanently unalertable: marked as handled, no human ever told,
+      // and every later run counting it under `alreadyTagged` exactly like one that WAS alerted. The
+      // original run exits non-zero once, and after that the evidence is gone. For a customer-safety
+      // monitor that is the worst available outcome, and it is silent.
+      //
+      // Alerting first inverts the failure into the safe direction: alert succeeds, tag fails -> the
+      // conversation stays untagged, so the next run re-evaluates it, alerts AGAIN and retries the
+      // tag. A human is told twice. A duplicate alert is a cheap, visible annoyance; a missed one is
+      // precisely what this monitor exists to prevent. If the tag keeps failing (wrong or deleted tag
+      // id) every run re-alerts and exits non-zero -- noisy and loud, the correct direction here.
+      const alertRes = await publishSnsAlert({ id, matches: evalResult.matches, snippet: evalResult.snippet, link });
+      if (!alertRes.ok) {
+        summary.ok = false;
+        summary.errors.push(`conversation ${id}: ${alertRes.error}`);
+        continue; // left untagged on purpose, so the next run retries instead of burying it
+      }
+      summary.alerted++;
+
+      const tagRes = await applyTag(intercomRequest, id);
+      if (!tagRes.ok) {
+        summary.ok = false;
+        summary.errors.push(`${tagRes.error} (a human WAS alerted for conversation ${id}; the next run will alert again because the tag did not land)`);
+        continue;
+      }
+      summary.tagged++;
     } catch (e) {
       summary.ok = false;
-      summary.errors.push(`CLASSIFIER ERROR for conversation ${id}: ${String((e && e.message) || e)}`);
+      summary.errors.push(`conversation ${id}: UNEXPECTED, a dependency threw while handling it: ${String((e && e.message) || e)}`);
       continue;
     }
-
-    // alreadyTagged must be checked BEFORE matched: evaluateConversation() returns matched:false for
-    // its already-tagged short-circuit too (it never even looks at the text in that case), so testing
-    // `!matched` first would swallow every already-tagged conversation into the generic "did not
-    // match" path and this counter would never move -- caught by monitor-sweep.test.mjs's dry-run
-    // assertion before this shipped.
-    if (evalResult.alreadyTagged) {
-      summary.alreadyTagged++;
-      continue;
-    }
-    if (!evalResult.matched) continue;
-
-    const ruleIds = evalResult.matches.map((m) => m.id);
-    const link = intercomConversationLink(id);
-    log(`[safety-monitor] MATCH conversation=${id} rules=${ruleIds.join(",")} action=${commit ? "TAG+ALERT" : "WOULD TAG+ALERT (dry run)"}`);
-    // Deliberately no snippet field here (or anywhere in `summary`) -- see this file's header
-    // "PRIVACY" note. The matched quote is used ONLY inside publishSnsAlert() below.
-    summary.matched.push({ id, rules: ruleIds, link });
-
-    if (!commit) continue;
-
-    // ALERT FIRST, THEN TAG. This order is load-bearing; it was the other way round originally.
-    //
-    // The tag is what makes a conversation invisible to every future run -- isAlreadyTagged() short-
-    // circuits it before the classifier ever sees the text. So if the tag lands and the alert then
-    // fails, the escalation becomes permanently unalertable: marked as handled, no human ever told,
-    // and every later run counting it under `alreadyTagged` exactly like one that WAS alerted. The
-    // original run exits non-zero once, and after that the evidence is gone. For a customer-safety
-    // monitor that is the worst available outcome, and it is silent.
-    //
-    // Alerting first inverts the failure into the safe direction: alert succeeds, tag fails -> the
-    // conversation stays untagged, so the next run re-evaluates it, alerts AGAIN and retries the
-    // tag. A human is told twice. A duplicate alert is a cheap, visible annoyance; a missed one is
-    // precisely what this monitor exists to prevent. If the tag keeps failing (wrong or deleted tag
-    // id) every run re-alerts and exits non-zero -- noisy and loud, the correct direction here.
-    const alertRes = await publishSnsAlert({ id, matches: evalResult.matches, snippet: evalResult.snippet, link });
-    if (!alertRes.ok) {
-      summary.ok = false;
-      summary.errors.push(`conversation ${id}: ${alertRes.error}`);
-      continue; // left untagged on purpose, so the next run retries instead of burying it
-    }
-    summary.alerted++;
-
-    const tagRes = await applyTag(intercomRequest, id);
-    if (!tagRes.ok) {
-      summary.ok = false;
-      summary.errors.push(`${tagRes.error} (a human WAS alerted for conversation ${id}; the next run will alert again because the tag did not land)`);
-      continue;
-    }
-    summary.tagged++;
   }
 
   return summary;

@@ -292,3 +292,43 @@ test("neither discovery path cries wolf when history is exhausted exactly ON the
   const search = await searchConversationIds({ intercomRequest: searchReq, sinceEpochSeconds: 0, maxPages: 2 });
   assert.deepEqual(search.errors, [], "same rule for the search path");
 });
+
+test("both discovery paths scan the IDENTICAL window: a conversation created in exactly the boundary second is found by list AND by search", async () => {
+  // Intercom's search API has no >= operator, so the search body has to compensate. It did not:
+  // list filtered client-side with `created_at >= since` (inclusive) while search sent
+  // `operator: ">", value: since` (exclusive). A conversation created in exactly the boundary
+  // second was therefore visible to one path and invisible to the other.
+  //
+  // That asymmetry is only harmless if you assume both paths always work. The two exist precisely
+  // because they don't (FND-20260817-64f5) -- search is the cover for list's misses and vice versa.
+  // A boundary conversation was uncovered exactly when list was the path that failed.
+  //
+  // This is deliberately a SEMANTIC test, not an assertion that the body literally says
+  // `since - 1`: the fake below actually evaluates the query it is sent against a shared corpus,
+  // so it fails for any body whose effective window excludes the boundary second, and passes for
+  // any body that includes it. A future rewrite that switches operators is free to pass.
+  const since = 1_900_000_000;
+  const corpus = [
+    { id: "before", created_at: since - 1 }, // strictly outside the window -- neither path may return it
+    { id: "boundary", created_at: since },   // exactly ON the boundary -- BOTH paths must return it
+    { id: "after", created_at: since + 60 }, // comfortably inside
+  ];
+
+  const listReq = async () => ({ ok: true, status: 200, json: { conversations: corpus, pages: {} } });
+  const list = await listConversationIds({ intercomRequest: listReq, sinceEpochSeconds: since, perPage: 50 });
+
+  // The fake search endpoint honours the query it receives rather than returning a canned answer.
+  const searchReq = async (_path, opts = {}) => {
+    const q = opts.body?.query || {};
+    assert.equal(q.field, "created_at", "the search must filter on created_at");
+    const ops = { ">": (a, b) => a > b, ">=": (a, b) => a >= b };
+    const cmp = ops[q.operator];
+    assert.ok(cmp, `unsupported search operator ${q.operator}`);
+    return { ok: true, status: 200, json: { conversations: corpus.filter((c) => cmp(c.created_at, q.value)), pages: {} } };
+  };
+  const search = await searchConversationIds({ intercomRequest: searchReq, sinceEpochSeconds: since });
+
+  assert.deepEqual([...list.ids].sort(), ["after", "boundary"], "list is inclusive of the boundary second");
+  assert.deepEqual([...search.ids].sort(), ["after", "boundary"], "search must cover the SAME window, boundary second included");
+  assert.equal(search.ids.has("before"), false, "and must not widen the window either -- the second before it stays out");
+});

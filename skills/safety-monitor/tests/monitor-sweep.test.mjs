@@ -250,3 +250,33 @@ test("runSweep honours its never-throws contract even when a dependency THROWS r
     `the throw must be reported as a distinct error, got: ${JSON.stringify(summary.errors)}`,
   );
 });
+
+test("a conversation whose handling THROWS does not abort the sweep: every later conversation is still scanned", async () => {
+  // The sibling test above covers a dependency that RETURNS {ok:false}. This covers one that
+  // throws, which took a different path: the never-throws wrapper added in an earlier round sat
+  // around the whole function, so a throw from inside the per-conversation loop unwound out of the
+  // loop entirely and every remaining conversation went unscanned -- silently, under an ok:false
+  // summary that named only the one conversation. On a customer-safety monitor that means one
+  // malformed record can hide every genuine hazard queued behind it.
+  //
+  // The thrower is deliberately FIRST in the discovery order, so an outer-only catch scores
+  // scanned:1 / matched:0 and this test fails, while per-iteration recovery scores scanned:2 and
+  // still finds A.
+  const req = fakeRequest({
+    "GET /tags": TAGS_OK,
+    "GET /conversations": { ok: true, status: 200, json: { conversations: [{ id: "boom", created_at: NOW_S - 60 }, { id: "A", created_at: NOW_S - 60 }] } },
+    "POST /conversations/search": { ok: true, status: 200, json: { conversations: [] } },
+    "GET /conversations/boom": () => { throw new Error("socket hang up"); },
+    "GET /conversations/A": { ok: true, status: 200, json: CONV_MATCH },
+  });
+  const summary = await runSweep({ commit: false, nowMs: () => NOW_MS, intercomRequest: req, log: () => {} });
+
+  assert.equal(summary.ok, false, "the throw is a real failure and must be reported as one");
+  assert.equal(summary.scanned, 2, "the sweep must continue past the thrower, not stop at it");
+  assert.equal(summary.matched.length, 1, "the genuine hazard queued BEHIND the thrower must still be found");
+  assert.equal(summary.matched[0].id, "A");
+  assert.ok(
+    summary.errors.some((e) => /UNEXPECTED/.test(e) && e.includes("boom") && /socket hang up/.test(e)),
+    `the throw must be attributed to the conversation that caused it, got: ${JSON.stringify(summary.errors)}`,
+  );
+});
