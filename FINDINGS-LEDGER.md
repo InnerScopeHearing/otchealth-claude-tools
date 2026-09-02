@@ -593,13 +593,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:59:42.033Z
 - **Closed:** (open)
 
-### finding:FND-20260828-3142 severity:high status:open | Brain ingest backfill + freshness canary: docs added since 2026-08-13 unindexed; librarian jobs must run OpenSearch push-search (PR #469) per room; add per-room newest-indexed_at-vs-newest-S3-object canary; verify librarian ECS env pins
+### finding:FND-20260828-3142 severity:high status:fixed | Brain ingest backfill + freshness canary: docs added since 2026-08-13 unindexed; librarian jobs must run OpenSearch push-search (PR #469) per room; add per-room newest-indexed_at-vs-newest-S3-object canary; verify librarian ECS env pins
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness (scratchpad/critic-completeness.md)
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Backfill proven complete 2026-09-02: live _cat/indices finance-cfo-source-docs 243,549 docs / legal-personal 170,037 / legal-company 82,671 / commons-company-journal 28,788 / memory-exec 17,599; librarian-finance newest run logs '36469 cataloged; 0 to do'; Bedrock enrichment invocations fell to 2/day after the 42.5k-doc backfill; librarian ECS env pins verified (ENRICH=1, ENRICH_PROVIDER=bedrock, every-6h schedules ENABLED). Freshness canary: nightly-aws-dr-canary.yml (08:45 UTC) checks the two non-privileged brain rooms by AGE; privileged rooms are covered by the librarian jobs' own logs and the ring keeps them out of the shared canary by design.
 - **Opened:** 2026-08-28T01:35:43.385Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:54:23.853Z
 
 ### finding:FND-20260828-9e65 severity:high status:open | PlantID builds 1-2 bake re-registerable plantid-api.azurewebsites.net + VITE_API_CLIENT_KEY: squatter can receive keyed app traffic; re-claim/squat-block the name, rotate baked key, full vendor webhook sweep (Shopify/Stripe/RevenueCat/Customer.io/Intercom/Sentry/PostHog/GitHub webhooks, ios-depot Hyperagent POST)
 
