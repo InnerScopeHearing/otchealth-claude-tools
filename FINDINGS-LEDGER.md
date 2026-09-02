@@ -928,3 +928,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-02T14:41:32.995Z
 - **Closed:** (open)
+
+### finding:FND-20260902-4ed8 severity:low status:open | Datadog monitor 22896070 (otc.fleet.token_age_hours) still reports overall_state=No Data with 0 groups while its OWN query returns 5 populated series (max 470.7h, threshold 1200h). Metric verified live via /api/v1/query. Tried: forced re-evaluation by PUT (worked for sibling monitor 22893313), and new_host_delay 300->0 (the one evidence-based suppressor for newly-seen groups on a hostless metric). Neither flipped it. NOT urgent and cannot misfire: notify_no_data=false so it pages nobody, and the live max has 2.5x headroom under the threshold. Expect it to settle once the nightly 09:05 UTC emitter gives it continuous data across its last_2d window; if it is still No Data after two nightly runs (by 2026-09-04), the monitor definition itself needs replacing rather than nudging.
+
+- **Source audit doc:** Datadog monitor 22896070 vs /api/v1/query, 2026-09-02
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-02T15:01:48.219Z
+- **Closed:** (open)
