@@ -134,7 +134,39 @@ export function writeAdvisory(text, rows, type = "fact", log = (m) => process.st
 // trailing \b, so an UN-suffixed fragment like "insolven" can never actually match inside "insolvent" or
 // "insolvency" (no word boundary exists between "n" and the following "t"/"c"); \w* lets it match the
 // whole word it starts, exactly like "divorc\w*" for divorce/divorced/divorcing.
-export const RING_DENY = /\b(innd|innerscope|inscope hearing|otcmkts|ticker|reg\s*(cf|d|a|c)\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|price\s*per\s*share|materially?\s*non.?public|mnpi|reg\s*fd|dividend|capital\s*raise|raise\s*round|the\s*raise\s*of|financing|term\s*sheet|convertible\s*note|safe\s*note|warrants?|insiders?|runway|insolven\w*|dilution|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number|divorc\w*|custody|dissolution|spousal\s*support|child\s*support|alimony|deposition|opposing\s*counsel|settlement\s*(offer|agreement|talks|conference|negotiation)|mediation|family\s*court|community[\s-]*property|marital|restraining\s*order|civil\s*case|civil\s*litigation)\b/i;
+//
+// CLO DECISION 2026-09-02 (closes FND-20260814-b126): a bare "custody" token was the SAME class of
+// mistake "raise"/"settlement"/"litigation" above were deliberately NOT left bare for -- it is dual-use
+// vocabulary. Brokerage/securities English uses "custody" constantly for the unrelated concept of a
+// custodian holding assets ("custody account", "held in custody", "in the custody of the broker",
+// "securities held in custody"), and a bare match was dropping legitimate INND/company finance documents
+// out of the SHARED brain rooms into human review (236+ and climbing before this fix; see the finding).
+// Narrowed to the family-law PHRASINGS that actually appear in this fleet's own personal-matter vocabulary
+// (dream-team/clo/CLO-BOOTSTRAP.md's "custody (custody/visitation litigation)" matter, FL-series
+// disclosures), while a bare "custody"/"custodian" with no family-law qualifier now passes through:
+//   - adjective + custody: "child custody", "legal custody", "physical custody", "joint custody",
+//     "sole custody" -- the standard family-law noun phrase shape.
+//   - custody + a family-law-specific noun: "custody order", "custody hearing", "custody evaluation",
+//     "custody dispute", "custody arrangement", "custody schedule" -- unambiguous court/process nouns
+//     that finance custody (a settlement/safekeeping concept) never pairs "custody" with.
+//   - "custody of the/her/his/their/my/a child/children/kids/minor(s)/daughter/son(s)" -- closes a real
+//     gap the two shapes above miss ("she was awarded custody of the children" contains neither an
+//     adjective immediately before "custody" nor one of the process nouns immediately after it), narrowed
+//     to a FAMILY-specific object so it does not also catch "in the custody of the broker" (an object that
+//     is a person/entity holding an ASSET, not a family-law dependent).
+//   - "(non-)custodial parent" -- "custodial" is a different word from "custody" (no shared substring
+//     after "custod"), so this was NEVER caught by the old bare token either; this closes that pre-existing
+//     gap rather than widening anything.
+// This is a NARROWING, not a widening, of what "custody" alone used to catch: every string the old bare
+// token matched that is a genuine family-law usage still matches one of the four shapes above (see the
+// regression tests); every string that is a genuine finance/custodian usage with no family-law qualifier
+// now passes. It does NOT widen the personal ring: RING_DENY is only ever a CONTENT-level backstop layered
+// UNDER the real wall, agent-lane gating -- PERSONAL_LEGAL_RING (['clo-personal','exec'],
+// otchealth-mcp-server src/tools/kb/search-privileged.ts) at the search-access layer, and kb-memory's own
+// NO_SHARE set (mem.mjs, PRIVILEGED_AGENTS here) which never lets a clo-personal-tagged row leave its lane
+// regardless of what its text says. Narrowing this fragment only changes which OTHER-lane-tagged content
+// this backstop additionally catches by content; it grants no lane new read access to anything.
+export const RING_DENY = /\b(innd|innerscope|inscope hearing|otcmkts|ticker|reg\s*(cf|d|a|c)\b|rule\s*144|form\s*s-?1|8-?k|10-?[qk]|share\s*price|stock\s*price|price\s*per\s*share|materially?\s*non.?public|mnpi|reg\s*fd|dividend|capital\s*raise|raise\s*round|the\s*raise\s*of|financing|term\s*sheet|convertible\s*note|safe\s*note|warrants?|insiders?|runway|insolven\w*|dilution|patient|\bphi\b|diagnos|medication|prescrib|hipaa|audiogram|hearing\s*number|divorc\w*|(child|legal|physical|joint|sole)\s*custody|custody\s*(order|hearing|evaluation|dispute|arrangement|schedule)|custody\s+of\s+(the\s+|her\s+|his\s+|their\s+|my\s+|a\s+)?(child|children|kids?|minors?|daughter|sons?)|(non-?)?custodial\s*parent|dissolution|spousal\s*support|child\s*support|alimony|deposition|opposing\s*counsel|settlement\s*(offer|agreement|talks|conference|negotiation)|mediation|family\s*court|community[\s-]*property|marital|restraining\s*order|civil\s*case|civil\s*litigation)\b/i;
 
 // Privileged/personal AGENT lanes that must NEVER be read cross-lane, regardless of content (mirrors
 // kb-memory/mem.mjs's own NO_SHARE set). A Set, not a scattered literal string compare, so a future
