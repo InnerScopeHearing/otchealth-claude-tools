@@ -13,14 +13,24 @@
 # live, uncommitted Azure Container App Job spec (no script in this repo to safely extend without
 # risking the fleet's actual token rotation), so a dedicated workflow is the safe, in-repo mechanism.
 #
-# AUTH: AZURE_SP_CLIENT_ID/CLIENT_SECRET/TENANT_ID (the SAME GitHub Actions secrets
-# .github/workflows/nightly-s3-dr-mirror.yml already uses for its own Key-Vault-backed steps) let
-# skills/kb-memory/azure-secret.mjs's kvSecret() resolve secrets via its SP client_credentials
-# fallback path — no azure/login OIDC step needed for this workflow specifically (kvSecret's SP path
-# does not go through the az CLI at all). token-age-metrics.mjs's own ensureAwsCreds()
-# (skills/kb-memory/aws-bootstrap.mjs) then bridges Key Vault's aws-cto-access-key-id/
-# aws-cto-secret-access-key into real AWS credentials for reading SSM parameter metadata — proven
-# live end-to-end from a Key-Vault-only seat before this workflow was written.
+# AUTH: GitHub OIDC -> arn:aws:iam::900915535335:role/otchealth-token-age-metrics, the same pattern
+# nightly-secrets-dr-export.yml and nightly-aws-dr-canary.yml use. No long-lived key is stored.
+#
+# CORRECTED 2026-09-02, BEFORE THIS WORKFLOW EVER RAN. It was authored 2026-08-18 against
+# AZURE_SP_CLIENT_ID/CLIENT_SECRET/TENANT_ID, on the reasoning that kvSecret() would resolve secrets
+# through its Azure SP fallback and then bridge Key Vault's aws-cto-access-key-id/-secret into real
+# AWS credentials. Azure subscription 55c84f6b -- and Key Vault kv-otc-55c84f6bef with it -- was
+# PERMANENTLY DELETED on 2026-08-13, five days before that was written, and kvSecret() has since
+# defaulted to SECRET_BACKEND=ssm. So the original chain was circular on a bare runner: reach SSM by
+# first reading the AWS credentials out of SSM. ensureAwsCreds() would have returned false, the
+# script would have exited 1 (correctly and loudly, by its own design), and this workflow would have
+# paged every morning at 09:05 while otc.fleet.token_age_hours stayed at No Data -- fixing the
+# monitor's silence with a different kind of silence. Assuming the role directly removes the loop.
+#
+# LEAST PRIVILEGE: the role can ssm:GetParameter ONLY the five allowlisted rotating secrets (metadata
+# is all this script reads from them -- ssmParamModifiedMs passes WithDecryption:false) plus the two
+# datadog-* parameters it needs to actually submit the metric, and kms:Decrypt only via SSM. No write
+# of any kind.
 name: Nightly Token Age Metrics
 
 on:
@@ -30,15 +40,11 @@ on:
 
 permissions:
   contents: read
+  id-token: write   # GitHub OIDC -> AssumeRoleWithWebIdentity; no long-lived AWS key stored anywhere
 
 concurrency:
   group: nightly-token-age-metrics
   cancel-in-progress: false
-
-env:
-  AZURE_SP_CLIENT_ID: ${{ secrets.AZURE_SP_CLIENT_ID }}
-  AZURE_SP_CLIENT_SECRET: ${{ secrets.AZURE_SP_CLIENT_SECRET }}
-  AZURE_SP_TENANT_ID: ${{ secrets.AZURE_SP_TENANT_ID }}
 
 jobs:
   token-age-metrics:
@@ -53,6 +59,12 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+        with:
+          role-to-assume: ${{ vars.AWS_TOKEN_AGE_METRICS_ROLE_ARN || 'arn:aws:iam::900915535335:role/otchealth-token-age-metrics' }}
+          aws-region: us-east-1
 
       - name: "Run token-age-metrics (fails RED on any real submission failure -- see the script's own header for why that is loud by design)"
         working-directory: skills/token-keeper
