@@ -154,19 +154,45 @@ let _noCredsNoted = false;
 // ("names fine, values never"), and CodeQL cannot distinguish token-keeper's `cfg.apiToken` (a name
 // literal) from its `apiToken` (the resolved value). Naming the secret is the entire diagnostic
 // value of these lines, so it stays.
+// HARDENED 2026-09-02 (auto-critic on PR #515 found two gaps; verifying them found a third, and the
+// third is the one that matters most because it FAKES success):
+//   1. Only AKIA was matched. AWS TEMPORARY credentials are ASIA-prefixed, and every ECS task role in
+//      this fleet uses temporary credentials -- so the one environment the redactor most needed to
+//      cover was the one it missed. All documented AWS unique-id prefixes are now matched.
+//   2. The long base64 run omitted `_` and `-`, so a base64url token (JWT segments, URL-safe keys)
+//      was split below the 40-char threshold and survived.
+//   3. FOUND WHILE VERIFYING 1 AND 2, not reported by the critic: SigV4 puts the key id in
+//      `Credential=<AK>/<date>/<region>/<service>/aws4_request`, and the `authorization: ...` rule
+//      stops at the first whitespace (it matched only "AWS4-HMAC-SHA256"). The output therefore read
+//      "[redacted] Credential=ASIA.../..." -- a visible redaction marker sitting next to the live key
+//      id. That is worse than no redaction, because it reads as safe. `Credential=` is now matched
+//      explicitly, and the widened long-run rule catches it a second time (defense in depth).
+// METHOD NOTE: the first verification pass asked "does [redacted] appear in the output", which case 3
+// PASSES while leaking. Assert the SECRET SUBSTRING IS GONE; a marker proves only that something,
+// somewhere, matched.
 const CREDENTIAL_SHAPES = [
   /\bBearer\s+[\w.\-~+/]+=*/gi,
-  /\bAKIA[0-9A-Z]{16}\b/g,
+  // AWS unique-id prefixes (docs: IAM identifiers). ASIA = temporary/STS, the ECS task-role case.
+  /\b(?:AKIA|ASIA|ABIA|ACCA|AIDA|AROA|ANPA|ANVA|APKA)[0-9A-Z]{16}\b/g,
+  /\bCredential=[^\s,;]+/gi,
   /\b(?:authorization|x-amz-security-token|password|secret|api[_-]?key|token)\b\s*[:=]\s*\S+/gi,
-  /\b[A-Za-z0-9+/]{40,}={0,2}\b/g, // long base64-ish run
   /\b[0-9a-f]{40,}\b/gi, // long hex run
 ];
+
+// Long high-entropy runs, widened to base64url (`_` and `-`). Applied via a callback rather than a
+// blanket replace so it does not eat the long lowercase kebab paths this codebase logs deliberately
+// (e.g. "/otchealth/some-long-secret-name"): a run that is ONLY lowercase, digits, slash and hyphen
+// is an identifier or path, never a credential -- real keys and tokens carry mixed case, `_`, `+`
+// or base64 padding.
+const LONG_RUN = /\b[A-Za-z0-9+/_-]{40,}={0,2}\b/g;
+const LOOKS_LIKE_PATH_OR_KEBAB = /^[a-z0-9/-]+$/;
 
 /** Bound what may be interpolated into a diagnostic from an upstream `detail`/error string. */
 export function safeDetail(detail) {
   let d = String(detail ?? "").trim();
   if (!d) return "unspecified";
   for (const re of CREDENTIAL_SHAPES) d = d.replace(re, "[redacted]");
+  d = d.replace(LONG_RUN, (m) => (LOOKS_LIKE_PATH_OR_KEBAB.test(m) ? m : "[redacted]"));
   d = d.replace(/\s+/g, " ");
   return d.length > 160 ? `${d.slice(0, 160)}...` : d;
 }

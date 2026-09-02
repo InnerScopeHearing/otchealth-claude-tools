@@ -223,3 +223,39 @@ test("FAIL ON OLD CODE: no console.error in azure-secret.mjs interpolates a raw 
   const raw = src.match(/console\.error\([^;]*\$\{detail\}/g) || [];
   assert.deepEqual(raw, [], `every logged detail must go through safeDetail(); found raw: ${raw.join(" | ")}`);
 });
+
+// ── safeDetail() hardening (2026-09-02, auto-critic on #515 + one gap found while verifying it) ────
+//
+// EVERY assertion here checks that the SECRET SUBSTRING IS GONE, never that "[redacted]" appears.
+// That distinction is the whole point: the Credential= case below PASSES a marker-presence check
+// while leaking the key id, because an unrelated part of the same string does get redacted. A
+// redactor must be proven to ACT, not to look like it acted.
+test("safeDetail(): ASIA temporary key ids are redacted -- the ECS task-role case, which AKIA-only missed", async () => {
+  const { safeDetail } = await import("../azure-secret.mjs");
+  for (const prefix of ["AKIA", "ASIA", "AROA", "ANPA", "APKA"]) {
+    const id = `${prefix}IOSFODNN7EXAMPLE`;
+    assert.ok(!safeDetail(`creds ${id} used`).includes(id), `${prefix}-prefixed key id must not survive`);
+  }
+});
+
+test("safeDetail(): a SigV4 Credential= field is redacted, not merely accompanied by a [redacted] marker", async () => {
+  const { safeDetail } = await import("../azure-secret.mjs");
+  const KEY = "ASIAIOSFODNN7EXAMPLE";
+  const out = safeDetail(`authorization: AWS4-HMAC-SHA256 Credential=${KEY}/20260902/us-east-1/ssm/aws4_request`);
+  assert.ok(!out.includes(KEY), `the key id must be gone, got: ${out}`);
+  // Guards the exact false-confidence shape: marker present AND secret present.
+  assert.ok(!(out.includes("[redacted]") && out.includes(KEY)), "a marker beside a live key is worse than no marker");
+});
+
+test("safeDetail(): base64url runs (underscore/hyphen) are redacted, not split under the length threshold", async () => {
+  const { safeDetail } = await import("../azure-secret.mjs");
+  const TOKEN = "abcd_efgh-ijkl_mnop_qrst-uvwx_yzab_cdef-ghij_klmn";
+  assert.ok(!safeDetail(`tok ${TOKEN}`).includes(TOKEN), "a base64url token must not survive");
+});
+
+test("safeDetail(): a long lowercase path or kebab identifier is NOT redacted -- over-redaction destroys the diagnostic", async () => {
+  const { safeDetail } = await import("../azure-secret.mjs");
+  const PATH = "/otchealth/some-really-long-secret-name-goes-right-here";
+  assert.ok(PATH.length >= 40, "fixture must actually exceed the long-run threshold to be meaningful");
+  assert.equal(safeDetail(`reading ${PATH}`), `reading ${PATH}`);
+});
