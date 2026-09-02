@@ -857,10 +857,10 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T03:13:33.138Z
 - **Closed:** (open)
 
-### finding:FND-20260902-5c58 severity:low status:open | cs-n8n SQLite database is 2.35 GB on a Lightsail instance (execution-history bloat, plausibly fed by the 5-min poller failure loop); check disk headroom and execution retention
+### finding:FND-20260902-5c58 severity:low status:fixed | cs-n8n SQLite database is 2.35 GB on a Lightsail instance (execution-history bloat, plausibly fed by the 5-min poller failure loop); check disk headroom and execution retention
 
 - **Source audit doc:** otchealth-cto run 33587097972 (n8n-inspect-datatables), 2026-09-02
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Read the live Lightsail instance (bundle small_3_0): 60 GB system disk, 2 vCPU, 2 GB RAM. The 2,351,165,440-byte SQLite db is 2.19 GiB = ~3.6% of disk, so there is no disk-headroom risk and the finding's implied urgency was wrong. Closing as NOT-A-RISK rather than leaving an alarming open item. What remains worth knowing (recorded here, not as an open finding): growth RATE is unmeasured, and the 5-minute poller failure loop writes execution rows continuously, so re-check size after that loop is fixed; n8n execution retention (EXECUTIONS_DATA_MAX_AGE/PRUNE) was not inspected.
 - **Opened:** 2026-09-02T03:28:50.685Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T03:30:07.441Z
