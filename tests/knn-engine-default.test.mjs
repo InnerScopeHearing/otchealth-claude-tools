@@ -15,12 +15,12 @@ const files = ["skills/doc-indexer/indexer.mjs", "skills/kb-memory/opensearch-wr
 for (const rel of files) {
   test(`${rel}: knn_vector mappings use engine faiss, never nmslib`, () => {
     const src = readFileSync(path.join(root, rel), "utf8");
-    const mappings = src.match(/type:\s*"knn_vector"[^}]*method:\s*\{[^}]*\}/g) || [];
+    const mappings = src.match(/type:\s*["']knn_vector["'][^}]*method:\s*\{[^}]*\}/g) || [];
     assert.ok(mappings.length >= 1, `expected at least one knn_vector mapping in ${rel}`);
     for (const m of mappings) {
-      assert.match(m, /engine:\s*"faiss"/, `knn_vector mapping must use faiss: ${m}`);
+      assert.match(m, /engine:\s*["']faiss["']/, `knn_vector mapping must use faiss: ${m}`);
       assert.doesNotMatch(m, /nmslib/, `nmslib is not creatable on OpenSearch 3.x: ${m}`);
     }
-    assert.doesNotMatch(src, /engine:\s*"nmslib"/, `${rel} still defaults an index to nmslib`);
+    assert.doesNotMatch(src, /engine:\s*["']nmslib["']/, `${rel} still defaults an index to nmslib (either quote style)`);
   });
 }
