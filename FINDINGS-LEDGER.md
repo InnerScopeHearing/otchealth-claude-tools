@@ -497,13 +497,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:16.109Z
 - **Closed:** 2026-08-28T22:18:01.821Z
 
-### finding:FND-20260827-558b severity:high status:open | PlantID backend rebuild: Azure Functions app gone; port functions/ to Lambda/ECS + OpenAI-direct/Bedrock + DynamoDB, then ship build 2 (shipped build 1 is dead)
+### finding:FND-20260827-558b severity:high status:fixed | PlantID backend rebuild: Azure Functions app gone; port functions/ to Lambda/ECS + OpenAI-direct/Bedrock + DynamoDB, then ship build 2 (shipped build 1 is dead)
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** DONE, verified live 2026-09-02. The PlantID backend was ported to AWS Lambda behind CloudFront (plantid-app PRs #60/#61) in account PlantID-NonProd 800993023626. Live probe: GET https://d3n9gq5v6ecbdx.cloudfront.net/v1/health returns {status:ok, app:plantid-api, runtime:aws-lambda, recognitionProvider:ai-vision, careProvider:llm, toxicityProvider:aspca}; /v1/identify without a key returns 401 (fails closed). The finding's 'ship build 2' action is also satisfied and then some: build 13 shipped to TestFlight 2026-09-02 against this backend and is the ONLY installable build (1-12 expired via ASC API the same session). The old Azure host plantid-api.azurewebsites.net returns 403.
 - **Opened:** 2026-08-27T19:00:18.954Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T03:52:42.710Z
 
 ### finding:FND-20260827-d074 severity:high status:open | FourVault backend rebuild on Flatstick pattern (own account, ECS+CloudFront+RDS+S3 provider, persisted-URL rewrite) + re-register SIWA redirect, eBay deletion endpoint, RevenueCat webhook
 
