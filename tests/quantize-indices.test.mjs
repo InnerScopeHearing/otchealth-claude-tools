@@ -78,17 +78,21 @@ function makeFakeCluster(initial = {}) {
       if (typeof beforeReindexHook === "function") beforeReindexHook(source.index, dest.index, indices); // a "live write" landing right as the pass starts
       const taskId = `fakeNode:${++taskSeq}`;
       const limit = typeof reindexHook === "function" ? reindexHook(source.index, dest.index) : Infinity;
-      let copied = 0, versionConflicts = 0;
+      let copied = 0, versionConflicts = 0, aborted = false;
       for (const [id, src] of s.docs) {
         if (copied >= limit) break;
         // Real _reindex semantics for dest.op_type="create": an id that already exists on dest is a
         // version conflict -- skipped when conflicts="proceed", otherwise it ABORTS the whole task as a
         // per-document failure. Modeled faithfully so the tests can prove both halves are load-bearing.
-        if (createOnly && d.docs.has(id)) { versionConflicts++; continue; }
+        if (createOnly && d.docs.has(id)) {
+          versionConflicts++;
+          if (conflicts !== "proceed") { aborted = true; break; } // real _reindex ABORTS at the first conflict unless conflicts="proceed"
+          continue;
+        }
         d.docs.set(id, structuredClone(src));
         copied++;
       }
-      const failures = createOnly && versionConflicts > 0 && conflicts !== "proceed"
+      const failures = aborted
         ? [{ index: dest.index, cause: { type: "version_conflict_engine_exception", reason: "document already exists" } }]
         : [];
       tasks.set(taskId, { completed: true, response: { failures, version_conflicts: versionConflicts, created: copied } });
@@ -563,6 +567,14 @@ test("reindexUntilCountsConverge(liveSide:'dest'): conflicts='proceed' is load-b
   const start = await cluster.client.reindexStart({ source: { index: "twin" }, dest: { index: "live", op_type: "create" } });
   const done = await Q.pollTaskToCompletion(cluster.client, start.json.task, { sleepFn: () => Promise.resolve() });
   assert.equal(done.ok, false, "a real _reindex without conflicts=proceed reports the version conflict as a per-document failure");
+  assert.equal(cluster.indices.get("live").docs.has("2"), false, "and it ABORTS there: the doc after the conflicting one is never copied");
+
+  // The same pass WITH conflicts=proceed skips the existing doc and keeps going.
+  const ok = makeFakeCluster({ twin: { docs: { "1": {}, "2": {} } }, live: { docs: { "1": {} } } });
+  const start2 = await ok.client.reindexStart({ conflicts: "proceed", source: { index: "twin" }, dest: { index: "live", op_type: "create" } });
+  const done2 = await Q.pollTaskToCompletion(ok.client, start2.json.task, { sleepFn: () => Promise.resolve() });
+  assert.equal(done2.ok, true, done2.reason);
+  assert.equal(ok.indices.get("live").docs.has("2"), true, "the gap after the conflicting doc IS filled");
 });
 
 test("pollTaskToCompletion: an already-completed task returns immediately", async () => {
