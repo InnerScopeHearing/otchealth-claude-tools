@@ -841,13 +841,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-01T14:20:58.738Z
 - **Closed:** (open)
 
-### finding:FND-20260902-2cc5 severity:low status:open | innd-stock S3 tests npm-install xlsx at runtime, so they fail on main in any network-restricted runner (pre-existing, 2 of 2 tests provide no real coverage)
+### finding:FND-20260902-2cc5 severity:low status:fixed | innd-stock S3 tests npm-install xlsx at runtime, so they fail on main in any network-restricted runner (pre-existing, 2 of 2 tests provide no real coverage)
 
 - **Source audit doc:** PR #513 baseline run (otchealth-claude-tools, run-tests.sh gate, 2026-09-02)
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-02T02:31:13.486Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T14:36:43.953Z
 
 ### finding:FND-20260902-8b55 severity:medium status:open | CS n8n restore did not carry the 4 data tables: Intercom Outcome Poller dead every 5min and Daily Reconciler dead daily since 2026-08-29, silent because the error router records but does not page
 
