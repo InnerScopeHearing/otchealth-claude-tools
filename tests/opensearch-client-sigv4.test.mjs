@@ -16,7 +16,7 @@
 import crypto from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rfc3986Encode, canonicalUri, canonicalQuery, signOpenSearchRequest, osBulkUpdate, osFetch } from "../skills/doc-indexer/opensearch-client.mjs";
+import { rfc3986Encode, canonicalUri, canonicalQuery, signOpenSearchRequest, signingUriFor, osBulkUpdate, osFetch } from "../skills/doc-indexer/opensearch-client.mjs";
 
 test("rfc3986Encode leaves unreserved characters unchanged", () => {
   assert.equal(rfc3986Encode("AZaz09-._~"), "AZaz09-._~");
@@ -226,4 +226,18 @@ test("osFetch: the URL it actually sends the request to matches the canonical (s
   });
   assert.equal(sentPath, signed.path, "the path actually fetched must be byte-identical to the path that was signed");
   assert.equal(sentPath, "/_tasks/abc123%3A456", "the colon must be single-encoded on the wire, matching what AWS's signature verification expects");
+});
+
+
+// 2026-09-02: OpenSearch Service signs the DOUBLE-encoded path like every non-S3 service. Live proof:
+// GET /_tasks/ep6nhLURSj2KQj4faFU_KA:100789 sent as %3A was rejected until the canonical URI carried
+// %253A (AWS's SignatureDoesNotMatch body quoted the expected canonical string verbatim).
+test("signingUriFor: es double-encodes reserved characters in the canonical URI; the wire path stays single-encoded", () => {
+  const path = "/_tasks/ep6nhLURSj2KQj4faFU_KA:100789";
+  assert.equal(canonicalUri(path), "/_tasks/ep6nhLURSj2KQj4faFU_KA%3A100789", "wire path is single-encoded");
+  assert.equal(signingUriFor(path, "es"), "/_tasks/ep6nhLURSj2KQj4faFU_KA%253A100789", "es canonical URI is double-encoded");
+  assert.equal(signingUriFor(path, "s3"), "/_tasks/ep6nhLURSj2KQj4faFU_KA%3A100789", "S3 is the only single-encode service");
+  assert.equal(signingUriFor("/memory-exec/_search", "es"), "/memory-exec/_search", "plain index paths are byte-identical under both passes (why this hid for 5 days)");
+  const signed = signOpenSearchRequest({ method: "GET", host: "h.es.amazonaws.com", path, region: "us-east-1", accessKeyId: "AKIA", secretAccessKey: "s", now: new Date("2026-09-02T00:00:00Z") });
+  assert.equal(signed.path, "/_tasks/ep6nhLURSj2KQj4faFU_KA%3A100789", "what goes on the wire is still the single-encoded path");
 });

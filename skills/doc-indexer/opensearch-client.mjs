@@ -94,6 +94,20 @@ function doubleEncodeUri(path) {
  * tests/opensearch-client-sigv4.test.mjs) precisely so a future edit here cannot silently change what
  * OpenSearch itself receives.
  */
+/**
+ * The URI that goes into the CANONICAL REQUEST (what is signed), as opposed to `canonicalUri(path)`,
+ * which is what goes on the wire. Per the SigV4 spec every service except S3 signs the DOUBLE-encoded
+ * path, and that includes Amazon OpenSearch Service ("es"): proven live on otchealth-brain on
+ * 2026-09-02, when GET /_tasks/<nodeId>:<taskNumber> (sent as `%3A`) was rejected with
+ * SignatureDoesNotMatch and AWS's own error spelled out the canonical string it expected --
+ * `/_tasks/...%253A100789`. The previous 2026-08-28 "es signs the single-encoded wire path" exception
+ * was never exercised by an index-name-only path (a-z0-9-_ encode to themselves either way) and was
+ * wrong the first time a path carried a reserved character. Exported for the regression test.
+ */
+export function signingUriFor(path, service) {
+  return service === "s3" ? canonicalUri(path) : doubleEncodeUri(path);
+}
+
 export function signOpenSearchRequest({ method, host, path, query, body, region, accessKeyId, secretAccessKey, sessionToken, now, contentType, service }) {
   const svc = service || "es";
   const d = now || new Date();
@@ -112,7 +126,7 @@ export function signOpenSearchRequest({ method, host, path, query, body, region,
   const qs = canonicalQuery(query);
 
   const wireUri = canonicalUri(path); // what actually gets sent -- unchanged by `service` on purpose
-  const signingUri = svc === "es" ? wireUri : doubleEncodeUri(path);
+  const signingUri = signingUriFor(path, svc);
   const canonicalRequest = [method.toUpperCase(), signingUri, qs, canonicalHeaders, signedHeaders, bodyHash].join("\n");
   const scope = `${dateStamp}/${region}/${svc}/aws4_request`;
   const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");

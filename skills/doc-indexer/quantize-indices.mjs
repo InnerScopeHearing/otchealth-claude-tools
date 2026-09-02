@@ -270,13 +270,31 @@ function flattenObject(obj, prefix = "", out = {}) {
   }
   return out;
 }
+// OpenSearch reports index settings FLATTENED, and a key can be BOTH a leaf and a namespace at once:
+// on 3.x a GET of any k-NN index returns `knn: "true"` next to `knn.derived_source.enabled: "true"`.
+// A naive unflatten walks into the string "true" and throws (`Cannot create property 'derived_source'
+// on string 'true'`, hit live on otchealth-brain 3.7, 2026-09-02, the moment the tool re-read a twin
+// it had created). When an intermediate node is already a primitive, the remainder of the key is kept
+// DOTTED at that level -- OpenSearch accepts dotted settings keys, so the create body stays valid.
 function unflattenObject(flat) {
   const out = {};
-  for (const [key, v] of Object.entries(flat)) {
+  // shorter (parent) keys first, so `knn` is placed before `knn.derived_source.enabled` whatever the
+  // insertion order of the flattened map -- otherwise the later leaf would overwrite the namespace.
+  const entries = Object.entries(flat).sort(([a], [b]) => a.split(".").length - b.split(".").length);
+  for (const [key, v] of entries) {
     const parts = key.split(".");
     let node = out;
-    for (let i = 0; i < parts.length - 1; i++) node = node[parts[i]] ||= {};
-    node[parts.at(-1)] = v;
+    let placed = false;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const existing = node[parts[i]];
+      if (existing !== undefined && (existing === null || typeof existing !== "object" || Array.isArray(existing))) {
+        node[parts.slice(i).join(".")] = v;
+        placed = true;
+        break;
+      }
+      node = node[parts[i]] ||= {};
+    }
+    if (!placed) node[parts.at(-1)] = v;
   }
   return out;
 }
@@ -400,6 +418,23 @@ export function formatBytes(n) {
  *  one of these (the original may genuinely not exist yet at that point) and so tests can assert
  *  phase membership without hardcoding the string list a second time. */
 export const SWAP_PHASES = ["swap_deleted_original", "swap_recreated_target", "swap_reindexing_back", "swap_reverifying", "cleanup_pending"];
+/**
+ * Pure. The phase a `failed` state should resume in when the failure happened MID-SWAP (the original
+ * index is already deleted, the twin holds the data): `failed_in_phase` when recorded, otherwise the
+ * most recent non-`failed` history entry (states persisted before failed_in_phase existed). Returns
+ * null when the failure was pre-swap, where a fresh start from the still-present original is correct.
+ */
+export function resumablePhase(state) {
+  if (!state || state.phase !== "failed") return null;
+  let phase = state.failed_in_phase;
+  if (!phase) {
+    for (let i = (state.history || []).length - 1; i >= 0; i--) {
+      const h = state.history[i];
+      if (h && h.phase && h.phase !== "failed") { phase = h.phase; break; }
+    }
+  }
+  return SWAP_PHASES.includes(phase) ? phase : null;
+}
 
 /** Pure. The initial state for an index nobody has touched yet. */
 export function initialState({ index, twin, vectorField = null, dimension = null, spaceType = null, compressionLevel = DEFAULT_COMPRESSION_LEVEL }) {
@@ -434,7 +469,10 @@ export function withPhase(state, phase, note = "") {
 /** Pure. Mark `state` failed with `reason`, preserving history. */
 export function withFailure(state, reason) {
   const ts = new Date().toISOString();
-  return { ...state, phase: "failed", error: reason, updated_at: ts, history: [...state.history, { ts, phase: "failed", note: reason }] };
+  // failed_in_phase (2026-09-02): a failure must not erase WHERE the run was. The first live swap died
+  // in swap_recreated_target with the original already deleted; recording plain phase:"failed" made the
+  // resume path treat it as a fresh run and GET the (gone) original. resumablePhase() reads this back.
+  return { ...state, phase: "failed", failed_in_phase: state.phase, error: reason, updated_at: ts, history: [...state.history, { ts, phase: "failed", note: reason }] };
 }
 
 /** Thin wrapper over the fleet's existing S3 commons mirror (skills/kb-memory/commons-store.mjs),
@@ -566,6 +604,21 @@ export async function reindexUntilCountsConverge(client, { source, dest }, { max
  * synthetic probe -- run against both indexes, requiring the top-K id sets to overlap by at least
  * `minOverlapPct`. Never mutates anything.
  */
+/**
+ * `_source` parity is checked with the vector field REMOVED from both sides. Live finding
+ * (otchealth-brain 3.7, 2026-09-02, commons-cco-memory): the twin is created with
+ * `index.knn.derived_source.enabled=true` + `mode:on_disk` + a compression level, so OpenSearch does
+ * not store the vector in `_source` at all -- it DERIVES it from the (quantized) k-NN index on read.
+ * A derived, quantized vector is never byte-identical to the fp32 original, so every sampled doc
+ * reported "_source differs" while every non-vector field matched exactly. Vector fidelity is what the
+ * k-NN top-k overlap probe below measures; the `_source` check is for everything else.
+ */
+export function sourceWithoutVector(src, vectorField) {
+  if (!src || typeof src !== "object") return src;
+  const { [vectorField]: _omitted, ...rest } = src;
+  return rest;
+}
+
 export async function verifyParity(client, { sourceIndex, destIndex, vectorField, minOverlapPct = DEFAULT_MIN_OVERLAP_PCT, sampleSize = SAMPLE_SIZE, k = KNN_K }) {
   const sampleRes = await client.search(sourceIndex, { size: sampleSize, _source: false, query: { match_all: {} } });
   if (!sampleRes.ok) return { ok: false, reason: `sampling ${sourceIndex} failed: ${describeErr(sampleRes)}` };
@@ -584,7 +637,7 @@ export async function verifyParity(client, { sourceIndex, destIndex, vectorField
   for (const id of ids) {
     const s = srcById.get(id), d = dstById.get(id);
     if (!s?.found || !d?.found) { mismatches.push({ id, reason: `found on source=${Boolean(s?.found)} dest=${Boolean(d?.found)}` }); continue; }
-    if (!deepEqual(s._source, d._source)) mismatches.push({ id, reason: "_source differs" });
+    if (!deepEqual(sourceWithoutVector(s._source, vectorField), sourceWithoutVector(d._source, vectorField))) mismatches.push({ id, reason: "_source differs" });
   }
   if (mismatches.length) {
     return { ok: false, reason: `${mismatches.length}/${ids.length} sampled doc(s) mismatched: ${JSON.stringify(mismatches.slice(0, 5))}`, sampleChecked: ids.length, mismatches };
@@ -748,6 +801,12 @@ export async function runMigrateOne(index, opts) {
     // and must not be treated as a fresh failure. `field` for those phases comes from `state`,
     // persisted back at twin-creation time below; the swap steps never need the fp32 `def` itself
     // (the quantized shape they recreate `index` with comes from the TWIN's own live mapping).
+    const resumeAt = resumablePhase(state);
+    if (resumeAt) {
+      state = withPhase(state, resumeAt, `resuming mid-swap after a failure recorded in ${resumeAt}`);
+      await save();
+      log(`  '${index}': resuming mid-swap at ${resumeAt} (original may already be deleted; twin holds the data)`);
+    }
     if (!SWAP_PHASES.includes(state.phase)) {
       const srcGet = await client.getIndex(index);
       if (!srcGet.ok) return await fail(`GET /${index} failed: ${describeErr(srcGet)}`);
