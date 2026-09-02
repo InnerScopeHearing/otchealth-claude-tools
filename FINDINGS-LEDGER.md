@@ -936,3 +936,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-02T15:01:48.219Z
 - **Closed:** (open)
+
+### finding:FND-20260902-b43e severity:critical status:open | n8n restore lost ALL pre-restore credentials: 6 dangling ids, 16 node-uses in ACTIVE workflows, incl. AWARE lifecycle email + signup tracking + AWARE/iHEARtest TTS
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-02-n8n-restore-lost-credentials.md
+- **Fix commit:** (none yet)
+- **Verified by:** poller exec 2517 failed 'Credential with ID YRHmFdrrzUSK3deH does not exist'; /rest/credentials lists only 4 of 10 referenced ids, and all 4 were minted post-restore
+- **Opened:** 2026-09-02T15:31:01.620Z
+- **Closed:** (open)
