@@ -91,6 +91,19 @@ COPY skills/innd-stock/ /app/skills/innd-stock/
 # comment above warns about, walked into by the person who read it. Its only imports are
 # kb-memory's azure-secret/aws-secret/sigv4, all already copied above.
 COPY skills/safety-monitor/ /app/skills/safety-monitor/
+# datadog: pure library, no job of its own. fleet-medic (copied above, scheduled every 30 min) and
+# token-keeper both `import { ddMetric } from "../datadog/dd-emit.mjs"` as of claude-tools #448, so
+# WITHOUT this line the fleet-medic task crash-loops on ERR_MODULE_NOT_FOUND the moment the image
+# rebuilds -- a second instance of the safety-monitor trap directly above, one level down: the skill
+# itself was copied, the thing it imports was not. Caught by simulating the image's file layout after
+# the merge, and now enforced by the import-closure test in tests/dockerfile-job-coverage.test.mjs.
+COPY skills/datadog/ /app/skills/datadog/
+# semantic-trust: pure library (trust.mjs), no job. kb-memory's contradiction-scan.mjs imports
+# groupAssertions/scoreClaim from it, and job/contradiction-scan.sh ships inside the image, so the
+# same MODULE_NOT_FOUND waits there. LATENT today, not live: verified 2026-09-02 that no EventBridge
+# schedule targets contradiction-scan (it is deliberately disarmed pending Matt's arming decision).
+# Copying a pure library arms nothing -- it only removes the trap that would fire on the day it is armed.
+COPY skills/semantic-trust/ /app/skills/semantic-trust/
 # Bake the one dependency (xlsx) so a scheduled run never npm-installs mid-job. innd-stock.mjs keeps
 # its lazy-install fallback for a fresh checkout, but production should never need it.
 RUN cd /app/skills/innd-stock && npm install --omit=dev --no-audit --no-fund
