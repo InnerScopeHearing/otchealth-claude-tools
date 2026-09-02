@@ -222,6 +222,15 @@ async function graphql(query, token, variables) {
 function readStdin() { return new Promise((res) => { let d = ""; if (process.stdin.isTTY) return res(""); process.stdin.on("data", (c) => (d += c)); process.stdin.on("end", () => res(d)); }); }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+// STDOUT DRAIN, 2026-09-02. Every exit below sets process.exitCode and lets the process end on its
+// own instead of calling process.exit(). On POSIX, Node's stdout is SYNCHRONOUS when it is a file or
+// a TTY but ASYNCHRONOUS when it is a PIPE, and process.exit() does not wait for a pending async
+// write. So `gh-app.mjs request ... > file.json` wrote all 306KB of a large response while
+// `gh-app.mjs request ... | wc -c` returned exactly 65536 -- a silently truncated prefix that still
+// parses as plausible output. That cost three wrong fleet-wide PR counts before the suspiciously
+// round byte total gave it away (flatstick reported 1 open PR against a true 8). Setting exitCode
+// preserves the exit status while letting the stream flush. Do not reintroduce process.exit() on any
+// path that has written to stdout.
 if (isMain) {
   const rawArgs = process.argv.slice(2);
   const noCache = rawArgs.includes("--no-cache");
@@ -245,7 +254,7 @@ if (isMain) {
       const r = await rest(m, a2, t.token, body || null);
       console.error(`HTTP ${r.status} ${m} ${a2}`);
       try { console.log(JSON.stringify(JSON.parse(r.text), null, 2)); } catch { console.log(r.text); }
-      process.exit(r.ok ? 0 : 1);
+      process.exitCode = r.ok ? 0 : 1;
     } else if (cmd === "ready-pr") {
       if (!a1 || !a2 || !a3) { console.error("usage: gh-app.mjs ready-pr <owner> <repo> <number>"); process.exit(2); }
       const t = await installationToken({ noCache });
@@ -253,7 +262,7 @@ if (isMain) {
       const nodeId = JSON.parse(pr.text).node_id;
       const g = await graphql(`mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft number}}}`, t.token, { id: nodeId });
       console.log(JSON.stringify(g.json, null, 2));
-      process.exit(g.ok ? 0 : 1);
+      process.exitCode = g.ok ? 0 : 1;
     } else if (cmd === "merge-pr") {
       if (!a1 || !a2 || !a3) { console.error("usage: gh-app.mjs merge-pr <owner> <repo> <number> [squash|merge|rebase]"); process.exit(2); }
       const t = await installationToken({ noCache });
@@ -261,16 +270,16 @@ if (isMain) {
       const r = await rest("PUT", `/repos/${a1}/${a2}/pulls/${a3}/merge`, t.token, JSON.stringify({ merge_method: method }));
       console.error(`HTTP ${r.status} merge ${a1}/${a2}#${a3} (${method})`);
       console.log(r.text);
-      process.exit(r.ok ? 0 : 1);
+      process.exitCode = r.ok ? 0 : 1;
     } else if (cmd === "graphql") {
       const t = await installationToken({ noCache });
       const q = await readStdin();
       const g = await graphql(q, t.token);
       console.log(JSON.stringify(g.json, null, 2));
-      process.exit(g.ok ? 0 : 1);
+      process.exitCode = g.ok ? 0 : 1;
     } else {
       console.error("commands: token | verify | request <METHOD> <path> | ready-pr <o> <r> <n> | merge-pr <o> <r> <n> [method] | graphql");
-      process.exit(2);
+      process.exitCode = 2;
     }
-  } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+  } catch (e) { console.error("ERROR: " + e.message); process.exitCode = 1; }
 }
