@@ -70,11 +70,20 @@ export function azureEnvPresent() {
  * pointer a fleet-wide 'is anything still on GCP?' audit trips over. The GCP path survives only
  * as laneCreds()'s expected-to-fail legacy fallback and is labelled as such below.
  */
+// RETURNS A FIXED LITERAL, NEVER AN INTERPOLATED ENV VALUE. This label is printed on every prompt by
+// the UserPromptSubmit hook, and its job is to name WHICH BACKEND served the read -- not which vault
+// instance or which raw env string. An earlier draft interpolated KV_NAME and the SECRET_BACKEND
+// value straight into the output; CodeQL flagged it (js/clear-text-logging, alert 93) as process
+// environment reaching a log, and it was right to: the values happen to be non-secret identifiers
+// today, but nothing in the function guaranteed that, and a log line on every prompt is the worst
+// possible place to discover otherwise. Enumerating the cases keeps the output a small closed set
+// that is safe to print, greppable, and stable enough to assert on in a test.
 export function credSource() {
   const backend = process.env.SECRET_BACKEND || 'ssm';
-  if (backend === 'keyvault') return azureEnvPresent() ? `azure-keyvault:${KV_NAME}` : `azure-keyvault:${KV_NAME}(no-sp-env)`;
+  if (backend === 'keyvault') return azureEnvPresent() ? 'azure-keyvault' : 'azure-keyvault(no-sp-env)';
   if (backend === 'ssm') return 'aws-ssm:/otchealth';
-  return `${backend}(via kvSecret; gcp-secret-manager is a retired last-resort fallback)`;
+  if (backend === 'gcp' || backend === 'gcp-secret-manager') return 'gcp-secret-manager(retired fallback)';
+  return 'other(via kvSecret; gcp-secret-manager is a retired last-resort fallback)';
 }
 
 // ---- Azure Key Vault (service principal from env) — PRIMARY ----

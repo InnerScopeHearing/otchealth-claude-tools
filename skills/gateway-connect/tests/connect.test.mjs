@@ -129,10 +129,46 @@ test('azureEnvPresent + credSource: label mirrors kvSecret backend (SSM default)
   assert.equal(credSource(), 'aws-ssm:/otchealth');
   // Only an explicit keyvault backend yields the Key Vault label (a hypothetical future vault).
   process.env.SECRET_BACKEND = 'keyvault';
-  assert.match(credSource(), /^azure-keyvault:/);
+  assert.equal(credSource(), 'azure-keyvault');
   if (save.be !== undefined) process.env.SECRET_BACKEND = save.be; else delete process.env.SECRET_BACKEND;
   // restore
   if (save.id !== undefined) process.env.AZURE_SP_CLIENT_ID = save.id; else delete process.env.AZURE_SP_CLIENT_ID;
   if (save.sec !== undefined) process.env.AZURE_SP_CLIENT_SECRET = save.sec; else delete process.env.AZURE_SP_CLIENT_SECRET;
   if (save.tn !== undefined) process.env.AZURE_SP_TENANT_ID = save.tn; else delete process.env.AZURE_SP_TENANT_ID;
+});
+
+// credSource() is printed on EVERY prompt by the UserPromptSubmit hook, so its output must be a
+// small closed set of literals rather than anything derived from the environment. An earlier draft
+// interpolated AZURE_KEYVAULT_NAME and the raw SECRET_BACKEND value into the label; CodeQL flagged
+// it as process environment reaching a log (js/clear-text-logging, alert 93 on PR #506). Those
+// particular values are non-secret identifiers, but nothing in the function enforced that, and a
+// line logged on every prompt is the worst place to find out otherwise. This pins the invariant.
+test('credSource: returns a fixed literal from a closed set, never an interpolated env value', () => {
+  const save = {
+    be: process.env.SECRET_BACKEND, kv: process.env.AZURE_KEYVAULT_NAME,
+    id: process.env.AZURE_SP_CLIENT_ID, sec: process.env.AZURE_SP_CLIENT_SECRET, tn: process.env.AZURE_SP_TENANT_ID,
+  };
+  const ALLOWED = new Set([
+    'aws-ssm:/otchealth',
+    'azure-keyvault',
+    'azure-keyvault(no-sp-env)',
+    'gcp-secret-manager(retired fallback)',
+    'other(via kvSecret; gcp-secret-manager is a retired last-resort fallback)',
+  ]);
+  // A value an attacker (or a misconfiguration) could plant in the environment must never appear.
+  const CANARY = 'CANARY-secret-value-must-not-be-logged';
+  process.env.AZURE_KEYVAULT_NAME = CANARY;
+  for (const backend of ['ssm', 'keyvault', 'gcp', 'gcp-secret-manager', CANARY, '']) {
+    if (backend === '') delete process.env.SECRET_BACKEND; else process.env.SECRET_BACKEND = backend;
+    for (const withSp of [false, true]) {
+      if (withSp) { process.env.AZURE_SP_CLIENT_ID = 'x'; process.env.AZURE_SP_CLIENT_SECRET = 'y'; process.env.AZURE_SP_TENANT_ID = 'z'; }
+      else { delete process.env.AZURE_SP_CLIENT_ID; delete process.env.AZURE_SP_CLIENT_SECRET; delete process.env.AZURE_SP_TENANT_ID; }
+      const out = credSource();
+      assert.ok(ALLOWED.has(out), `credSource() returned an unlisted label: ${JSON.stringify(out)}`);
+      assert.doesNotMatch(out, new RegExp(CANARY), 'no environment value may reach the label');
+    }
+  }
+  for (const [k, v] of Object.entries({ SECRET_BACKEND: save.be, AZURE_KEYVAULT_NAME: save.kv, AZURE_SP_CLIENT_ID: save.id, AZURE_SP_CLIENT_SECRET: save.sec, AZURE_SP_TENANT_ID: save.tn })) {
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
 });
