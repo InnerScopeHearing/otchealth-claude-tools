@@ -945,13 +945,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T15:31:01.620Z
 - **Closed:** 2026-09-02T15:39:32.443Z
 
-### finding:FND-20260902-0532 severity:high status:open | Fielded AWARE builds still POST to automation.otchealth.app (NXDOMAIN since 2026-08-27), so AWARE signup tracking and lifecycle email receive zero traffic regardless of the now-restored credentials
+### finding:FND-20260902-0532 severity:high status:fixed | Fielded AWARE builds still POST to automation.otchealth.app (NXDOMAIN since 2026-08-27), so AWARE signup tracking and lifecycle email receive zero traffic regardless of the now-restored credentials
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-02-n8n-restore-lost-credentials.md
 - **Fix commit:** (none yet)
-- **Verified by:** AWARE Lifecycle Emails aK7HZDAUTvX6d7MJ has exactly ONE execution in its entire history (id 16, 2026-08-28T22:38:24Z) and it only succeeded via the credential-free 'Unknown event' set-node branch; AWARE Signup Webhook a5EfSHYnHqxxb2cP likewise idle. Both are ACTIVE with working credentials as of 2026-09-02, so the remaining fault is upstream: the baked-in client URL resolves to nothing.
+- **Verified by:** 2026-09-02 Matt go. Cloudflare A automation.otchealth.app -> 3.228.71.221 (record e91510e4, DNS-only, TTL 300); Caddy site block extended by otchealth-cto workflow aws-n8n-host-config run 33665204864 (PR #151 merged 65835f6): reloaded, healthz 200 on attempt 2, Let's Encrypt cert CN=automation.otchealth.app valid to 2026-12-01. Security gate done BEFORE the record: unhardened EL receiver cnGHm6ZIu9ORuUXS deactivated, old EL workspace webhook 365ca8 disabled. AWARE signup/emails/TTS webhooks are active with restored credentials on the same host, so fielded builds now reach working workflows; first real execution is a watch item, not a gate.
 - **Opened:** 2026-09-02T15:41:08.776Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:10:40.937Z
 
 ### finding:FND-20260902-44af severity:medium status:open | OpenAI spend is INVISIBLE from the seat and has NO budget alarm: openai-api-key lacks api.usage.read (organization/costs returns 'insufficient permissions'), no admin/usage-scoped key exists in SSM, and OpenAI is now the fleet's primary LLM path after every Foundry caller was ported to it -- the same blind-spot class Bedrock had until the 2026-09-02 cost-category + anomaly monitor fix. Fix: mint a restricted key with api.usage.read into SSM, add a usage poller + PostHog/Datadog metric + monthly threshold; until then the only view is platform.openai.com/usage (Matt)
 
