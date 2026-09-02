@@ -135,6 +135,42 @@ let _authMode = null;
 export function authMode() { return _authMode; }
 
 let _noCredsNoted = false;
+
+// Credential shapes that must never survive into a log line, applied at the SINK (2026-09-02).
+//
+// WHY AT THE SINK, NOT THE PRODUCER. ssmSecretDetailed()'s `detail` can carry ssmCall()'s transport
+// catch, which builds `error-${e.message}` from a raw Error. A raw Error.message is exactly what the
+// fleet rule forbids putting in a log: an execFile or fetch rejection can embed the entire attempted
+// request, Authorization header included. That is not hypothetical -- it is the eval-runner incident
+// (otchealth-mcp-server #256), where a scheduled job wrote a live gateway bearer into CloudWatch once
+// per failing case for days. The lesson recorded from it was: redact where the string is PRINTED,
+// never trust that a secret can be kept out of the string in the first place, and match a SHAPE as
+// well as any exact value so a rotated or different credential is still caught.
+//
+// Deliberately shape-only and lossy-but-readable: "fetch failed" survives intact (it is useful and
+// benign), while any bearer, AWS key id, long base64/hex run, or key:value credential pair becomes
+// [redacted]. CodeQL also flags `name` on these same lines; that half is a FALSE POSITIVE -- `name`
+// is a secret NAME (e.g. "mercury-api-token"), which the fleet rule explicitly permits logging
+// ("names fine, values never"), and CodeQL cannot distinguish token-keeper's `cfg.apiToken` (a name
+// literal) from its `apiToken` (the resolved value). Naming the secret is the entire diagnostic
+// value of these lines, so it stays.
+const CREDENTIAL_SHAPES = [
+  /\bBearer\s+[\w.\-~+/]+=*/gi,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\b(?:authorization|x-amz-security-token|password|secret|api[_-]?key|token)\b\s*[:=]\s*\S+/gi,
+  /\b[A-Za-z0-9+/]{40,}={0,2}\b/g, // long base64-ish run
+  /\b[0-9a-f]{40,}\b/gi, // long hex run
+];
+
+/** Bound what may be interpolated into a diagnostic from an upstream `detail`/error string. */
+export function safeDetail(detail) {
+  let d = String(detail ?? "").trim();
+  if (!d) return "unspecified";
+  for (const re of CREDENTIAL_SHAPES) d = d.replace(re, "[redacted]");
+  d = d.replace(/\s+/g, " ");
+  return d.length > 160 ? `${d.slice(0, 160)}...` : d;
+}
+
 /**
  * Explain an SSM read that produced no value, under the ssm-sole-path default.
  *
@@ -167,13 +203,13 @@ function reportSsmMiss(name, outcome, detail) {
   }
   if (outcome === "denied") {
     console.error(
-      `[kv-secret] ACCESS DENIED reading "${name}" from AWS SSM /otchealth/* (${detail}). This is a ` +
+      `[kv-secret] ACCESS DENIED reading "${name}" from AWS SSM /otchealth/* (${safeDetail(detail)}). This is a ` +
         `PERMISSIONS problem, not a missing secret: the parameter may well exist. Check the ssm:GetParameter ` +
         `grant (and the KMS decrypt grant for SecureString) on this task role or IAM user.`,
     );
     return;
   }
-  console.error(`[kv-secret] READ error for "${name}" from AWS SSM /otchealth/*: ${detail}`);
+  console.error(`[kv-secret] READ error for "${name}" from AWS SSM /otchealth/*: ${safeDetail(detail)}`);
 }
 
 /** Mint a Key Vault (vault.azure.net) access token via the SAME three-path resolver kvSecret() uses

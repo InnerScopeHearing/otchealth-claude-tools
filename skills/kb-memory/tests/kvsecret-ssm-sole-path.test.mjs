@@ -35,7 +35,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtemp, writeFile, chmod, readFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, chmod, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -44,7 +44,7 @@ const AZURE_SECRET = join(HERE, "..", "azure-secret.mjs");
 
 /** Run kvSecret() in a subprocess with fetch stubbed and a booby-trapped `az` on PATH.
  *  Returns { hosts, result, azSpawned, stderr } -- hosts is every host the module actually contacted. */
-async function probe({ env = {}, secretName = "some-secret-not-in-ssm", ssmStatus = 400, ssmType = "ParameterNotFound" } = {}) {
+async function probe({ env = {}, secretName = "some-secret-not-in-ssm", ssmStatus = 400, ssmType = "ParameterNotFound", ssmThrowMessage = null } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "kvsecret-sole-path-"));
   const marker = join(dir, "az-was-spawned");
   const bin = join(dir, "az");
@@ -59,6 +59,10 @@ async function probe({ env = {}, secretName = "some-secret-not-in-ssm", ssmStatu
       const u = new URL(String(url));
       hosts.push(u.host);
       if (u.host.startsWith("ssm.")) {
+        const thrown = ${JSON.stringify(ssmThrowMessage)};
+        // Reproduces ssmCall()'s transport catch, which builds reason: \`error-\${e.message}\` from a
+        // RAW Error -- the path by which an upstream message can reach a log line.
+        if (thrown) throw new Error(thrown);
         return new Response(JSON.stringify({ __type: ${JSON.stringify(ssmType)}, message: "stub" }), {
           status: ${ssmStatus}, headers: { "content-type": "application/x-amz-json-1.1" },
         });
@@ -164,4 +168,58 @@ test("a miss is LOUD and says DENIED (not 'missing') when SSM answers AccessDeni
   assert.equal(result, null);
   assert.match(stderr, /denied/i, "an AccessDenied must be reported as a permissions problem");
   assert.doesNotMatch(stderr, /not found in/i, "must not describe a denial as an absent parameter");
+});
+
+// ── Sink redaction (2026-09-02, follow-up to CodeQL alerts 94/95 on PR #513) ──────────────────────
+//
+// ssmCall()'s transport catch builds `error-${e.message}` from a RAW Error, and that string reaches
+// reportSsmMiss()'s console.error as `detail`. A raw Error.message is precisely what the fleet rule
+// forbids in a log: an execFile or fetch rejection can embed the whole attempted request, including
+// an Authorization header. This is the eval-runner incident (otchealth-mcp-server #256) in a
+// different file, so it gets the same treatment: redact at the SINK, by SHAPE, never by trusting the
+// producer.
+//
+// NOTE ON THE OTHER HALF OF THOSE ALERTS: CodeQL also flags `name` on these lines. That is a false
+// positive and is deliberately NOT "fixed" -- `name` is a secret NAME (e.g. "mercury-api-token"),
+// which the fleet rule explicitly permits ("names fine, values never"), and naming the secret is the
+// entire diagnostic value of the line. CodeQL reaches it because token-keeper's `cfg.apiToken` (a
+// name literal) and `apiToken` (the resolved value) are indistinguishable to its heuristic.
+
+test("a poisoned upstream error message is REDACTED at the log sink: no bearer token or AWS key id survives to stderr", async () => {
+  const BEARER = "Bearer eyJhbGciOiJIUzI1NiJ9.SUPERSECRETPAYLOADVALUE.c2lnbmF0dXJlZGF0YQ";
+  const AKIA = "AKIAIOSFODNN7EXAMPLE";
+  const { stderr, result } = await probe({
+    ssmThrowMessage: `connect ECONNREFUSED while sending -H '${BEARER}' -H 'x-amz-security-token: ${AKIA}'`,
+  });
+  assert.equal(result, null);
+  assert.doesNotMatch(stderr, /SUPERSECRETPAYLOADVALUE/, "the bearer payload must never reach stderr");
+  assert.doesNotMatch(stderr, /eyJhbGciOiJIUzI1NiJ9/, "no part of the token may survive");
+  assert.doesNotMatch(stderr, new RegExp(AKIA), "an AWS key id must never reach stderr");
+  assert.match(stderr, /\[redacted\]/, "the redaction must be visible, not a silent truncation");
+  // The benign, useful part of the message must survive -- redaction that destroys all diagnostic
+  // value gets worked around by the next person instead of relied on.
+  assert.match(stderr, /ECONNREFUSED/, "the actual transport cause must still be readable");
+});
+
+test("safeDetail(): shape-based, so a credential it has never seen before is still caught", async () => {
+  const { safeDetail } = await import("../azure-secret.mjs");
+  assert.match(safeDetail("Bearer abc.def.ghi"), /\[redacted\]/);
+  assert.match(safeDetail("AKIAIOSFODNN7EXAMPLE"), /\[redacted\]/);
+  assert.match(safeDetail(`authorization: ${"z".repeat(50)}`), /\[redacted\]/);
+  assert.match(safeDetail("a".repeat(64)), /\[redacted\]/, "a long base64-ish run is credential-shaped");
+  assert.match(safeDetail("f0".repeat(30)), /\[redacted\]/, "a long hex run is credential-shaped");
+  // Benign details must pass through untouched, or the diagnostics become useless.
+  assert.equal(safeDetail("ParameterNotFound"), "ParameterNotFound");
+  assert.equal(safeDetail("http-403"), "http-403");
+  assert.equal(safeDetail(""), "unspecified");
+  assert.equal(safeDetail(null), "unspecified");
+  assert.ok(safeDetail("x".repeat(400)).length <= 163, "an unbounded upstream string must be truncated");
+});
+
+test("FAIL ON OLD CODE: no console.error in azure-secret.mjs interpolates a raw ${detail}", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(AZURE_SECRET, "utf8");
+  // The exact regression this guards: a future edit adding a diagnostic that drops safeDetail().
+  const raw = src.match(/console\.error\([^;]*\$\{detail\}/g) || [];
+  assert.deepEqual(raw, [], `every logged detail must go through safeDetail(); found raw: ${raw.join(" | ")}`);
 });
