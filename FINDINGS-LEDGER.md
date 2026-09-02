@@ -825,13 +825,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-30T04:18:50.737Z
 - **Closed:** 2026-08-30T04:18:50.737Z
 
-### finding:FND-20260831-139c severity:low status:open | Unresolved: fleet docs assert Azure sub 55c84f6b deleted 2026-08-13, but Wave B recorded live Azure job executions on 08-14/15/16
+### finding:FND-20260831-139c severity:low status:wontfix | Unresolved: fleet docs assert Azure sub 55c84f6b deleted 2026-08-13, but Wave B recorded live Azure job executions on 08-14/15/16
 
 - **Source audit doc:** otchealth-claude-tools PR #439 critic rounds, 2026-08-31
 - **Fix commit:** (none yet)
-- **Verified by:** Both claims are in the durable record and cannot both be true. The execution evidence (sentinel-os-eval statuses across 08-12..08-16 incl. a 1h28m duration, FND-20260816-1aa3) is too specific and internally consistent to be fabricated, so 08-13 was likely the EVACUATION date with final deletion landing days later. NOT resolved because it changes no current action (Azure is definitively gone either way, verified 401 repeatedly) and guessing a date into the durable record is how drift starts. Flagged in the STATUS CORRECTION block of runbooks/AWS-JOBS-MIGRATION-WAVE-B.md.
+- **Verified by:** Informational by its own definition: the docs' 2026-08-13 deletion date vs Wave B's recorded job executions on 08-14/15/16 changes no action (both dates precede every AWS cutover and nothing depends on the exact hour Azure stopped serving). Recorded so the discrepancy is not re-investigated; closing as wontfix on 2026-09-02.
 - **Opened:** 2026-08-31T17:40:01.992Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:09:08.232Z
 
 ### finding:FND-20260901-34de severity:low status:fixed | Route the 782-agent subagent-research corpus to S3 commons + brain index (currently parked on orphan branch claude/subagent-research-corpus)
 
