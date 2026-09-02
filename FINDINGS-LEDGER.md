@@ -729,13 +729,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T21:36:46.992Z
 - **Closed:** 2026-08-28T23:03:50.544Z
 
-### finding:FND-20260828-8823 severity:low status:open | Gateway gumroad_* tool family (39 tools) is dark: GUMROAD_ACCESS_TOKEN never provisioned on the AWS task def and no gumroad param exists in SSM (never evacuated from Azure KV). Fix needs Matt: re-mint the access token in Gumroad settings -> store as /otchealth/gw/GUMROAD_ACCESS_TOKEN -> add secret ref in next gateway task-def rev. Digital-products lane dormant, low urgency.
+### finding:FND-20260828-8823 severity:low status:fixed | Gateway gumroad_* tool family (39 tools) is dark: GUMROAD_ACCESS_TOKEN never provisioned on the AWS task def and no gumroad param exists in SSM (never evacuated from Azure KV). Fix needs Matt: re-mint the access token in Gumroad settings -> store as /otchealth/gw/GUMROAD_ACCESS_TOKEN -> add secret ref in next gateway task-def rev. Digital-products lane dormant, low urgency.
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md#2026-08-28
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 06b79a02
+- **Verified by:** gateway rev 36 (image 06b79a0) carries secret GUMROAD_ACCESS_TOKEN from SSM gw/GUMROAD_ACCESS_TOKEN (restored from the Notion vault, live-verified); gateway tool gumroad_user_get returned the creator account (matthew@otchealth.app, usd) on 2026-09-02 19:21Z
 - **Opened:** 2026-08-28T21:43:02.043Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T19:24:30.043Z
 
 ### finding:FND-20260828-8a48 severity:medium status:fixed | Restored Taylor workflow jJsq re-embeds the superseded Entra app a0bca2fb client secret INLINE in its Code node jsCode (pre-hardening restore regressed the 2026-08-07 credentialization; encrypted credential 8hPSiaFyOV3oxyk5 died with old instance). Now auth-gated at webhook (121c fix) but secret value sits in workflow JSON readable via n8n API, and the old tenant password key is still valid. Fix: re-credentialize Graph auth in the CS rebuild program, then owner/Application-Administrator removes the old password key (standing Matt gate).
 
