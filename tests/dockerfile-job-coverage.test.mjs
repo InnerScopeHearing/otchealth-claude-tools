@@ -13,6 +13,12 @@
 // ignorable and rots; a hard failure with no escape hatch gets deleted the first time it blocks a
 // legitimate case. Requiring an explicit entry forces whoever adds one to write down WHY a
 // job-bearing skill is absent from the image -- the decision that was previously implicit.
+//
+// It matches the DESTINATION, not just the source. The first draft of this test asserted only
+// `COPY skills/<skill>/ `, which a `COPY skills/<skill>/ /tmp/whatever/` would satisfy while the
+// scheduled task still died at /app/skills/<skill>/job/... -- an "enforceable" guard enforcing the
+// half that is salient rather than the half the runtime reads. Review caught it. The task commands
+// reference /app/skills/<skill>/job/..., so that exact prefix is what has to be bound.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -31,6 +37,12 @@ const NOT_IN_IMAGE = {
     "deploy decision wearing a build change, so it stays out until that decision is made.",
 };
 
+// A skill counts as covered only if it is copied to the path the job command actually references,
+// /app/skills/<skill>/. Trailing slash optional on the destination; Docker treats both alike.
+function copiedToAppPath(dockerfile, skill) {
+  return new RegExp(`^COPY\\s+skills/${skill}/\\s+/app/skills/${skill}/?\\s*$`, "m").test(dockerfile);
+}
+
 test("every skill with a job/ entrypoint is COPY'd into the doc-indexer image, or is a recorded exception", () => {
   const dockerfile = readFileSync(join(ROOT, "skills/doc-indexer/job/Dockerfile"), "utf8");
   const skills = readdirSync(join(ROOT, "skills"), { withFileTypes: true })
@@ -40,7 +52,7 @@ test("every skill with a job/ entrypoint is COPY'd into the doc-indexer image, o
   assert.ok(skills.length >= 8, `expected to find the job-bearing skills, found ${skills.length}`);
 
   const missing = skills.filter(
-    (s) => !new RegExp(`^COPY skills/${s}/ `, "m").test(dockerfile) && !NOT_IN_IMAGE[s],
+    (s) => !copiedToAppPath(dockerfile, s) && !NOT_IN_IMAGE[s],
   );
   assert.deepEqual(
     missing,
@@ -52,9 +64,7 @@ test("every skill with a job/ entrypoint is COPY'd into the doc-indexer image, o
 
   // An exception that is no longer needed is itself drift: once a skill IS copied, delete its entry
   // rather than leaving a stale justification that reads as current.
-  const staleExceptions = Object.keys(NOT_IN_IMAGE).filter((s) =>
-    new RegExp(`^COPY skills/${s}/ `, "m").test(dockerfile),
-  );
+  const staleExceptions = Object.keys(NOT_IN_IMAGE).filter((s) => copiedToAppPath(dockerfile, s));
   assert.deepEqual(
     staleExceptions,
     [],
