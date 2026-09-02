@@ -190,12 +190,52 @@ export async function ssmAvailable() {
   return (await awsCreds()) !== null;
 }
 
-/** Read one secret from SSM Parameter Store. Returns the trimmed value or null. Never throws. */
-export async function ssmSecret(name) {
+/**
+ * Read one secret from SSM, reporting WHY when there is no value.
+ *
+ * WHY THIS EXISTS (2026-09-02). ssmSecret() below collapsed three genuinely different answers into
+ * one `null`: "this parameter does not exist" (ParameterNotFound), "you are not allowed to read it"
+ * (AccessDeniedException), and "I could not even ask" (no resolvable AWS credentials). A caller --
+ * and more importantly a human reading a log -- could not tell a missing secret from a missing IAM
+ * grant. That is the same silent-failure shape as the legal-store S3 port, where a 403 read as "the
+ * matter does not exist". Absence is a legitimate answer worth staying quiet about; a denial or an
+ * unreachable store is an infrastructure fault that must be loud. They cannot share a return value.
+ *
+ * `outcome` is one of:
+ *   found          -- `value` is the trimmed secret
+ *   not-found      -- the store answered honestly: no such parameter (a normal, quiet result)
+ *   denied         -- the store refused: an IAM grant is missing (never routine)
+ *   no-credentials -- this seat could not resolve AWS credentials at all; the store was never asked
+ *   error          -- anything else (HTTP/transport); `detail` carries the shape
+ *
+ * Never throws. ssmSecret() remains the thin value-or-null wrapper so every existing caller is
+ * byte-for-byte unaffected.
+ */
+export async function ssmSecretDetailed(name) {
   const res = await ssmCall("GetParameter", { Name: `${PREFIX}/${name}`, WithDecryption: true });
-  if (res.status !== 200 || !res.json?.Parameter) return null;
-  const v = res.json.Parameter.Value;
-  return v == null ? null : String(v).trim() || null;
+  if (res.status === 200 && res.json?.Parameter) {
+    const v = res.json.Parameter.Value;
+    const trimmed = v == null ? null : String(v).trim() || null;
+    // An empty/whitespace-only parameter is a real row that resolves to nothing usable. Report it as
+    // not-found rather than found-with-null, so a caller can never receive outcome:"found", value:null.
+    return trimmed === null
+      ? { value: null, outcome: "not-found", detail: "parameter present but empty" }
+      : { value: trimmed, outcome: "found", detail: null };
+  }
+  if (res.reason === "no-aws-credentials") return { value: null, outcome: "no-credentials", detail: res.reason };
+  // AWS JSON-1.1 puts the error class in __type, e.g. "com.amazon.coral.service#ParameterNotFound".
+  const type = String(res.json?.__type || "");
+  if (/ParameterNotFound/i.test(type)) return { value: null, outcome: "not-found", detail: "ParameterNotFound" };
+  if (/AccessDenied|UnrecognizedClient|InvalidSignature/i.test(type) || res.status === 403) {
+    return { value: null, outcome: "denied", detail: type || `http-${res.status}` };
+  }
+  return { value: null, outcome: "error", detail: type || res.reason || `http-${res.status}` };
+}
+
+/** Read one secret from SSM Parameter Store. Returns the trimmed value or null. Never throws.
+ *  Use ssmSecretDetailed() when you need to tell "absent" from "denied" from "could not ask". */
+export async function ssmSecret(name) {
+  return (await ssmSecretDetailed(name)).value;
 }
 
 /**

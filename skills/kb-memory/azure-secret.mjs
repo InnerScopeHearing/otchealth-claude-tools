@@ -43,7 +43,7 @@
 // this one. Whenever the SP path is what actually worked, it logs a loud warning so RBAC drift on
 // the identity is visible in logs/alerts immediately, not discovered months later.
 
-import { ssmSecret, ssmSecretSet, awsCredsPresent } from "./aws-secret.mjs";
+import { ssmSecret, ssmSecretDetailed, ssmSecretSet, awsCredsPresent } from "./aws-secret.mjs";
 import { execFileSync } from "node:child_process";
 
 let _identityTok = null, _identityExp = 0;
@@ -133,6 +133,48 @@ async function azCliToken() {
 // never minted). Kept for backward compatibility with any caller importing this.
 let _authMode = null;
 export function authMode() { return _authMode; }
+
+let _noCredsNoted = false;
+/**
+ * Explain an SSM read that produced no value, under the ssm-sole-path default.
+ *
+ * The whole point of ssmSecretDetailed() is that these three cases are NOT the same event, so they
+ * must not produce the same output:
+ *   not-found      SILENT. The store was reached and answered honestly. Plenty of callers read
+ *                  genuinely optional secrets (a PostHog key, a Datadog key) and treat null as "not
+ *                  configured" -- printing an error for that trains readers to ignore this prefix,
+ *                  which is how a real one gets missed. Absence is an answer, not a failure.
+ *   denied         LOUD, every time, per secret. A missing IAM grant is never routine and is exactly
+ *                  the case that must never be mistaken for "the secret does not exist".
+ *   no-credentials LOUD, but ONCE per process: it is an environment-wide condition, identical for
+ *                  every name, so a job reading twenty secrets would otherwise emit twenty copies.
+ *   error          LOUD, per secret: transport/HTTP shapes differ per call and each is worth seeing.
+ */
+function reportSsmMiss(name, outcome, detail) {
+  if (outcome === "not-found") return;
+  if (outcome === "no-credentials") {
+    if (_noCredsNoted) return;
+    _noCredsNoted = true;
+    const aws = awsCredsPresent();
+    console.error(
+      `[kv-secret] cannot reach the secret store (AWS SSM /otchealth/*): no AWS credentials resolvable ` +
+        `on this seat (ECS task role: ${aws.ecs ? "yes" : "no"}, AWS_ACCESS_KEY_ID: ${aws.env ? "yes" : "no"}, ` +
+        `OTC_AWS_ACCESS_KEY_ID: ${aws.otc ? "yes" : "no"}). Set OTC_AWS_ACCESS_KEY_ID + OTC_AWS_SECRET_ACCESS_KEY ` +
+        `(NOT the plain AWS_ names -- this sandbox's proxy injects a non-functional placeholder into those). ` +
+        `Suppressing further per-secret copies of this notice.`,
+    );
+    return;
+  }
+  if (outcome === "denied") {
+    console.error(
+      `[kv-secret] ACCESS DENIED reading "${name}" from AWS SSM /otchealth/* (${detail}). This is a ` +
+        `PERMISSIONS problem, not a missing secret: the parameter may well exist. Check the ssm:GetParameter ` +
+        `grant (and the KMS decrypt grant for SecureString) on this task role or IAM user.`,
+    );
+    return;
+  }
+  console.error(`[kv-secret] READ error for "${name}" from AWS SSM /otchealth/*: ${detail}`);
+}
 
 /** Mint a Key Vault (vault.azure.net) access token via the SAME three-path resolver kvSecret() uses
  *  (managed identity -> SP client_credentials -> az-CLI/OIDC), returning the raw token string (or
@@ -224,16 +266,35 @@ async function kvSecretSetAzure(name, value) {
  *  secret name) or 5xx (vault down) stops immediately without trying the other path, because
  *  silently retrying there would mask a genuinely different bug behind "it worked anyway via SP". */
 export async function kvSecret(name) {
-  // SECRET_BACKEND now DEFAULTS to ssm (2026-08-27): AWS SSM /otchealth/* is the store of record
-  // since Azure subscription 55c84f6b -- and Key Vault kv-otc-55c84f6bef with it -- was permanently
-  // deleted 2026-08-13. The old 'keyvault' default meant every read on a default-configured seat
-  // burned the dead Azure token ladder before reaching the store that actually works. Either way
-  // the OTHER store is still tried on a miss (cross-fallback preserved).
+  // SECRET_BACKEND DEFAULTS to ssm (2026-08-27): AWS SSM /otchealth/* is the store of record since
+  // Azure subscription 55c84f6b -- and Key Vault kv-otc-55c84f6bef with it -- was permanently
+  // deleted 2026-08-13.
+  //
+  // SSM IS NOW THE SOLE READ PATH UNDER THIS DEFAULT (2026-09-02). Until now an SSM miss still fell
+  // through to the Azure ladder below "in case the mirror does not yet carry a newly-created secret".
+  // That reasoning expired the day the vault was deleted: a permanently-deleted Key Vault cannot
+  // carry a secret SSM lacks, so the fallback could never succeed -- it could only fail and then
+  // describe the failure wrongly. What it actually printed on every miss was
+  //   [kv-secret] READ failed for "x" via all auth paths: identity:no-token, sp:no-token, azcli:no-token
+  // naming three Azure credentials as the cause of what was simply "not in SSM", and never naming the
+  // store actually consulted -- sending the reader after an Azure auth problem that does not exist.
+  //
+  // ON COST, MEASURED HONESTLY: on a seat with no AZURE_SP_* (every current seat and job -- checked
+  // live against the running ECS task definitions), the ladder makes NO network call, and removing it
+  // is NOT a measurable latency win: warm miss 68ms after vs 63ms before, i.e. noise, because the SSM
+  // round trip (~60ms) dwarfs the failed `az` spawn. An earlier draft of this comment claimed
+  // "250ms vs 91ms"; that was a cold first call misread as ladder cost, and is retracted. The real
+  // wins are the honest diagnostic above, and that any seat which DOES carry AZURE_SP_* would
+  // otherwise POST to login.microsoftonline.com on every miss for a token it can do nothing with.
+  //
+  // This mirrors the policy kvSecretSet() has applied to WRITES since 2026-08-27 (see its own
+  // comment) -- reads simply never got it. SECRET_BACKEND=keyvault restores the full ladder for a
+  // hypothetical future vault; that escape hatch is pinned by a counterfactual test.
   if ((process.env.SECRET_BACKEND || "ssm") === "ssm") {
-    const v = await ssmSecret(name);
-    if (v != null) return v;
-    // Fall through to Key Vault below rather than returning null: during the transition the mirror
-    // may not yet carry a newly-created secret.
+    const { value, outcome, detail } = await ssmSecretDetailed(name);
+    if (outcome === "found") return value;
+    reportSsmMiss(name, outcome, detail);
+    return null;
   }
   const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
   const attempts = [];
@@ -300,26 +361,41 @@ export async function requireSecrets(names) {
     else out[n] = v;
   }
   if (missing.length) {
-    const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
-    const spOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
-    const identityOk = Boolean(process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER);
-    const azOk = Boolean(await azCliToken());
-    // AWS/SSM state (2026-08-18): by the time this FATAL fires, kvSecret() has ALREADY tried the SSM
-    // mirror as a fallback for every one of the `missing` names (see kvSecret()'s own tail) and that
-    // ALSO failed -- so this banner was previously silent about a whole auth family it had, in fact,
-    // already exhausted. A reader seeing only "Azure paths failed" has no way to know AWS was ever
-    // tried at all, let alone what to set to fix it. Report it explicitly instead of letting the
-    // absence of a mention read as "SSM was never a factor here".
+    // BACKEND-AWARE (2026-09-02). This banner used to assert, unconditionally, that "all four auth
+    // paths (Azure identity/SP/az-CLI, then AWS SSM) were tried per secret". Under the ssm default
+    // that is now FALSE -- only SSM is consulted -- and a banner that names three dead Azure
+    // credentials as candidate causes is the same misdirection this change removed from kvSecret()
+    // itself. Report what was actually tried, per backend.
     const aws = awsCredsPresent();
+    const ssmOnly = (process.env.SECRET_BACKEND || "ssm") === "ssm";
     console.error("==================================================================================");
-    console.error(`[FATAL] Required secret(s) UNAVAILABLE from Key Vault (${vault}) OR its SSM fallback: ${missing.join(", ")}`);
-    console.error(`        Azure: managed identity attached: ${identityOk ? "yes" : "no"}. AZURE_SP_* creds present: ${spOk ? "yes" : "NO"}. az-CLI/OIDC login: ${azOk ? "yes" : "no — run azure/login@v2 (OIDC) or 'az login'"}.`);
-    console.error(`        AWS (SSM fallback, /otchealth/* mirror): ECS task role: ${aws.ecs ? "yes" : "no"}. AWS_ACCESS_KEY_ID/SECRET present: ${aws.env ? "yes" : "no"}. OTC_AWS_ACCESS_KEY_ID/SECRET present: ${aws.otc ? "yes" : "NO"}.`);
-    console.error("        All four auth paths (Azure identity/SP/az-CLI, then AWS SSM) were tried per secret (see [kv-secret]");
-    console.error("        WARN/ERROR lines above for which path failed and how -- a 401/403 means an RBAC grant is likely");
-    console.error("        missing on the identity; SSM failing with no AWS creds present means set OTC_AWS_ACCESS_KEY_ID +");
-    console.error("        OTC_AWS_SECRET_ACCESS_KEY (NOT the plain AWS_ names -- this sandbox's proxy injects a non-functional");
-    console.error("        placeholder into those; see skills/kb-memory/SKILL.md 'Credential bootstrap' for the full per-seat guide).");
+    if (ssmOnly) {
+      console.error(`[FATAL] Required secret(s) UNAVAILABLE from AWS SSM Parameter Store (/otchealth/*): ${missing.join(", ")}`);
+      console.error(`        AWS: ECS task role: ${aws.ecs ? "yes" : "no"}. AWS_ACCESS_KEY_ID/SECRET present: ${aws.env ? "yes" : "no"}. OTC_AWS_ACCESS_KEY_ID/SECRET present: ${aws.otc ? "yes" : "NO"}.`);
+      console.error("        SSM is the ONLY store consulted (SECRET_BACKEND=ssm, the default). Azure Key Vault");
+      console.error("        kv-otc-55c84f6bef was permanently deleted 2026-08-13 and is NOT a fallback -- do not go");
+      console.error("        looking for an Azure auth problem. See the [kv-secret] lines above: a DENIED means an");
+      console.error("        ssm:GetParameter / KMS-decrypt grant is missing on this role; silence means the parameter");
+      console.error("        genuinely is not there (check the name, or write it with setup/set-secret.mjs). No AWS creds");
+      console.error("        at all means set OTC_AWS_ACCESS_KEY_ID + OTC_AWS_SECRET_ACCESS_KEY (NOT the plain AWS_ names --");
+      console.error("        this sandbox's proxy injects a non-functional placeholder into those; see");
+      console.error("        skills/kb-memory/SKILL.md 'Credential bootstrap' for the full per-seat guide).");
+    } else {
+      const vault = process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef";
+      const spOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
+      const identityOk = Boolean(process.env.IDENTITY_ENDPOINT && process.env.IDENTITY_HEADER);
+      const azOk = Boolean(await azCliToken());
+      console.error(`[FATAL] Required secret(s) UNAVAILABLE from Key Vault (${vault}) OR its SSM fallback: ${missing.join(", ")}`);
+      console.error(`        Azure: managed identity attached: ${identityOk ? "yes" : "no"}. AZURE_SP_* creds present: ${spOk ? "yes" : "NO"}. az-CLI/OIDC login: ${azOk ? "yes" : "no — run azure/login@v2 (OIDC) or 'az login'"}.`);
+      console.error(`        AWS (SSM fallback, /otchealth/* mirror): ECS task role: ${aws.ecs ? "yes" : "no"}. AWS_ACCESS_KEY_ID/SECRET present: ${aws.env ? "yes" : "no"}. OTC_AWS_ACCESS_KEY_ID/SECRET present: ${aws.otc ? "yes" : "NO"}.`);
+      console.error("        All four auth paths (Azure identity/SP/az-CLI, then AWS SSM) were tried per secret (see [kv-secret]");
+      console.error("        WARN/ERROR lines above for which path failed and how -- a 401/403 means an RBAC grant is likely");
+      console.error("        missing on the identity; SSM failing with no AWS creds present means set OTC_AWS_ACCESS_KEY_ID +");
+      console.error("        OTC_AWS_SECRET_ACCESS_KEY (NOT the plain AWS_ names -- this sandbox's proxy injects a non-functional");
+      console.error("        placeholder into those; see skills/kb-memory/SKILL.md 'Credential bootstrap' for the full per-seat guide).");
+      console.error("        NOTE: SECRET_BACKEND=keyvault is set explicitly -- kv-otc-55c84f6bef was permanently deleted");
+      console.error("        2026-08-13, so this ladder cannot succeed. Unset it to use the live SSM store.");
+    }
     console.error("        Refusing to run with missing credentials (fail-loud, not silent). GCP Secret Manager is retired.");
     console.error("==================================================================================");
     process.exit(78);
@@ -332,10 +408,20 @@ export async function kvSecretOrThrow(name) {
   const v = await kvSecret(name);
   if (v == null) {
     const aws = awsCredsPresent();
+    const credState = aws.any
+      ? "yes, but the secret itself was not found there either"
+      : "NO -- set OTC_AWS_ACCESS_KEY_ID + OTC_AWS_SECRET_ACCESS_KEY";
+    // Backend-aware for the same reason as requireSecrets()'s banner: under the ssm default Key Vault
+    // is never consulted, so naming it as a store that "failed" sends the reader after a nonexistent
+    // Azure auth problem. The keyvault wording is kept verbatim for the explicit opt-in path.
     throw new Error(
-      `required secret '${name}' unavailable from Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"}) or its SSM fallback ` +
-      `(AWS creds resolvable: ${aws.any ? "yes, but the secret itself was not found there either" : "NO -- set OTC_AWS_ACCESS_KEY_ID + OTC_AWS_SECRET_ACCESS_KEY"}) ` +
-      `-- see [kv-secret] log lines above for which auth path(s) failed`,
+      (process.env.SECRET_BACKEND || "ssm") === "ssm"
+        ? `required secret '${name}' unavailable from AWS SSM (/otchealth/*), the sole secret store ` +
+          `(AWS creds resolvable: ${credState}) -- see [kv-secret] log lines above; Azure Key Vault is ` +
+          `permanently deleted and is NOT consulted, so this is not an Azure auth problem`
+        : `required secret '${name}' unavailable from Key Vault (${process.env.AZURE_KEYVAULT_NAME || "kv-otc-55c84f6bef"}) or its SSM fallback ` +
+          `(AWS creds resolvable: ${credState}) ` +
+          `-- see [kv-secret] log lines above for which auth path(s) failed`,
     );
   }
   return v;
