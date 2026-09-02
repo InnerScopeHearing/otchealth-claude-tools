@@ -252,7 +252,13 @@ async function scan() {
 
   const metricSummary = await emitAgentErrorMetrics(results);
   if (!metricSummary.skipped) {
-    console.log(`[fleet-medic] agent_error metrics: ${metricSummary.emitted} emitted, ${metricSummary.failed} failed (of ${results.length} agents)`);
+    // STDERR, not stdout, unconditionally. `scan --json` promises stdout is ONE JSON document and
+    // nothing else -- tests/fleet-medic-s3.test.mjs JSON.parse()s it whole, and so does anything
+    // else piping this command. An earlier draft of this line used console.log and appended a human
+    // sentence after the JSON, breaking every machine consumer while looking perfectly fine to a
+    // human reading the container log. This is diagnostic output about telemetry plumbing; it
+    // belongs on the same channel as the per-agent METRIC EMIT FAILED lines just above.
+    console.error(`[fleet-medic] agent_error metrics: ${metricSummary.emitted} emitted, ${metricSummary.failed} failed (of ${results.length} agents)`);
   }
 
   if (!dispatching) return;

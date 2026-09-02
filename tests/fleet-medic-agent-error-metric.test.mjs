@@ -7,6 +7,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { emitAgentErrorMetrics } from "../skills/fleet-medic/medic.mjs";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 async function withStubbedFetch(stub, run) {
   const original = globalThis.fetch;
@@ -88,4 +90,18 @@ test("MEDIC_SKIP_METRICS=1 is a clean escape hatch (skips without touching the n
       assert.equal(fetchCalled, false);
     } finally { globalThis.fetch = original; }
   } finally { if (prev === undefined) delete process.env.MEDIC_SKIP_METRICS; else process.env.MEDIC_SKIP_METRICS = prev; }
+});
+
+// REGRESSION LOCK (2026-09-02). The first version of this feature printed its run summary with
+// console.log, which appended a human sentence to STDOUT after `scan --json` had already written its
+// single JSON document -- silently breaking every machine consumer of that command while looking
+// completely normal in a container log. It was caught only because tests/fleet-medic-s3.test.mjs
+// happens to JSON.parse() that stdout, i.e. by a test about something else entirely. This pins the
+// channel directly, at the source, so the contract break is named rather than inferred.
+test("the agent_error run summary goes to STDERR -- `scan --json` promises stdout is one JSON document and nothing else", () => {
+  const src = readFileSync(fileURLToPath(new URL("../skills/fleet-medic/medic.mjs", import.meta.url)), "utf8");
+  const lines = src.split("\n").filter((l) => l.includes("agent_error metrics:") && !l.trim().startsWith("//"));
+  assert.equal(lines.length, 1, "expected exactly one summary emitter to pin");
+  assert.match(lines[0], /console\.error\(/, "the summary must not be written to stdout");
+  assert.doesNotMatch(lines[0], /console\.log\(/);
 });
