@@ -83,6 +83,14 @@ COPY skills/growth-room/ /app/skills/growth-room/
 # The alternative, a runtime `git clone`, fails outright: node:24-slim ships no git (proved live,
 # task f0a5b0cf exit 127, "/bin/sh: 1: git: not found").
 COPY skills/innd-stock/ /app/skills/innd-stock/
+# safety-monitor (EventBridge schedule otchealth-safety-monitor, hourly): job/sweep.sh runs
+# monitor.mjs sweep --commit, scanning recent Intercom conversations for customer-reported safety
+# hazards, tagging matches and publishing one SNS alert each. Added 2026-09-02 after a pre-deploy
+# rehearsal ran the registered task def and got `/bin/sh: 0: cannot open
+# /app/skills/safety-monitor/job/sweep.sh: No such file` -- the exact trap the aws-image-canary
+# comment above warns about, walked into by the person who read it. Its only imports are
+# kb-memory's azure-secret/aws-secret/sigv4, all already copied above.
+COPY skills/safety-monitor/ /app/skills/safety-monitor/
 # Bake the one dependency (xlsx) so a scheduled run never npm-installs mid-job. innd-stock.mjs keeps
 # its lazy-install fallback for a fresh checkout, but production should never need it.
 RUN cd /app/skills/innd-stock && npm install --omit=dev --no-audit --no-fund
