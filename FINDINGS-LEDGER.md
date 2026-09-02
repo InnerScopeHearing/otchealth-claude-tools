@@ -753,13 +753,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-29T00:09:18.101Z
 - **Closed:** (open)
 
-### finding:FND-20260829-878f severity:low status:open | Work-ledger attribution is caller-supplied, not token-bound, on connector surfaces
+### finding:FND-20260829-878f severity:low status:fixed | Work-ledger attribution is caller-supplied, not token-bound, on connector surfaces
 
 - **Source audit doc:** otchealth-mcp-server PR #263 review (sentry-bot prediction triage, 2026-08-29)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** otchealth-mcp-server PR #271 (draft, branch claude/bedrock-guardrails, commit 60b969d0b1ef6e109d8a64cbc98f63b80d302964) -- code fix + tests complete, NOT yet merged/deployed
+- **Verified by:** resolveAttribution pure-fn tests (9) + handler-level tests through the actual registered entry point on all 5 task_* tools (task_create/task_claim/task_update/task_heartbeat/task_complete), including the connector-lane-token-claiming-cto case explicitly asked for in the dispatch; typecheck/build clean; full suite 2000->2028 (28 new pass, same pre-existing 81 unrelated env-dependent failures unchanged). CTO review/merge/deploy still pending.
 - **Opened:** 2026-08-29T03:47:48.523Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:44:55.188Z
 
 ### finding:FND-20260829-e454 severity:high status:fixed | ChatGPT MCP client: 45s hard per-call timeout + fresh session per tool call - long-running gateway tools (brain_search deep, depot_* waits, heygen wait/poll) need job-id/poll shape on the ChatGPT surface; do not rely on per-session server state for ChatGPT callers
 
