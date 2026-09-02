@@ -49,6 +49,7 @@ import { fileURLToPath } from "node:url";
 import { kvSecret } from "./azure-secret.mjs";
 import { cGet, cPut, cList, commonsConfigured } from "./commons-store.mjs";
 import { chatBody, resolveTier } from "../../setup/model-routing.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
@@ -102,6 +103,14 @@ async function openaiChat(model, sys, user, max, attempt = 0) {
   }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error("chat " + r.status + " " + JSON.stringify(j).slice(0, 160));
+  recordOpenAIUsage({
+    model,
+    kind: "chat",
+    promptTokens: j.usage?.prompt_tokens || 0,
+    completionTokens: j.usage?.completion_tokens || 0,
+    cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+    caller: "kb-memory-librarian",
+  });
   return j.choices?.[0]?.message?.content || "";
 }
 async function chatQuality(sys, user, max = 900) { return openaiChat(QUALITY_MODEL, sys, user, max); }

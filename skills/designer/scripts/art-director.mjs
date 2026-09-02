@@ -23,6 +23,7 @@ import {
     loadCredentials, requireCredential, resolveBrand, parseArgs,
     resolveOpenAIProvider, requireAzureOpenAI, azureOpenAIUrl,
 } from './_lib.mjs';
+import { recordOpenAIUsage } from '../../../setup/openai-usage.mjs';
 
 const args = parseArgs(process.argv);
 const dryRun = Boolean(args['dry-run']);
@@ -155,7 +156,18 @@ async function callVision(useProvider) {
         }),
     });
     if (!res.ok) throw new Error(`${useProvider} vision ${res.status}: ${await res.text()}`);
-    return res.json();
+    const j = await res.json();
+    if (useProvider === 'openai') {
+        recordOpenAIUsage({
+            model,
+            kind: 'chat',
+            promptTokens: j.usage?.prompt_tokens || 0,
+            completionTokens: j.usage?.completion_tokens || 0,
+            cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+            caller: 'designer-art-director',
+        });
+    }
+    return j;
 }
 
 let data;

@@ -28,6 +28,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { chatBody, LEGACY_STANDARD, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 import { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL } from "./judge-bedrock-nova.mjs";
 import { compareJudgeRow, aggregateJudgeComparison, renderJudgeComparisonReport } from "./judge-compare.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -138,7 +139,16 @@ export async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
     const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
-    const choice = (await r.json()).choices[0];
+    const j = await r.json();
+    recordOpenAIUsage({
+      model: dep,
+      kind: "chat",
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: "agent-evals",
+    });
+    const choice = j.choices[0];
     // Reasoning-truncation handling (2026-08-30, FND-20260830-e927): on a truncated-empty response
     // (see chat()'s own comment below for the incident + measurements), escalate the token budget 2x
     // ONCE and retry within the SAME existing `effTries` allowance; if STILL truncated-empty on the

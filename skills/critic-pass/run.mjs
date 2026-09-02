@@ -29,6 +29,7 @@ import { pathToFileURL } from "node:url";
 import { buildCriticPrompt, parseCriticVerdict, shouldRevise } from "./critic.mjs";
 import { chatBody, resolveTier, LEGACY_STANDARD, serviceTierFor, flexRetryPolicy } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 
 const SM = "otchealth-shared-prod";
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
@@ -149,7 +150,16 @@ async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
     const r = await fetch(OPENAI_CHAT_URL, init);
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 160));
-    const choice = (await r.json()).choices[0];
+    const j = await r.json();
+    recordOpenAIUsage({
+      model: dep,
+      kind: "chat",
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: "critic-pass",
+    });
+    const choice = j.choices[0];
     // On truncated-empty, retry within the SAME existing `effTries` budget the 429 path already
     // uses (never more worst-case calls than that pre-existing retry allowance) -- but double the
     // token budget only the FIRST time this happens (`escalated` latches permanently), never on

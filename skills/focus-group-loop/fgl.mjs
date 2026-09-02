@@ -30,6 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, extname } from "node:path";
 import { LEGACY_STANDARD, chatBody, resolveTier } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai").toLowerCase();
@@ -89,7 +90,16 @@ async function callChatOpenAI(key, dep, system, content, maxTokens, tries) {
     const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise(s => setTimeout(s, ra ? ra * 1000 : 2000 * (a + 1))); continue; }
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 140));
-    return (await r.json()).choices[0].message.content;
+    const j = await r.json();
+    recordOpenAIUsage({
+      model: dep,
+      kind: "chat",
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: "focus-group-loop",
+    });
+    return j.choices[0].message.content;
   }
   throw Object.assign(new Error("chat 429 exhausted"), { throttled: true });
 }

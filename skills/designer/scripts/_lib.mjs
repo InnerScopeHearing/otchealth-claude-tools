@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname, basename, extname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { recordOpenAIUsage } from '../../../setup/openai-usage.mjs';
 
 const HOME = homedir();
 const SKILL_HOME = resolve(HOME, '.claude/skills/designer');
@@ -133,9 +134,39 @@ export function writeMeta(outputPath, meta) {
 }
 
 // ─── Cost reporting ───────────────────────────────────────────────────
+// This is also the ONE place that gives every designer OpenAI call (gpt-image-1 generation, Sora
+// video) fleet cost visibility -- see the callers of recordOpenAIUsage() below and
+// setup/openai-usage.mjs's own header. Deliberately NOT instrumented at each individual fetch() call
+// site in gen-image.mjs / gen-app-icon-family.mjs / gen-icon-batch.mjs / _openai.mjs: those already
+// compute an exact, provider-published per-call dollar figure themselves (quality/size-aware for
+// images, duration-aware for Sora) and hand it to reportCost() as `costUsd` -- recording it a SECOND
+// time at the raw fetch() call, with this module's own coarser fallback price table, would either
+// double-count the spend or silently disagree with the number this file already prints to the user.
+function callerFromArgv() {
+    try {
+        return basename(process.argv[1] || '', '.mjs') || 'designer';
+    } catch {
+        return 'designer';
+    }
+}
 export function reportCost({ provider, model, units, costUsd, dryRun }) {
     const tag = dryRun ? '[DRY-RUN]' : '[BILLED]';
     console.log(`${tag} ${provider}/${model}: ${units} → ~$${costUsd.toFixed(3)}`);
+    // A dry run never made the real network call -- recording it would report money that was never
+    // spent. Only 'openai' (the exact literal every OpenAI-routed reportCost() call already uses,
+    // e.g. gen-image.mjs's `provider === 'vertex' ? 'google-vertex' : provider`) is in scope here;
+    // 'azure-openai'/'google-vertex'/'elevenlabs'/'recraft'/etc. are out of scope for this module.
+    if (dryRun || provider !== 'openai') return;
+    const m = String(model || '');
+    const kind = /^gpt-image/i.test(m) ? 'image' : 'other';
+    const imagesGuess = parseInt(String(units || '').match(/^(\d+)/)?.[1] || '1', 10) || 1;
+    recordOpenAIUsage({
+        model: m || 'unknown',
+        kind,
+        images: imagesGuess,
+        caller: callerFromArgv(),
+        costUsdOverride: typeof costUsd === 'number' ? costUsd : undefined,
+    });
 }
 
 // ─── Arg parsing (minimal, dep-free) ──────────────────────────────────

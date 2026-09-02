@@ -60,6 +60,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { diffScorecards } from "./promptcheck.mjs";
 import { TIERS, chatBody, resolveTier, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 
 // LLM_PROVIDER (2026-08-27, Azure Foundry retirement port): Azure subscription 55c84f6b (the whole
 // Foundry estate defaultRewriteLLM called exclusively) is permanently deleted -- verified 401 forever.
@@ -484,7 +485,16 @@ export async function defaultRewriteLLM(promptText) {
     const body = { ...chatBody(dep, { messages: [{ role: "system", content: sys }, { role: "user", content: promptText }], maxTokens }), model: dep };
     const r = await fetch(OPENAI_CHAT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error("rewrite chat " + r.status + " " + (await r.text()).slice(0, 160));
-    const choice = (await r.json()).choices[0];
+    const j = await r.json();
+    recordOpenAIUsage({
+      model: dep,
+      kind: "chat",
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: "agent-evals-selfrepair",
+    });
+    const choice = j.choices[0];
     if (truncatedEmpty(choice)) {
       throw Object.assign(new Error(`reasoning model "${dep}" exhausted its token budget (${maxTokens}) on hidden reasoning with no visible output (finish_reason=length)`), { reasoningExhausted: true });
     }

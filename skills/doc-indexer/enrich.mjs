@@ -159,6 +159,7 @@ import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } fro
 // (PR #472) -- the fleet's one Bedrock Converse signer/transport -- rather than a second one; see
 // this file's own "LLM PROVIDER" section below for why the Bedrock lane is opt-in only.
 import { VALID_PROVIDERS, DEFAULT_PROVIDER, defaultModelFor, estCostFor, extractJsonObject, callBedrockChat } from "./enrich-llm.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 
 // ============================ CLI ============================
 const argv = process.argv.slice(2);
@@ -428,6 +429,14 @@ async function chatJson(messages, max_tokens) {
     if (r.status === 429) { const ra = parseInt(r.headers.get("retry-after") || "0", 10); await sleep((ra > 0 ? ra * 1000 : 4000) + Math.floor(Math.random() * 1200)); return chatJson(messages, max_tokens); }
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error("chat " + r.status + " " + JSON.stringify(j).slice(0, 160));
+    recordOpenAIUsage({
+      model: MODEL,
+      kind: "chat",
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: "doc-indexer-enrich",
+    });
     return { text: j.choices?.[0]?.message?.content || "", usage: j.usage || {} };
   }
   for (const host of [FEP, "https://otchealth-foundry.cognitiveservices.azure.com"]) {

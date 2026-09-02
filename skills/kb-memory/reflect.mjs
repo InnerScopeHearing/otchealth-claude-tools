@@ -35,6 +35,7 @@ import { dirname, join } from "node:path";
 import { kvSecret } from "./azure-secret.mjs";
 import { chatBody, resolveTier, LEGACY_STANDARD } from "../../setup/model-routing.mjs";
 import { FAILED_WRITE_FILE, appendFailedWriteFallback } from "./local-fallback.mjs";
+import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
 // Durable local fallback for a lesson that failed to persist to the real ledger (2026-08-18).
@@ -156,6 +157,14 @@ async function callChatOpenAI(key, dep, system, user, maxTokens, tries) {
     if (r.status === 429) { const ra = +(r.headers.get("retry-after") || 0); await new Promise((s) => setTimeout(s, ra ? ra * 1000 : 1500 * (a + 1))); continue; }
     if (!r.ok) { const body = await r.text().catch(() => ""); throw new Error("chat " + r.status + (body ? " " + body.slice(0, 160) : "")); }
     const j = await r.json();
+    recordOpenAIUsage({
+      model: dep,
+      kind: "chat",
+      promptTokens: j.usage?.prompt_tokens || 0,
+      completionTokens: j.usage?.completion_tokens || 0,
+      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
+      caller: "kb-memory-reflect",
+    });
     return j.choices?.[0]?.message?.content || "";
   }
   throw Object.assign(new Error("429 exhausted"), { throttled: true });
