@@ -782,7 +782,7 @@ export function flatRoomMapping(dims = EMB_DIMS) {
         execution_status: { type: "keyword" },
         signed: { type: "boolean" },
         indexed_at: { type: "date" },
-        [OS_VECTOR_FIELD_FLAT]: { type: "knn_vector", dimension: dims, method: { name: "hnsw", engine: "nmslib", space_type: "cosinesimil" } },
+        [OS_VECTOR_FIELD_FLAT]: { type: "knn_vector", dimension: dims, method: { name: "hnsw", engine: "faiss", space_type: "cosinesimil" } },
       },
     },
   };

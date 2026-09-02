@@ -52,6 +52,7 @@
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { TIERS, LEGACY_STANDARD, resolveTier, modelFamilyOf, chatBody, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { RING_DENY } from "../kb-memory/dedupe.mjs";
 import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
@@ -298,6 +299,14 @@ export async function callChat(p, system, user, tries) {
   // max_tokens + a non-default temperature on api.openai.com exactly as they do on Foundry.
   let curTokens = BRAIN_MAX_TOKENS;
   let escalated = false;
+  // Prompt-caching hygiene (2026-09-02): `system` (either ask()'s or diffCmd()'s --summarize system
+  // prompt, both module-level string literals) is fully static and already sent first, with the
+  // per-question SOURCES/DELTA content (fully variable, never shared across calls) last -- already
+  // cache-friendly order. Logged ONCE per attempt here (the single transport both callers funnel
+  // through) rather than at each of the two call sites, so this never drifts if a third caller is
+  // added later. company-brain is interactive/on-demand, excluded from OPENAI_BATCH by design (see
+  // run-evals.mjs's BATCH MODE section header for the general rule this follows).
+  logPrefixForText("company-brain", system);
   for (let a = 0; a < tries; a++) {
     const shaped = chatBody(p.dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: curTokens });
     const req = chatRequestFor(p, shaped);

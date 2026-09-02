@@ -59,6 +59,7 @@ import { dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { diffScorecards } from "./promptcheck.mjs";
 import { TIERS, chatBody, resolveTier, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 
@@ -472,6 +473,10 @@ function loadTaskRubric(agent, taskId) {
 // No behavior change.
 export async function defaultRewriteLLM(promptText) {
   const sys = "You rewrite a prompt hunk to recover failed rubric criteria while keeping the PR's intended change. Output ONLY the replacement hunk text, no commentary, no code fences.";
+  // Prompt-caching hygiene (2026-09-02): `sys` is fully static (never depends on promptText) and is
+  // already sent FIRST as the system message with the variable hunk text LAST -- already
+  // cache-friendly order, so this is observability only, not a reorder.
+  logPrefixForText("agent-evals:selfrepair", sys);
   if (LLM_PROVIDER === "openai") {
     const dep = process.env.SELFREPAIR_REWRITE_MODEL || resolveTier("quality", "openai").deployment;
     const key = process.env.OPENAI_API_KEY || (await smGet("openai-api-key"));

@@ -33,7 +33,8 @@ import crypto from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { makeSignal, isMnpiSubject, isPhiExcluded } from "../schema.mjs";
-import { TIERS, LEGACY_STANDARD, chatBody, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv } from "../../../setup/model-routing.mjs";
+import { TIERS, LEGACY_STANDARD, chatBody, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv, isBatchEnabled, buildBatchLine, submitBatch, awaitBatch, assertAllBatchResultsPresent } from "../../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../../setup/prompt-shape.mjs";
 import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 import { recordOpenAIUsage } from "../../../setup/openai-usage.mjs";
 
@@ -401,21 +402,35 @@ async function callOpenAI(key, dep, system, user, maxTokens, tries) {
 // needing the shared exec feed itself to be reachable -- the existing scanRows-level tests already
 // cover the pure gating/materiality logic with an injected fake entailer; this covers the actual
 // network call and its FAIL-LOUD behavior on a genuine provider failure.
-export async function makeEntailer() {
-  const SYS = `You are a precise fact-checker for an internal company memory ledger. You are given ONE NEW statement and a small numbered set of PRIOR statements about the same named entity. Decide, for the SINGLE prior statement (if any) that most clearly conflicts, whether the new statement:
+// Hoisted to module scope (2026-09-02, was a local `const SYS` inside makeEntailer()) so the OPENAI_BATCH
+// entailer below (makeBatchedEntailer) can share the IDENTICAL static system prompt without a second,
+// potentially-drifting copy. Unchanged wording.
+const CONTRADICTION_SYSTEM = `You are a precise fact-checker for an internal company memory ledger. You are given ONE NEW statement and a small numbered set of PRIOR statements about the same named entity. Decide, for the SINGLE prior statement (if any) that most clearly conflicts, whether the new statement:
 - "agree": consistent, or merely restates/paraphrases, or adds no conflicting info.
 - "supersede": a NORMAL expected update (a version/build number bump, a status flip from pending to done, a value that legitimately changed over time). NOT a contradiction.
 - "contradict": the new and the prior statement cannot both be true - a real, unambiguous factual conflict.
 - "stale-with-material-drift": the prior statement asserts an ongoing/current state that is implausible to still hold given the time elapsed and the new statement, though not in direct logical conflict.
 Be CONSERVATIVE: prefer "supersede" or "agree" unless the conflict is unambiguous. This feeds an automated alert; false positives cost real attention. Respond with STRICT JSON only: {"label":"agree|supersede|contradict|stale-with-material-drift","citedId":"<exact prior row id, or null>","reason":"<one short sentence>"}. You MUST cite the exact prior row id you judged against when label is contradict or stale-with-material-drift.`;
 
+// Extracted (2026-09-02, unchanged wording) from makeEntailer()'s inline template so both the LIVE
+// openai entailer below and makeBatchedEntailer()'s batch lines build the byte-identical user prompt.
+function buildEntailUser(newRow, slice) {
+  return `NEW (id ${newRow.id}, ${(newRow.ts || "").slice(0, 10)}, ${newRow.type}): "${clip(newRow.text, 400)}"\n\nPRIOR STATEMENTS (same entity keys: ${(newRow.ekeys || []).join(", ") || "n/a"}):\n` +
+    slice.map((p) => `[${p.id}] (${(p.ts || "").slice(0, 10)}) ${p.type}: "${clip(p.text, 300)}"${p.was ? ` (was: "${clip(p.was, 120)}")` : ""}`).join("\n");
+}
+
+export async function makeEntailer() {
+  const SYS = CONTRADICTION_SYSTEM;
+
   if (LLM_PROVIDER === "openai") {
     const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
     if (!key) return null;
     const dep = resolveTier(process.env.CONTRADICTION_MODEL || "quality", "openai").deployment;
     return async function entail(newRow, slice) {
-      const user = `NEW (id ${newRow.id}, ${(newRow.ts || "").slice(0, 10)}, ${newRow.type}): "${clip(newRow.text, 400)}"\n\nPRIOR STATEMENTS (same entity keys: ${(newRow.ekeys || []).join(", ") || "n/a"}):\n` +
-        slice.map((p) => `[${p.id}] (${(p.ts || "").slice(0, 10)}) ${p.type}: "${clip(p.text, 300)}"${p.was ? ` (was: "${clip(p.was, 120)}")` : ""}`).join("\n");
+      const user = buildEntailUser(newRow, slice);
+      // Prompt-caching hygiene (2026-09-02): CONTRADICTION_SYSTEM is fully static and already sent
+      // first, with the per-row NEW+PRIOR content last -- already cache-friendly, observability only.
+      logPrefixForText("signal-radar-contradiction-staleness", SYS);
       let raw;
       try {
         raw = await callOpenAI(key, dep, SYS, user, CONTRADICTION_MAX_TOKENS, 4);
@@ -458,8 +473,7 @@ Be CONSERVATIVE: prefer "supersede" or "agree" unless the conflict is unambiguou
   };
 
   return async function entail(newRow, slice) {
-    const user = `NEW (id ${newRow.id}, ${(newRow.ts || "").slice(0, 10)}, ${newRow.type}): "${clip(newRow.text, 400)}"\n\nPRIOR STATEMENTS (same entity keys: ${(newRow.ekeys || []).join(", ") || "n/a"}):\n` +
-      slice.map((p) => `[${p.id}] (${(p.ts || "").slice(0, 10)}) ${p.type}: "${clip(p.text, 300)}"${p.was ? ` (was: "${clip(p.was, 120)}")` : ""}`).join("\n");
+    const user = buildEntailUser(newRow, slice);
     let raw, lastErr;
     for (let i = 0; i < providers.length; i++) {
       // Fall through to the next provider on ANY failure (throttle OR e.g. a 404 when the quality-tier
@@ -476,20 +490,112 @@ Be CONSERVATIVE: prefer "supersede" or "agree" unless the conflict is unambiguou
   };
 }
 
+/**
+ * planEntailments(rows, opts) -> Array<{ row, slice }>
+ * Replicates scanRows()'s OWN row-selection walk (annotate -> recentClaimRows -> sort -> per-row
+ * candidateSlice, respecting maxLlmCalls) EXACTLY, so a batch built from this plan lines up 1:1 with
+ * the (row, slice) pairs scanRows() will independently walk when handed a batched `entail` built from
+ * this same plan (see makeBatchedEntailer() below). Kept as its own pure function (not folded into
+ * scanRows() itself) so scanRows() stays completely UNCHANGED -- the one existing, well-tested
+ * orchestration loop, reused unmodified by both the live and batch entailment paths.
+ */
+export function planEntailments(rows, opts = {}) {
+  const nowMs = opts.nowMs ?? Date.now();
+  const windowDays = opts.windowDays ?? WINDOW_DAYS;
+  const maxCandidates = opts.maxCandidates ?? MAX_CANDIDATES;
+  const maxLlmCalls = opts.maxLlmCalls ?? MAX_LLM_CALLS;
+  const annotated = (rows || [])
+    .filter((r) => r && typeof r === "object")
+    .map((r) => (r.ekeys ? r : { ...r, ekeys: extractEntityKeys(r.text, r.tags) }));
+  const recent = recentClaimRows(annotated, nowMs, windowDays).sort(
+    (a, b) => (Date.parse(a.ts || "") || 0) - (Date.parse(b.ts || "") || 0)
+  );
+  const plan = [];
+  for (const r of recent) {
+    if (plan.length >= maxLlmCalls) break;
+    const slice = candidateSlice(annotated, r, { maxCandidates });
+    if (!slice.length) continue;
+    plan.push({ row: r, slice });
+  }
+  return plan;
+}
+
+/**
+ * makeBatchedEntailer(rows, opts) -> Promise<Function|null>
+ * OPENAI_BATCH (2026-09-02): builds the SAME set of entailment calls scanRows() would make one at a
+ * time (via planEntailments above), submits them all as ONE Batch API job (50% off vs synchronous
+ * pricing, stacks with prompt caching -- CONTRADICTION_SYSTEM is fully static across every row in a
+ * scan), then returns an `entail(newRow, slice)` function with the IDENTICAL signature and return
+ * shape as makeEntailer()'s live openai entailer -- a drop-in for scanRows()'s injected `entail`
+ * parameter (same contract as makeEntailer: returns `null`, never throws, when no openai-api-key is
+ * resolvable). scanRows() itself is completely unmodified by this lane.
+ *
+ * Looked up by row id (the ledger's own primary key). If scanRows() ever asks this entailer about a
+ * row NOT in the pre-built plan -- which would mean this function's planEntailments() call and
+ * scanRows()'s own walk have somehow gone out of sync -- this THROWS loudly rather than fabricating a
+ * fail-quiet 'agree', because that specific silent-success shape is exactly what FND-20260819-c9bb
+ * flagged elsewhere in this fleet.
+ */
+export async function makeBatchedEntailer(rows, opts = {}) {
+  const key = process.env.OPENAI_API_KEY || (await kvSecret("openai-api-key"));
+  if (!key) return null;
+  const dep = resolveTier(process.env.CONTRADICTION_MODEL || "quality", "openai").deployment;
+  const plan = planEntailments(rows, opts);
+  if (!plan.length) {
+    return async () => ({ label: "agree", citedId: null, reason: "unreachable (batch plan had nothing to entail)" });
+  }
+  logPrefixForText("signal-radar-contradiction-staleness", CONTRADICTION_SYSTEM);
+  const lines = plan.map((p, i) => buildBatchLine({
+    customId: `row-${i}`,
+    deployment: dep,
+    messages: [{ role: "system", content: CONTRADICTION_SYSTEM }, { role: "user", content: buildEntailUser(p.row, p.slice) }],
+    maxTokens: CONTRADICTION_MAX_TOKENS,
+    jsonMode: true,
+  }));
+  console.error(`[signal-radar-contradiction-staleness] OPENAI_BATCH: submitting ${lines.length} entailment request(s) as one Batch API job (50% off, up to 24h)...`);
+  const batchId = await submitBatch(lines, { apiKey: key });
+  console.error(`[signal-radar-contradiction-staleness] OPENAI_BATCH: batch ${batchId} submitted, waiting for it to complete...`);
+  const { results } = await awaitBatch(batchId, {
+    apiKey: key,
+    onPoll: ({ status, elapsedMs }) => console.error(`[signal-radar-contradiction-staleness] OPENAI_BATCH: batch ${batchId} status=${status} (${Math.round(elapsedMs / 1000)}s elapsed)`),
+  });
+  assertAllBatchResultsPresent(lines.map((l) => l.custom_id), results);
+  console.error(`[signal-radar-contradiction-staleness] OPENAI_BATCH: batch ${batchId} complete.`);
+  const byRowId = new Map(plan.map((p, i) => [p.row.id, results.get(`row-${i}`)]));
+  return async function entail(newRow) {
+    const r = byRowId.get(newRow.id);
+    if (!r) throw new Error(`detector ERROR: no pre-computed batch result for row ${newRow.id} (batch plan/scanRows mismatch)`);
+    if (r.error) throw new Error(`detector ERROR: OpenAI batch entailment failed for row ${newRow.id}: ${r.error}`);
+    let parsed;
+    try { parsed = JSON.parse(r.content); } catch { return { label: "agree", citedId: null, reason: "malformed model output, fail-quiet" }; }
+    return { label: parsed.label, citedId: parsed.citedId || null, reason: parsed.reason || "" };
+  };
+}
+
 export async function run() {
   const notes = [];
   try {
     const { rows, note } = await readSharedFeed();
     if (note) notes.push(note);
     if (!rows.length) return { signals: [], notes };
-    const entail = await makeEntailer();
+    // ONE nowMs, reused for both planning and scanning -- makeBatchedEntailer()'s plan and
+    // scanRows()'s own walk must agree on exactly which rows count as "recent" (see
+    // planEntailments()'s doc comment); two separate Date.now() calls could in principle straddle a
+    // window boundary (however unlikely at a multi-day window) and cause a spurious plan/scan mismatch.
+    const nowMs = Date.now();
+    // OPENAI_BATCH (2026-09-02): both unset (the state of every job today) means this stays on the
+    // EXACT pre-existing makeEntailer() path -- byte-identical to before this lever existed. See
+    // makeBatchedEntailer()'s own header for the full contract.
+    const entail = (LLM_PROVIDER === "openai" && isBatchEnabled("signal-radar-contradiction-staleness"))
+      ? await makeBatchedEntailer(rows, { nowMs })
+      : await makeEntailer();
     if (!entail) {
       notes.push(LLM_PROVIDER === "openai"
         ? "openai-api-key unavailable (env OPENAI_API_KEY or the fleet secret) - entailment skipped, detector idle."
         : "Azure OpenAI creds unavailable (azure-foundry-openai-endpoint/key or azure-openai-endpoint/key) - entailment skipped, detector idle.");
       return { signals: [], notes };
     }
-    const res = await scanRows(rows, entail, { nowMs: Date.now() });
+    const res = await scanRows(rows, entail, { nowMs });
     return { signals: res.signals, notes: notes.concat(res.notes) };
   } catch (e) {
     // FAIL-OPEN: never throw out of the detector (runDetectorSafely also catches, this is belt+braces).

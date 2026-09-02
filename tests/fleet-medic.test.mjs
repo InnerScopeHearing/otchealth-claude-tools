@@ -49,13 +49,57 @@ test("sm(): regression pin -- never sends a token-mint request built from a null
 });
 
 const NOW = Date.parse("2026-06-25T12:00:00Z");
-const OPTS = { beaconFreshMin: 120, staleWatchMin: 10080, cooldownMin: 360, escalateAfter: 3, roster: [] };
+const OPTS = { beaconFreshMin: 120, staleWatchMin: 10080, cooldownMin: 360, escalateAfter: 3, darkConsecutive: 2, roster: [] };
 const byAgent = (rows) => Object.fromEntries(rows.map((r) => [r.agent, r]));
 
-test("a FRESH beacon with hooks unwired = active-but-broken -> DISPATCH (the real fire)", () => {
-  const r = byAgent(classify([], { developer: { status: "DARK", age_min: 5, hooks_wired: false, ledger_size: 0 } }, {}, NOW, OPTS));
+// FND-20260902-67ce: a DARK condition now additionally requires `darkConsecutive` (default 2) CONSECUTIVE
+// SCANS before it is allowed to dispatch -- so this test's fixture now carries a prior `dark_streak: 1`
+// (this agent was ALSO DARK last scan) to represent "the second consecutive DARK reading", which is what
+// actually fires the real dispatch today. See "single DARK does not dispatch" / "two consecutive DARK
+// dispatches" below for the two halves of the new gate on their own, and the counterfactual further down
+// for proof the gate (not something else) is what changed this test's behaviour.
+test("a FRESH beacon with hooks unwired = active-but-broken, on the 2nd consecutive DARK scan -> DISPATCH (the real fire)", () => {
+  const r = byAgent(classify([], { developer: { status: "DARK", age_min: 5, hooks_wired: false, ledger_size: 0 } },
+    { developer: { dark_streak: 1 } }, NOW, OPTS));
   assert.strictEqual(r.developer.condition, "DARK");
+  assert.strictEqual(r.developer.dark_streak, 2);
   assert.strictEqual(r.developer.dispatch, true);
+});
+
+test("FND-20260902-67ce: a SINGLE fresh DARK beacon (no prior streak) does NOT dispatch yet -- a transient reading must not page", () => {
+  const r = byAgent(classify([], { developer: { status: "DARK", age_min: 5, hooks_wired: false, ledger_size: 0 } }, {}, NOW, OPTS));
+  assert.strictEqual(r.developer.condition, "DARK", "still correctly classified DARK");
+  assert.strictEqual(r.developer.dark_streak, 1);
+  assert.strictEqual(r.developer.dispatch, false, "one reading alone must not dispatch");
+  assert.strictEqual(r.developer.streak_gated, true);
+});
+
+test("FND-20260902-67ce: TWO consecutive DARK scans (state chained between calls, as scan() persists it in production) DOES dispatch on the second", () => {
+  const beacons = { developer: { status: "DARK", age_min: 5, hooks_wired: false, ledger_size: 0 } };
+  const first = classify([], beacons, {}, NOW, OPTS)[0];
+  assert.strictEqual(first.dispatch, false, "scan 1 of 2: not yet");
+  // production persists dark_streak (not just consecutive_dark) every scan regardless of dispatch --
+  // see scan()'s newState seeding loop -- so feed scan 1's dark_streak into scan 2's state, exactly as
+  // medic.mjs itself does.
+  const state2 = { developer: { dark_streak: first.dark_streak } };
+  const second = classify([], beacons, state2, NOW + 30 * 60000, OPTS)[0];
+  assert.strictEqual(second.dark_streak, 2);
+  assert.strictEqual(second.dispatch, true, "scan 2 of 2: dispatches");
+});
+
+test("FND-20260902-67ce counterfactual: darkConsecutive:1 (the pre-fix-equivalent) reproduces the ORIGINAL single-scan dispatch -- proving the gate (not something else) is what changed the behaviour above", () => {
+  const r = byAgent(classify([], { developer: { status: "DARK", age_min: 5, hooks_wired: false, ledger_size: 0 } }, {}, NOW, { ...OPTS, darkConsecutive: 1 }));
+  assert.strictEqual(r.developer.dispatch, true, "darkConsecutive:1 must reproduce dispatch-on-first-sight");
+});
+
+test("FND-20260902-67ce: a 'starting' beacon (beacon.mjs's own startup grace) is healthy-pending -- never DARK, never dispatches, never escalates, and does not touch the DARK streak", () => {
+  const r = byAgent(classify([], { developer: { status: "starting", age_min: 2, hooks_wired: false, ledger_size: 0 } },
+    { developer: { dark_streak: 1 } }, NOW, OPTS));
+  assert.strictEqual(r.developer.condition, "STARTING");
+  assert.strictEqual(r.developer.severity, "ok");
+  assert.strictEqual(r.developer.dispatch, false);
+  assert.strictEqual(r.developer.escalate, false);
+  assert.strictEqual(r.developer.dark_streak, 0, "STARTING is not DARK, so it resets rather than extends any prior streak");
 });
 
 test("a fresh LIVE beacon = memory functioning -> HEALTHY, no dispatch", () => {
@@ -95,8 +139,12 @@ test("cooldown suppresses a re-dispatch within the window", () => {
 
 test("persistent DARK across the threshold ESCALATES to the human", () => {
   const old = new Date(NOW - 10 * 3600 * 1000).toISOString(); // past cooldown
+  // dark_streak: 5 -- FND-20260902-67ce's new streak gate needs >= darkConsecutive (2) consecutive DARK
+  // SCANS before a dispatch is even considered; a agent that has escalated through 2 prior dispatch
+  // CYCLES (consecutive_dark: 2, ~6h apart per COOLDOWN_MIN) has self-evidently been DARK across far
+  // more than 2 consecutive scans, so this fixture is a persistent, long-running failure on both axes.
   const r = byAgent(classify([], { developer: { status: "DARK", age_min: 5, hooks_wired: false, ledger_size: 0 } },
-    { developer: { last_dispatch_ts: old, consecutive_dark: 2 } }, NOW, OPTS)); // this dispatch makes it 3
+    { developer: { last_dispatch_ts: old, consecutive_dark: 2, dark_streak: 5 } }, NOW, OPTS)); // this dispatch makes consecutive_dark 3
   assert.strictEqual(r.developer.dispatch, true);
   assert.strictEqual(r.developer.consecutive_dark, 3);
   assert.strictEqual(r.developer.escalate, true);

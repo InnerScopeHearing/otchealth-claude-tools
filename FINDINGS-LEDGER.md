@@ -201,21 +201,21 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-11T00:28:56.430Z
 - **Closed:** 2026-09-02T17:52:35.383Z
 
-### finding:FND-20260812-c22a severity:high status:open | WISMO stager (n8n x2epOeluOYLTFgo7) rejects the real Shopify fulfillment webhook on HMAC signature mismatch -- first live fulfillment event since deploy (Aug 4) silently failed to stage, no draft exists for order #10673's real UPS shipment despite fulfillment succeeding in Shopify
+### finding:FND-20260812-c22a severity:high status:fixed | WISMO stager (n8n x2epOeluOYLTFgo7) rejects the real Shopify fulfillment webhook on HMAC signature mismatch -- first live fulfillment event since deploy (Aug 4) silently failed to stage, no draft exists for order #10673's real UPS shipment despite fulfillment succeeding in Shopify
 
 - **Source audit doc:** CRO daily digest 2026-08-12
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Live production evidence, n8n workflow crDTSnQHM4G5FYDE (OTCHealth WISMO Fulfillment Stager, trigger-only design): rebuilt as an authenticated-re-fetch trigger stager (Shopify HMAC secret unavailable, rotation freeze in force, so the receiver never trusts the webhook body). Order #10673 / fulfillment 6860727877793 -- the exact fulfillment this finding names -- staged correctly end to end (exec 2734, data table row order_name=#10673, tracking_number=1Z6615490397619138, carrier=UPS matching a direct independent Shopify read, one internal Outlook email sent). Forged-order quarantine path proven with a genuine Shopify 404 (exec 2733, not the earlier undefined-URL false-positive). Duplicate replay proven to send zero second emails, row updatedAt unchanged (exec 2735). Shopify webhook subscription 1660974366881 repointed off the dead otc-wismo-stage path onto this workflow and independently read back. Full receipt: runbooks/2026-09-02-cs-rebuild-wismo.md.
 - **Opened:** 2026-08-12T14:06:00.168Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T20:14:33.847Z
 
-### finding:FND-20260814-4fea severity:medium status:open | Gateway ECS task role has OpenSearch write+delete though the gateway adapter is read-only; all 25 task-def families share otchealthTaskRole so it cannot be tightened without splitting roles first
+### finding:FND-20260814-4fea severity:medium status:fixed | Gateway ECS task role has OpenSearch write+delete though the gateway adapter is read-only; all 25 task-def families share otchealthTaskRole so it cannot be tightened without splitting roles first
 
 - **Source audit doc:** otchealth-cto/runbooks/AWS-CUTOVER-2026-08-14.md
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** gateway task def otchealth-gateway:36 runs with taskRoleArn otchealthGatewayTaskRole (inline gateway-runtime: es Get/Head/Post/Put on domain/otchealth-brain/* with NO es:ESHttpDelete, ssm Get* /otchealth/*, kms:Decrypt, the 3 DR buckets, sns otchealth-alerts, bedrock InvokeModel* + ApplyGuardrail m7goqvo48q4m). The premise that the adapter is read-only was stale: opensearch-write.ts PUTs _doc and opensearch-backfill.ts POSTs _bulk, so PUT/POST stay; only DELETE was removed. ECS_STABLE 2/2, /health 200, brain_search + memory writes verified after cutover.
 - **Opened:** 2026-08-14T07:41:59.160Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T19:24:35.835Z
 
 ### finding:FND-20260814-b126 severity:medium status:open | Brain-load ring backstop drops legitimate INND finance docs on a bare 'custody' token (236+ so far, fail-safe, flagged for human review, needs CLO decision before narrowing)
 
@@ -529,13 +529,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:28.013Z
 - **Closed:** 2026-08-28T22:41:00.181Z
 
-### finding:FND-20260827-b308 severity:medium status:open | innd.com Netlify env: N8N_SHAREHOLDER_WEBHOOK forwards shareholder signups to a dead n8n destination and soft-succeeds; unset or repoint at deploy of innd-website PR #11
+### finding:FND-20260827-b308 severity:medium status:fixed | innd.com Netlify env: N8N_SHAREHOLDER_WEBHOOK forwards shareholder signups to a dead n8n destination and soft-succeeds; unset or repoint at deploy of innd-website PR #11
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 259cd94
+- **Verified by:** otchealth-cto branch claude/shareholder-signup-restore: rebuilt workflow L3i5cMEBEqPU55tR on cs-n8n.otchealthmart.com, repointed innd.com Netlify env N8N_SHAREHOLDER_WEBHOOK to https://automation.otchealth.app/webhook/shareholder-signup, proved end to end via a real POST to https://innd.com/.netlify/functions/signup (n8n execution 2697, ok:true + code INND-... + all 5 steps succeeded), test side effects cleaned up. See runbooks/2026-09-02-shareholder-signup-restore.md
 - **Opened:** 2026-08-27T19:00:30.765Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T19:30:06.326Z
 
 ### finding:FND-20260827-2740 severity:medium status:fixed | Vendor webhook registries never enumerated (Stripe, RevenueCat, Customer.io, Intercom, Shopify, PostHog, Sentry): sweep each for Azure/n8n callback URLs once MCPs are authorized
 
@@ -585,13 +585,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:49:31.673Z
 - **Closed:** 2026-09-02T18:02:45.948Z
 
-### finding:FND-20260827-3a32 severity:low status:open | SSM netlify-token is STALE (Netlify API returns 401 Access Denied) -- blocks the N8N_SHAREHOLDER_WEBHOOK env unset (FND-20260827-b308) and any Netlify automation from the seat; needs a fresh PAT from app.netlify.com/user/applications (Matt) or Netlify MCP auth, then unset the var on the innd site (function then logs each signup email to Netlify function logs = recoverable, vs today's silent deferred loss)
+### finding:FND-20260827-3a32 severity:low status:fixed | SSM netlify-token is STALE (Netlify API returns 401 Access Denied) -- blocks the N8N_SHAREHOLDER_WEBHOOK env unset (FND-20260827-b308) and any Netlify automation from the seat; needs a fresh PAT from app.netlify.com/user/applications (Matt) or Netlify MCP auth, then unset the var on the innd site (function then logs each signup email to Netlify function logs = recoverable, vs today's silent deferred loss)
 
 - **Source audit doc:** live Netlify API probe 2026-08-27
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 259cd94
+- **Verified by:** SSM /otchealth/netlify-token authenticated cleanly for every call this session (site GET, account-scoped env GET/PUT, build trigger, deploy polling) -- zero 401s observed. Used live to repoint N8N_SHAREHOLDER_WEBHOOK and trigger+confirm a real rebuild. See runbooks/2026-09-02-shareholder-signup-restore.md
 - **Opened:** 2026-08-27T19:59:42.033Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T19:30:09.541Z
 
 ### finding:FND-20260828-3142 severity:high status:fixed | Brain ingest backfill + freshness canary: docs added since 2026-08-13 unindexed; librarian jobs must run OpenSearch push-search (PR #469) per room; add per-room newest-indexed_at-vs-newest-S3-object canary; verify librarian ECS env pins
 
@@ -729,13 +729,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T21:36:46.992Z
 - **Closed:** 2026-08-28T23:03:50.544Z
 
-### finding:FND-20260828-8823 severity:low status:open | Gateway gumroad_* tool family (39 tools) is dark: GUMROAD_ACCESS_TOKEN never provisioned on the AWS task def and no gumroad param exists in SSM (never evacuated from Azure KV). Fix needs Matt: re-mint the access token in Gumroad settings -> store as /otchealth/gw/GUMROAD_ACCESS_TOKEN -> add secret ref in next gateway task-def rev. Digital-products lane dormant, low urgency.
+### finding:FND-20260828-8823 severity:low status:fixed | Gateway gumroad_* tool family (39 tools) is dark: GUMROAD_ACCESS_TOKEN never provisioned on the AWS task def and no gumroad param exists in SSM (never evacuated from Azure KV). Fix needs Matt: re-mint the access token in Gumroad settings -> store as /otchealth/gw/GUMROAD_ACCESS_TOKEN -> add secret ref in next gateway task-def rev. Digital-products lane dormant, low urgency.
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md#2026-08-28
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 06b79a02
+- **Verified by:** gateway rev 36 (image 06b79a0) carries secret GUMROAD_ACCESS_TOKEN from SSM gw/GUMROAD_ACCESS_TOKEN (restored from the Notion vault, live-verified); gateway tool gumroad_user_get returned the creator account (matthew@otchealth.app, usd) on 2026-09-02 19:21Z
 - **Opened:** 2026-08-28T21:43:02.043Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T19:24:30.043Z
 
 ### finding:FND-20260828-8a48 severity:medium status:fixed | Restored Taylor workflow jJsq re-embeds the superseded Entra app a0bca2fb client secret INLINE in its Code node jsCode (pre-hardening restore regressed the 2026-08-07 credentialization; encrypted credential 8hPSiaFyOV3oxyk5 died with old instance). Now auth-gated at webhook (121c fix) but secret value sits in workflow JSON readable via n8n API, and the old tenant password key is still valid. Fix: re-credentialize Graph auth in the CS rebuild program, then owner/Application-Administrator removes the old password key (standing Matt gate).
 

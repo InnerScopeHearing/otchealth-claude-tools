@@ -31,6 +31,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { TIERS, chatBody } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { docketAdd, ensureStore } from "./legal.mjs";
 
 const MONTHS = "Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t|tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?";
@@ -142,6 +143,15 @@ async function defaultChat(system, user) {
   const key = (await kvSecret("azure-foundry-key")) || (await kvSecret("azure-openai-key"));
   if (!ep || !key) return null; // no creds -> fail open, deterministic context stands
   const dep = TIERS.standard.deployment; // gpt-4.1 on Foundry. NEVER TIERS.cheap (gpt-4.1-mini banned for quality work).
+  // Prompt-caching hygiene (2026-09-02): LABEL_SYSTEM (this file's only caller) is fully static and
+  // already sent first, with the per-candidate date/context text last -- already cache-friendly order,
+  // observability only. NOTE (not fixed here, out of this PR's scope): this call still targets Azure
+  // Foundry, which returns HTTP 401 forever since the Azure estate's permanent deletion (see
+  // otchealth-cto/CLAUDE.md's 2026-08-27 correction) -- unlike the six FND-20260819-c9bb callers, this
+  // one was never ported to OpenAI-direct, so it is NOT one of this sweep's "nightly OpenAI-direct
+  // jobs" and gets no batch/EVAL_JUDGE treatment; it fails open (returns null, the deterministic `what`
+  // stands) rather than crashing, so this is a discovered-but-dark gap, not a live incident.
+  logPrefixForText("legal-deadline-extract", system);
   const body = chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 60, temperature: 0.1 });
   const r = await fetch(`${ep}/openai/deployments/${dep}/chat/completions?api-version=2024-06-01`, { method: "POST", headers: { "api-key": key, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) return null;

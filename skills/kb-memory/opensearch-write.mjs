@@ -232,7 +232,7 @@ export function memoryIndexMapping() {
         tags: { type: "text" },
         text: { type: "text" },
         retracted: { type: "boolean" },
-        contentVector: { type: "knn_vector", dimension: EMB_DIMS, method: { name: "hnsw", engine: "nmslib", space_type: "cosinesimil" } },
+        contentVector: { type: "knn_vector", dimension: EMB_DIMS, method: { name: "hnsw", engine: "faiss", space_type: "cosinesimil" } },
       },
     },
   };

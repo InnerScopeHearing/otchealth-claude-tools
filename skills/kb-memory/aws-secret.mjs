@@ -26,15 +26,14 @@
 // themselves currently come FROM Key Vault, so that seat still bootstraps through Azure. That is a
 // seat-convenience gap, not a production one, and it is called out rather than hidden.
 //
-// Dependency-free: hand-rolled SigV4, no aws-sdk.
+// Dependency-free: no aws-sdk. SigV4 signing itself is ../../setup/aws-sigv4.mjs, the shared signer
+// this file's own ssmCall() migrated onto (FND-20260828-5ca1, 2026-09-02) -- see ssmCall()'s own
+// comment for the migration note.
 
-import crypto from "node:crypto";
+import { awsFetch } from "../../setup/aws-sigv4.mjs";
 
 const REGION = process.env.AWS_REGION || "us-east-1";
 const PREFIX = process.env.AWS_SSM_PREFIX || "/otchealth";
-
-const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
-const hmac = (k, d) => crypto.createHmac("sha256", k).update(d).digest();
 
 /**
  * Resolve AWS credentials, preferring the ECS task role.
@@ -131,58 +130,35 @@ export function awsCredsPresent() {
   return { ecs, env, otc, any: ecs || env || otc };
 }
 
-/** Signed SSM JSON-1.1 call. Returns { status, json } and never throws.
+/** Signed SSM JSON-1.1 call. Returns { status, json, reason } (plus `text`, unused by any existing
+ *  caller here but part of awsFetch()'s standard shape) and never throws.
  *
  *  Exported (2026-08-28, for the AWS-native secrets-DR export) so a caller needing an SSM action this
  *  file does not already wrap one-off (GetParameter with WithDecryption for the passphrase-exists
  *  check, PutParameter with Tier/KeyId for a faithful restore) reuses THIS SigV4 implementation
  *  instead of a fifth reimplementation of "how does this seat sign an SSM call" — the exact
- *  duplication class this file's own header (awsCredsPresent()'s comment) already calls out. */
+ *  duplication class this file's own header (awsCredsPresent()'s comment) already calls out.
+ *
+ *  FND-20260828-5ca1 (2026-09-02): the hand-rolled signer that lived here (canonical request, HMAC
+ *  chain, Authorization construction) is now ../../setup/aws-sigv4.mjs's awsFetch() -- one of six
+ *  hand-rolled SigV4 implementations this fleet had grown, consolidated into a single shared signer.
+ *  SSM always signs a bare "/" path (its JSON-RPC protocol has no meaningful URL path), so the
+ *  double-vs-single-encode question aws-sigv4.mjs exists to fix is a complete no-op here -- this
+ *  migration is a pure refactor with no behavior change, not a bug fix, for this specific caller.
+ *  Credentials are resolved HERE first (unchanged: this function's own early "no-aws-credentials"
+ *  check still runs before any signing work is attempted) and passed to awsFetch() explicitly, so
+ *  aws-sigv4.mjs's own internal awsCreds() fallback is never reached from this call site -- credential
+ *  SOURCING is untouched, only the signing math moved. */
 export async function ssmCall(target, body) {
   const creds = await awsCreds();
   if (!creds) return { status: 0, json: null, reason: "no-aws-credentials" };
   const host = `ssm.${REGION}.amazonaws.com`;
   const payload = JSON.stringify(body);
-  const amz = new Date().toISOString().replace(/[:-]|\..{3}/g, "");
-  const date = amz.slice(0, 8);
-  const hh = {
-    host,
-    "x-amz-date": amz,
-    "x-amz-target": `AmazonSSM.${target}`,
-    "content-type": "application/x-amz-json-1.1",
-    ...(creds.st ? { "x-amz-security-token": creds.st } : {}),
-  };
-  const keys = Object.keys(hh).sort();
-  const canonH = keys.map((k) => `${k}:${String(hh[k]).trim()}\n`).join("");
-  const signed = keys.join(";");
-  const creq = ["POST", "/", "", canonH, signed, sha256(payload)].join("\n");
-  const scope = `${date}/${REGION}/ssm/aws4_request`;
-  const sts = ["AWS4-HMAC-SHA256", amz, scope, sha256(creq)].join("\n");
-  let k = hmac("AWS4" + creds.sk, date);
-  k = hmac(k, REGION);
-  k = hmac(k, "ssm");
-  k = hmac(k, "aws4_request");
-  const sig = crypto.createHmac("sha256", k).update(sts).digest("hex");
-  try {
-    const r = await fetch(`https://${host}/`, {
-      method: "POST",
-      headers: {
-        ...hh,
-        Authorization: `AWS4-HMAC-SHA256 Credential=${creds.ak}/${scope}, SignedHeaders=${signed}, Signature=${sig}`,
-      },
-      body: payload,
-    });
-    const txt = await r.text();
-    let json = null;
-    try {
-      json = txt ? JSON.parse(txt) : null;
-    } catch {
-      json = null;
-    }
-    return { status: r.status, json, reason: r.ok ? null : `http-${r.status}` };
-  } catch (e) {
-    return { status: 0, json: null, reason: `error-${String((e && e.message) || e)}` };
-  }
+  return awsFetch(`https://${host}/`, {
+    method: "POST",
+    headers: { "x-amz-target": `AmazonSSM.${target}`, "content-type": "application/x-amz-json-1.1" },
+    body: payload,
+  }, { service: "ssm", region: REGION, credentials: creds });
 }
 
 /** True when SSM is reachable at all (credentials resolvable). Cheap, no network. */

@@ -26,10 +26,11 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { chatBody, LEGACY_STANDARD, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv } from "../../setup/model-routing.mjs";
+import { chatBody, LEGACY_STANDARD, resolveTier, serviceTierFor, flexRetryPolicy, truncatedEmpty, positiveIntEnv, isBatchEnabled, buildBatchLine, submitBatch, awaitBatch, assertAllBatchResultsPresent } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
-import { judgeBedrockNova, BEDROCK_NOVA_JUDGE_MODEL } from "./judge-bedrock-nova.mjs";
+import { judgeBedrockNova, BEDROCK_NOVA_MODELS } from "./judge-bedrock-nova.mjs";
 import { compareJudgeRow, aggregateJudgeComparison, renderJudgeComparisonReport } from "./judge-compare.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SM = "otchealth-shared-prod";
@@ -49,15 +50,37 @@ const ONLY_TASK = takeVal("--task", "");
 const EMIT = argv.includes("--emit");
 const JSON_OUT = takeVal("--json", "");
 const PASS_AT = 0.7;
-// JUDGE_PROVIDER (2026-08-29): opt-in alternative judge lane. UNSET (the default) is BYTE-FOR-BYTE the
-// pre-existing behavior -- the judge() function below is completely unchanged, and DEP (the SAME model
-// the agent persona ran on) is still what scores it. "bedrock-nova" routes judge() through
-// judge-bedrock-nova.mjs's Amazon Bedrock Nova Lite Converse call instead, a genuinely different model
-// family (removes the same-model-family judging-its-own-output correlated-bias risk the default judge
-// carries). --judge-compare (below) runs BOTH judges on every task regardless of JUDGE_PROVIDER, so the
-// CTO can decide the swap on evidence rather than switching blind.
-const JUDGE_PROVIDER = (process.env.JUDGE_PROVIDER || "").toLowerCase();
-const JUDGE_COMPARE = argv.includes("--judge-compare");
+// JUDGE_PROVIDER (2026-08-29): the ORIGINAL opt-in alternative-judge env var. Kept working UNCHANGED
+// for backward compat (SKILL.md and existing scripts reference it): "bedrock-nova" routes judge()
+// through judge-bedrock-nova.mjs's Amazon Bedrock Nova Lite Converse call instead of the default,
+// a genuinely different model family (removes the same-model-family judging-its-own-output
+// correlated-bias risk the default judge carries).
+//
+// EVAL_JUDGE (2026-09-02, the OpenAI cost-lever sweep's third lever): the NEW, CTO-facing selector,
+// with a third option JUDGE_PROVIDER never had -- openai (default, unchanged) | nova-micro | nova-lite.
+// EVAL_JUDGE, when set, takes precedence over JUDGE_PROVIDER; JUDGE_PROVIDER=bedrock-nova (with
+// EVAL_JUDGE unset) resolves to "nova-lite" for full backward compatibility, so nothing that already
+// sets JUDGE_PROVIDER needs to change. Both unset (every job today) resolves to "openai", the
+// EXACT pre-existing behavior -- judgeDefault() below is completely unchanged either way.
+export const JUDGE_PROVIDER = (process.env.JUDGE_PROVIDER || "").toLowerCase();
+const EVAL_JUDGE_RAW = (process.env.EVAL_JUDGE || "").toLowerCase();
+export const EVAL_JUDGE = EVAL_JUDGE_RAW || (JUDGE_PROVIDER === "bedrock-nova" ? "nova-lite" : "openai");
+// The resolved Nova model id for EVAL_JUDGE, or undefined when EVAL_JUDGE is "openai" (or any other
+// unrecognized value, which also falls back to the default openai judge rather than throwing --
+// an unrecognized EVAL_JUDGE is a config typo, not a reason to crash a nightly eval run).
+export const NOVA_JUDGE_MODEL = BEDROCK_NOVA_MODELS[EVAL_JUDGE];
+// The Nova model --judge-compare/--compare runs as "the other judge": whichever Nova model EVAL_JUDGE
+// itself resolves to when EVAL_JUDGE names one, else nova-lite (the original, most-tested Nova judge)
+// -- so `--compare` with no EVAL_JUDGE set (openai primary) still has a sensible default second judge
+// to compare against, and `--compare` WITH `EVAL_JUDGE=nova-micro` compares against nova-micro
+// specifically (not silently substituting nova-lite for what the caller explicitly asked to evaluate).
+export const COMPARE_NOVA_MODEL = NOVA_JUDGE_MODEL || BEDROCK_NOVA_MODELS["nova-lite"];
+// --judge-compare is the ORIGINAL flag name; --compare is the CTO-facing alias added 2026-09-02.
+// Both run the identical comparison (BOTH judges on every task's answer), which already generalizes
+// to "the same N golden answers" for whatever --agent/--task selects (or every task, if neither is
+// given) -- there is no separate hardcoded-10 mode, since hardcoding a count would regress the
+// moment the golden set's size changes.
+export const JUDGE_COMPARE = argv.includes("--judge-compare") || argv.includes("--compare");
 
 // short role briefs (v1). LATER: load the real dream-team agent definitions for full fidelity.
 const PERSONA = {
@@ -192,13 +215,56 @@ async function chat(system, user, maxTokens = 4000) {
   try { return await callChat(EP, KEY, DEP, system, user, maxTokens, 4); }
   catch (e) { if (e.throttled && FB_EP && FB_KEY) return await callChat(FB_EP, FB_KEY, FB_DEP, system, user, maxTokens, 5); throw e; }
 }
-// judgeDefault: the ORIGINAL judge, byte-for-byte unchanged (2026-08-29: only renamed from `judge` so
-// judge() below can dispatch on JUDGE_PROVIDER; every line of logic here is identical to before this
-// file had a second judge provider). Scores via the SAME chat()/DEP the agent persona ran on.
+
+// personaPromptFor(t) -> { system, user } -- extracted (2026-09-02, unchanged wording/values) from
+// the inline expression main()'s per-task loop used to build directly, so BOTH the synchronous path
+// (chat(system, user)) and the new batch path (runPersonaBatch() below) build the IDENTICAL prompt
+// from one place, with zero risk of the two drifting apart over time. `system` is STATIC per agent
+// (the persona brief + the fixed "answer concretely" suffix, neither of which depends on the specific
+// task); `user` is the single genuinely variable part (the task text). Already cache-friendly order
+// (static first, variable last) -- logs its own cache-eligibility line via prompt-shape.mjs's shared
+// helper, once per task regardless of which path (sync or batch) ultimately sends it.
+export function personaPromptFor(t) {
+  const system = (PERSONA[t.agent] || `You are the ${t.agent}.`) + " Answer concretely and completely: name the SPECIFIC tools, gates, thresholds, numbers, and rules you would apply and WHY, cover every relevant consideration explicitly rather than implying it, and whenever you refuse or block, also state the compliant path.";
+  logPrefixForText(`agent-evals:persona:${t.agent}`, system);
+  return { system, user: t.task };
+}
+
+// judgePromptFor(task, rubric) -> { sys, user } -- the default judge's STATIC system prompt + its
+// TASK+RUBRIC+ANSWER user content, extracted (2026-09-02, unchanged wording) from judgeDefault() below
+// so the batch judge path (runJudgeBatch()) builds the byte-identical prompt without a second copy of
+// this template. `sys` never depends on task/rubric/answer (fully static across every call, any
+// agent). `user` places TASK+RUBRIC (stable across repeated nightly runs of the SAME golden task)
+// BEFORE `answer` (the one part that is genuinely different every run) -- already the cache-friendly
+// order. Takes `answer` as a THIRD, separate argument (not baked into this function) so the batch
+// path can build one request per task from a Map of already-known answers without re-deriving
+// task/rubric each time; logs the SAME prompt-shape line either way.
+const JUDGE_SYSTEM = "You are a strict eval judge. Given a task, a rubric (list of criteria), and a candidate answer, decide for EACH criterion whether the answer satisfies it. Return ONLY compact JSON: {\"met\":[true/false per criterion in order],\"notes\":\"one line\"}.";
+export function judgePromptFor(task, rubric, answer) {
+  logPrefixForText("agent-evals:judge", JUDGE_SYSTEM);
+  return { sys: JUDGE_SYSTEM, user: `TASK:\n${task}\n\nRUBRIC:\n${rubric.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\nANSWER:\n${answer}` };
+}
+
+// parseJudgeOutput(raw, rubric) -> {met, score, notes} -- the default judge's parse/defensiveness
+// logic, extracted (2026-09-02, unchanged) from judgeDefault() below so the batch judge path parses a
+// batch-returned completion string through the IDENTICAL fail-safe logic (malformed JSON -> all-false
+// with a "judge parse failed" note, short/long `met` arrays padded/truncated to rubric.length) rather
+// than a second, potentially-drifting copy.
+export function parseJudgeOutput(raw, rubric) {
+  let j; try { j = JSON.parse(raw.match(/\{[\s\S]*\}/)[0]); } catch { j = { met: rubric.map(() => false), notes: "judge parse failed" }; }
+  const met = (j.met || []).slice(0, rubric.length); while (met.length < rubric.length) met.push(false);
+  const score = met.filter(Boolean).length / rubric.length;
+  return { met, score, notes: j.notes || "" };
+}
+
+// judgeDefault: the ORIGINAL judge, behavior byte-for-byte unchanged (2026-08-29: renamed from `judge`
+// so judge() below can dispatch on EVAL_JUDGE/JUDGE_PROVIDER; 2026-09-02: its prompt-building and
+// parsing were extracted into judgePromptFor()/parseJudgeOutput() above so the batch path can reuse
+// them, but the actual wording, budget, and defensiveness are identical to before either change).
+// Scores via the SAME chat()/DEP the agent persona ran on.
 const JUDGE_MAX_TOKENS = positiveIntEnv("AGENT_EVALS_JUDGE_MAX_TOKENS", 1500);
-async function judgeDefault(task, rubric, answer) {
-  const sys = "You are a strict eval judge. Given a task, a rubric (list of criteria), and a candidate answer, decide for EACH criterion whether the answer satisfies it. Return ONLY compact JSON: {\"met\":[true/false per criterion in order],\"notes\":\"one line\"}.";
-  const user = `TASK:\n${task}\n\nRUBRIC:\n${rubric.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\nANSWER:\n${answer}`;
+export async function judgeDefault(task, rubric, answer) {
+  const { sys, user } = judgePromptFor(task, rubric, answer);
   // 400 -> 800 -> 1500 (2026-08-29 then 2026-08-30, FND-20260830-e927): live-tested this exact judge
   // prompt shape, including a deliberately AMBIGUOUS/hedging candidate answer meant to force real
   // per-criterion deliberation rather than an obvious all-pass: 10 live calls across an easy and a hard
@@ -212,21 +278,22 @@ async function judgeDefault(task, rubric, answer) {
   // is caught by main()'s existing per-task catch, which skips the task entirely rather than scoring it.
   // Env-overridable (AGENT_EVALS_JUDGE_MAX_TOKENS).
   const out = await chat(sys, user, JUDGE_MAX_TOKENS);
-  let j; try { j = JSON.parse(out.match(/\{[\s\S]*\}/)[0]); } catch { j = { met: rubric.map(() => false), notes: "judge parse failed" }; }
-  const met = (j.met || []).slice(0, rubric.length); while (met.length < rubric.length) met.push(false);
-  const score = met.filter(Boolean).length / rubric.length;
-  return { met, score, notes: j.notes || "" };
+  return parseJudgeOutput(out, rubric);
 }
-// judge: the dispatcher. JUDGE_PROVIDER unset (the default) takes the EXACT pre-existing code path
-// (judgeDefault); JUDGE_PROVIDER=bedrock-nova routes through judge-bedrock-nova.mjs instead. This is
-// the ONLY call site the normal (non --judge-compare) per-task loop below uses.
-async function judge(task, rubric, answer) {
-  return JUDGE_PROVIDER === "bedrock-nova" ? judgeBedrockNova(task, rubric, answer) : judgeDefault(task, rubric, answer);
+// judge: the dispatcher. EVAL_JUDGE resolving to "openai" (the default; also the legacy JUDGE_PROVIDER
+// unset case) takes the EXACT pre-existing code path (judgeDefault); "nova-micro"/"nova-lite" route
+// through judge-bedrock-nova.mjs instead, passing the resolved model id explicitly so this dispatcher
+// never hardcodes a raw Bedrock inference-profile id. This is the ONLY call site the normal
+// (non --judge-compare/--compare) per-task loop below uses.
+export async function judge(task, rubric, answer) {
+  return NOVA_JUDGE_MODEL ? judgeBedrockNova(task, rubric, answer, { model: NOVA_JUDGE_MODEL }) : judgeDefault(task, rubric, answer);
 }
 // The human-readable label for whichever judge produced a given result -- used in console output and
 // the emitted PostHog judge_model property so a scorecard is legible about which judge scored it.
-function judgeLabel(provider = JUDGE_PROVIDER) {
-  return provider === "bedrock-nova" ? BEDROCK_NOVA_JUDGE_MODEL : DEP;
+// `evalJudge` defaults to the module's own resolved EVAL_JUDGE; a caller (the --judge-compare/--compare
+// report below) may pass a specific value to label the OTHER judge in a comparison.
+export function judgeLabel(evalJudge = EVAL_JUDGE) {
+  return BEDROCK_NOVA_MODELS[evalJudge] || DEP;
 }
 async function emit(results) {
   const key = await sm("posthog-fleet-ingest-key"); if (!key) return;
@@ -234,6 +301,59 @@ async function emit(results) {
   // to DEP unconditionally, which was accurate before a second judge provider existed but would have
   // silently mislabeled every bedrock-nova-judged scorecard as judged by the OpenAI agent model).
   for (const r of results) await fetch("https://us.i.posthog.com/capture/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_key: key, event: "eval_result", distinct_id: r.agent, timestamp: new Date().toISOString(), properties: { agent: r.agent, task_id: r.id, callsite_id: r.callsite_id, score: r.score, pass: r.pass, model: DEP, judge_model: judgeLabel() } }) });
+}
+
+// ============================== BATCH MODE (2026-09-02, OPENAI_BATCH lever) ==============================
+// Opt-in: isBatchEnabled("agent-evals") (env OPENAI_BATCH=1, or OPENAI_BATCH_AGENT_EVALS=1 to arm this
+// caller alone). OpenAI provider only -- Batch API is an api.openai.com concept; LLM_PROVIDER=foundry/
+// azure is unaffected and never enters this code path. Submits ALL of this run's persona-answer
+// requests as ONE Batch API job (50% off, up to 24h turnaround, stacks with prompt caching -- see
+// setup/model-routing.mjs's own BATCH API section header), then -- ONLY when the judge ALSO resolves
+// to the default OpenAI judge (NOVA_JUDGE_MODEL unset; a Nova judge runs on Bedrock, which has no
+// relationship to OpenAI's Batch API and is not batched here) -- submits a SECOND batch for the judge
+// calls once every persona answer is known.
+//
+// ACCEPTED TRADE-OFF, disclosed rather than hidden: batch mode submits every task's persona/judge
+// request UP FRONT in one shot; there is no equivalent here to a hypothetical "stop once enough
+// results are collected" optimization, because Batch API has no such concept (every submitted line is
+// billed and processed). This is a non-issue for agent-evals specifically -- unlike recall-evals'
+// mine-cases/mine-hard-negatives generators (which stop early once a --target count of VALIDATED
+// cases is reached), agent-evals always runs every task in its filtered set to completion regardless
+// of mode, so batch mode changes WHEN/how the calls happen, never HOW MANY.
+//
+// --judge-compare/--compare's EXTRA per-task comparison call against the "other" judge stays
+// SYNCHRONOUS even in batch mode: it is a manual, occasional diagnostic pass, not the nightly cost
+// driver this lever targets, and folding a third batch into an already-two-batch run for an
+// infrequently-used flag was judged not worth the added complexity for this PR.
+// `apiKey` is an explicit parameter (not read off module-level KEY), mirroring callChat()/
+// callChatOpenAI()'s existing convention -- this is what lets these three functions be exercised
+// directly with a mocked fetch and a fake key in a test, without ever calling initModel() or
+// resolving a real credential.
+export async function runOneBatch(lines, label, { apiKey } = {}) {
+  console.error(`[agent-evals] OPENAI_BATCH: submitting ${lines.length} ${label} request(s) as one Batch API job (50% off, up to 24h)...`);
+  const batchId = await submitBatch(lines, { apiKey });
+  console.error(`[agent-evals] OPENAI_BATCH: batch ${batchId} submitted, waiting for it to complete...`);
+  const { results } = await awaitBatch(batchId, {
+    apiKey,
+    onPoll: ({ status, elapsedMs }) => console.error(`[agent-evals] OPENAI_BATCH: batch ${batchId} status=${status} (${Math.round(elapsedMs / 1000)}s elapsed)`),
+  });
+  assertAllBatchResultsPresent(lines.map((l) => l.custom_id), results);
+  console.error(`[agent-evals] OPENAI_BATCH: batch ${batchId} complete, ${results.size} ${label} result(s).`);
+  return results;
+}
+export function runPersonaBatch(tasks, { dep, apiKey } = {}) {
+  const lines = tasks.map((t) => {
+    const { system, user } = personaPromptFor(t);
+    return buildBatchLine({ customId: t.id, deployment: dep, messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: 4000 });
+  });
+  return runOneBatch(lines, "persona answer", { apiKey });
+}
+export function runJudgeBatch(tasks, answerById, { dep, apiKey } = {}) {
+  const lines = tasks.map((t) => {
+    const { sys, user } = judgePromptFor(t.task, t.rubric, answerById.get(t.id) || "");
+    return buildBatchLine({ customId: t.id, deployment: dep, messages: [{ role: "system", content: sys }, { role: "user", content: user }], maxTokens: JUDGE_MAX_TOKENS, jsonMode: true });
+  });
+  return runOneBatch(lines, "judge verdict", { apiKey });
 }
 
 // The CLI driver. Wrapped in a function (2026-08-29, alongside the flex-lane adoption above) and
@@ -248,17 +368,65 @@ async function main() {
     .filter(t => (!ONLY_AGENT || t.agent === ONLY_AGENT) && (!ONLY_TASK || t.id === ONLY_TASK));
   if (!tasks.length) { console.error("no matching tasks"); process.exit(2); }
   await initModel();
-  console.log(`# agent-evals (run+judge on ${DEP}, judge=${judgeLabel()}${JUDGE_COMPARE ? ` +compare vs ${JUDGE_PROVIDER === "bedrock-nova" ? DEP : BEDROCK_NOVA_JUDGE_MODEL}` : ""}) - ${tasks.length} task(s), pass>=${PASS_AT}\n`);
+  // BATCH MODE (2026-09-02): see the runOneBatch/runPersonaBatch/runJudgeBatch section above for the
+  // full contract. Both unset (OPENAI_BATCH*, the state of every job today) means BATCH_MODE is false
+  // and the two `let`s below stay null forever -- the per-task loop below then takes the EXACT
+  // pre-existing synchronous code path, byte-identical to before this lever existed.
+  const BATCH_MODE = LLM_PROVIDER === "openai" && isBatchEnabled("agent-evals");
+  let batchedAnswers = null; // Map<task.id, {error, content}> from runPersonaBatch(), or null in sync mode
+  let batchedJudged = null;  // Map<task.id, {met,score,notes}> from runJudgeBatch(), or null when not batching the judge
+  if (BATCH_MODE) {
+    batchedAnswers = await runPersonaBatch(tasks, { dep: DEP, apiKey: KEY });
+    if (!NOVA_JUDGE_MODEL) {
+      const answerById = new Map(tasks.map((t) => {
+        const r = batchedAnswers.get(t.id);
+        return [t.id, r && !r.error ? r.content : ""]; // a per-task persona-answer failure surfaces below via batchedAnswers itself, not by poisoning the judge batch with an empty string silently
+      }));
+      const judgeResults = await runJudgeBatch(tasks, answerById, { dep: DEP, apiKey: KEY });
+      batchedJudged = new Map();
+      for (const t of tasks) {
+        const r = judgeResults.get(t.id);
+        if (!r.error) batchedJudged.set(t.id, parseJudgeOutput(r.content, t.rubric));
+        // else: leave unset -- the per-task loop below throws "no judge result" for this task, the
+        // same per-task-skip UX a synchronous judge failure already produces.
+      }
+    }
+    // NOVA_JUDGE_MODEL set: judge stays on the synchronous per-task judge() dispatch below (a Nova
+    // judge call is not batched -- see this section's header comment), using the now-known batched
+    // persona answer for each task.
+  }
+  // The "compare vs" label always names the OTHER judge -- DEP (the default openai judge) when Nova
+  // is primary, else COMPARE_NOVA_MODEL (the resolved Nova model id) when openai is primary. Uses the
+  // already-resolved constants directly rather than routing back through judgeLabel(), which exists to
+  // label "whichever judge scored a given result", a different question from "what is the OTHER one".
+  const compareOtherLabel = NOVA_JUDGE_MODEL ? DEP : COMPARE_NOVA_MODEL;
+  console.log(`# agent-evals (run+judge on ${DEP}, judge=${judgeLabel()}${BATCH_MODE ? ` [OPENAI_BATCH${batchedJudged ? "" : ", judge sync"}]` : ""}${JUDGE_COMPARE ? ` +compare vs ${compareOtherLabel}` : ""}) - ${tasks.length} task(s), pass>=${PASS_AT}\n`);
   const results = [];
-  // --judge-compare accumulates one compareJudgeRow() per successfully-scored task, REGARDLESS of
-  // JUDGE_PROVIDER -- it always compares the default judge against judge-bedrock-nova.mjs, reusing
-  // whichever of the two `scored` already IS (from the normal judge() dispatch above) instead of paying
-  // for a redundant third call to the same judge.
+  // --judge-compare/--compare accumulates one compareJudgeRow() per successfully-scored task,
+  // REGARDLESS of EVAL_JUDGE/JUDGE_PROVIDER -- it always compares the default OpenAI judge against a
+  // Nova judge (COMPARE_NOVA_MODEL), reusing whichever of the two `scored` already IS (from the normal
+  // judge() dispatch above) instead of paying for a redundant third call to the same judge. Runs
+  // synchronously even under BATCH_MODE (see this file's BATCH MODE section header for why).
   const compareRows = [];
   for (const t of tasks) {
     process.stderr.write(`  running ${t.id}...`);
     let answer, scored;
-    try { answer = await chat((PERSONA[t.agent] || `You are the ${t.agent}.`) + " Answer concretely and completely: name the SPECIFIC tools, gates, thresholds, numbers, and rules you would apply and WHY, cover every relevant consideration explicitly rather than implying it, and whenever you refuse or block, also state the compliant path.", t.task); scored = await judge(t.task, t.rubric, answer); }
+    try {
+      if (BATCH_MODE) {
+        const ar = batchedAnswers.get(t.id);
+        if (ar.error) throw new Error(`batch persona-answer error: ${ar.error}`);
+        answer = ar.content;
+      } else {
+        const { system, user } = personaPromptFor(t);
+        answer = await chat(system, user);
+      }
+      if (batchedJudged) {
+        scored = batchedJudged.get(t.id);
+        if (!scored) throw new Error(`batch: no judge result for task "${t.id}" (see the earlier per-task judge-batch error above)`);
+      } else {
+        scored = await judge(t.task, t.rubric, answer);
+      }
+    }
     catch (e) { console.error(` ERROR ${e.message}`); continue; }
     const pass = scored.score >= PASS_AT;
     // callsite_id/prompt_file identify WHICH prompt surface this task exercises (default to the agent
@@ -267,16 +435,17 @@ async function main() {
     process.stderr.write(` ${(scored.score * 100).toFixed(0)}%\n`);
     console.log(`[${pass ? "PASS" : "FAIL"}] ${t.agent}/${t.id}  ${(scored.score * 100).toFixed(0)}%  (${scored.met.filter(Boolean).length}/${t.rubric.length})  ${scored.notes}`);
 
-    // --judge-compare: score the SAME answer with the OTHER judge too, purely for the comparison report
-    // below. A failure here (e.g. no AWS credentials configured for the Nova side) is logged and SKIPPED
-    // for the comparison only -- it must never invalidate this task's primary scorecard entry above,
-    // which is already recorded and unaffected by anything that happens from here down.
+    // --judge-compare/--compare: score the SAME answer with the OTHER judge too, purely for the
+    // comparison report below. A failure here (e.g. no AWS credentials configured for the Nova side)
+    // is logged and SKIPPED for the comparison only -- it must never invalidate this task's primary
+    // scorecard entry above, which is already recorded and unaffected by anything that happens from
+    // here down.
     if (JUDGE_COMPARE) {
       try {
-        const bedrockIsPrimary = JUDGE_PROVIDER === "bedrock-nova";
-        const other = bedrockIsPrimary ? await judgeDefault(t.task, t.rubric, answer) : await judgeBedrockNova(t.task, t.rubric, answer);
-        const a = bedrockIsPrimary ? other : scored;   // default-judge result
-        const b = bedrockIsPrimary ? scored : other;   // bedrock-nova-judge result
+        const novaIsPrimary = Boolean(NOVA_JUDGE_MODEL);
+        const other = novaIsPrimary ? await judgeDefault(t.task, t.rubric, answer) : await judgeBedrockNova(t.task, t.rubric, answer, { model: COMPARE_NOVA_MODEL });
+        const a = novaIsPrimary ? other : scored;   // default-judge result
+        const b = novaIsPrimary ? scored : other;   // nova-judge result
         compareRows.push(compareJudgeRow({ id: t.id, agent: t.agent, a, b }, PASS_AT));
       } catch (e) {
         console.error(`  [judge-compare] skipped comparison for ${t.agent}/${t.id}: ${e.message}`);
@@ -293,10 +462,13 @@ async function main() {
   }
   if (JUDGE_COMPARE) {
     const compareSummary = aggregateJudgeComparison(compareRows);
-    console.log("\n" + renderJudgeComparisonReport(compareRows, compareSummary, { labelA: "default (" + DEP + ")", labelB: "bedrock-nova (" + BEDROCK_NOVA_JUDGE_MODEL + ")" }));
+    // `a` is ALWAYS the default-OpenAI-judge result and `b` is ALWAYS the Nova-judge result, regardless
+    // of which one main() treated as "primary" above (see the compareJudgeRow a/b assignment in the
+    // per-task loop) -- so these labels never swap based on novaIsPrimary either.
+    console.log("\n" + renderJudgeComparisonReport(compareRows, compareSummary, { labelA: `default (${DEP})`, labelB: `nova (${COMPARE_NOVA_MODEL})` }));
     if (JSON_OUT) {
       const comparePath = JSON_OUT.replace(/\.json$/i, "") + ".judge-compare.json";
-      writeFileSync(comparePath, JSON.stringify({ labelA: DEP, labelB: BEDROCK_NOVA_JUDGE_MODEL, rows: compareRows, summary: compareSummary }, null, 2));
+      writeFileSync(comparePath, JSON.stringify({ labelA: DEP, labelB: COMPARE_NOVA_MODEL, rows: compareRows, summary: compareSummary }, null, 2));
       console.log(`wrote judge-compare json -> ${comparePath}`);
     }
   }

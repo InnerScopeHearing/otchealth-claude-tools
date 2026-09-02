@@ -572,3 +572,406 @@ test("fetchOpenAIWithFlexRetry: under flex, a truncated-empty 2xx RETRIES throug
     assert.equal(result, "recovered", "the third attempt's real answer must be returned, not thrown away by a first-occurrence throw");
     assert.equal(calls, 3, "retries through truncated-empty responses while the flex-granted allowance remains");
   }));
+
+// ============================================================================================
+// BATCH API (2026-09-02) -- batchEnvVar / isBatchEnabled / buildBatchLine / submitBatch /
+// awaitBatch / assertAllBatchResultsPresent. Every "default" assertion proves the same
+// byte-identical-until-opted-in contract as the flex-processing suite above: with OPENAI_BATCH*
+// unset (the state of every real job today), isBatchEnabled() is false and nothing else in this
+// section runs unless a test calls it directly.
+// ============================================================================================
+
+const CLEAR_BATCH_ENV = {
+  OPENAI_BATCH: undefined,
+  OPENAI_BATCH_TEST_CALLER: undefined,
+  OPENAI_BATCH_POLL_MS: undefined,
+  OPENAI_BATCH_TIMEOUT_MS: undefined,
+};
+
+// ---- batchEnvVar / isBatchEnabled --------------------------------------------------------------
+
+test("batchEnvVar slugifies a caller name into OPENAI_BATCH_<CALLER>, same convention as serviceTierEnvVar", async () => {
+  const { batchEnvVar } = await freshImport();
+  assert.equal(batchEnvVar("doc-indexer-enrich"), "OPENAI_BATCH_DOC_INDEXER_ENRICH");
+  assert.equal(batchEnvVar(""), null);
+  assert.equal(batchEnvVar(undefined), null);
+});
+
+test("isBatchEnabled: both unset (every job today) is false", async () =>
+  withEnvVars(CLEAR_BATCH_ENV, async () => {
+    const { isBatchEnabled } = await freshImport();
+    assert.equal(isBatchEnabled("agent-evals"), false);
+    assert.equal(isBatchEnabled(), false);
+  }));
+
+test("isBatchEnabled: OPENAI_BATCH=1 enables every caller with no per-caller override", async () =>
+  withEnvVars({ ...CLEAR_BATCH_ENV, OPENAI_BATCH: "1" }, async () => {
+    const { isBatchEnabled } = await freshImport();
+    assert.equal(isBatchEnabled("agent-evals"), true);
+    assert.equal(isBatchEnabled("anything-else"), true);
+  }));
+
+test("isBatchEnabled: a per-caller override wins even when it turns batch OFF while the fleet-wide flag is on", async () =>
+  withEnvVars({ ...CLEAR_BATCH_ENV, OPENAI_BATCH: "1", OPENAI_BATCH_TEST_CALLER: "0" }, async () => {
+    const { isBatchEnabled } = await freshImport();
+    assert.equal(isBatchEnabled("test-caller"), false, "explicit per-caller '0' must override the global '1'");
+    assert.equal(isBatchEnabled("other-caller"), true, "an unrelated caller still gets the fleet-wide default");
+  }));
+
+test("isBatchEnabled: a per-caller override wins even when it turns batch ON while the fleet-wide flag is unset", async () =>
+  withEnvVars({ ...CLEAR_BATCH_ENV, OPENAI_BATCH_TEST_CALLER: "true" }, async () => {
+    const { isBatchEnabled } = await freshImport();
+    assert.equal(isBatchEnabled("test-caller"), true);
+    assert.equal(isBatchEnabled("other-caller"), false);
+  }));
+
+// ---- buildBatchLine -----------------------------------------------------------------------------
+
+test("buildBatchLine: builds a custom_id/method/url/body envelope via chatBody(), model set on the body", async () => {
+  const { buildBatchLine } = await freshImport();
+  const line = buildBatchLine({ customId: "task-1", deployment: "gpt-4.1", messages: [{ role: "user", content: "hi" }], maxTokens: 500 });
+  assert.equal(line.custom_id, "task-1");
+  assert.equal(line.method, "POST");
+  assert.equal(line.url, "/v1/chat/completions");
+  assert.equal(line.body.model, "gpt-4.1");
+  assert.equal(line.body.max_tokens, 500);
+  assert.deepEqual(line.body.messages, [{ role: "user", content: "hi" }]);
+});
+
+test("buildBatchLine: a reasoning-family deployment gets max_completion_tokens via chatBody, not max_tokens", async () => {
+  const { buildBatchLine } = await freshImport();
+  const line = buildBatchLine({ customId: "t", deployment: "gpt-5.6-terra", messages: [], maxTokens: 900, jsonMode: true });
+  assert.equal(line.body.max_completion_tokens, 900);
+  assert.equal("max_tokens" in line.body, false);
+  assert.deepEqual(line.body.response_format, { type: "json_object" });
+});
+
+test("buildBatchLine: coerces a non-string customId and rejects an empty one", async () => {
+  const { buildBatchLine } = await freshImport();
+  assert.equal(buildBatchLine({ customId: 42, deployment: "gpt-4.1", messages: [] }).custom_id, "42");
+  assert.throws(() => buildBatchLine({ customId: "", deployment: "gpt-4.1", messages: [] }), /customId is required/);
+  assert.throws(() => buildBatchLine({ deployment: "gpt-4.1", messages: [] }), /customId is required/);
+});
+
+// ---- submitBatch: validation (no network reached) ------------------------------------------------
+
+test("submitBatch: throws without ever calling fetch when apiKey is missing", async () => {
+  const { submitBatch } = await freshImport();
+  let called = false;
+  await assert.rejects(
+    () => withStubbedFetch(async () => { called = true; return { ok: true }; }, () => submitBatch([{ custom_id: "a", body: { model: "gpt-4.1" } }], {})),
+    /missing apiKey/
+  );
+  assert.equal(called, false);
+});
+
+test("submitBatch: throws on an empty lines array", async () => {
+  const { submitBatch } = await freshImport();
+  await assert.rejects(() => submitBatch([], { apiKey: "sk-test" }), /no requests supplied/);
+});
+
+test("submitBatch: throws on a line with no custom_id", async () => {
+  const { submitBatch } = await freshImport();
+  await assert.rejects(() => submitBatch([{ body: { model: "gpt-4.1" } }], { apiKey: "sk-test" }), /non-empty custom_id/);
+});
+
+test("submitBatch: throws on a duplicate custom_id across lines", async () => {
+  const { submitBatch } = await freshImport();
+  const lines = [
+    { custom_id: "dup", method: "POST", url: "/v1/chat/completions", body: { model: "gpt-4.1" } },
+    { custom_id: "dup", method: "POST", url: "/v1/chat/completions", body: { model: "gpt-4.1" } },
+  ];
+  await assert.rejects(() => submitBatch(lines, { apiKey: "sk-test" }), /duplicate custom_id "dup"/);
+});
+
+test("submitBatch: throws when lines target more than one model (OpenAI's single-model-per-file rule)", async () => {
+  const { submitBatch } = await freshImport();
+  const lines = [
+    { custom_id: "a", method: "POST", url: "/v1/chat/completions", body: { model: "gpt-4.1" } },
+    { custom_id: "b", method: "POST", url: "/v1/chat/completions", body: { model: "gpt-5.6-terra" } },
+  ];
+  await assert.rejects(() => submitBatch(lines, { apiKey: "sk-test" }), /single model per file/);
+});
+
+// ---- submitBatch: happy path + upload/create failure handling -----------------------------------
+
+function makeBatchLines(n = 2) {
+  return Array.from({ length: n }, (_, i) => ({ custom_id: `req-${i}`, method: "POST", url: "/v1/chat/completions", body: { model: "gpt-4.1", messages: [{ role: "user", content: `hi ${i}` }] } }));
+}
+
+test("submitBatch: uploads a purpose=batch JSONL file, then creates a batch against that file id, and returns the batch id", async () => {
+  const { submitBatch } = await freshImport();
+  const calls = [];
+  const result = await submitBatch(makeBatchLines(2), {
+    apiKey: "sk-test",
+    fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), init });
+      if (String(url) === "https://api.openai.com/v1/files") {
+        assert.ok(init.body instanceof FormData, "the file upload must be a multipart FormData body");
+        return { ok: true, status: 200, json: async () => ({ id: "file-abc123" }) };
+      }
+      if (String(url) === "https://api.openai.com/v1/batches") {
+        const body = JSON.parse(init.body);
+        assert.equal(body.input_file_id, "file-abc123");
+        assert.equal(body.endpoint, "/v1/chat/completions");
+        assert.equal(body.completion_window, "24h");
+        return { ok: true, status: 200, json: async () => ({ id: "batch_abc123" }) };
+      }
+      throw new Error("unexpected url " + url);
+    },
+  });
+  assert.equal(result, "batch_abc123");
+  assert.equal(calls.length, 2);
+});
+
+test("submitBatch: a failed file upload throws with the response body surfaced, and never calls /v1/batches", async () => {
+  const { submitBatch } = await freshImport();
+  let batchCreateCalled = false;
+  await assert.rejects(
+    () => submitBatch(makeBatchLines(1), {
+      apiKey: "sk-test",
+      fetchImpl: async (url) => {
+        if (String(url).includes("/v1/files")) return { ok: false, status: 500, text: async () => "upload broke" };
+        batchCreateCalled = true;
+        return { ok: true, status: 200, json: async () => ({ id: "batch_x" }) };
+      },
+    }),
+    /file upload failed, HTTP 500: upload broke/
+  );
+  assert.equal(batchCreateCalled, false);
+});
+
+test("submitBatch: a failed batch-create call throws with the response body surfaced", async () => {
+  const { submitBatch } = await freshImport();
+  await assert.rejects(
+    () => submitBatch(makeBatchLines(1), {
+      apiKey: "sk-test",
+      fetchImpl: async (url) => {
+        if (String(url).includes("/v1/files")) return { ok: true, status: 200, json: async () => ({ id: "file-1" }) };
+        return { ok: false, status: 400, text: async () => "bad request" };
+      },
+    }),
+    /batch create failed, HTTP 400: bad request/
+  );
+});
+
+// ---- awaitBatch ----------------------------------------------------------------------------------
+
+function fakeBatchObject(overrides = {}) {
+  return { id: "batch_abc123", status: "in_progress", output_file_id: null, error_file_id: null, errors: null, ...overrides };
+}
+
+test("awaitBatch: polls until status=completed, then downloads output_file_id and returns a custom_id-keyed Map", async () => {
+  const { awaitBatch } = await freshImport();
+  let getCalls = 0;
+  const onPollLog = [];
+  const { batch, results } = await awaitBatch("batch_abc123", {
+    apiKey: "sk-test",
+    pollIntervalMs: 1,
+    sleepFn: () => Promise.resolve(),
+    onPoll: (info) => onPollLog.push(info),
+    fetchImpl: async (url) => {
+      const u = String(url);
+      if (u === "https://api.openai.com/v1/batches/batch_abc123") {
+        getCalls++;
+        return { ok: true, status: 200, json: async () => fakeBatchObject(getCalls < 3 ? { status: "in_progress" } : { status: "completed", output_file_id: "file-out-1" }) };
+      }
+      if (u === "https://api.openai.com/v1/files/file-out-1/content") {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => [
+            JSON.stringify({ custom_id: "req-0", response: { status_code: 200, body: { choices: [{ message: { content: "answer zero" } }] } }, error: null }),
+            JSON.stringify({ custom_id: "req-1", response: { status_code: 200, body: { choices: [{ message: { content: "answer one" } }] } }, error: null }),
+          ].join("\n"),
+        };
+      }
+      throw new Error("unexpected url " + u);
+    },
+  });
+  assert.equal(getCalls, 3, "must actually poll until the terminal status, not assume the first response is final");
+  assert.equal(batch.status, "completed");
+  assert.equal(results.get("req-0").content, "answer zero");
+  assert.equal(results.get("req-0").error, null);
+  assert.equal(results.get("req-1").content, "answer one");
+  assert.equal(onPollLog.length, 3, "onPoll fires once per poll iteration, including the terminal one");
+  assert.equal(onPollLog[2].status, "completed");
+});
+
+test("awaitBatch: the output line order need not match input order -- results are keyed by custom_id, never position", async () => {
+  const { awaitBatch } = await freshImport();
+  const { results } = await awaitBatch("b1", {
+    apiKey: "sk-test",
+    fetchImpl: async (url) => {
+      const u = String(url);
+      if (u.endsWith("/batches/b1")) return { ok: true, status: 200, json: async () => fakeBatchObject({ status: "completed", output_file_id: "f1" }) };
+      if (u.endsWith("/files/f1/content")) {
+        // req-1 listed BEFORE req-0 in the output file, deliberately out of input order
+        return { ok: true, status: 200, text: async () => [
+          JSON.stringify({ custom_id: "req-1", response: { body: { choices: [{ message: { content: "one" } }] } }, error: null }),
+          JSON.stringify({ custom_id: "req-0", response: { body: { choices: [{ message: { content: "zero" } }] } }, error: null }),
+        ].join("\n") };
+      }
+      throw new Error("unexpected url " + u);
+    },
+  });
+  assert.equal(results.get("req-0").content, "zero");
+  assert.equal(results.get("req-1").content, "one");
+});
+
+test("awaitBatch: a reasoning-truncated output line (finish_reason:length, empty content) is recorded as an error, not a real blank answer", async () => {
+  const { awaitBatch } = await freshImport();
+  const { results } = await awaitBatch("b1", {
+    apiKey: "sk-test",
+    fetchImpl: async (url) => {
+      const u = String(url);
+      if (u.endsWith("/batches/b1")) return { ok: true, status: 200, json: async () => fakeBatchObject({ status: "completed", output_file_id: "f1" }) };
+      if (u.endsWith("/files/f1/content")) return { ok: true, status: 200, text: async () => JSON.stringify({ custom_id: "req-0", response: { body: { choices: [{ message: { content: "" }, finish_reason: "length" }] } }, error: null }) };
+      throw new Error("unexpected url " + u);
+    },
+  });
+  assert.equal(results.get("req-0").content, null);
+  assert.match(results.get("req-0").error, /finish_reason=length/);
+});
+
+test("awaitBatch: a non-truncated, genuinely short/blank-looking completion (finish_reason:stop) is still returned as a real answer", async () => {
+  const { awaitBatch } = await freshImport();
+  const { results } = await awaitBatch("b1", {
+    apiKey: "sk-test",
+    fetchImpl: async (url) => {
+      const u = String(url);
+      if (u.endsWith("/batches/b1")) return { ok: true, status: 200, json: async () => fakeBatchObject({ status: "completed", output_file_id: "f1" }) };
+      if (u.endsWith("/files/f1/content")) return { ok: true, status: 200, text: async () => JSON.stringify({ custom_id: "req-0", response: { body: { choices: [{ message: { content: "ok" }, finish_reason: "stop" }] } }, error: null }) };
+      throw new Error("unexpected url " + u);
+    },
+  });
+  assert.equal(results.get("req-0").content, "ok");
+  assert.equal(results.get("req-0").error, null);
+});
+
+test("awaitBatch: a per-line error in the output file is recorded as {error, content:null}, not thrown", async () => {
+  const { awaitBatch } = await freshImport();
+  const { results } = await awaitBatch("b1", {
+    apiKey: "sk-test",
+    fetchImpl: async (url) => {
+      const u = String(url);
+      if (u.endsWith("/batches/b1")) return { ok: true, status: 200, json: async () => fakeBatchObject({ status: "completed", output_file_id: "f1" }) };
+      if (u.endsWith("/files/f1/content")) return { ok: true, status: 200, text: async () => JSON.stringify({ custom_id: "req-0", response: null, error: { message: "content policy violation" } }) };
+      throw new Error("unexpected url " + u);
+    },
+  });
+  assert.equal(results.get("req-0").error, "content policy violation");
+  assert.equal(results.get("req-0").content, null);
+});
+
+test("awaitBatch: entries present ONLY in error_file_id are still returned, and the output file wins on a conflicting custom_id", async () => {
+  const { awaitBatch } = await freshImport();
+  const { results } = await awaitBatch("b1", {
+    apiKey: "sk-test",
+    fetchImpl: async (url) => {
+      const u = String(url);
+      if (u.endsWith("/batches/b1")) return { ok: true, status: 200, json: async () => fakeBatchObject({ status: "completed", output_file_id: "f-out", error_file_id: "f-err" }) };
+      if (u.endsWith("/files/f-out/content")) return { ok: true, status: 200, text: async () => JSON.stringify({ custom_id: "req-0", response: { body: { choices: [{ message: { content: "ok" } }] } }, error: null }) };
+      if (u.endsWith("/files/f-err/content")) return { ok: true, status: 200, text: async () => [
+        JSON.stringify({ custom_id: "req-1", error: { message: "request-level failure" } }),
+        JSON.stringify({ custom_id: "req-0", error: { message: "should be ignored, output file already has req-0" } }),
+      ].join("\n") };
+      throw new Error("unexpected url " + u);
+    },
+  });
+  assert.equal(results.get("req-0").content, "ok", "the output file is authoritative when a custom_id appears in both files");
+  assert.equal(results.get("req-1").error, "request-level failure");
+});
+
+test("awaitBatch: throws on a terminal 'failed' status, tagging .batchStatus and .batch", async () => {
+  const { awaitBatch } = await freshImport();
+  await assert.rejects(
+    () => awaitBatch("b1", { apiKey: "sk-test", fetchImpl: async () => ({ ok: true, status: 200, json: async () => fakeBatchObject({ status: "failed", errors: { data: [{ message: "quota exceeded" }] } }) }) }),
+    (e) => { assert.match(e.message, /terminal status "failed"/); assert.match(e.message, /quota exceeded/); assert.equal(e.batchStatus, "failed"); assert.ok(e.batch); return true; }
+  );
+});
+
+test("awaitBatch: throws on 'expired' and on 'cancelled', the other two documented terminal-failure statuses", async () => {
+  const { awaitBatch } = await freshImport();
+  for (const status of ["expired", "cancelled"]) {
+    await assert.rejects(
+      () => awaitBatch("b1", { apiKey: "sk-test", fetchImpl: async () => ({ ok: true, status: 200, json: async () => fakeBatchObject({ status }) }) }),
+      new RegExp(`terminal status "${status}"`)
+    );
+  }
+});
+
+test("awaitBatch: 'cancelling' (in-flight, not yet terminal) is polled through rather than thrown on immediately", async () => {
+  const { awaitBatch } = await freshImport();
+  let calls = 0;
+  const { batch } = await awaitBatch("b1", {
+    apiKey: "sk-test", pollIntervalMs: 1, sleepFn: () => Promise.resolve(),
+    fetchImpl: async () => { calls++; return { ok: true, status: 200, json: async () => fakeBatchObject(calls < 2 ? { status: "cancelling" } : { status: "cancelled" }) }; },
+  }).catch((e) => ({ batch: e.batch, threw: true }));
+  assert.equal(calls, 2, "cancelling must be polled again, not treated as terminal");
+  assert.equal(batch.status, "cancelled");
+});
+
+test("awaitBatch: exceeding timeoutMs while still non-terminal throws, tagged .timedOut", async () => {
+  const { awaitBatch } = await freshImport();
+  await assert.rejects(
+    () => awaitBatch("b1", {
+      apiKey: "sk-test", timeoutMs: 5, pollIntervalMs: 1, sleepFn: () => new Promise((r) => setTimeout(r, 10)),
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => fakeBatchObject({ status: "in_progress" }) }),
+    }),
+    (e) => { assert.match(e.message, /timed out after 5ms/); assert.equal(e.timedOut, true); return true; }
+  );
+});
+
+test("awaitBatch: a completed batch with NEITHER output_file_id nor error_file_id throws rather than returning an empty result set silently", async () => {
+  const { awaitBatch } = await freshImport();
+  await assert.rejects(
+    () => awaitBatch("b1", { apiKey: "sk-test", fetchImpl: async () => ({ ok: true, status: 200, json: async () => fakeBatchObject({ status: "completed" }) }) }),
+    /neither an output_file_id nor an error_file_id/
+  );
+});
+
+test("awaitBatch: a non-ok GET /v1/batches/{id} response throws immediately", async () => {
+  const { awaitBatch } = await freshImport();
+  await assert.rejects(
+    () => awaitBatch("b1", { apiKey: "sk-test", fetchImpl: async () => ({ ok: false, status: 401, text: async () => "unauthorized" }) }),
+    /HTTP 401: unauthorized/
+  );
+});
+
+test("awaitBatch: throws without calling fetch when apiKey or batchId is missing", async () => {
+  const { awaitBatch } = await freshImport();
+  let called = false;
+  const fetchImpl = async () => { called = true; return { ok: true, status: 200, json: async () => fakeBatchObject() }; };
+  await assert.rejects(() => awaitBatch("b1", { fetchImpl }), /missing apiKey/);
+  await assert.rejects(() => awaitBatch("", { apiKey: "sk-test", fetchImpl }), /missing batchId/);
+  assert.equal(called, false);
+});
+
+test("OPENAI_BATCH_POLL_MS / OPENAI_BATCH_TIMEOUT_MS are env-overridable fleet-wide, defaulting to 30s / 24h", async () =>
+  withEnvVars(CLEAR_BATCH_ENV, async () => {
+    const { OPENAI_BATCH_POLL_MS, OPENAI_BATCH_TIMEOUT_MS } = await freshImport();
+    assert.equal(OPENAI_BATCH_POLL_MS, 30000);
+    assert.equal(OPENAI_BATCH_TIMEOUT_MS, 24 * 60 * 60 * 1000);
+  }));
+
+test("OPENAI_BATCH_POLL_MS / OPENAI_BATCH_TIMEOUT_MS env overrides take effect", async () =>
+  withEnvVars({ ...CLEAR_BATCH_ENV, OPENAI_BATCH_POLL_MS: "5000", OPENAI_BATCH_TIMEOUT_MS: "60000" }, async () => {
+    const { OPENAI_BATCH_POLL_MS, OPENAI_BATCH_TIMEOUT_MS } = await freshImport();
+    assert.equal(OPENAI_BATCH_POLL_MS, 5000);
+    assert.equal(OPENAI_BATCH_TIMEOUT_MS, 60000);
+  }));
+
+// ---- assertAllBatchResultsPresent -----------------------------------------------------------------
+
+test("assertAllBatchResultsPresent: passes when every custom_id has an entry, error or not", async () => {
+  const { assertAllBatchResultsPresent } = await freshImport();
+  const results = new Map([["a", { error: null, content: "x" }], ["b", { error: "boom", content: null }]]);
+  assert.doesNotThrow(() => assertAllBatchResultsPresent(["a", "b"], results));
+});
+
+test("assertAllBatchResultsPresent: throws naming every custom_id missing from the results Map entirely", async () => {
+  const { assertAllBatchResultsPresent } = await freshImport();
+  const results = new Map([["a", { error: null, content: "x" }]]);
+  assert.throws(() => assertAllBatchResultsPresent(["a", "b", "c"], results), /2 custom_id\(s\) got NO result at all.*b, c/s);
+});

@@ -73,9 +73,9 @@
 // Usage:
 //   node skills/aws-image-canary/image-canary.mjs [--json] [--strict] [--warn-slots=N]
 import { fileURLToPath } from "node:url";
-import crypto from "node:crypto";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 import { awsCreds as ecsOrEnvAwsCreds } from "../kb-memory/aws-secret.mjs";
+import { awsFetch, canonicalUriPath } from "../../setup/aws-sigv4.mjs";
 
 const DEFAULT_REGION = process.env.AWS_REGION || "us-east-1";
 const argv = process.argv.slice(2);
@@ -231,42 +231,25 @@ export function assessLeadingIndicator(remaining, warnThreshold) {
   return "SAFE";
 }
 
-// ── AWS signing + calls (self-contained SigV4; matches the fleet's "built-in fetch + node:crypto, no
-//    vendor SDK" convention -- see skills/fleet-backup/s3-client.mjs, skills/kb-memory/aws-secret.mjs,
-//    and skills/cutover-preflight/preflight.mjs's own `aws()`, which this closely follows) ───────────
-const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
-const hmac = (k, d) => crypto.createHmac("sha256", k).update(d).digest();
-
-async function awsRequest(creds, { service, host, method = "GET", path = "/", query = "", body = "", region = DEFAULT_REGION, extra = {} }) {
-  // SigV4 canonicalises the query string SORTED BY KEY; an unsorted query signs a string AWS never
-  // reconstructs on its end, which comes back as a 403 that a caller scanning for results misreads as
-  // "empty" rather than "denied" (the same footgun preflight.mjs's own aws() documents).
-  const q = query ? query.split("&").filter(Boolean).sort().join("&") : "";
-  const amz = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const date = amz.slice(0, 8);
-  const hh = {
-    host,
-    "x-amz-date": amz,
-    "x-amz-content-sha256": sha256(body),
-    ...(creds.st ? { "x-amz-security-token": creds.st } : {}),
-    ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k.toLowerCase(), v])),
-  };
-  const keys = Object.keys(hh).sort();
-  const canon = [method, path, q, keys.map((k) => `${k}:${hh[k]}\n`).join(""), keys.join(";"), sha256(body)].join("\n");
-  const scope = `${date}/${region}/${service}/aws4_request`;
-  let k = hmac("AWS4" + creds.sk, date);
-  for (const p of [region, service, "aws4_request"]) k = hmac(k, p);
-  const sig = crypto.createHmac("sha256", k).update(["AWS4-HMAC-SHA256", amz, scope, sha256(canon)].join("\n")).digest("hex");
-  hh.Authorization = `AWS4-HMAC-SHA256 Credential=${creds.ak}/${scope}, SignedHeaders=${keys.join(";")}, Signature=${sig}`;
-  const r = await fetch(`https://${host}${path}${q ? "?" + q : ""}`, { method, headers: hh, body: method === "GET" ? undefined : body });
-  const text = await r.text();
-  let json = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = null;
-  }
-  return { status: r.status, json, text };
+// ── AWS signing + calls -----------------------------------------------------------------------------
+// FND-20260828-5ca1 (2026-09-02): this used to be a self-contained hand-rolled SigV4 signer -- one of
+// nine independent copies the finding found across the toolkit, and one of FOUR that never applied
+// AWS's documented double-encode rule for the EventBridge Scheduler REST paths this file signs
+// (`/schedules/<name>` via schedulerGetSchedule/schedulerListSchedules below), a latent bug that never
+// surfaced only because every schedule name in this fleet has stayed alphanumeric-hyphen so far (see
+// ../../setup/aws-sigv4.mjs's header for the full writeup). Now delegates to that shared signer;
+// ../../setup/aws-sigv4.mjs's awsFetch() takes a single `url` rather than separate host/path/query, so
+// this wrapper's own signature (used by 4 call sites below: schedulerListSchedules,
+// schedulerGetSchedule, ecsCall, ecrCall) is preserved unchanged -- only the internals moved.
+//
+// ONE deliberate, safe simplification: the shared signer only signs+sends `x-amz-content-sha256` for
+// service "s3" (the one AWS service that requires it); ECS/ECR/Scheduler ignore its absence, so this
+// is fewer signed headers on the wire, never a correctness loss -- verified against AWS's own SigV4
+// documentation, which names x-amz-content-sha256 as an S3-specific requirement, not a general one.
+export async function awsRequest(creds, { service, host, method = "GET", path = "/", query = "", body = "", region = DEFAULT_REGION, extra = {} }) {
+  const url = `https://${host}${path}${query ? `?${query}` : ""}`;
+  const r = await awsFetch(url, { method, headers: extra, body }, { service, region, credentials: creds });
+  return { status: r.status, json: r.json, text: r.text };
 }
 
 /**
@@ -297,7 +280,10 @@ async function schedulerListSchedules(creds, region, nextToken) {
   return awsRequest(creds, { service: "scheduler", host: `scheduler.${region}.amazonaws.com`, path: "/schedules", region, query: qp.join("&") });
 }
 async function schedulerGetSchedule(creds, region, name, groupName) {
-  const path = `/schedules/${encodeURIComponent(name)}`;
+  // canonicalUriPath(), not plain encodeURIComponent(): a schedule NAME is exactly the kind of
+  // caller-supplied identifier this file's own header flags -- see ../../setup/aws-sigv4.mjs for why
+  // this specific pattern was the latent bug FND-20260828-5ca1 closes.
+  const path = canonicalUriPath(`/schedules/${name}`);
   const query = groupName ? `groupName=${encodeURIComponent(groupName)}` : "";
   return awsRequest(creds, { service: "scheduler", host: `scheduler.${region}.amazonaws.com`, path, region, query });
 }

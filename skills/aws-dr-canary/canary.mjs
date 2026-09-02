@@ -42,8 +42,8 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import crypto from "node:crypto";
 import { awsCreds } from "../kb-memory/aws-secret.mjs";
+import { awsFetch } from "../../setup/aws-sigv4.mjs";
 import { s3Head, s3Get } from "../fleet-backup/s3-client.mjs";
 import { listBlobsMetaFromS3 } from "../kb-memory/s3-blob.mjs";
 import { resolveOpenSearchConfig } from "../kb-memory/opensearch-write.mjs";
@@ -124,36 +124,22 @@ async function checkOpenSearchSnapshot() {
 
 // ---------- check 3: RDS automated-snapshot freshness ----------
 // AWS RDS is a "Query protocol" service (form-encoded POST body, XML response) -- unlike SSM's
-// JSON-RPC or OpenSearch's plain REST, so this is a small dedicated signer rather than a reuse of
-// either existing client. Same SigV4 mechanics throughout the toolkit; only the request/response
-// SHAPE differs, which is exactly the class of difference that makes forcing a shared abstraction
-// across all three not worth it.
-function sha256Hex(s) { return crypto.createHash("sha256").update(s, "utf8").digest("hex"); }
-function hmac(key, data) { return crypto.createHmac("sha256", key).update(data, "utf8").digest(); }
-
-async function rdsDescribeDbSnapshots(creds, dbInstanceId) {
+// JSON-RPC or OpenSearch's plain REST. It always signs a bare "/" path, so FND-20260828-5ca1's
+// double-vs-single-encode fix is a no-op here; this migration onto ../../setup/aws-sigv4.mjs (one of
+// six hand-rolled SigV4 implementations consolidated 2026-09-02) is a pure refactor, not a bug fix,
+// for this specific caller.
+export async function rdsDescribeDbSnapshots(creds, dbInstanceId) {
   const region = process.env.RDS_REGION || process.env.AWS_REGION || "us-east-1";
   const host = `rds.${region}.amazonaws.com`;
   const params = { Action: "DescribeDBSnapshots", Version: "2014-10-31", DBInstanceIdentifier: dbInstanceId, SnapshotType: "automated" };
   const body = Object.keys(params).sort().map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`).join("&");
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const dateStamp = amzDate.slice(0, 8);
-  const headers = { host, "content-type": "application/x-www-form-urlencoded; charset=utf-8", "x-amz-date": amzDate, ...(creds.sessionToken ? { "x-amz-security-token": creds.sessionToken } : {}) };
-  const sortedNames = Object.keys(headers).sort();
-  const canonicalHeaders = sortedNames.map((n) => `${n}:${String(headers[n]).trim()}\n`).join("");
-  const signedHeaders = sortedNames.join(";");
-  const canonicalRequest = ["POST", "/", "", canonicalHeaders, signedHeaders, sha256Hex(body)].join("\n");
-  const scope = `${dateStamp}/${region}/rds/aws4_request`;
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
-  let k = hmac(`AWS4${creds.secretAccessKey}`, dateStamp);
-  k = hmac(k, region); k = hmac(k, "rds"); k = hmac(k, "aws4_request");
-  const signature = hmac(k, stringToSign).toString("hex");
-  const authorization = `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-  const r = await fetch(`https://${host}/`, { method: "POST", headers: { ...headers, Authorization: authorization }, body });
-  const text = await r.text();
-  if (!r.ok) throw new Error(`DescribeDBSnapshots HTTP ${r.status}: ${text.slice(0, 400)}`);
-  return text;
+  const r = await awsFetch(`https://${host}/`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded; charset=utf-8" },
+    body,
+  }, { service: "rds", region, credentials: creds });
+  if (r.reason) throw new Error(`DescribeDBSnapshots ${r.reason}: ${(r.text || "").slice(0, 400)}`);
+  return r.text;
 }
 
 /** Pure: extract {createTime, status} per <DBSnapshot> block from the raw XML response. A narrow,
@@ -195,37 +181,24 @@ async function checkRdsSnapshot() {
 
 // ---------- check 4: n8n Lightsail AutoSnapshot freshness (+ the add-on itself still Enabled) ----------
 // Lightsail's wire protocol is JSON-1.1 with an x-amz-target header (POST /, application/x-amz-json-1.1
-// body) -- a different shape from RDS's Query protocol above (form-encoded body, no x-amz-target), so
-// this is its own small dedicated signer rather than a forced shared abstraction, matching this file's
-// own stated philosophy in the RDS section's comment above. Reuses this file's existing sha256Hex()/
-// hmac() helpers (defined above for the RDS signer) rather than a third copy of the same two functions.
-async function lightsailCall(creds, region, action, body) {
+// body) -- a different shape from RDS's Query protocol above (form-encoded body, no x-amz-target), but
+// like RDS it always signs a bare "/" path, so this migration onto ../../setup/aws-sigv4.mjs is also a
+// pure refactor (no double-vs-single-encode question applies to a rootless path).
+export async function lightsailCall(creds, region, action, body) {
   const host = `lightsail.${region}.amazonaws.com`;
-  const payload = JSON.stringify(body);
-  const amz = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const dateStamp = amz.slice(0, 8);
-  const headers = {
-    host,
-    "content-type": "application/x-amz-json-1.1",
-    "x-amz-date": amz,
-    "x-amz-target": `Lightsail_20161128.${action}`,
-    ...(creds.sessionToken ? { "x-amz-security-token": creds.sessionToken } : {}),
-  };
-  const sortedNames = Object.keys(headers).sort();
-  const canonicalHeaders = sortedNames.map((n) => `${n}:${String(headers[n]).trim()}\n`).join("");
-  const signedHeaders = sortedNames.join(";");
-  const canonicalRequest = ["POST", "/", "", canonicalHeaders, signedHeaders, sha256Hex(payload)].join("\n");
-  const scope = `${dateStamp}/${region}/lightsail/aws4_request`;
-  const stringToSign = ["AWS4-HMAC-SHA256", amz, scope, sha256Hex(canonicalRequest)].join("\n");
-  let k = hmac(`AWS4${creds.secretAccessKey}`, dateStamp);
-  k = hmac(k, region); k = hmac(k, "lightsail"); k = hmac(k, "aws4_request");
-  const signature = hmac(k, stringToSign).toString("hex");
-  const authorization = `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-  const r = await fetch(`https://${host}/`, { method: "POST", headers: { ...headers, Authorization: authorization }, body: payload });
-  const text = await r.text();
-  let json = null;
-  try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-  return { status: r.status, json, text };
+  const r = await awsFetch(`https://${host}/`, {
+    method: "POST",
+    headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": `Lightsail_20161128.${action}` },
+    body: JSON.stringify(body),
+  }, { service: "lightsail", region, credentials: creds });
+  // awsFetch() never throws (a no-credentials or transport failure comes back as status:0 + reason
+  // instead) -- the ORIGINAL bare-fetch() version of this function DID throw on a transport error,
+  // which checkN8nAutoSnapshot()'s own try/catch turned into a detailed error message. Preserve that:
+  // a real network/credential failure (status 0) still throws here, so callers keep their existing
+  // "HTTP <code>" branch for genuine non-2xx responses and their existing catch-block detail for
+  // everything else, exactly as before this migration.
+  if (r.status === 0) throw new Error(`${action}: ${r.reason}`);
+  return { status: r.status, json: r.json, text: r.text };
 }
 
 /** Pure: does a Lightsail GetInstance response show the AutoSnapshot add-on as Enabled? Returns false

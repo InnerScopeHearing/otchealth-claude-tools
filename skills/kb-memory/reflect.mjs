@@ -34,6 +34,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { kvSecret } from "./azure-secret.mjs";
 import { chatBody, resolveTier, LEGACY_STANDARD } from "../../setup/model-routing.mjs";
+import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { FAILED_WRITE_FILE, appendFailedWriteFallback } from "./local-fallback.mjs";
 import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -256,6 +257,13 @@ function recentMemory() { try { return execFileSync("node", [join(HERE, "mem.mjs
 export async function distill({ agent, toolCount = 0, body = "", known = "", chatFn = ask, modelConfigured = true, provider = LLM_PROVIDER } = {}) {
   const sys = `You are the memory-reflection step for agent "${agent}". From the session below, extract ONLY genuinely DURABLE, REUSABLE lessons that are NOT already in the agent's recent memory. Prefer: pitfalls (a wrong belief or trap + the fix), decisions (a standing choice + why), or facts (a stable identifier/config). Be strict: 0-3 items, each one sentence, specific and self-contained. If nothing new and durable, return []. Mark share=true ONLY if it is non-sensitive and useful cross-team (no MNPI/PHI/privileged). Return ONLY a JSON array: [{"type":"pitfall|decision|remember","text":"..","share":bool}].`;
   const user = `AGENT RECENT MEMORY (do NOT duplicate these):\n${known}\n\n===== SESSION SIGNAL (${toolCount} tool calls) =====\n${body}`;
+  // Prompt-caching hygiene (2026-09-02): `sys` is static PER AGENT (varies only by the fixed agent
+  // name for repeated calls from the SAME agent, never per-session); `known`+`body` in `user` are
+  // both genuinely per-session variable, with `known` (recent memory, comparatively more stable
+  // across nearby calls) already placed before `body` (the highly volatile transcript) -- already
+  // the cache-friendly order (most-stable-first among the variable parts, fully-static system
+  // message first overall). Observability only, not a reorder.
+  logPrefixForText(`kb-memory-reflect:${agent}`, sys);
 
   let items = [];
   let llmError = null;

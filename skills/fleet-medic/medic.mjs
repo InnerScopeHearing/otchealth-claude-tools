@@ -60,19 +60,28 @@ const BEACON_FRESH_MIN = parseInt(process.env.MEDIC_BEACON_FRESH_MIN || "120", 1
 const STALE_WATCH_MIN  = parseInt(process.env.MEDIC_STALE_WATCH_MIN  || "10080", 10) || 10080; // 7d: below this, silence is just "idle", not "broken"
 const COOLDOWN_MIN     = parseInt(process.env.MEDIC_COOLDOWN_MIN     || "360", 10) || 360;   // don't re-dispatch the same agent within 6h
 const ESCALATE_AFTER   = parseInt(process.env.MEDIC_ESCALATE_AFTER   || "3", 10) || 3;       // N consecutive DARK dispatches -> escalate to the human
+// FND-20260902-67ce: require this many CONSECUTIVE SCANS classified DARK (not merely consecutive
+// DISPATCHES, which are already 6h-cooldown-spaced by COOLDOWN_MIN above) before a DARK condition is
+// allowed to dispatch at all. A single transient DARK reading -- e.g. a beacon caught mid-startup-race
+// before this fix's beacon.mjs grace window even applies (an older beacon binary, a seat that predates
+// the fix, or any other one-off blip) -- must not page. Deliberately scoped to DARK only: NO-MEMORY
+// (never wrote a shared entry, no beacon at all) is a persistent-absence signal, not a noisy reading,
+// so it keeps its existing single-scan dispatch behaviour unchanged.
+const DARK_CONSECUTIVE = parseInt(process.env.MEDIC_DARK_CONSECUTIVE || "2", 10) || 2;
 
 // ============================ PURE CORE (hermetically tested) ============================
 // classify(): given the two health signals + prior medic state + now, decide each agent's condition and
 // whether to dispatch. No I/O -> deterministic + unit-testable. This is the brain of the auto-medic.
 //   health:  [{agent, status:"LIVE"|"STALE"|"NO-DATA", last_shared_age_min}]
-//   beacons: { agent: {status:"LIVE"|"DARK", age_min, hooks_wired:bool, ledger_size:int} }
-//   state:   { agent: {last_dispatch_ts, consecutive_dark} }
-// returns:  [{agent, condition:"HEALTHY"|"WATCH"|"DARK"|"NO-MEMORY", severity, dispatch, escalate, reason}]
+//   beacons: { agent: {status:"LIVE"|"DARK"|"starting", age_min, hooks_wired:bool, ledger_size:int} }
+//   state:   { agent: {last_dispatch_ts, consecutive_dark, dark_streak} }
+// returns:  [{agent, condition:"HEALTHY"|"WATCH"|"STARTING"|"DARK"|"NO-MEMORY", severity, dispatch, escalate, reason}]
 export function classify(health, beacons, state, now, opts = {}) {
   const beaconFresh = opts.beaconFreshMin ?? BEACON_FRESH_MIN;
   const staleWatch = opts.staleWatchMin ?? STALE_WATCH_MIN;
   const cooldown = opts.cooldownMin ?? COOLDOWN_MIN;
   const escalateAfter = opts.escalateAfter ?? ESCALATE_AFTER;
+  const darkConsecutive = opts.darkConsecutive ?? DARK_CONSECUTIVE;
   const hByAgent = {}; for (const h of (health || [])) hByAgent[h.agent] = h;
   const agents = [...new Set([...(opts.roster || EXEC), ...Object.keys(hByAgent), ...Object.keys(beacons || {})])];
   const out = [];
@@ -80,12 +89,21 @@ export function classify(health, beacons, state, now, opts = {}) {
     const h = hByAgent[agent];
     const b = (beacons || {})[agent];
     const freshBeacon = b && typeof b.age_min === "number" && b.age_min <= beaconFresh ? b : null;
-    const st = (state || {})[agent] || { last_dispatch_ts: 0, consecutive_dark: 0 };
+    const st = (state || {})[agent] || { last_dispatch_ts: 0, consecutive_dark: 0, dark_streak: 0 };
     const sinceDispatch = st.last_dispatch_ts ? (now - Date.parse(st.last_dispatch_ts)) / 60000 : Infinity;
+    const priorDarkStreak = st.dark_streak || 0;
 
     let condition = "WATCH", severity = "low", reason = "";
+    // 0. STARTUP: beacon.mjs itself reports "starting" (hooks not wired yet, but still inside its own
+    //    startup grace window) -- healthy-pending, not a real signal either way. Checked BEFORE the
+    //    DARK test below on purpose: that test's `hooks_wired === false` / `ledger_size === 0` OR-arms
+    //    would otherwise misclassify a "starting" beacon as DARK regardless of its status field.
+    if (freshBeacon && freshBeacon.status === "starting") {
+      condition = "STARTING"; severity = "ok";
+      reason = `session starting up, hooks not wired yet (${freshBeacon.age_min}m ago, within beacon startup grace)`;
+    }
     // 1. SHARP: an active session (fresh beacon) whose memory is OFF -> the real fire.
-    if (freshBeacon && (freshBeacon.status === "DARK" || freshBeacon.hooks_wired === false || freshBeacon.ledger_size === 0)) {
+    else if (freshBeacon && (freshBeacon.status === "DARK" || freshBeacon.hooks_wired === false || freshBeacon.ledger_size === 0)) {
       condition = "DARK"; severity = "high";
       reason = `active session with memory OFF (${freshBeacon.hooks_wired === false ? "hooks unwired" : freshBeacon.ledger_size === 0 ? "ledger empty" : "beacon DARK"}, ${freshBeacon.age_min}m ago)`;
     }
@@ -104,11 +122,18 @@ export function classify(health, beacons, state, now, opts = {}) {
     }
     else { condition = "WATCH"; severity = "low"; reason = h ? `${h.status} (${Math.round((h.last_shared_age_min || 0) / 60)}h)` : "no signal"; }
 
+    // dark_streak: consecutive SCANS (not dispatches) this agent has been classified DARK, persisted
+    // across calls via `state`. Resets to 0 the instant a scan is NOT DARK -- STARTING included, so a
+    // startup-grace reading never counts as, or breaks, a genuine DARK streak either way.
+    const dark_streak = condition === "DARK" ? priorDarkStreak + 1 : 0;
     const wantsDispatch = condition === "DARK" || condition === "NO-MEMORY";
-    const dispatch = wantsDispatch && sinceDispatch >= cooldown;       // respect cooldown so we don't spam
+    // NO-MEMORY keeps its original single-scan gate; DARK additionally requires darkConsecutive scans.
+    const meetsDarkGate = condition !== "DARK" || dark_streak >= darkConsecutive;
+    const dispatch = wantsDispatch && sinceDispatch >= cooldown && meetsDarkGate; // respect cooldown + the streak gate so we don't spam or cry wolf on one reading
     const consecutive_dark = wantsDispatch ? (st.consecutive_dark || 0) + (dispatch ? 1 : 0) : 0;
     const escalate = wantsDispatch && consecutive_dark >= escalateAfter;
-    out.push({ agent, condition, severity, dispatch, escalate, reason, consecutive_dark, cooled_down: wantsDispatch && !dispatch });
+    const streak_gated = condition === "DARK" && !meetsDarkGate;
+    out.push({ agent, condition, severity, dispatch, escalate, reason, consecutive_dark, dark_streak, streak_gated, cooled_down: wantsDispatch && !dispatch });
   }
   return out.sort((a, b) => ({ high: 0, low: 1, ok: 2 }[a.severity] - { high: 0, low: 1, ok: 2 }[b.severity]) || a.agent.localeCompare(b.agent));
 }
@@ -244,8 +269,11 @@ async function scan() {
   else {
     console.log(`# FLEET MEDIC scan ${new Date(now).toISOString()}  (beacons: ${Object.keys(beacons).length}; ${dispatching ? "DISPATCH" : "dry-run"})`);
     for (const r of results) {
-      const tag = r.condition === "HEALTHY" ? "  ok " : r.condition === "WATCH" ? "watch" : "DARK!";
-      const act = r.dispatch ? " -> DISPATCH" : r.cooled_down ? " (cooldown)" : "";
+      // FND-20260902-67ce: STARTING is healthy-pending, not a real signal -- must never print as "DARK!"
+      // (that was the exact false-positive this fix closes; a print-only regression here would recreate
+      // the same operator-facing confusion even with the underlying dispatch already fixed).
+      const tag = r.condition === "HEALTHY" ? "  ok " : r.condition === "STARTING" ? " new " : r.condition === "WATCH" ? "watch" : "DARK!";
+      const act = r.dispatch ? " -> DISPATCH" : r.streak_gated ? ` (streak ${r.dark_streak}/${DARK_CONSECUTIVE})` : r.cooled_down ? " (cooldown)" : "";
       console.log(`[${tag}] ${r.agent.padEnd(11)} ${r.condition.padEnd(10)} ${act.padEnd(13)} ${r.reason}`);
     }
   }
@@ -265,7 +293,13 @@ async function scan() {
   const ingestKey = await sm("posthog-fleet-ingest-key");
   const nowIso = new Date(now).toISOString();
   const escalations = [];
-  const newState = { ...state };
+  // FND-20260902-67ce: `dark_streak` (consecutive SCANS classified DARK, distinct from `consecutive_dark`
+  // which counts consecutive DISPATCH cycles ~6h apart) must persist EVERY scan for EVERY agent -- not
+  // only inside the dispatch/HEALTHY branches below -- or the streak gate in classify() would never see
+  // a rising count and could never actually reach `darkConsecutive`. Seed it from this scan's results
+  // first; the per-branch logic below then only ever overlays `last_dispatch_ts`/`consecutive_dark`.
+  const newState = {};
+  for (const r of results) newState[r.agent] = { ...(state[r.agent] || {}), dark_streak: r.dark_streak };
   let captureOk = 0, captureFail = 0;
   for (const r of results) {
     if (r.dispatch) {
@@ -276,11 +310,11 @@ async function scan() {
       // that "Succeeded" but produced zero visible telemetry is never indistinguishable from a real one.
       const captured = await emitDispatch(ingestKey, r.agent, r);
       if (captured) captureOk++; else captureFail++;
-      newState[r.agent] = { last_dispatch_ts: nowIso, consecutive_dark: r.consecutive_dark };
+      newState[r.agent] = { ...newState[r.agent], last_dispatch_ts: nowIso, consecutive_dark: r.consecutive_dark };
       console.error(`  ${captured ? "DISPATCHED" : "DISPATCH FAILED (capture)"} medic -> ${r.agent}: ${r.reason}${r.escalate ? "  [ESCALATE]" : ""}`);
       if (r.escalate) escalations.push(r);
     } else if (r.condition === "HEALTHY" && newState[r.agent]) {
-      newState[r.agent] = { last_dispatch_ts: newState[r.agent].last_dispatch_ts, consecutive_dark: 0 }; // recovered -> reset the streak
+      newState[r.agent] = { ...newState[r.agent], consecutive_dark: 0 }; // recovered -> reset the escalation streak (dark_streak is already 0 from the seed above)
     }
   }
   try { await cPut(`${MEDIC_PREFIX}_state.json`, JSON.stringify(newState, null, 1), "application/json"); } catch {}
