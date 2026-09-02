@@ -241,13 +241,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-16T04:17:51.024Z
 - **Closed:** 2026-08-16T04:17:51.024Z
 
-### finding:FND-20260816-5539 severity:medium status:open | xero-run's AWS EventBridge twin carries a real daily cron (0 7 UTC) while its Azure original is a de-facto-disabled cron (Feb 30, never fires) -- enabling the AWS schedule as-is is new financial automation going live, not a like-for-like cutover, and xero-run posts to a real accounting ledger
+### finding:FND-20260816-5539 severity:medium status:fixed | xero-run's AWS EventBridge twin carries a real daily cron (0 7 UTC) while its Azure original is a de-facto-disabled cron (Feb 30, never fires) -- enabling the AWS schedule as-is is new financial automation going live, not a like-for-like cutover, and xero-run posts to a real accounting ledger
 
 - **Source audit doc:** runbooks/AWS-JOBS-MIGRATION-WAVE-B.md
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** aws scheduler get-schedule otchealth-xero-run on 2026-09-02 = DISABLED, cron(0 7 * * ? *). The AWS twin is not enabled, so no new financial automation runs; enabling it remains a deliberate, Matt-gated flip per the original finding.
 - **Opened:** 2026-08-16T18:29:57.947Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:49:02.173Z
 
 ### finding:FND-20260816-1aa3 severity:low status:fixed | sentinel-os-eval has failed 4 of its last 5 Azure runs (08-12,08-13,08-14 Failed, 08-15 Succeeded but took 1h28m, 08-16 Failed) -- pre-existing, unrelated to the AWS migration, surfaced while cross-checking the jobs matrix
 
