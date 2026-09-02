@@ -849,13 +849,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T02:31:13.486Z
 - **Closed:** 2026-09-02T14:36:43.953Z
 
-### finding:FND-20260902-8b55 severity:medium status:open | CS n8n restore did not carry the 4 data tables: Intercom Outcome Poller dead every 5min and Daily Reconciler dead daily since 2026-08-29, silent because the error router records but does not page
+### finding:FND-20260902-8b55 severity:medium status:fixed | CS n8n restore did not carry the 4 data tables: Intercom Outcome Poller dead every 5min and Daily Reconciler dead daily since 2026-08-29, silent because the error router records but does not page
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-02-cs-n8n-state-and-datatable-outage.md (PR #138)
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** poller exec 2521 (mode=trigger, 2026-09-02T15:35:11Z) traversed all 13 nodes: Intercom fetch 1 item/10161ms, Process 13 items, all four Persist nodes 13 items, lastNodeExecuted=Persist Outcome Cursor (cursor committed last per design). Independently confirmed at the tables, not the run log: cursor/outcomes/csat/qa all count=13. Required three distinct fixes -- data-table repoint, alwaysOutputData on the cursor read (empty table halted the branch and made the 24h bootstrap unreachable), and restoring the missing Intercom credential.
 - **Opened:** 2026-09-02T03:13:33.138Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T15:39:29.347Z
 
 ### finding:FND-20260902-5c58 severity:low status:fixed | cs-n8n SQLite database is 2.35 GB on a Lightsail instance (execution-history bloat, plausibly fed by the 5-min poller failure loop); check disk headroom and execution retention
 
