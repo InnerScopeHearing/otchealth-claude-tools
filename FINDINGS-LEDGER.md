@@ -864,3 +864,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** Read the live Lightsail instance (bundle small_3_0): 60 GB system disk, 2 vCPU, 2 GB RAM. The 2,351,165,440-byte SQLite db is 2.19 GiB = ~3.6% of disk, so there is no disk-headroom risk and the finding's implied urgency was wrong. Closing as NOT-A-RISK rather than leaving an alarming open item. What remains worth knowing (recorded here, not as an open finding): growth RATE is unmeasured, and the 5-minute poller failure loop writes execution rows continuously, so re-check size after that loop is fixed; n8n execution retention (EXECUTIONS_DATA_MAX_AGE/PRUNE) was not inspected.
 - **Opened:** 2026-09-02T03:28:50.685Z
 - **Closed:** 2026-09-02T03:30:07.441Z
+
+### finding:FND-20260902-81bc severity:critical status:open | CUSTOMER SAFETY: safety-escalation detection has been DOWN since the Azure loss. Safety Monitor n8n workflow D8NH3ITNIhvPyjfP was never restored; 77 customer conversations since 2026-08-14 produced ZERO new safety tags vs 5 in the prior 30 days. Rebuild detection AND have a human review the 77-conversation window
+
+- **Source audit doc:** live Intercom API + cs-n8n workflow inventory, 2026-09-02 (session:2026-09-02)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-02T03:58:32.611Z
+- **Closed:** (open)
