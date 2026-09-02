@@ -8,6 +8,14 @@
 // took the whole nightly loop down with it -- the credential-registry regen, the commons index, the
 // memory reindex, and the fleet-watch report never ran (observed live: the task stopped exit=1).
 //
+// SOURCES for the operational history above, none of which this test establishes on its own and all
+// of which are checkable: the Azure deletion date and its consequences are in
+// otchealth-claude-tools/CLAUDE.md ("CORRECTION, 2026-08-27"); the cron schedule is on the
+// EventBridge schedule otchealth-daily-digest; the failing run and its exit status are in the
+// findings-ledger entry named above. Cited rather than dropped because a regression lock is easier
+// to judge when the reader can see what it was built to prevent, but an unsourced assertion in a
+// header is just a claim.
+//
 // This was NOT caught by any existing test. job/librarian.sh's identical migration (2026-08-18) is
 // covered by skills/doc-indexer/tests/storage-backend-default.test.mjs (the library's default
 // backend) and skills/kb-memory/tests/s3-mirror-table.test.mjs (the MIRROR table), but nightly.sh's
@@ -42,10 +50,34 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NIGHTLY_SH = join(ROOT, "skills", "doc-indexer", "job", "nightly.sh");
 const src = () => readFileSync(NIGHTLY_SH, "utf8");
 
-// Strips full-line `#` comments (this script's only comment style -- see its header block) before
-// scanning for a live flag, so the header's own prose describing the historical bug ("hardcoded
-// `--azure`") does not trip the assertion it exists to explain.
-const stripComments = (text) => text.replace(/^\s*#.*$/gm, "");
+// Strips `#` comments -- both full-line and trailing -- before scanning for a live flag, so prose
+// describing the historical bug ("hardcoded `--azure`") does not trip the assertion it exists to
+// explain. A trailing comment must be stripped too: an earlier version handled only full-line
+// comments, so a perfectly ordinary `... indexer.mjs index  # was --azure before the fix` made the
+// --azure ban fail on a script that was correct. That is a loud false positive rather than a missed
+// regression, but a guard that cries wolf gets muted, which costs the same in the end.
+//
+// A `#` only opens a comment when it is unquoted AND begins a word, so quote state is tracked rather
+// than pattern-matched: `--container 'a#b'` and `echo "x # y"` keep their text. SCOPE, stated
+// honestly: this handles single and double quotes, which is what this script uses. It does not model
+// heredocs, backslash escapes, or `$'...'`. nightly.sh contains no heredoc (verified), and if one is
+// ever added, a `#` inside it would be treated as a comment -- affecting only what this scanner
+// ignores, never what it flags.
+const stripComments = (text) =>
+  text
+    .split("\n")
+    .map((line) => {
+      let sq = false;
+      let dq = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === "'" && !dq) sq = !sq;
+        else if (c === '"' && !sq) dq = !dq;
+        else if (c === "#" && !sq && !dq && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+      }
+      return line;
+    })
+    .join("\n");
 
 test("nightly.sh never passes --azure on a live invocation (the commons storage account is permanently write-blocked)", () => {
   assert.doesNotMatch(
