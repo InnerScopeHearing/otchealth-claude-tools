@@ -177,13 +177,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-08T14:02:55.785Z
 - **Closed:** 2026-09-02T07:07:28.052Z
 
-### finding:FND-20260811-19ed severity:high status:open | Dedicated App Coders allow_delete field is ignored by admission ownership checker
+### finding:FND-20260811-19ed severity:high status:wontfix | Dedicated App Coders allow_delete field is ignored by admission ownership checker
 
 - **Source audit doc:** /agent/workspace/aware-build-2026-08-09/control/control-plane-regressions-2026-08-10.md
 - **Fix commit:** (none yet)
-- **Verified by:** Reproduced in AWARE run 20260810T023500Z-63b58bed: validated packet allow_delete=true, admission returned DELETE_NOT_ALLOWED
+- **Verified by:** SUPERSEDED, control plane no longer exists (2026-09-02 verification): 'Dedicated App Coders' was the Hyperagent-hosted AWARE build orchestration of 2026-08-09..11; its source doc lives at a Hyperagent workspace path (/agent/workspace/aware-build-2026-08-09/control/...) that is gone with the Azure/Hyperagent CTO sunset. git grep across otchealth-cto, otchealth-claude-tools, aware-aural-rehab and aware-aural-rehab-ci finds ZERO code references (only the findings ledger and its library mirror). AWARE now builds under the 2026-08 exercise-program release contract with no such control plane. Nothing to fix; closing so the three highs stop implying live risk.
 - **Opened:** 2026-08-11T00:28:01.096Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:52:29.361Z
 
 ### finding:FND-20260811-12b8 severity:high status:open | Dedicated App Coders integration gate falsely flags Node 24 compile cache as secret
 
