@@ -833,10 +833,45 @@ test("main(): a successful migrate returns exit code 0", async () => {
 // 2026-09-02 live finding: a 3.x GET returns `knn: "true"` AND `knn.derived_source.enabled: "true"`
 // (leaf + namespace under one key). The old unflatten threw on the second key. The remainder is now
 // kept as a dotted key, which OpenSearch accepts in a create body.
-test("sanitizeIndexSettings: a settings key that is both a leaf and a namespace (knn + knn.derived_source.*) does not throw and keeps the nested part as a dotted key", () => {
-  const out = Q.sanitizeIndexSettings({ knn: "true", "knn.derived_source": { enabled: "true" }, number_of_shards: "1", uuid: "x" });
-  assert.equal(out.knn, true);
-  assert.equal(out["knn.derived_source.enabled"], "true");
-  assert.equal(out.number_of_shards, "1");
-  assert.equal("uuid" in out, false, "uuid is a denylisted per-index key");
+test("sanitizeIndexSettings: a settings key that is both a leaf and a namespace (knn + knn.derived_source.*) does not throw and keeps the nested part as a dotted key, in either insertion order", () => {
+  for (const flat of [
+    { knn: "true", "knn.derived_source": { enabled: "true" }, number_of_shards: "1", uuid: "x" },
+    { "knn.derived_source": { enabled: "true" }, knn: "true", number_of_shards: "1", uuid: "x" },
+  ]) {
+    const out = Q.sanitizeIndexSettings(flat);
+    assert.equal(out.knn, true);
+    assert.equal(out["knn.derived_source.enabled"], "true", `namespaced setting preserved for order ${Object.keys(flat).join(",")}`);
+    assert.equal(out.number_of_shards, "1");
+    assert.equal("uuid" in out, false, "uuid is a denylisted per-index key");
+  }
+});
+
+// 2026-09-02 live incident (commons-cco-memory): the run died in swap_recreated_target AFTER deleting the
+// original; withFailure() recorded plain phase:"failed", so the retry treated it as a fresh run and
+// GET /commons-cco-memory 404'd. A failure now records failed_in_phase and the resume continues the swap.
+test("withFailure records failed_in_phase and resumablePhase() resumes a mid-swap failure (also from legacy history-only states)", () => {
+  const preSwap = Q.withFailure(Q.withPhase(Q.initialState({ index: "i", twin: "i--q", vectorField: "v" }), "reindexing"), "boom");
+  assert.equal(preSwap.failed_in_phase, "reindexing");
+  assert.equal(Q.resumablePhase(preSwap), null, "a pre-swap failure restarts from the still-present original");
+  const midSwap = Q.withFailure(Q.withPhase(Q.initialState({ index: "i", twin: "i--q", vectorField: "v" }), "swap_recreated_target"), "boom");
+  assert.equal(Q.resumablePhase(midSwap), "swap_recreated_target");
+  const legacy = { ...midSwap }; delete legacy.failed_in_phase; // persisted before this fix
+  assert.equal(Q.resumablePhase(legacy), "swap_recreated_target");
+  assert.equal(Q.resumablePhase(Q.withPhase(Q.initialState({ index: "i", twin: "i--q", vectorField: "v" }), "verified")), null);
+});
+
+test("runMigrateOne: a run that FAILED inside swap_recreated_target (original already deleted) resumes and completes instead of GETting the deleted original", async () => {
+  const cluster = baseFixture();
+  const stateStore = makeFakeStateStore();
+  const failed = Q.withFailure(Q.withPhase(Q.initialState({ index: "memory-exec", twin: "memory-exec--q", vectorField: "contentVector" }), "swap_recreated_target"), "Cannot create property 'derived_source' on string 'true'");
+  await stateStore.put("memory-exec", failed);
+  cluster.indices.delete("memory-exec");
+  const seedDocs = Object.fromEntries([0, 1, 2, 3, 4].map((i) => [String(i), { text: `doc ${i}`, contentVector: [i, i + 1, i + 2, i + 3] }]));
+  await cluster.client.createIndex("memory-exec--q", { settings: { index: { knn: true } }, mappings: { properties: { text: { type: "text" }, contentVector: Q.buildQuantizedField(fp32Field(4)) } } });
+  for (const [id, src] of Object.entries(seedDocs)) cluster.indices.get("memory-exec--q").docs.set(id, src);
+  const result = await Q.runMigrateOne("memory-exec", { client: cluster.client, stateStore, log: noopLog, commit: true });
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(cluster.indices.has("memory-exec--q"), false, "twin cleaned up after the completed swap");
+  assert.equal(cluster.indices.get("memory-exec").docs.size, 5, "the recreated original holds the twin's docs");
+  assert.equal((await stateStore.get("memory-exec")).phase, "complete");
 });
