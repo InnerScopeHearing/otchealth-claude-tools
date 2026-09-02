@@ -270,13 +270,28 @@ function flattenObject(obj, prefix = "", out = {}) {
   }
   return out;
 }
+// OpenSearch reports index settings FLATTENED, and a key can be BOTH a leaf and a namespace at once:
+// on 3.x a GET of any k-NN index returns `knn: "true"` next to `knn.derived_source.enabled: "true"`.
+// A naive unflatten walks into the string "true" and throws (`Cannot create property 'derived_source'
+// on string 'true'`, hit live on otchealth-brain 3.7, 2026-09-02, the moment the tool re-read a twin
+// it had created). When an intermediate node is already a primitive, the remainder of the key is kept
+// DOTTED at that level -- OpenSearch accepts dotted settings keys, so the create body stays valid.
 function unflattenObject(flat) {
   const out = {};
   for (const [key, v] of Object.entries(flat)) {
     const parts = key.split(".");
     let node = out;
-    for (let i = 0; i < parts.length - 1; i++) node = node[parts[i]] ||= {};
-    node[parts.at(-1)] = v;
+    let placed = false;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const existing = node[parts[i]];
+      if (existing !== undefined && (existing === null || typeof existing !== "object" || Array.isArray(existing))) {
+        node[parts.slice(i).join(".")] = v;
+        placed = true;
+        break;
+      }
+      node = node[parts[i]] ||= {};
+    }
+    if (!placed) node[parts.at(-1)] = v;
   }
   return out;
 }

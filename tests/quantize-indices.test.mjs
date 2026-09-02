@@ -828,3 +828,15 @@ test("main(): a successful migrate returns exit code 0", async () => {
   const code = await Q.main(["migrate", "--index", "memory-exec", "--commit"], { client: cluster.client, stateStore: makeFakeStateStore(), log: noopLog });
   assert.equal(code, 0);
 });
+
+
+// 2026-09-02 live finding: a 3.x GET returns `knn: "true"` AND `knn.derived_source.enabled: "true"`
+// (leaf + namespace under one key). The old unflatten threw on the second key. The remainder is now
+// kept as a dotted key, which OpenSearch accepts in a create body.
+test("sanitizeIndexSettings: a settings key that is both a leaf and a namespace (knn + knn.derived_source.*) does not throw and keeps the nested part as a dotted key", () => {
+  const out = Q.sanitizeIndexSettings({ knn: "true", "knn.derived_source": { enabled: "true" }, number_of_shards: "1", uuid: "x" });
+  assert.equal(out.knn, true);
+  assert.equal(out["knn.derived_source.enabled"], "true");
+  assert.equal(out.number_of_shards, "1");
+  assert.equal("uuid" in out, false, "uuid is a denylisted per-index key");
+});
