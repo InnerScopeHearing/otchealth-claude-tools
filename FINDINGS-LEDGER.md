@@ -856,3 +856,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-02T03:13:33.138Z
 - **Closed:** (open)
+
+### finding:FND-20260902-5c58 severity:low status:open | cs-n8n SQLite database is 2.35 GB on a Lightsail instance (execution-history bloat, plausibly fed by the 5-min poller failure loop); check disk headroom and execution retention
+
+- **Source audit doc:** otchealth-cto run 33587097972 (n8n-inspect-datatables), 2026-09-02
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-02T03:28:50.685Z
+- **Closed:** (open)
