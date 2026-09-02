@@ -737,13 +737,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T21:43:02.043Z
 - **Closed:** (open)
 
-### finding:FND-20260828-8a48 severity:medium status:open | Restored Taylor workflow jJsq re-embeds the superseded Entra app a0bca2fb client secret INLINE in its Code node jsCode (pre-hardening restore regressed the 2026-08-07 credentialization; encrypted credential 8hPSiaFyOV3oxyk5 died with old instance). Now auth-gated at webhook (121c fix) but secret value sits in workflow JSON readable via n8n API, and the old tenant password key is still valid. Fix: re-credentialize Graph auth in the CS rebuild program, then owner/Application-Administrator removes the old password key (standing Matt gate).
+### finding:FND-20260828-8a48 severity:medium status:fixed | Restored Taylor workflow jJsq re-embeds the superseded Entra app a0bca2fb client secret INLINE in its Code node jsCode (pre-hardening restore regressed the 2026-08-07 credentialization; encrypted credential 8hPSiaFyOV3oxyk5 died with old instance). Now auth-gated at webhook (121c fix) but secret value sits in workflow JSON readable via n8n API, and the old tenant password key is still valid. Fix: re-credentialize Graph auth in the CS rebuild program, then owner/Application-Administrator removes the old password key (standing Matt gate).
 
 - **Source audit doc:** session:2026-08-28 jJsq jsCode full read during 121c fix
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** 2026-09-02: Taylor front-desk workflow jJsqx9P15WBPjg6P no longer embeds the Entra app a0bca2fb client secret. The literal and the inline token() function were removed from the Code node; a new 'Graph Token' HTTP Request node (Webhook -> Graph Token -> Graph Action -> Respond) mints the client_credentials token at the v2 endpoint using encrypted n8n httpBasicAuth credential 4mqIZGaMIulVVBEj (client_secret_basic verified accepted by Entra: HTTP 200, expires_in 3599), and the store of record is SSM /otchealth/n8n-cs/taylor-graph-client-secret v1. Readback: active=true, versionId 81dc4054, secret literal absent from the entire workflow JSON; live authed execution 2553 ran Webhook, Graph Token, Graph Action, Respond all without error. Rollback anchor 619d51cb (contains the literal; do not restore). The old tenant password-key removal remains a Matt/admin gate under the rotation freeze; earlier workflow VERSIONS in n8n history still contain the literal (history is owner-only).
 - **Opened:** 2026-08-28T22:55:17.249Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:10:25.388Z
 
 ### finding:FND-20260829-59ed severity:medium status:open | ROTATION FREEZE (Matt directive 2026-08-29): all secret rotations held by owner instruction - Perplexity connector token (exposed in CloudWatch pre-fix), Customer.io Track pair (value committed in otchealth-ops git export, still valid), DR passphrase custody move, n8n owner credentials, Entra a0bca2fb old key. These exposures remain OPEN by explicit owner acceptance, not oversight. Re-raise only if evidence of active abuse appears (gateway 401 spikes on the Perplexity lane, unexplained CIO track events) or Matt lifts the freeze.
 
