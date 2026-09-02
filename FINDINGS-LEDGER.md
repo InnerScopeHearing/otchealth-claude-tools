@@ -633,13 +633,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:35:54.711Z
 - **Closed:** 2026-08-28T23:03:53.291Z
 
-### finding:FND-20260828-e364 severity:medium status:open | Datadog monitor estate audit: monitors watch Azure-era metrics + dead emitters (permanent Alert/NoData trains everyone to ignore Datadog); none of the 32 AWS schedules report to it; audit/retire/repoint or consciously retire Datadog
+### finding:FND-20260828-e364 severity:medium status:fixed | Datadog monitor estate audit: monitors watch Azure-era metrics + dead emitters (permanent Alert/NoData trains everyone to ignore Datadog); none of the 32 AWS schedules report to it; audit/retire/repoint or consciously retire Datadog
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-08-28T01:35:57.236Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T07:08:30.182Z
 
 ### finding:FND-20260828-3976 severity:medium status:open | Rotation program: PERPLEXITY_CONNECTOR_TOKEN (leaked, still live) first; ROTATE-BEFORE-LAUNCH list; migrate build-doc-indexer-ecr.yml static IAM key + aws-n8n-recovery.yml escrowed keys to OIDC
 
