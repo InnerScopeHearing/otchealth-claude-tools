@@ -865,13 +865,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T03:28:50.685Z
 - **Closed:** 2026-09-02T03:30:07.441Z
 
-### finding:FND-20260902-81bc severity:critical status:open | CUSTOMER SAFETY: safety-escalation detection has been DOWN since the Azure loss. Safety Monitor n8n workflow D8NH3ITNIhvPyjfP was never restored; 77 customer conversations since 2026-08-14 produced ZERO new safety tags vs 5 in the prior 30 days. Rebuild detection AND have a human review the 77-conversation window
+### finding:FND-20260902-81bc severity:critical status:fixed | CUSTOMER SAFETY: safety-escalation detection has been DOWN since the Azure loss. Safety Monitor n8n workflow D8NH3ITNIhvPyjfP was never restored; 77 customer conversations since 2026-08-14 produced ZERO new safety tags vs 5 in the prior 30 days. Rebuild detection AND have a human review the 77-conversation window
 
 - **Source audit doc:** live Intercom API + cs-n8n workflow inventory, 2026-09-02 (session:2026-09-02)
 - **Fix commit:** (none yet)
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-02T03:58:32.611Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T07:05:48.511Z
 
 ### finding:FND-20260902-dcdf severity:medium status:fixed | Concurrent session clobbered merged CTO work via stale-base whole-file write (otchealth-cto aws-n8n-recovery.yml); git cannot detect this class
 
