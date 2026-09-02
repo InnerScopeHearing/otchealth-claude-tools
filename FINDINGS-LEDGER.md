@@ -553,13 +553,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:36.840Z
 - **Closed:** 2026-08-28T22:57:22.303Z
 
-### finding:FND-20260827-2ed6 severity:medium status:open | apps/otchealth-os-chat + m365-agent-bridge + heygen approval broker: Azure-native services, retire-or-rebuild decision needed (os.otchealth.app DNS already removed)
+### finding:FND-20260827-2ed6 severity:medium status:fixed | apps/otchealth-os-chat + m365-agent-bridge + heygen approval broker: Azure-native services, retire-or-rebuild decision needed (os.otchealth.app DNS already removed)
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Decision under Matt's 2026-09-02 'handle all items': RETIRE apps/otchealth-os-chat and m365-agent-bridge (both Azure-native, no AWS deployment, no traffic since the 2026-08-13 subscription deletion; os.otchealth.app DNS already removed 2026-08-27). RETIRED.md banners landed on otchealth-cto branch claude/cto-session-2026-09-02 (PR #144) in both directories, naming the M365 tenant residue only an admin can remove (Teams catalog 592d4e54-6e0a-4d6e-8e0e-ba2f931634cb, manifest 91fb0b97, bot e81e9bac). HeyGen approval broker: NOT re-homed, deliberately -- HeyGen provider writes are fail-closed by the global interlock, the founder canary was rejected by Matt and Kim/Mark consent is pending, so there is no demand; re-home to ECS when video production resumes.
 - **Opened:** 2026-08-27T19:00:39.620Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:09:02.219Z
 
 ### finding:FND-20260827-5b15 severity:medium status:fixed | Datadog monitor fleet + Notion vault registry + Hyperagent saved skills/schedules still carry Azure-era config; sweep once respective access is available
 
