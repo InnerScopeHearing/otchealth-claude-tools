@@ -16,7 +16,7 @@
 import crypto from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rfc3986Encode, canonicalUri, canonicalQuery, signOpenSearchRequest, osBulkUpdate } from "../skills/doc-indexer/opensearch-client.mjs";
+import { rfc3986Encode, canonicalUri, canonicalQuery, signOpenSearchRequest, osBulkUpdate, osFetch } from "../skills/doc-indexer/opensearch-client.mjs";
 
 test("rfc3986Encode leaves unreserved characters unchanged", () => {
   assert.equal(rfc3986Encode("AZaz09-._~"), "AZaz09-._~");
@@ -199,4 +199,31 @@ test("signOpenSearchRequest: 'es' (the default, service omitted) is UNCHANGED fo
   const withEsService = signOpenSearchRequest({ ...opts, service: "es" });
   assert.equal(withoutService.headers.Authorization, withEsService.headers.Authorization, "omitting `service` must be identical to passing 'es' explicitly");
   assert.equal(withoutService.path, "/commerce-commerce-source-docs/_bulk", "no character in this path is encoding-sensitive, so single- vs double-encode make no difference here -- this is exactly why the pre-2026-08-28 signer's latent bug went unnoticed in production");
+});
+
+test("osFetch: the URL it actually sends the request to matches the canonical (signed) path -- regression lock for the SignatureDoesNotMatch class this file's own header warns a new caller into", async () => {
+  // Found live 2026-09-02 (see osFetch()'s own header comment): a caller whose path contains a
+  // character canonicalUri() actually changes (a literal ':', as in an OpenSearch task id
+  // "<nodeId>:<taskNumber>") used to be signed against ONE string but sent to the wire as a
+  // DIFFERENT one, because osFetch() re-derived the request URL from its own raw `path` argument
+  // instead of the canonicalized `path` signOpenSearchRequest() returns. Every pre-existing caller's
+  // path (plain index names, literal segments like `_bulk`/`_mapping`) happens to be unaffected by
+  // percent-encoding, so this never surfaced before a caller with a colon-bearing path existed.
+  let capturedUrl = null;
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => { capturedUrl = url; return { status: 200, ok: true, text: async () => "{}" }; };
+  try {
+    const cfg = { host: "example.us-east-1.es.amazonaws.com", region: "us-east-1", accessKeyId: "AKIDEXAMPLE", secretAccessKey: "secret" };
+    await osFetch(cfg, { method: "GET", path: "/_tasks/abc123:456" });
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.ok(capturedUrl, "fetch must have been called");
+  const sentPath = new URL(capturedUrl).pathname;
+  const signed = signOpenSearchRequest({
+    method: "GET", host: "example.us-east-1.es.amazonaws.com", path: "/_tasks/abc123:456",
+    region: "us-east-1", accessKeyId: "AKIDEXAMPLE", secretAccessKey: "secret",
+  });
+  assert.equal(sentPath, signed.path, "the path actually fetched must be byte-identical to the path that was signed");
+  assert.equal(sentPath, "/_tasks/abc123%3A456", "the colon must be single-encoded on the wire, matching what AWS's signature verification expects");
 });
