@@ -848,3 +848,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-02T02:31:13.486Z
 - **Closed:** (open)
+
+### finding:FND-20260902-8b55 severity:medium status:open | CS n8n restore did not carry the 4 data tables: Intercom Outcome Poller dead every 5min and Daily Reconciler dead daily since 2026-08-29, silent because the error router records but does not page
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-02-cs-n8n-state-and-datatable-outage.md (PR #138)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-02T03:13:33.138Z
+- **Closed:** (open)
