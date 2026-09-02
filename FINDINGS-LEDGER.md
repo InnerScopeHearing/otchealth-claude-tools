@@ -920,3 +920,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** My earlier finding FND-20260902-7cd1 said gh-app.mjs 'truncates responses at exactly 64KB', implying a cap in the tool. THAT WAS WRONG and is corrected here rather than restated. Disproof: the same request redirected to a FILE yields 306506 bytes and all 8 PRs, while piped it yields exactly 65536 and 1 PR; and a plain 200KB pipe in the same shell passes unharmed, so it is not a general pipe cap either. REAL CAUSE: on POSIX Node's stdout is synchronous to a file/TTY but ASYNCHRONOUS to a pipe, and process.exit() does not wait for the pending write. Every command did console.log(big); process.exit(n). FIX: set process.exitCode and let the process end naturally (branch claude/gh-app-stdout-drain). Verified piped 65536->306506 bytes, PR count 1->8, exit status preserved (0 success / 1 on 404). Regression test first proves the failure mode is real on this runtime with a scratch script (so it cannot become vacuous), then pins gh-app.mjs; counterfactual fails against the unfixed file. GENERAL LESSON worth more than the fix: never call process.exit() on a path that has written to stdout.
 - **Opened:** 2026-09-02T05:55:50.047Z
 - **Closed:** 2026-09-02T06:18:32.296Z
+
+### finding:FND-20260902-67ce severity:medium status:open | fleet-medic DARK has a startup false positive: beacon.mjs emits hooks_wired=false before session-start.sh installs the hooks, so every fresh session briefly reads DARK (verified 2026-09-02: cto DARK while whoami PASS on 2093 entries and hooksWired() true against live settings). Worked around at monitor 22893313 (sum(last_2h)>2 = 3 consecutive dark runs, mirroring medic ESCALATE_AFTER=3); real fix belongs in beacon.mjs (withhold or use a distinct 'starting' status until hooks exist) or medic (require 2 consecutive DARK before dispatch).
+
+- **Source audit doc:** skills/kb-memory/beacon.mjs hooksWired() + skills/fleet-medic/medic.mjs classify()
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-02T14:41:32.995Z
+- **Closed:** (open)
