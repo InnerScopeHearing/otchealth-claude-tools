@@ -881,13 +881,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T04:24:06.497Z
 - **Closed:** 2026-09-02T04:24:06.497Z
 
-### finding:FND-20260902-546d severity:medium status:open | credentials.env frozen at 2026-08-19 with dead-Azure values; otc.fleet.ledger_flush silent, 2 Datadog monitors blind
+### finding:FND-20260902-546d severity:medium status:fixed | credentials.env frozen at 2026-08-19 with dead-Azure values; otc.fleet.ledger_flush silent, 2 Datadog monitors blind
 
 - **Source audit doc:** session 2026-09-02 CTO verification of the Datadog monitor-estate audit
 - **Fix commit:** (none yet)
 - **Verified by:** Verified firsthand, not taken from the subagent report. (1) Datadog /api/v1/query for sum:otc.fleet.ledger_flush{*}.as_count() over the last 3d returns status=ok with ZERO series, despite this session writing multiple ledger entries -- so the silence is real, not an idle-fleet artifact. (2) KB_DD_EMIT is UNSET in this session's shells; mem.mjs emitFleet() only emits when it is 1. (3) ~/.designer/credentials.env DOES contain KB_DD_EMIT=1 at line 4 but its mtime is 2026-08-19 06:25. session-start.sh truncates that file before rewriting it (( umask 077; : > $CRED )), so it is rewritten in full on every run -- a 14-day-old mtime proves the hydration block has not executed in THIS SANDBOX since 2026-08-19. Scope caution: verified for this sandbox only; other seats may differ. (4) The frozen file holds 13 dead AZURE_* keys (dead sub 55c84f6b, dead vault kv-otc-55c84f6bef, dead Foundry/Speech) plus N8N_BASE_URL=https://automation.otchealth.app, the dead host fleet doctrine explicitly forbids. (5) skills/designer/scripts/_lib.mjs reads this file as a fallback after process.env, so the creative skill can resolve dead Azure endpoints from it. (6) session-start.sh line 288 still hardcodes KEYVAULT default to the dead kv-otc-55c84f6bef, and line 326 calls fetch-secrets-azure.mjs with 2>/dev/null || true, discarding both stderr and exit code. NOT YET VERIFIED: whether session-start.sh fails vs is skipped in this environment, and whether the designer skill actually breaks in practice. Consequence: Datadog monitors 22895854 (ledger SILENT) and 23035302 (routed agent activity abnormal) have been blind, reading No Data as if healthy.
 - **Opened:** 2026-09-02T04:32:38.485Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T07:01:05.508Z
 
 ### finding:FND-20260902-cc19 severity:medium status:fixed | aws-n8n-recovery.yml clobbered a SECOND time by a stale-base write; branch protection now enforces up-to-date-before-merge
 
