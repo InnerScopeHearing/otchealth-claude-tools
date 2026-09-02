@@ -505,13 +505,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:18.954Z
 - **Closed:** 2026-09-02T03:52:42.710Z
 
-### finding:FND-20260827-d074 severity:high status:open | FourVault backend rebuild on Flatstick pattern (own account, ECS+CloudFront+RDS+S3 provider, persisted-URL rewrite) + re-register SIWA redirect, eBay deletion endpoint, RevenueCat webhook
+### finding:FND-20260827-d074 severity:high status:fixed | FourVault backend rebuild on Flatstick pattern (own account, ECS+CloudFront+RDS+S3 provider, persisted-URL rewrite) + re-register SIWA redirect, eBay deletion endpoint, RevenueCat webhook
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** FourVault backend rebuilt on the Flatstick pattern in its OWN account 552969575274 (PRs #100 CDK scaffold, #102 deploy+restore+verify, #104 S3 image provider): live https://d2ffkg8m53kmvs.cloudfront.net/health = {ok:true, storageProvider:'s3'} on 2026-09-02; app repointed (#103 d9a69be); TestFlight build 83 (VALID, 2026-08-29/30) was built from that exact cutover commit by ios-depot run 33283624565 and is tagged tf/1.0+83, so the AWS-backed build has shipped. Remaining are vendor-portal actions only a human can do: RevenueCat dashboard webhook URL -> https://d2ffkg8m53kmvs.cloudfront.net/webhooks/revenuecat (no RC API for webhooks), Sign in with Apple return URL in the Apple developer portal if a web redirect is used, and the eBay marketplace account-deletion endpoint registration. Listed for Matt; not fleet risk.
 - **Opened:** 2026-08-27T19:00:21.836Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:02:43.050Z
 
 ### finding:FND-20260827-e4e3 severity:high status:fixed | doc-indexer push-search still requires dead Azure Search: librarian ECS jobs run but room freshness rides on enrich-only; add first-class OpenSearch push-search backend and make it default
 
