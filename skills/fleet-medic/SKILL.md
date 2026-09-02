@@ -20,6 +20,11 @@ A standing monitor scans every exec agent's memory health and auto-remediates th
      "never initialized" (NO-DATA) and long silence. Staleness alone is only a WATCH (an idle agent is
      not a broken one), so the medic NEVER cries wolf on a merely-quiet agent.
    - Degrades gracefully: if PostHog is unreadable, it still runs on the deterministic team-health spine.
+   - **`status=starting`** (FND-20260902-67ce, 2026-09-02) is a THIRD, distinct beacon status: a session
+     whose hooks are not wired YET but is still inside beacon.mjs's own startup grace window (session-
+     start.sh has not reached the hook-install step). Classified as healthy-pending (condition
+     `STARTING`, severity `ok`) -- never dispatches, never escalates, never counts toward a DARK streak.
+     This closes the false positive where every fresh session briefly read DARK.
 2. **Auto-dispatch:** for an agent that is DARK / NO-MEMORY (past its cooldown), it writes a targeted
    self-heal directive to `otchealthcommons/company-journal/_MEDIC/<agent>.md` (generic activation
    steps, no secrets) and emits a `medic_dispatch` PostHog event.
@@ -46,7 +51,12 @@ node skills/fleet-medic/medic.mjs clear --agent <a>            # manually clear 
 ## Thresholds (env-overridable on the job)
 `MEDIC_BEACON_FRESH_MIN` (120) a beacon counts as "active now" only if this fresh; `MEDIC_STALE_WATCH_MIN`
 (10080 = 7d) below this, silence is just "idle"; `MEDIC_COOLDOWN_MIN` (360) no re-dispatch within;
-`MEDIC_ESCALATE_AFTER` (3) consecutive DARK dispatches before escalating to the human.
+`MEDIC_ESCALATE_AFTER` (3) consecutive DARK dispatches before escalating to the human;
+`MEDIC_DARK_CONSECUTIVE` (2, FND-20260902-67ce) consecutive DARK **scans** (not dispatches -- this is a
+much shorter horizon than `MEDIC_ESCALATE_AFTER`) required before a DARK condition is allowed to
+dispatch at all, so one transient/flaky reading cannot page. Scoped to DARK only; NO-MEMORY keeps its
+original single-scan dispatch. `beacon.mjs`'s own `BEACON_STARTUP_GRACE_MIN` (10 min default) is the
+companion knob on the beacon side -- see skills/kb-memory/beacon.mjs's header.
 
 ## Escalation posture: ALERT-ONLY (Matt decision 2026-06-25)
 On escalation the medic leaves the self-heal directive + emits the `medic_dispatch` / `_ESCALATIONS`
