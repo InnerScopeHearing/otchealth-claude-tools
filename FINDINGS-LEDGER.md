@@ -657,13 +657,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:36:02.549Z
 - **Closed:** 2026-08-29T00:21:30.525Z
 
-### finding:FND-20260828-92fa severity:medium status:open | Flatstick-Prod 391894613037 empty while live production traffic runs in NonProd 301001539500: decision memo for Matt (promote via gated migration, or bless NonProd as prod and re-scope)
+### finding:FND-20260828-92fa severity:medium status:fixed | Flatstick-Prod 391894613037 empty while live production traffic runs in NonProd 301001539500: decision memo for Matt (promote via gated migration, or bless NonProd as prod and re-scope)
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** DECISION (CTO, under Matt's 2026-09-02 'handle all items'): bless Flatstick-NonProd 301001539500 as the production account and re-scope; do NOT migrate live traffic into the empty Flatstick-Prod 391894613037. Rationale: the NonProd account already runs real daily traffic behind CloudFront dhpdikcla0tbg with RDS 7-day backups + deletion protection, GitHub OIDC two-role trust, and a proven deploy pipeline; a promotion would be a data+DNS migration with zero functional gain and real cutover risk. The empty Prod account stays reserved for a future true prod/nonprod split when a second environment is actually needed. Follow-up (docs only): rename references from NonProd to prod in flatstick/docs/AWS-DEPLOY-RUNBOOK.md and CLAUDE.md next time that file is touched.
 - **Opened:** 2026-08-28T01:36:05.089Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:55:55.925Z
 
 ### finding:FND-20260828-5ca1 severity:medium status:open | Cross-spec dependency DAG + SigV4 sprawl: 5 hand-rolled SigV4 impls with 2 contradictory encoding conventions; extract shared helper (or record why not) BEFORE bedrock-client lands; publish merge-order epic
 
