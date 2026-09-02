@@ -793,13 +793,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-30T02:19:25.584Z
 - **Closed:** 2026-08-30T02:19:25.584Z
 
-### finding:FND-20260830-6a1a severity:medium status:open | daily-digest nightly.sh still hardcodes --azure for the commons room STORAGE backend and fails every night with 'blob put 403 AccountIsDisabled' on the dead otchealthcommons account, after generating the digest; sibling librarian.sh was migrated to S3 on 2026-08-18 but this script's header never was. Fix needs the same per-room S3-mirror verification librarian.sh's audit did.
+### finding:FND-20260830-6a1a severity:medium status:fixed | daily-digest nightly.sh still hardcodes --azure for the commons room STORAGE backend and fails every night with 'blob put 403 AccountIsDisabled' on the dead otchealthcommons account, after generating the digest; sibling librarian.sh was migrated to S3 on 2026-08-18 but this script's header never was. Fix needs the same per-room S3-mirror verification librarian.sh's audit did.
 
 - **Source audit doc:** brain-freshness investigation 2026-08-30 (secondary gap, NOT fixed)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 7a308e03938fc5687f23a36438850f593124543b
+- **Verified by:** Fix landed on main BEFORE this dispatch began (commit 7a308e0, PR #508, 2026-09-01, same CTO session lineage) -- the ledger entry was just never closed, which is very likely why this exact bug got re-dispatched to a subagent a day later. Independently re-verified rather than trusting the commit message: (1) read the full current nightly.sh -- zero live --azure/--key-secret flags remain, only header prose describing the historical bug; (2) confirmed otchealthcommons/company-journal has a real row in skills/kb-memory/s3-blob.mjs's MIRROR table (bucket otchealth-brain-dr-55c84f6b), matching job/librarian.sh's proven per-room S3 pattern the original finding asked for; (3) sh -n clean on nightly.sh. Added the regression lock nightly.sh itself never had: tests/nightly-sh-storage-backend.test.mjs, proven failing-first against the pre-fix commit (5/7 assertions failed with the exact --azure text) and passing 7/7 against current content -- see claude-tools PR #517 (draft, not yet merged).
 - **Opened:** 2026-08-30T02:19:28.118Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T04:38:18.746Z
 
 ### finding:FND-20260830-e7c1 severity:high status:fixed | Auto critic-pass returns malformed:true and posts a FAKE 'fail-safe approve' on every PR: model IS reached (OPENAI_API_KEY present, unreachable:false, model=gpt-5.6-terra) but its response never parses, so every claude/* PR merged tonight got an auto-review that never actually happened
 
