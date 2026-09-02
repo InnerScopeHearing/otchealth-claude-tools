@@ -140,10 +140,18 @@ chain (`../kb-memory/aws-secret.mjs`) every other AWS-touching skill in this rep
 ## How it is scheduled
 
 Hourly, as an ECS Fargate task driven by EventBridge Scheduler (`otchealth-safety-monitor`), running
-`skills/safety-monitor/job/sweep.sh` out of the `doc-indexer` image. It is registered in
-`setup/heartbeat-registry.json` at a 90-minute SLO, 1.5x its own cadence, so one late run is
-tolerated and two are not. A monitor that goes silent looks exactly like a monitor reporting no
-hazards, which is why the heartbeat matters more here than on most jobs.
+`skills/safety-monitor/job/sweep.sh` out of the `doc-indexer` image.
+
+The schedule and task definition live in AWS, not in this repo -- the same as every other job in
+`setup/heartbeat-registry.json`. Nothing here provisions them, so this section is the only in-repo
+record of what the deployed cadence is, and it has to be kept true by hand.
+
+`setup/heartbeat-registry.json` registers it at `interval_min: 90`. That field is a **staleness SLO,
+not a cadence**: `heartbeat.mjs check` marks a job LATE at `age > interval_min` and DEAD at `3x`. At
+90 against an hourly cadence, a single missed run (age ~120) is already flagged LATE, and ~4.5h of
+silence reads DEAD. That is deliberately tighter than the fleet's usual 2x-cadence convention, which
+exists to absorb one missed run without noise. A monitor that goes silent looks exactly like a
+monitor reporting no hazards, so here the missed run is the thing worth hearing about.
 
 The scheduled invocation passes `--commit`. The CLI's dry-run default exists to protect a human
 running it by hand; a scheduled sweep that stayed in dry-run would detect hazards and tell nobody,
