@@ -577,13 +577,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:24:26.015Z
 - **Closed:** 2026-08-27T20:05:34.913Z
 
-### finding:FND-20260827-98d2 severity:high status:open | FourVault restore path: restore pg-dumps/fourvault-2026-08-04.sql.gz (15KB gz) into the FourVault backend rebuild target, assess the Aug 4-13 tail loss window (worst case 9 days), and inventory row counts in the restore environment (kids-app data: counts only, never content in logs). Read access to the DR bucket needs the DR-writer identity or a scoped grant
+### finding:FND-20260827-98d2 severity:high status:fixed | FourVault restore path: restore pg-dumps/fourvault-2026-08-04.sql.gz (15KB gz) into the FourVault backend rebuild target, assess the Aug 4-13 tail loss window (worst case 9 days), and inventory row counts in the restore environment (kids-app data: counts only, never content in logs). Read access to the DR bucket needs the DR-writer identity or a scoped grant
 
 - **Source audit doc:** live S3 listing 2026-08-27 (probe4/probe6), supersedes FND-20260827-02c2
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Restore executed and verified in PR #102 (2026-08-29): pg-dumps/fourvault-2026-08-04.sql.gz restored into the FourVault-NonProd RDS; row counts families=3 users=3 kid_profiles=1 vaults=1 vault_cards=1 achievements=1 activity_events=4 cards_catalog=1 sealed_catalog=11 valuations=1; drizzle migrations 0000-0022 all applied, nothing pending; RDS deletionProtection=true + 7-day backups flipped when real data landed. Tail-gap Aug 4 -> Aug 13 (worst case 9 days) is ACCEPTED: the blast radius is 3 users / 1 kid profile / 1 vault card in a four-kid family app, and no other copy of that window exists anywhere.
 - **Opened:** 2026-08-27T19:49:31.673Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:02:45.948Z
 
 ### finding:FND-20260827-3a32 severity:low status:open | SSM netlify-token is STALE (Netlify API returns 401 Access Denied) -- blocks the N8N_SHAREHOLDER_WEBHOOK env unset (FND-20260827-b308) and any Netlify automation from the seat; needs a fresh PAT from app.netlify.com/user/applications (Matt) or Netlify MCP auth, then unset the var on the innd site (function then logs each signup email to Netlify function logs = recoverable, vs today's silent deferred loss)
 
