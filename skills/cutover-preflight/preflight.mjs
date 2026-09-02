@@ -28,7 +28,7 @@
  */
 import { kvSecret } from '../kb-memory/azure-secret.mjs';
 import { mintToken } from '../gateway-connect/connect.mjs';
-import crypto from 'node:crypto';
+import { awsFetch, canonicalUriPath } from '../../setup/aws-sigv4.mjs';
 
 const JSON_OUT = process.argv.includes('--json');
 const results = [];
@@ -56,31 +56,19 @@ async function check(id, title, fn, remedy) {
   }
 }
 
-// ── AWS signing (self-contained; the gateway's own signer is TypeScript) ────────────────────────
-const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
-const hmac = (k, d) => crypto.createHmac('sha256', k).update(d).digest();
+// ── AWS signing --------------------------------------------------------------------------------
+// FND-20260828-5ca1 (2026-09-02): this was a self-contained hand-rolled SigV4 signer -- one of nine
+// independent copies the finding found across the toolkit, and one of FOUR that never applied AWS's
+// documented double-encode rule for a REST path on a non-S3 service (this file's own S3 'DOCS-S3'
+// check, further down, IS single-encode-correct, but the SAME generic `aws()` also signs ECS/
+// OpenSearch calls whose paths, if they ever contained a reserved character, would need the
+// double-encode this never did) -- see ../../setup/aws-sigv4.mjs's header for the full writeup and
+// which implementations were wrong. Now delegates to that shared signer; the wrapper's own signature
+// (used by every `aws({...})` call site in this file) is preserved unchanged.
 async function aws({ service, host, method = 'GET', path = '/', query = '', body = '', region = 'us-east-1', extra = {} }) {
-  const AK = process.env.__PF_AK, SK = process.env.__PF_SK;
-  // SigV4 canonicalises the query string SORTED BY KEY. Unsorted params sign a string AWS never
-  // reconstructs -> 403, which a caller scanning for results reads as "empty" rather than "denied".
-  const q = query ? query.split('&').filter(Boolean).sort().join('&') : '';
-  const amz = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const date = amz.slice(0, 8);
-  // S3 REJECTS any request without a signed x-amz-content-sha256 (400 InvalidRequest).
-  // ECS/JSON-protocol services REQUIRE X-Amz-Target and the x-amz-json content type, and both must
-  // be SIGNED -- omitting them yields "Received a request with an unknown operation", which a caller
-  // parsing JSON reads as a malformed response rather than a malformed request.
-  const hh = { host, 'x-amz-date': amz, 'x-amz-content-sha256': sha256(body),
-               ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k.toLowerCase(), v])) };
-  const keys = Object.keys(hh).sort();
-  const canon = [method, path, q, keys.map((k) => `${k}:${hh[k]}\n`).join(''), keys.join(';'), sha256(body)].join('\n');
-  const scope = `${date}/${region}/${service}/aws4_request`;
-  let k = hmac('AWS4' + SK, date);
-  for (const p of [region, service, 'aws4_request']) k = hmac(k, p);
-  const sig = crypto.createHmac('sha256', k).update(['AWS4-HMAC-SHA256', amz, scope, sha256(canon)].join('\n')).digest('hex');
-  hh.Authorization = `AWS4-HMAC-SHA256 Credential=${AK}/${scope}, SignedHeaders=${keys.join(';')}, Signature=${sig}`;
-  const r = await fetch(`https://${host}${path}${q ? '?' + q : ''}`, { method, headers: hh, body: method === 'GET' ? undefined : body });
-  return { status: r.status, text: await r.text() };
+  const url = `https://${host}${path}${query ? `?${query}` : ''}`;
+  const r = await awsFetch(url, { method, headers: extra, body }, { service, region, credentials: { accessKeyId: process.env.__PF_AK, secretAccessKey: process.env.__PF_SK } });
+  return { status: r.status, text: r.text };
 }
 
 const OS_HOST = 'search-otchealth-brain-uqmq2jw23cv4yjnnxblxzb7nny.us-east-1.es.amazonaws.com';
@@ -167,7 +155,7 @@ async function runningTask() {
     const rel = 'INND/Banking/Mercury/5623/innerscope-hearing-technologies-inc-5623-monthly-statement-2023-10.pdf';
     const out = [];
     for (const [label, key] of [['source', `otchealthcfodata/cfo-source-docs/${rel}`], ['sidecar', `otchealthcfodata/cfo-source-docs/_TEXT/${rel}.txt`]]) {
-      const path = '/' + key.split('/').map(encodeURIComponent).join('/');
+      const path = canonicalUriPath('/' + key);
       const r = await aws({ service: 's3', host: `${BUCKET}.s3.us-east-1.amazonaws.com`, path });
       if (r.status !== 200) return { status: 'FAIL', evidence: `${label} HTTP ${r.status} (mirror incomplete or unreadable)` };
       out.push(`${label} ${r.text.length}B`);

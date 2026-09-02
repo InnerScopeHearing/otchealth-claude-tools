@@ -1,27 +1,29 @@
-// sigv4.mjs -- ONE shared AWS SigV4 request signer for the whole toolkit.
+// sigv4.mjs -- a shared AWS SigV4 request signer, kb-memory's own (host/path/query-style API).
 //
-// WHY THIS EXISTS (FND-20260828-5ca1, severity medium, still open): a fleet audit found FIVE
-// independent hand-rolled SigV4 implementations already in this repo --
-//   skills/kb-memory/aws-secret.mjs (ssmCall, the SSM JSON-1.1 caller)
-//   skills/kb-memory/s3-blob.mjs
-//   skills/fleet-backup/s3-client.mjs
-//   skills/doc-indexer/opensearch-client.mjs
-//   skills/aws-image-canary/image-canary.mjs (and skills/aws-dr-canary/canary.mjs, skills/legal-
-//     deadline-pager/pager.mjs, skills/cutover-preflight/preflight.mjs carry close variants too)
-// -- with two contradictory canonical-header-encoding conventions between them (compare
-// aws-secret.mjs's `hh` object, whose keys are hand-written lowercase and never re-cased, against
-// image-canary.mjs's `extra` handling, which lowercases keys defensively). The finding asks for a
-// shared extraction point BEFORE the next SigV4-shaped caller lands, so the fleet stops growing a
-// sixth (seventh, ...) copy.
+// WHY THIS EXISTS (FND-20260828-5ca1): a fleet audit found hand-rolled SigV4 implementations
+// independently duplicated across this repo, with contradictory canonical-URI-encoding conventions
+// between them. This file was the FIRST extraction point for that finding; skills/safety-monitor/
+// monitor.mjs's SNS publish call is its consumer, and skills/kb-memory/tests/sigv4.test.mjs is its
+// own differential/structural test suite -- both untouched by the 2026-09-02 migration below.
 //
-// THIS FILE DOES NOT REFACTOR THE EXISTING FIVE. Each is load-bearing production code with its own
-// test coverage and its own service-specific quirks (S3's optional streaming payload hash, OpenSearch's
-// index-routing paths); collapsing them onto a shared signer is a real, separately-reviewable change
-// with real regression risk, not a rider on an unrelated feature PR. This file is the extraction POINT
-// the finding asks for: skills/safety-monitor/monitor.mjs's SNS publish call is its first consumer.
-// The next new SigV4 caller should import from here; a future dedicated PR can migrate the existing
-// five once each is verified from a paused pipeline (see the finding's own note: "before bedrock-client
-// lands; publish merge-order epic").
+// STATUS UPDATE (2026-09-02): the finding's actual scope, verified by a fresh
+// `grep -rln "AWS4-HMAC-SHA256\|aws4_request" skills/ setup/`, was NINE independent implementations,
+// not five, and did NOT include skills/legal-deadline-pager/pager.mjs (an earlier draft of this
+// comment named it as a "close variant"; it delegates to personal-store.mjs -> s3-blob.mjs and never
+// hand-rolled its own signing -- corrected here rather than left to mislead the next reader). SIX of
+// the nine were migrated in that pass onto a SECOND, newly-created shared signer,
+// ../../setup/aws-sigv4.mjs (url-based API: signRequest/awsFetch, plus the RFC-3986 double-vs-
+// single-encode fix four of the six had been missing -- see that file's own header for the full
+// writeup): skills/kb-memory/aws-secret.mjs's ssmCall, skills/aws-dr-canary/canary.mjs's RDS +
+// Lightsail signers, skills/aws-image-canary/image-canary.mjs's awsRequest, skills/cutover-preflight/
+// preflight.mjs's aws(), and both skills/aws-jobs-migration/*.mjs scripts' awsCall. The remaining
+// three -- skills/kb-memory/s3-blob.mjs, skills/fleet-backup/s3-client.mjs, and
+// skills/doc-indexer/opensearch-client.mjs -- were deliberately left unmigrated (already correct,
+// heavily tested, exercised together by a cross-file integration test); unifying THIS file with
+// ../../setup/aws-sigv4.mjs, and migrating those three, remains open for a future dedicated PR, exactly
+// as this file originally called for ("once each is verified from a paused pipeline"). Do not add a
+// TENTH (or an eleventh) hand-rolled implementation instead of importing from one of the two shared
+// signers that now exist.
 //
 // Dependency-free: hand-rolled HMAC-SHA256 chain via node:crypto, exactly the algorithm every one of
 // the five existing implementations already uses (AWS Signature Version 4 -- see
