@@ -48,6 +48,7 @@ function makeFakeCluster(initial = {}) {
   const calls = []; // {method, args} audit trail -- the counterfactual/spy tests read this
   let freeBytes = 10_000_000_000; // 10GB "free disk" by default -- plenty for small test fixtures
   let reindexHook = null; // (sourceName, destName) => number of docs to actually copy (undefined = all)
+  let beforeReindexHook = null; // (sourceName, destName, indices) => void, runs before each reindex pass copies anything
 
   const client = {
     async getIndex(index) {
@@ -68,19 +69,29 @@ function makeFakeCluster(initial = {}) {
       indices.delete(index);
       return { status: 200, ok: true, json: { acknowledged: true } };
     },
-    async reindexStart({ source, dest }) {
-      calls.push({ method: "reindexStart", args: [source.index, dest.index] });
+    async reindexStart(body) {
+      const { source, dest, conflicts } = body;
+      const createOnly = dest.op_type === "create";
+      calls.push({ method: "reindexStart", args: [source.index, dest.index], body: { op_type: dest.op_type, conflicts } });
       const s = indices.get(source.index), d = indices.get(dest.index);
       if (!s || !d) return { status: 400, ok: false, json: { error: { reason: "index not found" } } };
+      if (typeof beforeReindexHook === "function") beforeReindexHook(source.index, dest.index, indices); // a "live write" landing right as the pass starts
       const taskId = `fakeNode:${++taskSeq}`;
       const limit = typeof reindexHook === "function" ? reindexHook(source.index, dest.index) : Infinity;
-      let copied = 0;
+      let copied = 0, versionConflicts = 0;
       for (const [id, src] of s.docs) {
         if (copied >= limit) break;
+        // Real _reindex semantics for dest.op_type="create": an id that already exists on dest is a
+        // version conflict -- skipped when conflicts="proceed", otherwise it ABORTS the whole task as a
+        // per-document failure. Modeled faithfully so the tests can prove both halves are load-bearing.
+        if (createOnly && d.docs.has(id)) { versionConflicts++; continue; }
         d.docs.set(id, structuredClone(src));
         copied++;
       }
-      tasks.set(taskId, { completed: true, response: { failures: [] } });
+      const failures = createOnly && versionConflicts > 0 && conflicts !== "proceed"
+        ? [{ index: dest.index, cause: { type: "version_conflict_engine_exception", reason: "document already exists" } }]
+        : [];
+      tasks.set(taskId, { completed: true, response: { failures, version_conflicts: versionConflicts, created: copied } });
       return { status: 200, ok: true, json: { task: taskId } };
     },
     async getTask(taskId) {
@@ -136,6 +147,7 @@ function makeFakeCluster(initial = {}) {
     calls,
     setFreeBytes: (n) => { freeBytes = n; },
     setReindexHook: (fn) => { reindexHook = fn; },
+    setBeforeReindexHook: (fn) => { beforeReindexHook = fn; },
     snapshot: (index) => (indices.has(index) ? structuredClone({ properties: indices.get(index).properties, docs: Object.fromEntries(indices.get(index).docs) }) : null),
   };
 }
@@ -488,6 +500,71 @@ test("reindexUntilCountsConverge: fails loud (does not silently accept a mismatc
   assert.match(r.reason, /never converged/);
 });
 
+// 2026-09-02 live finding (memory-exec on otchealth-brain 3.7): the swap-back reindexes the FROZEN twin
+// onto the RECREATED original, which is the live write target from the instant it exists. Three full
+// passes ended source=17675 dest=17678 (three live auto-journal writes landed mid-pass); the strict
+// equality rule declared FAILED and left a 1.2GB twin behind while the original was already complete
+// and quantized. The swap-back direction converges on dest >= source and copies create-only.
+test("reindexUntilCountsConverge(liveSide:'dest'): a live dest that grew PAST the frozen source converges on the first pass (the memory-exec shape)", async () => {
+  const cluster = makeFakeCluster({ twin: { docs: { "1": {}, "2": {}, "3": {} } }, live: { docs: { "live-write-1": {} } } });
+  const r = await Q.reindexUntilCountsConverge(cluster.client, { source: "twin", dest: "live" }, { log: noopLog, liveSide: "dest" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.attempts, 1);
+  assert.equal(r.srcCount, 3);
+  assert.equal(r.dstCount, 4, "3 twin docs + the 1 live write that already existed on dest");
+  const start = cluster.calls.find((c) => c.method === "reindexStart");
+  assert.deepEqual(start.body, { op_type: "create", conflicts: "proceed" }, "swap-back must be create-only AND conflicts=proceed");
+});
+
+test("reindexUntilCountsConverge(liveSide:'dest'): never overwrites a doc the live dest already holds (a resume must not revert live updates to the twin's older copy)", async () => {
+  const cluster = makeFakeCluster({
+    twin: { docs: { "1": { text: "twin-era copy" }, "2": { text: "only in twin" } } },
+    live: { docs: { "1": { text: "updated live after the first pass" } } },
+  });
+  const r = await Q.reindexUntilCountsConverge(cluster.client, { source: "twin", dest: "live" }, { log: noopLog, liveSide: "dest" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(cluster.indices.get("live").docs.get("1").text, "updated live after the first pass");
+  assert.equal(cluster.indices.get("live").docs.get("2").text, "only in twin", "the gap IS filled");
+});
+
+test("reindexUntilCountsConverge(liveSide:'dest'): still retries while the live dest holds FEWER docs than the frozen source, and fails loud if it never catches up", async () => {
+  const cluster = makeFakeCluster({ twin: { docs: { "1": {}, "2": {}, "3": {} } }, live: {} });
+  let call = 0;
+  cluster.setReindexHook(() => { call++; return call < 2 ? 1 : Infinity; }); // 1 doc, then all
+  const r = await Q.reindexUntilCountsConverge(cluster.client, { source: "twin", dest: "live" }, { log: noopLog, liveSide: "dest" });
+  assert.equal(r.ok, true, r.reason);
+  assert.equal(r.attempts, 2);
+
+  const stuck = makeFakeCluster({ twin: { docs: { "1": {}, "2": {}, "3": {} } }, live: {} });
+  stuck.setReindexHook(() => 1);
+  const f = await Q.reindexUntilCountsConverge(stuck.client, { source: "twin", dest: "live" }, { log: noopLog, liveSide: "dest", maxAttempts: 2 });
+  assert.equal(f.ok, false);
+  assert.match(f.reason, /never caught up/);
+  assert.match(f.reason, /docs are missing on 'live'/);
+});
+
+test("reindexUntilCountsConverge (default liveSide:'source'): a dest ABOVE the live source is still NOT accepted (resurrected deletes must fail loud), and the forward pass stays overwrite-mode", async () => {
+  const cluster = makeFakeCluster({ live: { docs: { "1": {} } }, twin: { docs: { "1": {}, "deleted-on-live": {} } } });
+  const r = await Q.reindexUntilCountsConverge(cluster.client, { source: "live", dest: "twin" }, { log: noopLog, maxAttempts: 2 });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /never converged/);
+  const start = cluster.calls.find((c) => c.method === "reindexStart");
+  assert.deepEqual(start.body, { op_type: undefined, conflicts: undefined }, "the forward pass must keep plain overwrite-by-_id semantics");
+});
+
+test("reindexUntilCountsConverge: an unknown liveSide is rejected up front, before any reindex is started", async () => {
+  const cluster = makeFakeCluster({ a: { docs: { "1": {} } }, b: {} });
+  await assert.rejects(() => Q.reindexUntilCountsConverge(cluster.client, { source: "a", dest: "b" }, { log: noopLog, liveSide: "both" }), /liveSide must be "source" or "dest"/);
+  assert.equal(cluster.calls.filter((c) => c.method === "reindexStart").length, 0);
+});
+
+test("reindexUntilCountsConverge(liveSide:'dest'): conflicts='proceed' is load-bearing -- create-only without it aborts the task on the first existing doc", async () => {
+  const cluster = makeFakeCluster({ twin: { docs: { "1": {}, "2": {} } }, live: { docs: { "1": {} } } });
+  const start = await cluster.client.reindexStart({ source: { index: "twin" }, dest: { index: "live", op_type: "create" } });
+  const done = await Q.pollTaskToCompletion(cluster.client, start.json.task, { sleepFn: () => Promise.resolve() });
+  assert.equal(done.ok, false, "a real _reindex without conflicts=proceed reports the version conflict as a per-document failure");
+});
+
 test("pollTaskToCompletion: an already-completed task returns immediately", async () => {
   const client = { getTask: async () => ({ status: 200, ok: true, json: { completed: true, response: { failures: [] } } }) };
   const r = await Q.pollTaskToCompletion(client, "n:1", { sleepFn: () => Promise.resolve() });
@@ -557,6 +634,35 @@ test("runMigrateOne: --commit performs the full swap -- original ends up quantiz
   assert.equal(finalIdx.properties.contentVector.mode, "on_disk", "the original index must now carry the quantized mapping");
   assert.equal(finalIdx.docs.size, 5, "all documents must have survived the swap");
   assert.deepEqual(finalIdx.docs.get("2"), { text: "doc 2", contentVector: [2, 3, 4, 5] }, "document content must be byte-identical after the round trip");
+});
+
+// The migrate-level regression for the 2026-09-02 memory-exec failure: a live write lands on the
+// RECREATED original while the twin is being reindexed back onto it (the gateway's auto-journal does
+// exactly this the instant the index name exists again). The swap must still complete, keep the live
+// write, and clean up the twin -- instead of declaring FAILED on dest > source.
+test("runMigrateOne: --commit completes the swap even when a live write lands on the recreated original mid swap-back (dest > source is convergence, not failure)", async () => {
+  const cluster = baseFixture();
+  const stateStore = makeFakeStateStore();
+  let liveWrites = 0;
+  cluster.setBeforeReindexHook((source, dest, indices) => {
+    if (source === "memory-exec--q" && dest === "memory-exec") {
+      indices.get("memory-exec").docs.set(`live-${++liveWrites}`, { text: "auto-journal episode written during the swap-back", contentVector: [9, 9, 9, 9] });
+    }
+  });
+
+  const result = await Q.runMigrateOne("memory-exec", { client: cluster.client, stateStore, log: noopLog, commit: true });
+
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(result.phase, "complete");
+  assert.equal(liveWrites, 1, "exactly one swap-back pass was needed; the old equality rule would have retried three times and failed");
+  assert.equal(cluster.indices.has("memory-exec--q"), false, "the twin must be cleaned up");
+  const finalIdx = cluster.indices.get("memory-exec");
+  assert.equal(finalIdx.properties.contentVector.mode, "on_disk");
+  assert.equal(finalIdx.docs.size, 6, "5 original docs + the 1 live write, nothing lost");
+  assert.ok(finalIdx.docs.has("live-1"), "the live write that landed mid swap-back must survive");
+  assert.deepEqual(finalIdx.docs.get("2"), { text: "doc 2", contentVector: [2, 3, 4, 5] });
+  const back = cluster.calls.find((c) => c.method === "reindexStart" && c.args[0] === "memory-exec--q");
+  assert.deepEqual(back.body, { op_type: "create", conflicts: "proceed" }, "the swap-back pass is create-only + conflicts=proceed");
 });
 
 test("runMigrateOne: never deletes the original when verification fails -- the load-bearing safety invariant", async () => {
