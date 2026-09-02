@@ -57,8 +57,34 @@ export function laneClaim(token) {
 export function azureEnvPresent() {
   return Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
 }
-/** Which cred source will be used, for a non-secret startup log line. */
-export function credSource() { return azureEnvPresent() ? `azure-keyvault:${KV_NAME}` : 'gcp-secret-manager'; }
+/**
+ * Which cred source will be used, for a non-secret startup log line.
+ *
+ * 2026-09-01: this label must mirror what laneCreds() ACTUALLY does, which is call the shared
+ * kvSecret() resolver -- and that resolver selects its store from SECRET_BACKEND, defaulting to
+ * AWS SSM Parameter Store (/otchealth/*), the fleet's store of record since the Azure exit.
+ * The previous two-branch label ('azure-keyvault' if AZURE_SP_* env is set, else the literal
+ * 'gcp-secret-manager') pre-dated that resolver and printed 'src=gcp-secret-manager' on EVERY
+ * prompt via the UserPromptSubmit hook, while the read was in fact served by SSM. GCP Secret
+ * Manager is retired; naming it as the live source on each prompt is exactly the kind of stale
+ * pointer a fleet-wide 'is anything still on GCP?' audit trips over. The GCP path survives only
+ * as laneCreds()'s expected-to-fail legacy fallback and is labelled as such below.
+ */
+// RETURNS A FIXED LITERAL, NEVER AN INTERPOLATED ENV VALUE. This label is printed on every prompt by
+// the UserPromptSubmit hook, and its job is to name WHICH BACKEND served the read -- not which vault
+// instance or which raw env string. An earlier draft interpolated KV_NAME and the SECRET_BACKEND
+// value straight into the output; CodeQL flagged it (js/clear-text-logging, alert 93) as process
+// environment reaching a log, and it was right to: the values happen to be non-secret identifiers
+// today, but nothing in the function guaranteed that, and a log line on every prompt is the worst
+// possible place to discover otherwise. Enumerating the cases keeps the output a small closed set
+// that is safe to print, greppable, and stable enough to assert on in a test.
+export function credSource() {
+  const backend = process.env.SECRET_BACKEND || 'ssm';
+  if (backend === 'keyvault') return azureEnvPresent() ? 'azure-keyvault' : 'azure-keyvault(no-sp-env)';
+  if (backend === 'ssm') return 'aws-ssm:/otchealth';
+  if (backend === 'gcp' || backend === 'gcp-secret-manager') return 'gcp-secret-manager(retired fallback)';
+  return 'other(via kvSecret; gcp-secret-manager is a retired last-resort fallback)';
+}
 
 // ---- Azure Key Vault (service principal from env) — PRIMARY ----
 async function kvToken() {
