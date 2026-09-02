@@ -665,13 +665,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-28T01:36:05.089Z
 - **Closed:** 2026-09-02T17:55:55.925Z
 
-### finding:FND-20260828-5ca1 severity:medium status:open | Cross-spec dependency DAG + SigV4 sprawl: 5 hand-rolled SigV4 impls with 2 contradictory encoding conventions; extract shared helper (or record why not) BEFORE bedrock-client lands; publish merge-order epic
+### finding:FND-20260828-5ca1 severity:medium status:fixed | Cross-spec dependency DAG + SigV4 sprawl: 5 hand-rolled SigV4 impls with 2 contradictory encoding conventions; extract shared helper (or record why not) BEFORE bedrock-client lands; publish merge-order epic
 
 - **Source audit doc:** workflow wf_0da52e2c-68a critic-completeness
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** d370d8c
+- **Verified by:** PR #528 (claude/sigv4-shared-helper): actual count was 9 impls (not 5); extracted setup/aws-sigv4.mjs (signRequest/awsFetch), fixed the missing double-encode-for-non-S3 bug in 4 EventBridge Scheduler callers, migrated 6 of 9 (aws-secret.mjs ssmCall, aws-dr-canary RDS+Lightsail, image-canary.mjs, preflight.mjs, both aws-jobs-migration scripts); 3 already-correct heavily-tested impls (s3-blob.mjs, fleet-backup/s3-client.mjs, opensearch-client.mjs) deliberately deferred to a future PR, documented in the new file's header. 29 new tests (16 unit incl AWS-test-suite-shaped vectors + differential cross-check, 13 live-shaped fetch-stub + source-scan regression pins), full toolkit gate green (2304 tests, up from 2275). The pending 'merge-order epic'/cross-spec-DAG half of this finding's original title was NOT in this session's scope.
 - **Opened:** 2026-08-28T01:36:07.572Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T18:36:54.126Z
 
 ### finding:FND-20260828-e0fd severity:medium status:fixed | Disposition matrix: PlantID backend rebuild (acct 800993023626 unused), os-chat + m365-agent-bridge retire incl tenant residue (Teams catalog 592d4e54/91fb0b97, Bot Service, 6 Copilot agents at dead endpoints, Entra a0bca2fb superseded secret), GCP orphaned Cloud Run export-then-delete (NEVER the MedReview BAA ring)
 
