@@ -6,7 +6,7 @@
 // tests pin both directions.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rotatingSecrets } from "../skills/token-keeper/token-age-metrics.mjs";
+import { rotatingSecrets, runFailed } from "../skills/token-keeper/token-age-metrics.mjs";
 import { PROVIDERS as REAL_PROVIDERS } from "../skills/token-keeper/keeper.mjs";
 
 test("every QuickBooks tenant in the registry produces a tracked secret id", () => {
@@ -54,4 +54,37 @@ test("counterfactual: mercury and plaid never appear -- they are kind static-tok
   assert.notEqual(REAL_PROVIDERS.plaid.kind, "oauth-rotating");
   const ids = rotatingSecrets(REAL_PROVIDERS).map((r) => r.id);
   assert.ok(!ids.some((i) => i.includes("mercury") || i.includes("plaid")));
+});
+
+// runFailed() is the run-severity decision. rotatingSecrets() above decides WHICH secrets are
+// tracked; this decides whether a run that could not speak for one of them is allowed to exit 0.
+// The interesting case is the third: an ABSENT expected target used to be a stderr line plus exit 0,
+// so a deleted or renamed secret quietly dropped out of monitoring and the monitor stayed green
+// about a secret it was no longer watching -- the exact per-secret "No Data" state this emitter was
+// built to end.
+test("a clean run does not fail", () => {
+  assert.equal(runFailed({ failed: 0, lookupErrors: 0, notFound: 0 }), false);
+  assert.equal(runFailed({}), false, "an empty summary is a clean run, not a failure");
+});
+
+test("a metric SEND failure fails the run", () => {
+  assert.equal(runFailed({ failed: 1, lookupErrors: 0, notFound: 0 }), true);
+});
+
+test("an SSM LOOKUP failure fails the run (a run that could not read the ages is not a run that found nothing)", () => {
+  assert.equal(runFailed({ failed: 0, lookupErrors: 1, notFound: 0 }), true);
+});
+
+test("an ABSENT expected target fails the run, alone -- counterfactual against the old failed||lookupErrors rule", () => {
+  const summary = { failed: 0, lookupErrors: 0, notFound: 1 };
+  assert.equal(runFailed(summary), true, "a tracked secret with no age emitted must not exit 0");
+  // Pin the difference explicitly: the superseded rule returned false for exactly this summary, so
+  // this assertion fails on the old code and is not merely restating the new implementation.
+  const supersededRule = (s) => s.failed > 0 || s.lookupErrors > 0;
+  assert.equal(supersededRule(summary), false, "the old rule tolerated a missing target -- that is the defect");
+  assert.notEqual(runFailed(summary), supersededRule(summary));
+});
+
+test("all three causes together still fail the run", () => {
+  assert.equal(runFailed({ failed: 2, lookupErrors: 1, notFound: 3 }), true);
 });

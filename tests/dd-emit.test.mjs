@@ -6,7 +6,7 @@
 // failed HTTP call.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ddMetric, _resetForTests } from "../skills/datadog/dd-emit.mjs";
+import { ddMetric, _resetForTests, _setSecretGetterForTests } from "../skills/datadog/dd-emit.mjs";
 
 async function withStubbedFetch(stub, run) {
   const original = globalThis.fetch;
@@ -118,5 +118,60 @@ test("a missing API key is a real, named failure -- not a quiet no-op (the dd-fl
     assert.equal(result.ok, false);
     assert.match(result.error, /datadog-api-key did not resolve/);
     assert.equal(fetchCalled, false, "must not attempt a submission it has no key for");
+  });
+});
+
+// The two tests below cover the CREDENTIAL-RESOLUTION half of the contract. Every test above stubs
+// fetch and so only ever exercises the SEND half; the credential lookup was resolved on the very
+// first line of ddMetric(), OUTSIDE any try/catch, so a throwing lookup propagated straight through
+// a module whose documented promise is that it "NEVER throws". Found by review, not by these tests --
+// which is exactly why they exist now.
+test("a THROWING credential lookup is reported as {ok:false}, not propagated -- the module contract says it never throws", async () => {
+  await withNoAmbientCreds(async () => {
+    _resetForTests();
+    delete process.env.DD_API_KEY;
+    delete process.env.DD_SITE;
+    _setSecretGetterForTests(async () => { throw new Error("SSM ThrottlingException: Rate exceeded"); });
+    try {
+      let fetchCalled = false;
+      const result = await withStubbedFetch(
+        async () => { fetchCalled = true; return { ok: true, text: async () => "{}" }; },
+        () => ddMetric("otc.fleet.test_metric", 1),
+      );
+      assert.equal(result.ok, false);
+      assert.match(result.error, /credential lookup FAILED/);
+      // The underlying reason must survive into the message, or the operator gets "it failed" with
+      // nothing to act on -- the same uselessness as the silent swallow this module replaced.
+      assert.match(result.error, /ThrottlingException/);
+      assert.equal(fetchCalled, false, "must not attempt a submission when it could not resolve a key");
+    } finally { _resetForTests(); }
+  });
+});
+
+test("a failed credential lookup is NOT cached -- a later call retries instead of repeating a phantom failure", async () => {
+  await withNoAmbientCreds(async () => {
+    _resetForTests();
+    delete process.env.DD_API_KEY;
+    delete process.env.DD_SITE;
+    let calls = 0;
+    // Transient: reject the first lookup, succeed on the retry. The pre-fix memo latched `_resolved`
+    // to true BEFORE awaiting, so one blip poisoned every subsequent call for the life of the process.
+    _setSecretGetterForTests(async (name) => {
+      calls++;
+      if (calls === 1) throw new Error("transient network blip");
+      return name === "datadog-api-key" ? "recovered-key" : "datadoghq.example";
+    });
+    try {
+      const first = await ddMetric("otc.fleet.test_metric", 1);
+      assert.equal(first.ok, false, "first call sees the transient failure");
+      const seen = [];
+      const second = await withStubbedFetch(
+        async (url, init) => { seen.push({ url, key: init.headers["DD-API-KEY"] }); return { ok: true, text: async () => "{}" }; },
+        () => ddMetric("otc.fleet.test_metric", 2),
+      );
+      assert.deepEqual(second, { ok: true }, "the retry must re-resolve, not replay the cached rejection");
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].key, "recovered-key");
+    } finally { _resetForTests(); }
   });
 });

@@ -70,6 +70,15 @@
 // path pages a human, instead of a job silently "succeeding" while its telemetry silently vanished
 // (the exact bug class skills/fleet-medic/medic.mjs already shipped once and fixed).
 //
+// AN ABSENT TARGET IS ALSO A FAILURE, for the same reason. rotatingSecrets() is a deliberate
+// allowlist of secrets that are supposed to EXIST (see above); a target missing from SSM means one
+// was deleted, renamed, or the registry drifted. Treating that as a quiet skip would silently drop
+// that secret from monitoring and leave otc.fleet.token_age_hours{secret:<id>} back in the No Data
+// state this script exists to end -- undetectably, because the run would still exit 0. Verified
+// 2026-09-02 against live SSM that all five expected targets are present, so this is a drift alarm,
+// not one that fires on a standing condition. If a target ever becomes legitimately retired, remove
+// it from rotatingSecrets() (and from the monitor) rather than letting the run tolerate its absence.
+//
 // Usage: node token-age-metrics.mjs [--dry-run] [--json]
 import { ensureAwsCreds } from "../kb-memory/aws-bootstrap.mjs";
 import { ssmParamModifiedMs } from "../kb-memory/aws-secret.mjs";
@@ -94,16 +103,28 @@ export function rotatingSecrets(providers = PROVIDERS) {
   return out;
 }
 
+/** Pure: did this run fail? Three distinct causes, ONE severity -- each of them means at least one
+ *  tracked secret has no fresh otc.fleet.token_age_hours point, which is precisely the per-secret
+ *  "No Data" state this script exists to end. `notFound` is the one that used to be excluded: an
+ *  absent target was reported to stderr and then exited 0, so a deleted or renamed secret dropped out
+ *  of monitoring silently -- the monitor stayed green about a secret it was no longer watching.
+ *  Exported for unit testing. */
+export function runFailed({ failed = 0, lookupErrors = 0, notFound = 0 } = {}) {
+  return failed > 0 || lookupErrors > 0 || notFound > 0;
+}
+
 async function main() {
   const targets = rotatingSecrets();
   const haveAws = await ensureAwsCreds();
   if (!haveAws) {
     console.error(
       "[token-age-metrics] FATAL: no AWS credentials resolvable (checked the ECS task role, " +
-        "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env, and Key Vault aws-cto-access-key-id/" +
-        "aws-cto-secret-access-key). Cannot read SSM; refusing to emit fabricated ages.",
+        "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env, and kvSecret aws-cto-access-key-id/" +
+        "aws-cto-secret-access-key -- which itself reads AWS SSM, NOT the deleted Key Vault). " +
+        "Cannot read SSM; refusing to emit fabricated ages.",
     );
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const now = Date.now();
@@ -127,7 +148,14 @@ async function main() {
       continue;
     }
     if (lastModifiedMs == null) {
-      console.error(`[token-age-metrics] NOT FOUND in SSM: ${t.id} (${t.label}) -- skipping, no age emitted for it.`);
+      // Distinct from a lookup ERROR above (which means "SSM could not answer"): this means SSM
+      // answered and the parameter is genuinely gone. Different diagnosis, same severity -- either
+      // way this secret is no longer being monitored.
+      console.error(
+        `[token-age-metrics] NOT FOUND in SSM: ${t.id} (${t.label}) -- this is an EXPECTED rotating ` +
+          `secret, so its absence is drift (deleted/renamed/registry stale), not a benign skip. ` +
+          `No age emitted; this run FAILS. Fix the secret or remove the target from rotatingSecrets().`,
+      );
       rows.push({ ...t, found: false });
       continue;
     }
@@ -169,16 +197,18 @@ async function main() {
         `${lookupErrors} lookup-failed, ${notFound} not found in SSM (tracked ${rows.length}).`,
     );
 
-  // Loud: EITHER a metric-send failure OR an SSM lookup failure fails this run. A run that could not
-  // read the ages is not a run that found nothing -- and only a non-zero exit reaches
-  // page-on-failure.mjs.
-  if (failed > 0 || lookupErrors > 0) process.exit(1);
+  // Loud: a metric-send failure, an SSM lookup failure, OR a missing expected target fails this run.
+  // A run that could not read the ages is not a run that found nothing -- and only a non-zero exit
+  // reaches page-on-failure.mjs. Set exitCode rather than calling process.exit(): stdout is async
+  // when it is a pipe (CI always pipes it), so exiting here can truncate the summary that was just
+  // written -- the same defect fixed in skills/github-app/gh-app.mjs (see FLEET-BULLETIN.md).
+  if (runFailed({ failed, lookupErrors, notFound })) process.exitCode = 1;
 }
 
 const isMain = process.argv[1] && process.argv[1].endsWith("token-age-metrics.mjs");
 if (isMain) {
   main().catch((e) => {
     console.error("[token-age-metrics] FATAL: " + (e && e.stack || e));
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

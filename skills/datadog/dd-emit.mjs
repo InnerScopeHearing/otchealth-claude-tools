@@ -21,13 +21,29 @@ import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const TYPE = { unspecified: 0, count: 1, rate: 2, gauge: 3 };
 
-let _apiKey, _site, _resolved = false;
-async function creds() {
-  if (_resolved) return { apiKey: _apiKey, site: _site };
-  _resolved = true;
-  _apiKey = process.env.DD_API_KEY || (await kvSecret("datadog-api-key"));
-  _site = process.env.DD_SITE || (await kvSecret("datadog-site")) || "datadoghq.com";
-  return { apiKey: _apiKey, site: _site };
+// Memoize the PROMISE, not a resolved-yet flag. An eager `_resolved = true` before the await had two
+// failure modes: a second caller entering while the first was still awaiting would be handed
+// undefined creds (a spurious "did not resolve"), and a THROWN lookup would leave the flag latched so
+// every later call in the process reported the same phantom failure -- one transient secret-store
+// blip permanently blinding the emitter. Clearing the cache on rejection keeps a failure retryable.
+let _credsPromise = null;
+// Test-only indirection. kvSecret() CAN reject (it reaches AWS SSM), and this module's whole contract
+// is that such a rejection surfaces as {ok:false, error} rather than as a thrown exception at the
+// caller. There is no way to force that path from a test otherwise: node:test's mock.module is
+// unavailable here (it needs --experimental-test-module-mocks and the runner is a plain `node --test`).
+// Defaults to the real kvSecret; _resetForTests() restores it so a stub cannot leak between tests.
+let _secretGetter = kvSecret;
+function creds() {
+  if (!_credsPromise) {
+    _credsPromise = (async () => ({
+      apiKey: process.env.DD_API_KEY || (await _secretGetter("datadog-api-key")),
+      site: process.env.DD_SITE || (await _secretGetter("datadog-site")) || "datadoghq.com",
+    }))().catch((e) => {
+      _credsPromise = null;
+      throw e;
+    });
+  }
+  return _credsPromise;
 }
 
 /** Submit ONE Datadog metric point (v2 series API). Retries transient failures with short backoff.
@@ -35,8 +51,23 @@ async function creds() {
  *  API key is reported as a real failure (not a quiet skip), matching fleet-medic's
  *  "POSTHOG CAPTURE SKIPPED" precedent for a missing credential. */
 export async function ddMetric(name, value, { tags = [], type = "gauge", attempts = 3 } = {}) {
-  const { apiKey, site } = await creds();
-  if (!apiKey) return { ok: false, error: "datadog-api-key did not resolve (checked DD_API_KEY env and Key Vault)" };
+  // creds() reaches a secret store (kvSecret -> AWS SSM), so it CAN throw. Resolving it outside a
+  // try/catch would break this module's own "never throws" contract at its very first statement and
+  // hand the caller an exception instead of the {ok:false, error} it is written to check.
+  let apiKey, site;
+  try {
+    ({ apiKey, site } = await creds());
+  } catch (e) {
+    return { ok: false, error: `datadog credential lookup FAILED: ${(e && e.message) || String(e)}` };
+  }
+  if (!apiKey)
+    return {
+      ok: false,
+      error:
+        "datadog-api-key did not resolve (checked the DD_API_KEY env var, then kvSecret -> AWS SSM " +
+        "/otchealth/datadog-api-key). NOTE: kvSecret reads SSM, not Key Vault -- kv-otc-55c84f6bef " +
+        "died with Azure subscription 55c84f6b on 2026-08-13; do not go looking for it there.",
+    };
   const body = JSON.stringify({
     series: [{ metric: name, type: TYPE[type] ?? 3, points: [{ timestamp: Math.floor(Date.now() / 1000), value: Number(value) }], tags }],
   });
@@ -58,7 +89,15 @@ export async function ddMetric(name, value, { tags = [], type = "gauge", attempt
   return { ok: false, error: lastErr };
 }
 
-/** Test-only: clear memoized credentials so a test can force re-resolution under a fresh env/mock. */
+/** Test-only: clear memoized credentials so a test can force re-resolution under a fresh env/mock,
+ *  and restore the real secret getter so a stub from one test cannot leak into the next. */
 export function _resetForTests() {
-  _apiKey = undefined; _site = undefined; _resolved = false;
+  _credsPromise = null;
+  _secretGetter = kvSecret;
+}
+
+/** Test-only: substitute the secret lookup (see _secretGetter above). Pass nothing to restore. */
+export function _setSecretGetterForTests(fn) {
+  _secretGetter = fn || kvSecret;
+  _credsPromise = null;
 }
