@@ -36,6 +36,16 @@
 // trying to track a point-in-time snapshot. It cannot make the source stop moving; it can only keep
 // re-copying until it catches up, and it fails loud (not silently) if it never does.
 //
+// THE TWO DIRECTIONS HAVE OPPOSITE CONVERGENCE RULES (2026-09-02, memory-exec): the forward pass (live
+// original -> frozen twin) converges on EQUAL counts; the swap-back (frozen twin -> the recreated
+// original, the live write target from the instant it exists) converges on dest >= source and copies
+// create-only, never overwriting a live doc -- see reindexUntilCountsConverge()'s `liveSide`. Between
+// the last converged forward pass and the delete there is an UNAVOIDABLE sub-second gap (verify and
+// delete run back-to-back; 0.2s measured on memory-exec) in which a write to the original is lost. The
+// memory rooms are projections of the S3 kb-memory ledger and the doc rooms of their S3 source buckets,
+// so such a write is re-materialized by the next librarian/brain-reindex run rather than lost for
+// good. The zero-gap design is an alias swap; the fleet's writers address concrete index names today.
+//
 // RESUMABLE STATE lives in the fleet's existing S3 commons mirror (skills/kb-memory/
 // commons-store.mjs, the SAME store setup/heartbeat.mjs already uses for `_HEARTBEAT/`), one JSON
 // file per index under `_QUANTIZE_STATE/<index>.json`. Every state write is a plain overwrite (no
@@ -565,16 +575,36 @@ export async function pollTaskToCompletion(client, taskId, { sleepFn = sleep, in
 /**
  * Reindex `source` -> `dest` and keep retrying (bounded) until their doc counts converge. This is
  * the mechanism that makes migrating a LIVE index safe: `_reindex` overwrites by `_id`, so re-running
- * it after new documents land on `source` is always safe, never duplicates, and eventually catches
- * up. Fails loud (does not silently accept a mismatch) if counts never converge within
- * `maxAttempts`, which most likely means the source is receiving writes faster than this tool can
- * copy them -- an operational signal to retry during a quieter window, not a bug to paper over.
+ * it after new documents land is always safe, never duplicates, and eventually catches up. Fails loud
+ * (does not silently accept a mismatch) if counts never converge within `maxAttempts`.
+ *
+ * `liveSide` names which of the two indexes is receiving live writes while this runs, because the two
+ * directions this tool uses have OPPOSITE convergence rules:
+ *   - "source" (default; the forward pass, live original -> frozen twin): `dest` must catch UP to
+ *     `source`, and only exact equality proves it did. A `dest` count ABOVE `source` here would mean
+ *     docs deleted from the live original were resurrected in the twin, so equality stays strict.
+ *   - "dest" (the swap-back, frozen twin -> the recreated original, which is the LIVE write target from
+ *     the instant it exists): `dest` legitimately grows PAST `source` by every live write that lands
+ *     during the pass, so `dest >= source` IS convergence and equality can never be demanded --
+ *     retrying only accumulates more live writes and then fails (2026-09-02, memory-exec: source=17675
+ *     dest=17678 after three full passes; the tool declared FAILED and left the twin behind while the
+ *     original was already complete and quantized). In this direction the reindex also runs with
+ *     dest.op_type="create" + conflicts="proceed": a doc that already exists on the live `dest` is
+ *     NEVER overwritten by the twin's older copy (a resume after a mid-pass failure would otherwise
+ *     revert every doc updated live since the first pass); the pass only fills the ids `dest` lacks.
  */
-export async function reindexUntilCountsConverge(client, { source, dest }, { maxAttempts = MAX_REINDEX_CONVERGE_ATTEMPTS, log = () => {}, pollOpts = {} } = {}) {
+export async function reindexUntilCountsConverge(client, { source, dest }, { maxAttempts = MAX_REINDEX_CONVERGE_ATTEMPTS, log = () => {}, pollOpts = {}, liveSide = "source" } = {}) {
+  if (liveSide !== "source" && liveSide !== "dest") {
+    throw new Error(`reindexUntilCountsConverge: liveSide must be "source" or "dest", got ${JSON.stringify(liveSide)}`);
+  }
+  const destLive = liveSide === "dest";
   let lastSrc = null, lastDst = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    log(`  reindexing ${source} -> ${dest} (attempt ${attempt}/${maxAttempts})...`);
-    const start = await client.reindexStart({ source: { index: source }, dest: { index: dest } });
+    log(`  reindexing ${source} -> ${dest} (attempt ${attempt}/${maxAttempts}${destLive ? ", create-only: live dest docs are never overwritten" : ""})...`);
+    const body = destLive
+      ? { conflicts: "proceed", source: { index: source }, dest: { index: dest, op_type: "create" } }
+      : { source: { index: source }, dest: { index: dest } };
+    const start = await client.reindexStart(body);
     if (!start.ok || !start.json || !start.json.task) {
       return { ok: false, reason: `starting _reindex ${source} -> ${dest} failed: ${describeErr(start)}` };
     }
@@ -585,13 +615,19 @@ export async function reindexUntilCountsConverge(client, { source, dest }, { max
       return { ok: false, reason: `post-reindex count check failed (source ok=${srcRes.ok}, dest ok=${dstRes.ok})` };
     }
     lastSrc = srcRes.count; lastDst = dstRes.count;
-    if (lastSrc === lastDst) return { ok: true, srcCount: lastSrc, dstCount: lastDst, attempts: attempt };
-    log(`  counts diverged after reindex (source=${lastSrc} dest=${lastDst}); likely live writes landed mid-pass; retrying`);
+    const converged = destLive ? lastDst >= lastSrc : lastSrc === lastDst;
+    if (converged) return { ok: true, srcCount: lastSrc, dstCount: lastDst, attempts: attempt, liveSide };
+    log(destLive
+      ? `  live dest '${dest}' still holds fewer docs than frozen source '${source}' (source=${lastSrc} dest=${lastDst}); retrying`
+      : `  counts diverged after reindex (source=${lastSrc} dest=${lastDst}); likely live writes landed mid-pass; retrying`);
   }
   return {
     ok: false,
-    reason: `doc counts never converged after ${maxAttempts} reindex attempts (last source=${lastSrc} dest=${lastDst}); ` +
-      `'${source}' is likely receiving writes faster than this tool can converge -- retry during a quieter window`,
+    reason: destLive
+      ? `live dest '${dest}' never caught up to frozen source '${source}' after ${maxAttempts} reindex attempts (last source=${lastSrc} dest=${lastDst}); ` +
+        `docs are missing on '${dest}' -- inspect before deleting '${source}'`
+      : `doc counts never converged after ${maxAttempts} reindex attempts (last source=${lastSrc} dest=${lastDst}); ` +
+        `'${source}' is likely receiving writes faster than this tool can converge -- retry during a quieter window`,
   };
 }
 
@@ -903,7 +939,7 @@ export async function runMigrateOne(index, opts) {
     }
 
     if (state.phase === "swap_reindexing_back") {
-      const conv = await reindexUntilCountsConverge(client, { source: twin, dest: index }, { log });
+      const conv = await reindexUntilCountsConverge(client, { source: twin, dest: index }, { log, liveSide: "dest" });
       if (!conv.ok) return await fail(`reindexing '${twin}' back onto '${index}' failed: ${conv.reason}`);
       state = withPhase(state, "swap_reverifying", `converged at ${conv.dstCount} docs`);
       await save();
@@ -1028,7 +1064,7 @@ export async function runRollback(index, opts) {
   }
   const recreate = await client.createIndex(index, { settings: { index: sanitizeIndexSettings(twinBody.settings?.index || {}) }, mappings: twinBody.mappings });
   if (!recreate.ok && recreate.status !== 400) return { index, ok: false, reason: `recreating '${index}' failed: ${describeErr(recreate)}` };
-  const conv = await reindexUntilCountsConverge(client, { source: twin, dest: index }, { log });
+  const conv = await reindexUntilCountsConverge(client, { source: twin, dest: index }, { log, liveSide: "dest" });
   if (!conv.ok) return { index, ok: false, reason: `reindexing '${twin}' back onto '${index}' failed: ${conv.reason}` };
   const field = findVectorField(twinBody.mappings?.properties || {})?.field;
   const v = field ? await verifyParity(client, { sourceIndex: twin, destIndex: index, vectorField: field }) : { ok: true, overlapPct: null };
