@@ -761,13 +761,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-29T03:47:48.523Z
 - **Closed:** (open)
 
-### finding:FND-20260829-e454 severity:high status:open | ChatGPT MCP client: 45s hard per-call timeout + fresh session per tool call - long-running gateway tools (brain_search deep, depot_* waits, heygen wait/poll) need job-id/poll shape on the ChatGPT surface; do not rely on per-session server state for ChatGPT callers
+### finding:FND-20260829-e454 severity:high status:fixed | ChatGPT MCP client: 45s hard per-call timeout + fresh session per tool call - long-running gateway tools (brain_search deep, depot_* waits, heygen wait/poll) need job-id/poll shape on the ChatGPT surface; do not rely on per-session server state for ChatGPT callers
 
 - **Source audit doc:** scratchpad/latest-openai-research.md (2026-08-29 platform research pass)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 9f60bfa
+- **Verified by:** otchealth-mcp-server #267 '9f60bfa fix(connectors): bound wall-clock time on ChatGPT-reachable tools' merged to main; the 45s jobshape deliverable was reviewed and landed in the 2026-09-01 builder batch (task #36).
 - **Opened:** 2026-08-29T04:41:55.195Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:49:05.298Z
 
 ### finding:FND-20260829-f7fa severity:medium status:open | otchealth-brain: ALL 15 indices un-quantized (fp32 3072-dim faiss, ~29GB total; finance 13GB, legal-personal 9.1GB, legal-company 4.4GB) on OpenSearch 2.19 - disk-optimized/quantized vectors would cut memory sharply and likely the $64/mo domain line; requires per-index reindex with recall check, coordinate with gateway single-write-path
 
