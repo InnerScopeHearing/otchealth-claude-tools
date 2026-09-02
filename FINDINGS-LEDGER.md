@@ -588,10 +588,10 @@ finding with `node ledger.mjs finding add`, close one with
 ### finding:FND-20260827-3a32 severity:low status:fixed | SSM netlify-token is STALE (Netlify API returns 401 Access Denied) -- blocks the N8N_SHAREHOLDER_WEBHOOK env unset (FND-20260827-b308) and any Netlify automation from the seat; needs a fresh PAT from app.netlify.com/user/applications (Matt) or Netlify MCP auth, then unset the var on the innd site (function then logs each signup email to Netlify function logs = recoverable, vs today's silent deferred loss)
 
 - **Source audit doc:** live Netlify API probe 2026-08-27
-- **Fix commit:** (none yet)
-- **Verified by:** netlify-token v2 (restored from the Notion child page 'Netlify Token (added 2026-05-21)') returns 200 on GET /api/v1/user and /sites (otchealth-app, otchealth-hq, innd); gateway netlify_list_sites returns the 3 sites on rev 36. The dependent env repoint (FND-b308) is in flight on the shareholder-signup restore.
+- **Fix commit:** 259cd94
+- **Verified by:** SSM /otchealth/netlify-token authenticated cleanly for every call this session (site GET, account-scoped env GET/PUT, build trigger, deploy polling) -- zero 401s observed. Used live to repoint N8N_SHAREHOLDER_WEBHOOK and trigger+confirm a real rebuild. See runbooks/2026-09-02-shareholder-signup-restore.md
 - **Opened:** 2026-08-27T19:59:42.033Z
-- **Closed:** 2026-09-02T19:24:32.946Z
+- **Closed:** 2026-09-02T19:30:09.541Z
 
 ### finding:FND-20260828-3142 severity:high status:fixed | Brain ingest backfill + freshness canary: docs added since 2026-08-13 unindexed; librarian jobs must run OpenSearch push-search (PR #469) per room; add per-room newest-indexed_at-vs-newest-S3-object canary; verify librarian ECS env pins
 
