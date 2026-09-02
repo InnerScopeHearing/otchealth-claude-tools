@@ -529,13 +529,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-27T19:00:28.013Z
 - **Closed:** 2026-08-28T22:41:00.181Z
 
-### finding:FND-20260827-b308 severity:medium status:open | innd.com Netlify env: N8N_SHAREHOLDER_WEBHOOK forwards shareholder signups to a dead n8n destination and soft-succeeds; unset or repoint at deploy of innd-website PR #11
+### finding:FND-20260827-b308 severity:medium status:fixed | innd.com Netlify env: N8N_SHAREHOLDER_WEBHOOK forwards shareholder signups to a dead n8n destination and soft-succeeds; unset or repoint at deploy of innd-website PR #11
 
 - **Source audit doc:** otchealth-cto/CLAUDE.md (2026-08-27 AWS-migration residue audit entry)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 259cd94
+- **Verified by:** otchealth-cto branch claude/shareholder-signup-restore: rebuilt workflow L3i5cMEBEqPU55tR on cs-n8n.otchealthmart.com, repointed innd.com Netlify env N8N_SHAREHOLDER_WEBHOOK to https://automation.otchealth.app/webhook/shareholder-signup, proved end to end via a real POST to https://innd.com/.netlify/functions/signup (n8n execution 2697, ok:true + code INND-... + all 5 steps succeeded), test side effects cleaned up. See runbooks/2026-09-02-shareholder-signup-restore.md
 - **Opened:** 2026-08-27T19:00:30.765Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T19:30:06.326Z
 
 ### finding:FND-20260827-2740 severity:medium status:fixed | Vendor webhook registries never enumerated (Stripe, RevenueCat, Customer.io, Intercom, Shopify, PostHog, Sentry): sweep each for Azure/n8n callback URLs once MCPs are authorized
 
