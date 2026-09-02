@@ -179,3 +179,21 @@ test("awsRequest never throws on a transport failure and reports it as a distinc
     globalThis.fetch = originalFetch;
   }
 });
+
+test("canonical header values collapse internal whitespace, not just trim (AWS signs them collapsed)", async () => {
+  // Trim-only signs "a:  b   c" verbatim while AWS canonicalizes to "a:b c", producing two different
+  // signatures and an auth failure whose message never explains itself. Same credentials, same
+  // request, values differing only in internal spacing must therefore sign IDENTICALLY.
+  const base = { method: "POST", service: "sns", region: "us-east-1", host: "sns.us-east-1.amazonaws.com", path: "/", body: "Action=Publish" };
+  const creds = { ak: "AKIAIOSFODNN7EXAMPLE", sk: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" };
+  const when = new Date("2026-09-02T00:00:00Z");
+  const tight = await signAwsRequest({ ...base, headers: { "content-type": "application/x-www-form-urlencoded" }, creds, now: when });
+  const loose = await signAwsRequest({ ...base, headers: { "content-type": "  application/x-www-form-urlencoded  " }, creds, now: when });
+  const spaced = await signAwsRequest({ ...base, headers: { "content-type": "application/x-www-form-urlencoded" }, creds, now: when });
+  assert.equal(loose.headers.authorization, tight.headers.authorization, "leading/trailing space must not change the signature");
+  assert.equal(spaced.headers.authorization, tight.headers.authorization);
+  // And the collapse itself: a value with runs of internal whitespace must sign as its collapsed form.
+  const runs = await signAwsRequest({ ...base, headers: { "x-test": "a   b     c" }, creds, now: when });
+  const single = await signAwsRequest({ ...base, headers: { "x-test": "a b c" }, creds, now: when });
+  assert.equal(runs.headers.authorization, single.headers.authorization, "internal whitespace runs must collapse to one space before signing");
+});

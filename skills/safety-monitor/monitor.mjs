@@ -174,6 +174,7 @@ export async function listConversationIds({ intercomRequest, sinceEpochSeconds, 
   let pages = 0;
   let lastCreatedAt = Infinity;
   let stillDescending = true;
+  let stop = "cap"; // overwritten by whichever break fires first; "cap" means the while condition ended it
   do {
     pages++;
     const qs = new URLSearchParams({ per_page: String(perPage) });
@@ -198,10 +199,16 @@ export async function listConversationIds({ intercomRequest, sinceEpochSeconds, 
     }
     const next = res.json?.pages?.next;
     cursor = (next && next.starting_after) || (typeof next === "string" ? next : null);
-    if (!cursor) break;
-    if (allBelowWindow && stillDescending) break; // safe early stop: every item on this page was older than the window, and order has held descending the whole way
+    if (!cursor) { stop = "exhausted"; break; }
+    if (allBelowWindow && stillDescending) { stop = "past-window"; break; } // safe early stop: every item on this page was older than the window, and order has held descending the whole way
   } while (pages < maxPages);
-  if (pages >= maxPages) errors.push(`list: hit the ${maxPages}-page safety cap without exhausting history -- the window may be incomplete; raise --max-pages if this recurs`);
+  // Warn ONLY when the cap is what cut us short. The old condition was `pages >= maxPages`, which
+  // also fired when the final allowed page legitimately had no next cursor -- a complete result set
+  // that happened to end exactly on the limit was reported as a failure. An explicit stop reason
+  // says why the loop ended instead of inferring it from a counter.
+  if (stop === "cap" && cursor) {
+    errors.push(`list: hit the ${maxPages}-page safety cap with more history still to read -- the window is INCOMPLETE; raise --max-pages`);
+  }
   return { ids, pages, errors };
 }
 
@@ -213,6 +220,7 @@ export async function searchConversationIds({ intercomRequest, sinceEpochSeconds
   const errors = [];
   let cursor = null;
   let pages = 0;
+  let stop = "cap";
   do {
     pages++;
     const body = { query: { field: "created_at", operator: ">", value: sinceEpochSeconds } };
@@ -226,8 +234,16 @@ export async function searchConversationIds({ intercomRequest, sinceEpochSeconds
     for (const c of convos) ids.add(String(c.id));
     const next = res.json?.pages?.next;
     cursor = (next && next.starting_after) || (typeof next === "string" ? next : null);
-    if (!cursor || convos.length === 0) break;
+    if (!cursor || convos.length === 0) { stop = "exhausted"; break; }
   } while (pages < maxPages);
+  // This warning did not exist. listConversationIds had one and this path did not, so a search
+  // discovery truncated by the page cap produced an otherwise clean, successful sweep -- incomplete
+  // discovery on a customer-safety monitor, reported as a good run. Both discovery paths must fail
+  // loud for the union to mean anything, since the whole point of running two is that either may
+  // miss something (FND-20260817-64f5).
+  if (stop === "cap" && cursor) {
+    errors.push(`search: hit the ${maxPages}-page safety cap with more results still to read -- discovery is INCOMPLETE; raise --max-pages`);
+  }
   return { ids, pages, errors };
 }
 

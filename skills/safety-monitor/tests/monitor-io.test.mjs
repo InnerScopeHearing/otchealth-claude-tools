@@ -8,6 +8,7 @@ import {
   verifySafetyTag,
   applyTag,
   listConversationIds,
+  searchConversationIds,
   discoverConversationIds,
   isCustomerAuthor,
   isAlreadyTagged,
@@ -249,4 +250,45 @@ test("the CLI routes progress logs to stderr under --json, so stdout carries onl
     /json \? \{ log: \(msg\) => console\.error\(msg\) \}/,
     "under --json the CLI must pass a log that writes to stderr; without it runSweep's default logs to stdout and corrupts the JSON",
   );
+});
+
+// ---- pagination cap: both discovery paths must fail LOUD, and neither may cry wolf ---------------
+
+test("searchConversationIds reports an error when the page cap cuts discovery short", async () => {
+  // This warning did not exist. listConversationIds had one and search did not, so a truncated
+  // search discovery produced a clean, successful sweep -- incomplete discovery on a customer-safety
+  // monitor, reported as a good run. Both paths must fail loud for their union to mean anything.
+  const page = { ok: true, status: 200, json: { conversations: [{ id: "z" }], pages: { next: { starting_after: "MORE" } } } };
+  const req = async () => page; // every page claims another page follows
+  const res = await searchConversationIds({ intercomRequest: req, sinceEpochSeconds: 0, maxPages: 3 });
+  assert.equal(res.pages, 3, "must stop at the cap");
+  assert.ok(
+    res.errors.some((e) => /INCOMPLETE/.test(e) && /safety cap/.test(e)),
+    `a capped search must report incompleteness, got: ${JSON.stringify(res.errors)}`,
+  );
+});
+
+test("neither discovery path cries wolf when history is exhausted exactly ON the last allowed page", async () => {
+  // The old listConversationIds condition was `pages >= maxPages`, which fired even when the final
+  // allowed page had no next cursor -- a COMPLETE result set that happened to end on the limit was
+  // reported as a failure, and on this monitor any error makes the whole run exit non-zero.
+  const now = Math.floor(Date.now() / 1000);
+  let n = 0;
+  const listReq = async () => {
+    n++;
+    const last = n === 2;
+    return { ok: true, status: 200, json: { conversations: [{ id: `c${n}`, created_at: now }], pages: last ? {} : { next: { starting_after: "MORE" } } } };
+  };
+  const list = await listConversationIds({ intercomRequest: listReq, sinceEpochSeconds: now - 3600, maxPages: 2, perPage: 1 });
+  assert.equal(list.pages, 2, "used exactly the allowed pages");
+  assert.deepEqual(list.errors, [], "history was exhausted on the last allowed page, so there is nothing to warn about");
+
+  let m = 0;
+  const searchReq = async () => {
+    m++;
+    const last = m === 2;
+    return { ok: true, status: 200, json: { conversations: [{ id: `s${m}` }], pages: last ? {} : { next: { starting_after: "MORE" } } } };
+  };
+  const search = await searchConversationIds({ intercomRequest: searchReq, sinceEpochSeconds: 0, maxPages: 2 });
+  assert.deepEqual(search.errors, [], "same rule for the search path");
 });

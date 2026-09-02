@@ -128,7 +128,14 @@ export async function signAwsRequest({ method, service, region, host, path = "/"
 
   const lower = { host: host.toLowerCase(), "x-amz-date": amzDate };
   if (creds.st) lower["x-amz-security-token"] = creds.st;
-  for (const [k, v] of Object.entries(headers)) lower[k.toLowerCase()] = String(v).trim();
+  // AWS canonicalization trims a header value AND collapses runs of internal whitespace to a single
+  // space. Trimming alone signs "a:  b   c" as-is while AWS canonicalizes it to "a:b c", so the two
+  // sides compute different signatures and the request fails to authenticate for a reason the error
+  // never names. SCOPE, stated rather than implied: the spec exempts whitespace inside a quoted
+  // string, which this does not model. No caller passes a quoted-string header value today (the
+  // signed set is host, x-amz-date, content-type and x-amz-security-token), and collapsing is
+  // strictly closer to the spec than trimming alone for every value that is not quoted.
+  for (const [k, v] of Object.entries(headers)) lower[k.toLowerCase()] = String(v).trim().replace(/\s+/g, " ");
 
   const signedKeys = Object.keys(lower).sort();
   const canonicalHeaders = signedKeys.map((k) => `${k}:${lower[k]}\n`).join("");
