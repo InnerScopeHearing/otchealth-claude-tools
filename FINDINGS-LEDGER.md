@@ -833,13 +833,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-08-31T17:40:01.992Z
 - **Closed:** (open)
 
-### finding:FND-20260901-34de severity:low status:open | Route the 782-agent subagent-research corpus to S3 commons + brain index (currently parked on orphan branch claude/subagent-research-corpus)
+### finding:FND-20260901-34de severity:low status:fixed | Route the 782-agent subagent-research corpus to S3 commons + brain index (currently parked on orphan branch claude/subagent-research-corpus)
 
 - **Source audit doc:** otchealth-cto PR #104 triage, 2026-09-01
 - **Fix commit:** (none yet)
-- **Verified by:** PR #104 closed 2026-09-01 in favour of #134 (tool only, merged fc1bc7f). Corpus NOT lost: 17MB / 782 distilled agent briefs+reports remain on origin branch claude/subagent-research-corpus, which is durable. NOT merged because the branch is an ORPHAN (main root 9fdabd56f6 vs branch root 258923836e, no merge base -- it is a full second copy of the repo), so merging would graft a parallel root onto main and every future clone would carry 17MB (agents re-clone constantly via repo-freshen/add-repo). Content verified safe: independent scan across 23 credential shapes found only a RevenueCat PUBLIC SDK key already in main's CLAUDE.md plus the redactor's own template; 54 REDACTED markers present; redactor proven to ACT via synthetic planted-secret test. TODO: upload research/ to S3 commons and decide whether to index into the brain -- note 782 agent transcripts could flood brain_search the way ops chatter did before the room-hygiene fix (mcp-server #110), so consider a dedicated room or exclusion.
+- **Verified by:** Already routed by the CTO Knowledge Library build (task #43, 2026-09-01): brain_search on 2026-09-02 returns otchealthcommons/company-journal/_CTO-LIBRARY/08-subagent-corpus/subagent-corpus/INDEX.md from the commons-company-journal room, i.e. the corpus is in S3 commons AND brain-indexed. The orphan branch remains only as the raw source; no further routing needed.
 - **Opened:** 2026-09-01T14:20:58.738Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T17:56:00.333Z
 
 ### finding:FND-20260902-2cc5 severity:low status:fixed | innd-stock S3 tests npm-install xlsx at runtime, so they fail on main in any network-restricted runner (pre-existing, 2 of 2 tests provide no real coverage)
 
