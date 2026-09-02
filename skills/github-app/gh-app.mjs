@@ -222,7 +222,18 @@ async function graphql(query, token, variables) {
 function readStdin() { return new Promise((res) => { let d = ""; if (process.stdin.isTTY) return res(""); process.stdin.on("data", (c) => (d += c)); process.stdin.on("end", () => res(d)); }); }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
+// STDOUT DRAIN, 2026-09-02. This file calls process.exit() NOWHERE, and a test enforces that. On
+// POSIX, Node's stdout is SYNCHRONOUS when it is a file or a TTY but ASYNCHRONOUS when it is a PIPE,
+// and process.exit() does not wait for a pending async write. Measured on this runtime: the same
+// large response written with `> file.json` was 306506 bytes, while `| wc -c` returned exactly
+// 65536 -- one pipe buffer, a silently truncated prefix that still parses as plausible JSON. Setting
+// process.exitCode preserves the status while letting the stream flush.
+//
+// The dispatch below is a function purely so the argument guards can `return` after setting
+// exitCode; at ESM top level they would have needed process.exit() to stop the command from running
+// with missing arguments, and that single exception is what made the rule unenforceable before.
+// Keep it absolute: no process.exit() on ANY path, so no future stdout write can land above one.
+async function main() {
   const rawArgs = process.argv.slice(2);
   const noCache = rawArgs.includes("--no-cache");
   const [cmd, a1, a2, a3, a4] = rawArgs.filter((a) => a !== "--no-cache");
@@ -238,39 +249,41 @@ if (isMain) {
       console.log(JSON.stringify({ installation_expires: t.expires_at, repository_selection: t.repository_selection, core_limit: j.resources.core.limit, core_remaining: j.resources.core.remaining, graphql_limit: j.resources.graphql.limit }, null, 2));
       console.error(j.resources.core.limit >= 15000 ? "OK: 15000 core limit confirms App-installation auth." : `NOTE: core limit ${j.resources.core.limit} (expected 15000 for an App installation on an enterprise org).`);
     } else if (cmd === "request") {
-      if (!a1 || !a2) { console.error("usage: gh-app.mjs request <METHOD> <path> [body on stdin]"); process.exit(2); }
+      if (!a1 || !a2) { console.error("usage: gh-app.mjs request <METHOD> <path> [body on stdin]"); process.exitCode = 2; return; }
       const t = await installationToken({ noCache });
       const m = a1.toUpperCase();
       const body = ["POST", "PUT", "PATCH", "DELETE"].includes(m) ? await readStdin() : null;
       const r = await rest(m, a2, t.token, body || null);
       console.error(`HTTP ${r.status} ${m} ${a2}`);
       try { console.log(JSON.stringify(JSON.parse(r.text), null, 2)); } catch { console.log(r.text); }
-      process.exit(r.ok ? 0 : 1);
+      process.exitCode = r.ok ? 0 : 1;
     } else if (cmd === "ready-pr") {
-      if (!a1 || !a2 || !a3) { console.error("usage: gh-app.mjs ready-pr <owner> <repo> <number>"); process.exit(2); }
+      if (!a1 || !a2 || !a3) { console.error("usage: gh-app.mjs ready-pr <owner> <repo> <number>"); process.exitCode = 2; return; }
       const t = await installationToken({ noCache });
       const pr = await rest("GET", `/repos/${a1}/${a2}/pulls/${a3}`, t.token);
       const nodeId = JSON.parse(pr.text).node_id;
       const g = await graphql(`mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft number}}}`, t.token, { id: nodeId });
       console.log(JSON.stringify(g.json, null, 2));
-      process.exit(g.ok ? 0 : 1);
+      process.exitCode = g.ok ? 0 : 1;
     } else if (cmd === "merge-pr") {
-      if (!a1 || !a2 || !a3) { console.error("usage: gh-app.mjs merge-pr <owner> <repo> <number> [squash|merge|rebase]"); process.exit(2); }
+      if (!a1 || !a2 || !a3) { console.error("usage: gh-app.mjs merge-pr <owner> <repo> <number> [squash|merge|rebase]"); process.exitCode = 2; return; }
       const t = await installationToken({ noCache });
       const method = a4 || "squash";
       const r = await rest("PUT", `/repos/${a1}/${a2}/pulls/${a3}/merge`, t.token, JSON.stringify({ merge_method: method }));
       console.error(`HTTP ${r.status} merge ${a1}/${a2}#${a3} (${method})`);
       console.log(r.text);
-      process.exit(r.ok ? 0 : 1);
+      process.exitCode = r.ok ? 0 : 1;
     } else if (cmd === "graphql") {
       const t = await installationToken({ noCache });
       const q = await readStdin();
       const g = await graphql(q, t.token);
       console.log(JSON.stringify(g.json, null, 2));
-      process.exit(g.ok ? 0 : 1);
+      process.exitCode = g.ok ? 0 : 1;
     } else {
       console.error("commands: token | verify | request <METHOD> <path> | ready-pr <o> <r> <n> | merge-pr <o> <r> <n> [method] | graphql");
-      process.exit(2);
+      process.exitCode = 2;
     }
-  } catch (e) { console.error("ERROR: " + e.message); process.exit(1); }
+  } catch (e) { console.error("ERROR: " + e.message); process.exitCode = 1; }
 }
+
+if (isMain) await main();
