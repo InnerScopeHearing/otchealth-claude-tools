@@ -905,13 +905,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T04:41:41.270Z
 - **Closed:** 2026-09-02T04:41:41.270Z
 
-### finding:FND-20260902-7cd1 severity:medium status:open | gh-app.mjs request truncates responses at exactly 64KB with no error, silently corrupting any list/count taken through it
+### finding:FND-20260902-7cd1 severity:medium status:fixed | gh-app.mjs request truncates responses at exactly 64KB with no error, silently corrupting any list/count taken through it
 
 - **Source audit doc:** session 2026-09-02 fleet PR recount
 - **Fix commit:** (none yet)
 - **Verified by:** Reproduced: GET /repos/InnerScopeHearing/flatstick/pulls?state=open&per_page=100 returns EXACTLY 65536 bytes and yields one parseable PR (number 267), while /search/issues total_count for the same query reports 8. A single PR with a large body fills the buffer, so grep/JSON.parse over the result reports 1 instead of 8 -- and JSON.parse fails outright with 'Unterminated string', which is at least loud, whereas grep-based counting fails SILENTLY and looks like a legitimate small number. I took three wrong fleet-wide PR counts through this path before the exact-65536 byte count gave it away. Impact: any agent using gh-app.mjs request for a list endpoint on a repo with verbose PR/issue bodies gets a truncated answer with no indication. Workarounds that work today: use /search/issues?q=...&per_page=1 and read total_count, or request narrower fields/pages. Real fix: have request either stream/paginate or FAIL LOUD on truncation rather than returning a valid-looking prefix. Same silent-success class as the eval-runner and fleet-medic incidents.
 - **Opened:** 2026-09-02T05:08:33.855Z
-- **Closed:** (open)
+- **Closed:** 2026-09-02T07:01:20.504Z
 
 ### finding:FND-20260902-8240 severity:medium status:fixed | CORRECTION to FND-20260902-7cd1: gh-app.mjs does not cap at 64KB; process.exit() races an async piped stdout write
 
