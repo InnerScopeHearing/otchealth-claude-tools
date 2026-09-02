@@ -138,12 +138,23 @@ export const RULES = [
   },
 ];
 
-/** Truncate `text` to at most `max` characters (default 120, matching the alert-snippet cap the
- *  locked design requires) on a whole-character boundary, appending an ellipsis marker when cut. */
+/** Truncate `text` so the RESULT is at most `max` units long (default 120, the alert-snippet cap the
+ *  locked design requires), cutting only on a whole-character boundary and appending an ellipsis
+ *  marker. Two bugs the first version had, both caught in review:
+ *   - it returned `slice(0, max)` PLUS an ellipsis, i.e. max + 1, breaking the cap it documented;
+ *   - `String.slice` cuts UTF-16 units, so it could split a surrogate pair and emit a lone half,
+ *     which is not a whole-character boundary and can render as a replacement glyph in the alert.
+ *  Iterating the string yields whole code points, and the ellipsis is paid for out of the budget
+ *  rather than added on top of it. */
 export function truncateSnippet(text, max = 120) {
   const s = String(text ?? "");
   if (s.length <= max) return s;
-  return `${s.slice(0, max)}…`;
+  let out = "";
+  for (const ch of s) {
+    if (out.length + ch.length > max - 1) break; // reserve one unit for the ellipsis
+    out += ch;
+  }
+  return `${out}…`;
 }
 
 /**
@@ -171,16 +182,33 @@ export function classify(rawText) {
  *  HTML) -- just enough to turn Intercom's `<div>...</div>`-wrapped message bodies into plain text so
  *  word-boundary regexes see real word boundaries instead of tag soup. */
 export function stripHtml(html) {
-  return String(html ?? "")
+  let s = String(html ?? "")
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li)>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
+    .replace(/<\/(p|div|li)>/gi, "\n");
+
+  // Strip tags to a FIXED POINT, not in one pass. A single pass leaves a fragment behind on nested
+  // or malformed markup -- "<<script>script>" becomes "<script>" -- and here that is not merely
+  // cosmetic: surviving angle-bracket soup changes where \b word boundaries fall, which is the one
+  // thing this function exists to get right. Text that keeps its markup can therefore hide a
+  // trigger word from the classifier, so an incomplete strip is a detection-evasion path in a
+  // SAFETY classifier. Terminates because each pass strictly shortens the string.
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/<[^>]*>/g, "");
+  } while (s !== prev);
+
+  // Decode entities with &amp; LAST. Decoding it first double-unescapes: the literal text
+  // "&amp;lt;" means "&lt;", but &amp;->& first turns it into "&lt;" and the next rule then turns
+  // that into "<", inventing a tag the author never wrote. Every other entity is decoded before it,
+  // so "&amp;" can only ever produce a literal ampersand.
+  return s
     .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&#39;/g, "'")
     .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, "&")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{2,}/g, "\n")
     .trim();

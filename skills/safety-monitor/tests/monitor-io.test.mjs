@@ -7,7 +7,6 @@ import {
   verifySafetyTag,
   applyTag,
   listConversationIds,
-  searchConversationIds,
   discoverConversationIds,
   isCustomerAuthor,
   isAlreadyTagged,
@@ -22,7 +21,6 @@ import {
 // consumed in order, for endpoints called more than once with different bodies e.g. pagination).
 function fakeRequest(routes) {
   const calls = [];
-  const counters = {};
   const fn = async (path, opts = {}) => {
     const method = opts.method || "GET";
     calls.push({ path, method, body: opts.body });

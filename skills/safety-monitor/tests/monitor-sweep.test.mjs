@@ -114,7 +114,14 @@ test("a single conversation's fetch failure is isolated: other conversations are
   assert.ok(summary.errors.some((e) => e.includes("broken") && e.includes("http-500")));
 });
 
-test("an SNS publish failure in --commit mode is a distinct error, but the tag write (which already succeeded) is not rolled back or hidden", async () => {
+test("an SNS publish failure in --commit mode leaves the conversation UNTAGGED, so a later run can retry instead of burying it", async () => {
+  // REWRITTEN 2026-09-02. The original asserted tagged:1 here -- it pinned the exact defect the auto
+  // critic caught. Old order was tag-then-alert, so a successful tag plus a failed alert produced a
+  // conversation that was tagged (hence skipped by isAlreadyTagged forever) and never alerted:
+  // permanently unalertable, silently, with later runs counting it under `alreadyTagged`
+  // indistinguishably from one that WAS alerted. Order is now alert-then-tag, so a failed alert
+  // writes nothing and the escalation stays visible. tagged:0 is not a relaxed assertion, it is the
+  // opposite claim, and it is the safe one.
   const req = fakeRequest({ ...baseRoutes(), "POST /conversations/A/tags": { ok: true, status: 200, json: {} } });
   const summary = await runSweep({
     commit: true,
@@ -124,12 +131,18 @@ test("an SNS publish failure in --commit mode is a distinct error, but the tag w
     log: () => {},
   });
   assert.equal(summary.ok, false);
-  assert.equal(summary.tagged, 1, "the tag genuinely was applied and that fact must still be visible");
   assert.equal(summary.alerted, 0);
+  assert.equal(summary.tagged, 0, "a failed alert must NOT leave a tag behind -- the tag is what hides it from every future run");
+  assert.equal(req.calls.filter((c) => c.path === "/conversations/A/tags").length, 0, "the tag endpoint must not be called at all once the alert failed");
   assert.ok(summary.errors.some((e) => e.includes("A") && e.includes("SNS publish failed")));
 });
 
-test("a tag-write failure in --commit mode skips the alert for that conversation rather than sending a mismatched one", async () => {
+test("a tag-write failure in --commit mode still ALERTS a human, and the error says so", async () => {
+  // REWRITTEN 2026-09-02 with the alert-then-tag reorder. The original asserted alerted:0 and
+  // snsCalled:false -- a failed tag suppressed the alert entirely, on an escalation already
+  // classified as a real match. Now the human is told first and a failing tag only means the next
+  // run tells them again. A duplicate alert is a visible annoyance; a suppressed one is the failure
+  // this monitor exists to prevent.
   const req = fakeRequest({ ...baseRoutes(), "POST /conversations/A/tags": { ok: false, status: 403, error: "http-403" } });
   let snsCalled = false;
   const summary = await runSweep({
@@ -139,10 +152,11 @@ test("a tag-write failure in --commit mode skips the alert for that conversation
     publishSnsAlert: async () => { snsCalled = true; return { ok: true }; },
     log: () => {},
   });
-  assert.equal(summary.ok, false);
+  assert.equal(summary.ok, false, "a failed tag is still a real error the run must report");
+  assert.equal(snsCalled, true, "the human MUST have been alerted before the tag was attempted");
+  assert.equal(summary.alerted, 1);
   assert.equal(summary.tagged, 0);
-  assert.equal(summary.alerted, 0);
-  assert.equal(snsCalled, false, "must not alert on a conversation this run failed to tag");
+  assert.ok(summary.errors.some((e) => e.includes("A") && /was alerted/i.test(e)), "the error must record that a human WAS alerted, so a reader does not assume it was dropped");
 });
 
 test("a classifier error is caught, reported as a DISTINCT message, and does not stop the rest of the run", async () => {
@@ -190,4 +204,32 @@ test("reconciliation counts are reported: a conversation found only via search s
   assert.equal(summary.discovery.union, 1);
   assert.equal(summary.matched.length, 1);
   assert.equal(summary.matched[0].id, "search-only");
+});
+
+test("an escalation whose alert failed is STILL detected on a later run (the permanently-unalertable regression)", async () => {
+  // The end-to-end form of the critic's high finding, and the one that would have caught it. Sweep
+  // twice over the same conversation with a failing alert and prove the second sweep still sees a
+  // live match rather than writing it off as handled. Under the old tag-then-alert order the second
+  // sweep reported alreadyTagged:1 and matched:0 -- one transient SNS failure and a real customer
+  // safety escalation was invisible from then on, with nothing anywhere saying so.
+  const routes = { ...baseRoutes(), "POST /conversations/A/tags": { ok: true, status: 200, json: {} } };
+  const opts = {
+    commit: true,
+    nowMs: () => NOW_MS,
+    publishSnsAlert: async () => ({ ok: false, error: "SNS publish failed: http-500" }),
+    log: () => {},
+  };
+
+  const first = await runSweep({ ...opts, intercomRequest: fakeRequest(routes) });
+  assert.equal(first.matched[0]?.id, "A", "first sweep must detect conversation A");
+  assert.equal(first.tagged, 0, "and must not tag it, because the alert failed");
+
+  // Second sweep sees the same conversation, still untagged because the first wrote nothing.
+  // NOTE on the alreadyTagged count: the shared fixture deliberately includes conversation B, which
+  // is already tagged, so this counter is 1 on EVERY sweep and 0 would be the wrong expectation
+  // (my first draft of this test asserted 0 and failed for that reason, not because of the code).
+  // The real invariant is that A must never JOIN that set on the strength of a failed alert.
+  const second = await runSweep({ ...opts, intercomRequest: fakeRequest(routes) });
+  assert.equal(second.matched[0]?.id, "A", "A must STILL be detected on a later run -- this is the entire point");
+  assert.equal(second.alreadyTagged, 1, "only the fixture's pre-tagged conversation B, never A");
 });

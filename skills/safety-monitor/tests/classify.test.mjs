@@ -201,3 +201,41 @@ test("stripHtml turns Intercom's wrapped message bodies into plain text with rea
   const r = classify(plain);
   assert.equal(r.matched, true, "the classifier must still see the real phrase once HTML is stripped");
 });
+
+// ---- review fixes, 2026-09-02 --------------------------------------------------------------------
+// Three defects found by the auto critic and CodeQL on PR #518. Each assertion below fails against
+// the pre-fix code, so they are locks rather than decoration.
+
+test("truncateSnippet's RESULT respects the cap -- the ellipsis comes out of the budget, not on top of it", () => {
+  const out = truncateSnippet("x".repeat(500), 120);
+  assert.equal(out.length, 120, "pre-fix this returned 121: slice(0,max) plus an ellipsis");
+  assert.ok(out.endsWith("…"));
+  assert.equal(truncateSnippet("short", 120), "short", "under the cap, text is returned untouched");
+});
+
+test("truncateSnippet never splits a surrogate pair into a lone half", () => {
+  // Astral chars are 2 UTF-16 units each, so a naive slice at an odd boundary cuts one in half.
+  const out = truncateSnippet("😀".repeat(50), 11);
+  assert.ok(out.length <= 11);
+  for (const ch of out.slice(0, -1)) assert.notEqual(ch.charCodeAt(0) >= 0xd800 && ch.charCodeAt(0) <= 0xdfff && ch.length === 1, true);
+  assert.equal([...out.slice(0, -1)].every((c) => c === "😀"), true, "only whole emoji survive the cut");
+});
+
+test("stripHtml removes tags to a FIXED POINT, so nested markup cannot leave a fragment behind", () => {
+  // A single pass leaves "<script>" behind on this input, which is a live tag opening. The property
+  // that matters is that NO "<" survives -- surviving angle brackets move \b word boundaries and can
+  // hide a trigger word from the classifier, which is an evasion path rather than cosmetics.
+  // (The residual literal text "script>" is fine: it is content, not markup, and my first draft of
+  // this test wrongly expected it to be stripped too.)
+  for (const input of ["<<script>script>alert", "<<div>div>hello<</p>/p>", "<<<b>b>b>x"]) {
+    assert.ok(!stripHtml(input).includes("<"), `no tag opening may survive: ${input} -> ${stripHtml(input)}`);
+  }
+  assert.equal(stripHtml("<p>plain</p>"), "plain", "ordinary markup still strips cleanly");
+});
+
+test("stripHtml decodes &amp; LAST, so an escaped entity is not double-unescaped into a tag", () => {
+  // The literal text "&amp;lt;" means "&lt;". Decoding &amp; first yields "&lt;" and the next rule
+  // turns that into "<", inventing markup the author never wrote.
+  assert.equal(stripHtml("a &amp;lt; b"), "a &lt; b");
+  assert.equal(stripHtml("Ben &amp; Jerry"), "Ben & Jerry", "an ordinary escaped ampersand still decodes");
+});

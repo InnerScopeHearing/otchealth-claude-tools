@@ -58,7 +58,7 @@
 // run)" and nothing is written or published.
 
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { awsRequest, canonicalQueryString } from "../kb-memory/sigv4.mjs";
+import { awsRequest } from "../kb-memory/sigv4.mjs";
 import { classify, stripHtml, truncateSnippet } from "./classify.mjs";
 
 // ---- constants (overridable via env for testing/ops; never via CLI flags -- these identify WHICH
@@ -439,21 +439,35 @@ export async function runSweep(opts = {}) {
 
     if (!commit) continue;
 
-    const tagRes = await applyTag(intercomRequest, id);
-    if (!tagRes.ok) {
-      summary.ok = false;
-      summary.errors.push(tagRes.error);
-      continue; // do not alert on a conversation we failed to tag -- a half-done action is worth surfacing as an error, not compounding it with a mismatched alert
-    }
-    summary.tagged++;
-
+    // ALERT FIRST, THEN TAG. This order is load-bearing; it was the other way round originally.
+    //
+    // The tag is what makes a conversation invisible to every future run -- isAlreadyTagged() short-
+    // circuits it before the classifier ever sees the text. So if the tag lands and the alert then
+    // fails, the escalation becomes permanently unalertable: marked as handled, no human ever told,
+    // and every later run counting it under `alreadyTagged` exactly like one that WAS alerted. The
+    // original run exits non-zero once, and after that the evidence is gone. For a customer-safety
+    // monitor that is the worst available outcome, and it is silent.
+    //
+    // Alerting first inverts the failure into the safe direction: alert succeeds, tag fails -> the
+    // conversation stays untagged, so the next run re-evaluates it, alerts AGAIN and retries the
+    // tag. A human is told twice. A duplicate alert is a cheap, visible annoyance; a missed one is
+    // precisely what this monitor exists to prevent. If the tag keeps failing (wrong or deleted tag
+    // id) every run re-alerts and exits non-zero -- noisy and loud, the correct direction here.
     const alertRes = await publishSnsAlert({ id, matches: evalResult.matches, snippet: evalResult.snippet, link });
     if (!alertRes.ok) {
       summary.ok = false;
       summary.errors.push(`conversation ${id}: ${alertRes.error}`);
-      continue;
+      continue; // left untagged on purpose, so the next run retries instead of burying it
     }
     summary.alerted++;
+
+    const tagRes = await applyTag(intercomRequest, id);
+    if (!tagRes.ok) {
+      summary.ok = false;
+      summary.errors.push(`${tagRes.error} (a human WAS alerted for conversation ${id}; the next run will alert again because the tag did not land)`);
+      continue;
+    }
+    summary.tagged++;
   }
 
   return summary;
