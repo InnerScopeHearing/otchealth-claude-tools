@@ -123,6 +123,17 @@ The old sweep only ever fail-opened -- any per-document error was logged and the
 `node skills/ocr-sweep/sweep.mjs` runs with these defaults. No Secret Manager / Key Vault credential
 is read by this file.
 
+## Region
+
+Textract only reads an `S3Object` from a bucket in the SAME region as the Textract endpoint it is
+called on. The sweep calls `textract.<AWS_REGION>.amazonaws.com` (default `us-east-1`), and all three
+buckets the MIRROR table maps these rooms to (`otchealth-finance-legal-dr-55c84f6b`,
+`otchealth-legal-personal-dr-55c84f6b`, and the commons `otchealth-brain-dr-55c84f6b`) are in
+`us-east-1` (verified 2026-09-03 with `aws s3api get-bucket-location`, `LocationConstraint` null).
+If a room is ever mirrored to a bucket in another region, run the sweep with `AWS_REGION` set to
+that bucket's region; there is no per-bucket region derivation in the code on purpose, because
+today there is exactly one region.
+
 ## IAM the job role needs (this skill does not touch IAM itself)
 
 Live state, verified with `aws iam list-role-policies` / `get-role-policy` on 2026-09-03:
