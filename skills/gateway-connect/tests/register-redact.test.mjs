@@ -55,8 +55,9 @@ test('register() survives the already-exists collision with one explicit local-s
   let adds = 0;
   const exec = (_file, args) => {
     calls.push(args.slice(0, 4).join(' '));
-    // A scope-less remove refuses when the name exists in more than one scope (verified 2026-09-03).
-    if (args[1] === 'remove' && !args.includes('-s')) throw cliError('  claude mcp remove gw -s local\n  claude mcp remove gw -s project', 1, args);
+    // The first local-scope remove finds nothing (a fresh cwd); every remove MUST be local-scoped.
+    if (args[1] === 'remove' && !(args.includes('-s') && args.includes('local'))) throw new Error(`unexpected non-local remove: ${args.join(' ')}`);
+    if (args[1] === 'remove' && adds === 0) throw cliError('No MCP server named "gw".', 1, args);
     if (args[1] === 'add' || args[1] === 'add-json') { adds += 1; if (adds === 1) throw cliError('MCP server gw already exists in local config', 1, args); }
     return '';
   };
@@ -93,4 +94,18 @@ test('source scan: the add is never run with stdio ignored, and the top-level ca
   assert.ok(!/stdio:\s*'ignore'/.test(body), 'register() must capture the CLI output, not ignore it');
   assert.match(body, /runClaude\(/);
   assert.match(SRC, /\[gateway-connect\] ERROR:', redactBearer\(/, 'the CLI entry point must redact before printing');
+});
+
+test('register() never issues a scope-less remove (it would delete the committed project .mcp.json entry)', () => {
+  const removes = [];
+  const exec = (_file, args) => { if (args[1] === 'remove') removes.push(args); return ''; };
+  register('gw', TOKEN, exec);
+  assert.ok(removes.length >= 1, 'a best-effort local remove precedes the add');
+  for (const r of removes) assert.deepEqual(r.slice(0, 4), ['mcp', 'remove', '-s', 'local'], `remove must be local-scoped: ${r.join(' ')}`);
+});
+
+test('source scan: no scope-less claude mcp remove anywhere in register()', () => {
+  const start = SRC.indexOf('export function register(');
+  const body = SRC.slice(start, SRC.indexOf('\n}\n', start) + 3);
+  assert.ok(!/\[\s*'mcp',\s*'remove',\s*mcpName\s*\]/.test(body), 'a scope-less remove reappeared in register()');
 });
