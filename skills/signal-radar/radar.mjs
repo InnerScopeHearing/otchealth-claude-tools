@@ -175,7 +175,13 @@ export async function runScan(opts = {}) {
     // ZERO signals reporting one persisted, silently, every 30 minutes. `persisted` now counts only
     // writes that actually returned success, so the summary line -- and any --json/dispatch consumer
     // reading it -- reflects what happened, not what was attempted.
-    try { await io.cosmosPutSignal({ id: s.id, owner: s.owner, ...s, escalate: d.escalate, consecutive: d.consecutive }); persisted++; }
+    try {
+      const put = await io.cosmosPutSignal({ id: s.id, owner: s.owner, ...s, escalate: d.escalate, consecutive: d.consecutive });
+      // cosmosPutSignal reports "not-configured" as a value, not a throw; a write that did not happen
+      // must never count as persisted, whichever way it says so.
+      if (put && put.ok === false) throw new Error(`put refused: ${put.reason || "unknown"}`);
+      persisted++;
+    }
     catch (e) { console.error(`  [warn] could not persist signal ${s.id}: ${e.message}`); }
 
     await io.posthogEmit("signal_detected", s.owner, { detector: s.detector, subject: s.subject, severity: s.severity, mnpi: s.mnpi, escalate: d.escalate, consecutive: d.consecutive });

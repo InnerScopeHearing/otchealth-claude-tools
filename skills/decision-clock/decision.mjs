@@ -308,7 +308,9 @@ export async function runSweep(opts = {}) {
   const anyBlocking = nudges.some((n) => n.blocking && n.blocking.length > 0);
 
   if (asJson) {
-    console.log(JSON.stringify({ ts: now, nudges, autoClosed: toAutoClose.map((r) => r.id), blocking: anyBlocking }, null, 2));
+    // Printed BEFORE the auto-close writes run, so this lists the CANDIDATES; the returned
+    // `autoClosed`/`autoCloseFailed` below are the actual outcomes.
+    console.log(JSON.stringify({ ts: now, nudges, autoCloseCandidates: toAutoClose.map((r) => r.id), blocking: anyBlocking }, null, 2));
   } else {
     console.log(`# decision-clock sweep ${now}  (${nudges.length} owner(s) with attention items; ${dispatching ? "DISPATCH" : "dry-run"})`);
     for (const n of nudges) console.log(`- ${n.owner}: ${n.count} item(s)${n.blocking && n.blocking.length ? ` [BLOCKING: ${n.blocking.join(", ")}]` : ""}`);
@@ -317,15 +319,28 @@ export async function runSweep(opts = {}) {
 
   // proceed: auto-close by policy timeout, unconditionally (not gated on --dispatch — this is a state
   // change driven by the timeout itself, distinct from "should we also ping someone about other rows").
+  // Every auto-close is a STATE WRITE, so its failure is tracked, reported, and fails the run: a
+  // swallowed replaceDoc error would otherwise leave the row open while the sweep reported it closed
+  // (and exited 0), the exact silent-success shape this port exists to remove.
+  const autoClosed = [];
+  const autoCloseFailed = [];
   for (const r of toAutoClose) {
     const note = `auto-resolved by terminal_policy=proceed after exceeding its terminal timeout (daysOverdue=${Math.round(r._class.daysOverdue)}, never ack'd)`;
     console.log(`[decision-clock] AUTO-CLOSE ${r.id} owner=${r.owner}: ${note}`);
     try {
       const found = await io.readDoc(CONTAINER, r.owner, r.id);
-      if (!found) { console.error(`  auto-close ${r.id} failed: not found under owner=${r.owner}`); continue; }
+      if (!found) { console.error(`  auto-close ${r.id} failed: not found under owner=${r.owner}`); autoCloseFailed.push({ id: r.id, error: "not found" }); continue; }
       const doc = { ...found.doc, status: "closed", closed_at: now, closed_by: "decision-clock-sweep-terminal-policy", closed_note: note };
       await io.replaceDoc(CONTAINER, r.owner, r.id, doc, found.etag);
-    } catch (e) { console.error(`  auto-close ${r.id} failed: ${e.message}`); }
+      autoClosed.push(r.id);
+    } catch (e) {
+      console.error(`  auto-close ${r.id} failed: ${e.message}`);
+      autoCloseFailed.push({ id: r.id, error: e.message });
+    }
+  }
+  if (autoCloseFailed.length) {
+    console.error(`[decision-clock] sweep: ${autoCloseFailed.length} auto-close state write(s) FAILED (${autoCloseFailed.map((f) => f.id).join(", ")}); those rows are still open. Exiting non-zero.`);
+    process.exitCode = 1;
   }
 
   const dispatchedOwners = [];
@@ -345,7 +360,7 @@ export async function runSweep(opts = {}) {
     process.exitCode = 1;
   }
 
-  return { ok: true, nudges, autoClosed: toAutoClose.map((r) => r.id), blocking: anyBlocking, dispatchedOwners };
+  return { ok: autoCloseFailed.length === 0, nudges, autoClosed, autoCloseFailed, blocking: anyBlocking, dispatchedOwners };
 }
 
 async function sweep() {
