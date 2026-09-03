@@ -1000,3 +1000,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T05:36:18.111Z
 - **Closed:** (open)
+
+### finding:FND-20260903-43c9 severity:low status:open | ocr-sweep MAX_DOCS_PER_RUN can overshoot by up to CONC-1: the bounded live run with MAX_DOCS_PER_RUN=5 CONC=2 processed 6 documents (budget checked before dispatch, in-flight workers not reserved); pages budget has the same shape
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-03-wave3-landing-and-gpt56-cutover.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T05:36:20.814Z
+- **Closed:** (open)
