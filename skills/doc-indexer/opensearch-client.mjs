@@ -36,8 +36,32 @@ export function rfc3986Encode(value) {
 }
 
 /** Canonicalize a URI path per SigV4: each segment individually percent-encoded, '/' preserved as a
- *  literal separator. An empty/absent path canonicalizes to '/'. */
+ *  literal separator. An empty/absent path canonicalizes to '/'.
+ *
+ *  `path` may ALSO be an array of RAW (unencoded) segment strings instead of one pre-joined string
+ *  -- use this form when a single logical path segment's VALUE itself contains a literal '/' or ':'
+ *  that must NOT be treated as a structural separator (e.g. a full AWS resource ARN used as a REST
+ *  path parameter, such as Bedrock's GetModelInvocationJob `{jobIdentifier}`). The plain-string form
+ *  cannot express this: `path.split("/")` has no way to tell "this slash is DATA" apart from "this
+ *  slash is a separator", so a segment value containing '/' gets torn into extra segments, and
+ *  pre-encoding the value yourself before calling this function does not help either -- the
+ *  per-segment `rfc3986Encode` pass below would then re-encode the already-`%`-escaped characters a
+ *  SECOND time (`%3A` -> `%253A`). Found live 2026-09-03 (the enrich.mjs Bedrock BATCH pilot):
+ *  passing a job's full ARN pre-joined into a string produced a wire path AWS's own router could not
+ *  match at all (`404 UnknownOperationException`, the ARN's internal '/' becoming a spurious extra
+ *  segment); pre-encoding the ARN first produced `400 "The provided ARN is invalid"` instead (the
+ *  double-encoding above). Passing `["model-invocation-job", jobArn]` as an array instead resolved
+ *  it -- live-verified against the real Bedrock control plane the same day (HTTP 200, a real job's
+ *  full status/details returned) -- because each array element is encoded EXACTLY ONCE regardless of
+ *  what characters it contains: the caller has explicitly told this function "this whole string is
+ *  one atomic segment", removing the ambiguity the string form cannot resolve on its own.
+ *  `doubleEncodeUri()`/`signingUriFor()` below compose with this correctly with NO changes of their
+ *  own needed: the array form only matters for the FIRST (inner) canonicalization pass, whose output
+ *  is always an ordinary joined string by the time any second pass sees it. See
+ *  tests/opensearch-client-sigv4.test.mjs for the regression lock (an independently hand-computed
+ *  signature, matching this file's existing convention for every other SigV4 edge case). */
 export function canonicalUri(path) {
+  if (Array.isArray(path)) return "/" + path.map(rfc3986Encode).join("/");
   if (!path || path === "/") return "/";
   return path.split("/").map(rfc3986Encode).join("/");
 }

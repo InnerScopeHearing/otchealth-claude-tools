@@ -27,6 +27,8 @@ import {
   VALID_PROVIDERS, DEFAULT_PROVIDER, BEDROCK_DEFAULT_MODEL,
   defaultModelFor, ratesFor, estCostFor, extractJsonObject,
   BEDROCK_TOOL_NAME, BEDROCK_TOOL_SCHEMA, callBedrockChat,
+  buildConverseBatchLine, parseBedrockBatchModelOutput,
+  BEDROCK_BATCH_DISCOUNT_DEFAULT, bedrockBatchDiscount, estBedrockBatchCostFor,
 } from "../enrich-llm.mjs";
 
 const execFileP = promisify(execFile);
@@ -190,6 +192,107 @@ test("callBedrockChat: defaults `converse` to the real bedrock-client.mjs conver
   } finally {
     for (const k of ENV_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
   }
+});
+
+// =========================================================================================
+// Bedrock BATCH adapter (2026-09-03): buildConverseBatchLine / parseBedrockBatchModelOutput /
+// the batch cost model. Pure functions, no network -- proves the "no forced tool-use, plain-text
+// JSON prompt, Converse-format record shape" contract this file's own header documents against
+// the live AWS batch-inference documentation cited there.
+// =========================================================================================
+
+test("buildConverseBatchLine: {recordId, modelInput} shape matches AWS's documented Converse batch input record exactly -- system/messages/inferenceConfig, NO toolConfig, NO modelId", () => {
+  const line = buildConverseBatchLine({ recordId: "shopify-library/00-index.md", system: "the system prompt", user: "the document text", maxTokens: 1200, temperature: 0 });
+  assert.deepEqual(line, {
+    recordId: "shopify-library/00-index.md",
+    modelInput: {
+      system: [{ text: "the system prompt" }],
+      messages: [{ role: "user", content: [{ text: "the document text" }] }],
+      inferenceConfig: { maxTokens: 1200, temperature: 0 },
+    },
+  });
+  assert.equal(line.modelInput.toolConfig, undefined, "batch inference does not support tool calling -- a toolConfig here would be silently ignored at best, so it must never be built");
+  assert.equal(line.modelInput.modelId, undefined, "modelId is a JOB-LEVEL field on CreateModelInvocationJob, never per-record");
+});
+
+test("buildConverseBatchLine: recordId is coerced to a string (a catalog path with '/' is a plain JSON string value here, never part of a URL/path)", () => {
+  const line = buildConverseBatchLine({ recordId: 12345, system: "s", user: "u" });
+  assert.equal(line.recordId, "12345");
+  assert.equal(typeof line.recordId, "string");
+  const withSlashes = buildConverseBatchLine({ recordId: "a/b/c d.md", system: "s", user: "u" });
+  assert.equal(withSlashes.recordId, "a/b/c d.md");
+});
+
+test("buildConverseBatchLine: requires a non-empty recordId", () => {
+  assert.throws(() => buildConverseBatchLine({ system: "s", user: "u" }), /recordId is required/);
+  assert.throws(() => buildConverseBatchLine({ recordId: "", system: "s", user: "u" }), /recordId is required/);
+});
+
+test("buildConverseBatchLine: defaults maxTokens 1200 / temperature 0, matching every other lane's deterministic-extraction posture", () => {
+  const line = buildConverseBatchLine({ recordId: "x", system: "s", user: "u" });
+  assert.deepEqual(line.modelInput.inferenceConfig, { maxTokens: 1200, temperature: 0 });
+});
+
+test("buildConverseBatchLine: missing system/user default to empty strings, never throw / never leak 'undefined' into the wire body", () => {
+  const line = buildConverseBatchLine({ recordId: "x" });
+  assert.deepEqual(line.modelInput.system, [{ text: "" }]);
+  assert.deepEqual(line.modelInput.messages, [{ role: "user", content: [{ text: "" }] }]);
+});
+
+test("parseBedrockBatchModelOutput: extracts the plain TEXT content block (never a toolUse block -- batch responses never contain one) and Converse usage field names", () => {
+  const modelOutput = { output: { message: { role: "assistant", content: [{ text: '{"doc_title":"Batch Fixture","confidence":"high"}' }] } }, stopReason: "end_turn", usage: { inputTokens: 900, outputTokens: 45 } };
+  const res = parseBedrockBatchModelOutput(modelOutput);
+  assert.equal(res.text, '{"doc_title":"Batch Fixture","confidence":"high"}');
+  assert.deepEqual(res.usage, { prompt_tokens: 900, completion_tokens: 45 });
+  // The load-bearing downstream property: this text round-trips through the SAME
+  // extractJsonObject() every other lane already uses -- no batch-specific parser exists.
+  assert.deepEqual(extractJsonObject(res.text), { doc_title: "Batch Fixture", confidence: "high" });
+});
+
+test("parseBedrockBatchModelOutput: a markdown-fenced or prose-prefixed reply still salvages via the SAME extractJsonObject() fallback every other lane uses -- no new parsing strategy exists for batch", () => {
+  const modelOutput = { output: { message: { content: [{ text: 'Here is the JSON:\n{"doc_title":"fenced"}\nDone.' }] } }, usage: { inputTokens: 10, outputTokens: 5 } };
+  assert.deepEqual(extractJsonObject(parseBedrockBatchModelOutput(modelOutput).text), { doc_title: "fenced" });
+});
+
+test("parseBedrockBatchModelOutput: missing/malformed modelOutput resolves to text:'' (a CONTENT question, handled by the caller's existing _parseFailed path) -- never throws", () => {
+  assert.deepEqual(parseBedrockBatchModelOutput(undefined), { text: "", usage: { prompt_tokens: 0, completion_tokens: 0 } });
+  assert.deepEqual(parseBedrockBatchModelOutput({}), { text: "", usage: { prompt_tokens: 0, completion_tokens: 0 } });
+  assert.deepEqual(parseBedrockBatchModelOutput({ output: { message: { content: [] } } }), { text: "", usage: { prompt_tokens: 0, completion_tokens: 0 } });
+  assert.equal(extractJsonObject(parseBedrockBatchModelOutput(undefined).text), null, "downstream, this becomes _parseFailed exactly like an empty interactive response already does");
+});
+
+test("parseBedrockBatchModelOutput: usage defaults to 0/0 when the field is absent, never NaN/undefined", () => {
+  const res = parseBedrockBatchModelOutput({ output: { message: { content: [{ text: "{}" }] } } });
+  assert.deepEqual(res.usage, { prompt_tokens: 0, completion_tokens: 0 });
+});
+
+test("bedrockBatchDiscount: defaults to 50% (BEDROCK_BATCH_DISCOUNT_DEFAULT), the documented Bedrock batch discount", () => {
+  assert.equal(BEDROCK_BATCH_DISCOUNT_DEFAULT, 0.5);
+  assert.equal(bedrockBatchDiscount({}), 0.5);
+});
+
+test("bedrockBatchDiscount: env-overridable via ENRICH_BEDROCK_BATCH_DISCOUNT, clamped-sane (an invalid value falls back to the default rather than corrupting the cost estimate)", () => {
+  assert.equal(bedrockBatchDiscount({ ENRICH_BEDROCK_BATCH_DISCOUNT: "0.3" }), 0.3);
+  assert.equal(bedrockBatchDiscount({ ENRICH_BEDROCK_BATCH_DISCOUNT: "not-a-number" }), 0.5);
+  assert.equal(bedrockBatchDiscount({ ENRICH_BEDROCK_BATCH_DISCOUNT: "-1" }), 0.5, "an out-of-[0,1]-range value falls back to the default, never silently applied");
+  assert.equal(bedrockBatchDiscount({ ENRICH_BEDROCK_BATCH_DISCOUNT: "1.5" }), 0.5);
+});
+
+test("estBedrockBatchCostFor: applies the discount ON TOP of ratesFor('bedrock'), never a second independent rate table -- an on-demand rate override is automatically reflected", () => {
+  // 1,000,000 in + 1,000,000 out at the default $1.00/$5.00 bedrock rate = $6.00 on-demand;
+  // 50% batch discount -> $3.00.
+  assert.equal(estBedrockBatchCostFor(1_000_000, 1_000_000, {}), 3.0);
+  // Overriding the ON-DEMAND rate changes the batch estimate too (same base, still discounted).
+  const overridden = estBedrockBatchCostFor(1_000_000, 1_000_000, { ENRICH_BEDROCK_RATE_IN: "2", ENRICH_BEDROCK_RATE_OUT: "10" });
+  assert.equal(overridden, 6.0, "(2+10) on-demand * 0.5 discount = 6.0");
+});
+
+test("estBedrockBatchCostFor: a custom discount env var changes the estimate, independent of the base rate", () => {
+  assert.equal(estBedrockBatchCostFor(1_000_000, 1_000_000, { ENRICH_BEDROCK_BATCH_DISCOUNT: "0.25" }), 4.5, "(1+5) on-demand * (1-0.25) = 4.5");
+});
+
+test("estBedrockBatchCostFor: zero tokens costs exactly $0", () => {
+  assert.equal(estBedrockBatchCostFor(0, 0, {}), 0);
 });
 
 // =========================================================================================

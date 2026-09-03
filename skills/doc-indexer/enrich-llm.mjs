@@ -161,3 +161,102 @@ export async function callBedrockChat({ modelId, region, system, user, maxTokens
     },
   };
 }
+
+// ============================ Bedrock BATCH adapter (2026-09-03) ============================
+// Batch inference does NOT support tool calling or structured output (see
+// bedrock-batch-client.mjs's own header for the live-verified AWS doc citation), so unlike
+// callBedrockChat() above (which forces a tool call), the batch lane sends the SAME plain-text
+// "output ONLY a JSON object" prompt enrich.mjs's enrichSystemPrompt() already builds for the
+// openai/azure lanes, submitted with modelInvocationType:"Converse" (see
+// bedrock-batch-client.mjs's createModelInvocationJob), and gets back an ORDINARY Converse text
+// content block -- no toolUse block exists in a batch response at all. Both functions below are
+// pure so the "does a batch line/response round-trip correctly" contract is unit-testable without
+// touching S3 or the Bedrock control plane.
+
+/**
+ * Build ONE Converse-format batch input line: `{recordId, modelInput}` where `modelInput` matches
+ * exactly the Converse REQUEST body shape a real-time `converseJson()` call would send (system as
+ * an array of `{text}` blocks, one user message, `inferenceConfig.maxTokens`), MINUS `toolConfig`
+ * (unsupported in batch -- see this file's header) and MINUS `modelId` (a job-level field on
+ * CreateModelInvocationJob, never per-record -- verbatim from the live "Example Converse input"
+ * doc, fetched 2026-09-03, which shows no `modelId` in the record). `recordId` is coerced to a
+ * string (Bedrock's recordId, like OpenAI's custom_id, is a plain JSON string field with no
+ * documented charset restriction -- it never appears inside a URL/path the way a model id does, so
+ * enrich.mjs's catalog PATHS, which can contain `/`, spaces, or unicode, are safe to use directly;
+ * see enrich.mjs's own `buildAndSubmitBedrockBatch()` for why recordId = the catalog row's path,
+ * matching the OpenAI batch lane's `custom_id: r.path` convention exactly, so both lanes' result
+ * maps key on the identical thing). `temperature` defaults to 0, matching every other lane in this
+ * file (deterministic extraction, not creative generation).
+ */
+export function buildConverseBatchLine({ recordId, system, user, maxTokens = 1200, temperature = 0 } = {}) {
+  if (recordId == null || recordId === "") throw new Error("buildConverseBatchLine: recordId is required");
+  return {
+    recordId: String(recordId),
+    modelInput: {
+      system: [{ text: system || "" }],
+      messages: [{ role: "user", content: [{ text: user || "" }] }],
+      inferenceConfig: { maxTokens, temperature },
+    },
+  };
+}
+
+/**
+ * Parse ONE Bedrock batch OUTPUT line's `modelOutput` field (present only when the line has no
+ * `error` -- see bedrock-batch-client.mjs's parseBatchOutputJsonl) into the SAME `{text, usage}`
+ * shape callBedrockChat()/chatJson() already return, so downstream code (enrich.mjs's
+ * `J(res.text) || {_parseFailed:true}`, the `_usage` accumulation) needs ZERO batch-specific
+ * branch -- a batch result and an interactive result look identical by the time either reaches
+ * `callEnrichLLM()`'s caller.
+ *
+ * `modelOutput` is the Converse API's own response body shape (verbatim from
+ * batch-inference-results.md, fetched 2026-09-03: "For Converse jobs, the format matches the
+ * response body of the Converse API"), i.e. `{output:{message:{content:[...]}}, usage:{...},
+ * stopReason}` -- the SAME shape converseJsonCore() already parses for the interactive lane,
+ * except the content block here is `{text}` (an ordinary assistant reply), never `{toolUse}`,
+ * since batch never receives a tool call. Missing/malformed `modelOutput` (should not happen for a
+ * line without an `error`, but a defensive default costs nothing) resolves to `text: ""`, which
+ * `extractJsonObject("")` turns into `null`, which becomes `_parseFailed` exactly like a genuinely
+ * empty interactive response already does -- never a throw, since this is a CONTENT shape
+ * question, not a transport failure (the transport-failure/`_callFailed` case is the recordId
+ * being MISSING or carrying an `error` field, handled by the caller before this function is ever
+ * invoked, not by this function itself).
+ */
+export function parseBedrockBatchModelOutput(modelOutput) {
+  const blocks = modelOutput?.output?.message?.content;
+  const textBlock = Array.isArray(blocks) ? blocks.find((b) => b && typeof b.text === "string") : null;
+  const usage = modelOutput?.usage || {};
+  return {
+    text: textBlock ? textBlock.text : "",
+    usage: { prompt_tokens: usage.inputTokens || 0, completion_tokens: usage.outputTokens || 0 },
+  };
+}
+
+// ============================ Bedrock BATCH cost model ============================
+// Bedrock's documented batch discount is 50% off the on-demand rate (verified live 2026-09-03,
+// see bedrock-batch-client.mjs's header for the citation). Applied on TOP of ratesFor("bedrock")
+// above, never as a second, independent rate table -- so a change to the on-demand rate (a real
+// price change, or ENRICH_BEDROCK_RATE_IN/OUT env override for a different model) is automatically
+// reflected in the batch estimate too, and the two can never quietly disagree about the BASE price,
+// only about the discount applied to it.
+export const BEDROCK_BATCH_DISCOUNT_DEFAULT = 0.5;
+
+/** The discount FACTOR (0..1, applied as a multiplier -- 0.5 means "half price") for Bedrock batch
+ *  inference, env-overridable via ENRICH_BEDROCK_BATCH_DISCOUNT for the day AWS changes the
+ *  published percentage. Deliberately NOT provider-generic (unlike ratesFor/estCostFor): batch
+ *  inference's discount is a Bedrock-specific commercial term, not a concept OpenAI's/Azure's rate
+ *  constants share (their $/1M rates already reflect their own top-line price with no separate
+ *  "batch mode" toggle in THIS codebase). */
+export function bedrockBatchDiscount(env = process.env) {
+  const v = parseFloat(env.ENRICH_BEDROCK_BATCH_DISCOUNT ?? "");
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : BEDROCK_BATCH_DISCOUNT_DEFAULT;
+}
+
+/** $ estimate for tin/tout tokens under Bedrock's BATCH rate (the on-demand rate from
+ *  ratesFor("bedrock", env) times bedrockBatchDiscount(env)). Pure aside from reading `env`. Used
+ *  ONLY for the `--dry-run` cost preview and the post-batch summary line -- never for anything that
+ *  gates whether a batch is submitted. */
+export function estBedrockBatchCostFor(tin, tout, env = process.env) {
+  const [rin, rout] = ratesFor("bedrock", env);
+  const discount = bedrockBatchDiscount(env);
+  return ((tin / 1e6) * rin + (tout / 1e6) * rout) * (1 - discount);
+}

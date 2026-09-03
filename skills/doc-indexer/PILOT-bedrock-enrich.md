@@ -1,12 +1,13 @@
 # Bounded pilot: enrich.mjs's Bedrock provider lane
 
-Status: **code shipped, provider is opt-in, nothing scheduled.** `ENRICH_PROVIDER=openai` (or the
-older `ENRICH_LLM_PROVIDER`) remains the default for every caller that does not explicitly pass
-`--llm-provider bedrock` / set `ENRICH_PROVIDER=bedrock`. `job/librarian.sh`'s master `ENRICH=1`
-per-room opt-in switch is untouched by this change and stays exactly as it already is today
-(finance and legal-company are OFF per otchealth-cto/CLAUDE.md's 2026-08-19 "OPEN -- Matt's call
-before the big backfill" note). **This document is the pilot the CTO runs before flipping either
-room's schedule onto Bedrock, or onto ENRICH at all.** Nothing in this PR arms a schedule.
+Status: **code shipped (interactive lane + batch lane), both opt-in, nothing scheduled.**
+`ENRICH_PROVIDER=openai` (or the older `ENRICH_LLM_PROVIDER`) remains the default for every caller
+that does not explicitly pass `--llm-provider bedrock` / set `ENRICH_PROVIDER=bedrock`.
+`job/librarian.sh`'s master `ENRICH=1` per-room opt-in switch is untouched by this change and stays
+exactly as it already is today (finance and legal-company are OFF per otchealth-cto/CLAUDE.md's
+2026-08-19 "OPEN -- Matt's call before the big backfill" note). **This document is the pilot the CTO
+runs before flipping either room's schedule onto Bedrock, or onto ENRICH at all.** Nothing in this
+PR (or its 2026-09-03 batch-lane follow-on, see its own section below) arms a schedule.
 
 ## Why this exists
 
@@ -176,6 +177,86 @@ throttling is observed.
 - Spot-check several `verify`-ed documents by hand across the batch, not only the ones that got
   flagged -- a model can be confidently wrong without tripping the confidence gate.
 
+## The Bedrock BATCH lane (`--bedrock-batch`, shipped 2026-09-03) -- run this AFTER the pilot above
+
+The interactive pilot above proves the MODEL's answers are good. This section proves the BATCH
+MECHANISM (a genuinely different code path: a control-plane job + S3 staging, not a per-document
+HTTP call) actually works, on a small, cheap, real submission, before ever pointing it at the full
+finance/legal-company backfill. See `SKILL.md`'s "Bedrock BATCH lane" section for the full
+flag/cost-model/resume reference; this section is the step-by-step runbook.
+
+### Prerequisites (one-time, before the first real batch submission)
+
+1. An S3 bucket dedicated to batch staging (never a document room's own bucket). Store its name as
+   `ENRICH_BEDROCK_BATCH_BUCKET` (env) or the fleet secret `bedrock-batch-s3-bucket`.
+2. An IAM role Bedrock assumes to run the job -- trust policy + S3/`bedrock:InvokeModel` permissions
+   per `SKILL.md`'s citations to `batch-iam-sr.md`/`batch-inference-permissions.md`. Store its ARN as
+   `ENRICH_BEDROCK_BATCH_ROLE_ARN` (env) or the fleet secret `bedrock-batch-role-arn`.
+3. Confirm the chosen model id supports batch inference in the target region as a CROSS-REGION
+   INFERENCE PROFILE (not single-region) -- `us.anthropic.claude-haiku-4-5-20251001-v1:0` (this
+   file's/`enrich-llm.mjs`'s default) is listed that way for `us-east-1` as of 2026-09-03; re-check
+   <https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-supported.html> if this
+   pilot runs much later or against a different model.
+4. **A real per-job MINIMUM record count applies** -- OBSERVED 100 for this exact account/model/
+   region on 2026-09-03 (a genuine 2-record submission was accepted at `CreateModelInvocationJob`
+   time, then ended `Failed` with "contains less records (2) than the required minimum of: 100").
+   AWS's own docs do not publish a fixed number, only "check your service quota", so re-verify if
+   this account/model/region changes. Every `--limit` below is sized comfortably above it.
+
+### Step 1: a network-free dry run, on a small slice
+
+```bash
+node enrich.mjs run --profile finance --search-backend opensearch --llm-provider bedrock --bedrock-batch --dry-run --limit 20
+```
+
+Confirms the row count, the built JSONL's size, and the ESTIMATED cost (a deliberate upper bound --
+see `SKILL.md`) before anything touches the network -- `--dry-run` never submits, so the minimum
+record count does not apply here; a small `--limit` is fine purely to sanity-check the shape and
+size of what would be built. `enrich.mjs` also prints its own `BEDROCK_BATCH WARN` line whenever the
+row count is under the observed 100-record minimum, dry run or not, as a second, harder-to-miss
+reminder before Step 2's real submission.
+
+### Step 2: a real batch submission, sized above the minimum
+
+```bash
+node enrich.mjs run --profile finance --search-backend opensearch --llm-provider bedrock --bedrock-batch --limit 150 --reindex
+```
+
+`--limit 150` is deliberately above the observed 100-record minimum (Prerequisite 4) with margin,
+and re-targets the first 150 rows the interactive pilot above already enriched (via OpenAI and via
+the interactive Bedrock lane) -- a real, if not perfectly 1:1, comparison sample (the interactive
+pilot's own Step 2 only sampled 20 of these 150 for a hand comparison; spot-check a similar handful
+here). This call blocks until the batch reaches a terminal state (Bedrock batch jobs are
+asynchronous and can take meaningfully longer than the interactive lane -- live-observed 2026-09-03:
+a 100-record submission was still `Validating`/`InProgress` more than 20 minutes after submission,
+so budget minutes to hours, not seconds; the process polls at `ENRICH_BEDROCK_BATCH_POLL_MS`,
+default 60s, and prints a status line on every poll). **If this process needs to be interrupted
+(Ctrl-C, a session timeout, a killed container), that is safe** -- the job keeps running on AWS
+regardless, and rerunning the EXACT SAME command resumes polling it rather than submitting a
+duplicate (see `SKILL.md`'s "Resuming an interrupted batch").
+
+**Inspect after this run**, the same checks Step 2/3 of the interactive pilot already describe
+(`verify` each path, the `llm: N/N calls ok` line, `_REVIEW/metadata-review-queue.csv`), plus:
+- The exact wall-clock time from submission to `Completed` -- this is the real number to plan a
+  large backfill's timeline around, not an assumption.
+- AWS's own Bedrock console/billing for this batch job, cross-checked against the run's printed
+  `~$X.XXX` / `tokens_in=.../tokens_out=...` line (now REAL counts from the job's own
+  `manifest.json.out`, not an estimate).
+
+### Step 3: the real bounded backfill (only after Steps 1-2 look right)
+
+```bash
+node enrich.mjs run --profile finance --search-backend opensearch --llm-provider bedrock --bedrock-batch --limit 300
+```
+
+Targets the next ~300 distinct eligible rows (the first 150 are already enriched at their current
+sha256 from Step 2). This is the exact command to scale up from once Steps 1-2 are trusted; run it
+again with a larger `--limit` (never omitting `--limit` against an unbounded room, and always well
+above the 100-record minimum -- see `ENRICH_BEDROCK_BATCH_MAX_RECORDS`'s own 2000-row safety cap in
+`SKILL.md`) for a larger reviewed
+batch, and run `legal-company`'s own version of this section separately, afterward, exactly as the
+interactive pilot's own closing note says.
+
 ## After the pilot
 
 **Do not flip `ENRICH_PROVIDER=bedrock` (or arm `ENRICH=1`) on `otchealth-job-librarian-finance` or
@@ -185,7 +266,10 @@ definition, or any EventBridge schedule -- that is a deliberate scope boundary (
 tests + this runbook only), not an oversight. When the CTO is ready to arm it, the change is a
 task-definition/job-env edit (`ENRICH=1` plus `ENRICH_PROVIDER=bedrock`, optionally
 `ENRICH_BEDROCK_MODEL`/`ENRICH_BEDROCK_RATE_IN`/`ENRICH_BEDROCK_RATE_OUT` if the defaults above are
-not what's wanted), not a code change.
+not what's wanted), not a code change. The SAME applies to the batch lane above: arming it on a
+schedule additionally means setting `ENRICH_BEDROCK_BATCH=1` plus the staging-bucket/role-ARN
+env vars (or fleet secrets) this section's Prerequisites named -- still a job-env edit, still gated
+on the CTO having reviewed a real submission's results first.
 
 `legal-company` carries INND MNPI; run its own bounded pilot (same steps, `--profile legal`, default
 container `company` -- never `--container personal`, which is hard-refused regardless of provider,

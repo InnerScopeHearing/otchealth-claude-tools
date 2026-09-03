@@ -84,6 +84,7 @@
 //   node enrich.mjs ensure-schema --profile commerce [--domain-pack commerce]
 //   node enrich.mjs run           --profile commerce [--limit n] [--concurrency 4] [--reindex]
 //   node enrich.mjs run           --profile finance --llm-provider bedrock --limit 5   (see PILOT-bedrock-enrich.md before a real backfill)
+//   node enrich.mjs run           --profile finance --llm-provider bedrock --bedrock-batch --dry-run --limit 200  (preview a Bedrock BATCH submission, no network call made -- see SKILL.md's "Bedrock BATCH lane" section)
 //   node enrich.mjs reindex-room  --profile commerce [--full-reset] [--wait-minutes 3]
 //   node enrich.mjs verify        --profile commerce --path "shopify-library/00-index.md"
 //
@@ -158,11 +159,25 @@ import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } fro
 // header). callBedrockChat() reuses deep-pass.mjs's ALREADY-MERGED bedrock-client.mjs converseJson
 // (PR #472) -- the fleet's one Bedrock Converse signer/transport -- rather than a second one; see
 // this file's own "LLM PROVIDER" section below for why the Bedrock lane is opt-in only.
-import { VALID_PROVIDERS, DEFAULT_PROVIDER, defaultModelFor, estCostFor, extractJsonObject, callBedrockChat } from "./enrich-llm.mjs";
+import {
+  VALID_PROVIDERS, DEFAULT_PROVIDER, defaultModelFor, estCostFor, extractJsonObject, callBedrockChat,
+  buildConverseBatchLine, parseBedrockBatchModelOutput, estBedrockBatchCostFor, bedrockBatchDiscount,
+} from "./enrich-llm.mjs";
 // OPENAI_BATCH (2026-09-02): the shared Batch API lane -- see setup/model-routing.mjs's own header
 // for the full contract. Bedrock is UNTOUCHED by this (buildAndSubmitEnrichBatch/BATCH_PREFETCH below
 // are only ever reached when LLM_PROVIDER === "openai").
 import { isBatchEnabled, buildBatchLine, submitBatch, awaitBatch, assertAllBatchResultsPresent } from "../../setup/model-routing.mjs";
+// BEDROCK_BATCH (2026-09-03): the control-plane job submit/poll + S3-staging client for enrich.mjs's
+// `--bedrock-batch` lane -- see bedrock-batch-client.mjs's own header for the full contract (why a
+// SEPARATE mechanism from OPENAI_BATCH above, why no tool-forcing, why "bedrock" as the SigV4 service
+// name for the control-plane host). buildAndSubmitBedrockBatch()/BATCH_PREFETCH below are only ever
+// reached when LLM_PROVIDER === "bedrock" && BEDROCK_BATCH; openai/azure and the interactive Bedrock
+// per-call lane are all untouched by this.
+import {
+  createModelInvocationJob, getModelInvocationJob, isBedrockBatchTerminal,
+  BEDROCK_BATCH_TERMINAL_FAILURE_STATUSES, BEDROCK_BATCH_MIN_TIMEOUT_HOURS,
+  putBatchInputFile, listBatchOutputFiles, getBatchOutputFileText, parseBatchOutputJsonl, parseManifest,
+} from "./bedrock-batch-client.mjs";
 import { logPrefixForText } from "../../setup/prompt-shape.mjs";
 import { recordOpenAIUsage } from "../../setup/openai-usage.mjs";
 
@@ -215,6 +230,35 @@ const pos = argv.filter((a) => !a.startsWith("--"));
 const cmd = pos[0] || "help";
 const REINDEX = flags.has("--reindex");
 const FULL_RESET = flags.has("--full-reset");
+// BEDROCK_BATCH (2026-09-03): opt-in, only meaningful with --llm-provider bedrock. See
+// bedrock-batch-client.mjs's header and this file's "BEDROCK BATCH MODE" section (near
+// buildAndSubmitBedrockBatch) for the full contract. Mirrors OPENAI_BATCH's flag/env shape
+// (isBatchEnabled) in SPIRIT but not name/mechanism -- see that section for why they cannot share
+// one implementation. `--dry-run` has no effect outside this lane today.
+const truthyFlag = (v) => /^(1|true|yes|on)$/i.test(String(v ?? "").trim());
+const BEDROCK_BATCH = flags.has("--bedrock-batch") || truthyFlag(process.env.ENRICH_BEDROCK_BATCH || process.env.BEDROCK_BATCH);
+const DRY_RUN = flags.has("--dry-run");
+// A safety rail, not a tuning knob: caps a SINGLE Bedrock batch submission independently of
+// --limit (which a caller may simply forget to pass). Deliberately env-only, no CLI flag, and
+// deliberately NOT applied to the OpenAI batch lane or the interactive per-call path -- neither of
+// those can accidentally stage an entire privileged room's document text into a separate S3
+// bucket and submit it as one irreversible, hours-long, billed AWS job the way a bare
+// `--bedrock-batch` with no --limit against an unbounded `todo` could. Raise it deliberately (a
+// reviewed decision) for a real large backfill; never as a default and never on a schedule -- see
+// this file's own SCOPE note near the top of this header and SKILL.md's Bedrock BATCH section.
+const BEDROCK_BATCH_MAX_RECORDS = parseInt(process.env.ENRICH_BEDROCK_BATCH_MAX_RECORDS || "2000", 10) || 2000;
+const BEDROCK_BATCH_POLL_MS = parseInt(process.env.ENRICH_BEDROCK_BATCH_POLL_MS || "60000", 10) || 60000;
+const BEDROCK_BATCH_TIMEOUT_HOURS = Math.min(
+  168,
+  Math.max(BEDROCK_BATCH_MIN_TIMEOUT_HOURS, parseInt(process.env.ENRICH_BEDROCK_BATCH_TIMEOUT_HOURS || String(BEDROCK_BATCH_MIN_TIMEOUT_HOURS), 10) || BEDROCK_BATCH_MIN_TIMEOUT_HOURS),
+);
+// This process's OWN client-side wait ceiling before it gives up POLLING (and throws, leaving the
+// resume marker in place -- see buildAndSubmitBedrockBatch's RESUME doc comment). Distinct from
+// BEDROCK_BATCH_TIMEOUT_HOURS, which is the job's OWN server-side timeout told to AWS at
+// submission. Defaults to the job timeout plus a 2h buffer, so this process's own patience
+// normally outlasts the job's -- a genuinely non-terminal job past its own timeout becomes
+// "Expired" (a terminal status this file handles directly), not a client-side give-up.
+const BEDROCK_BATCH_MAX_WAIT_MS = parseInt(process.env.ENRICH_BEDROCK_BATCH_MAX_WAIT_MS || "", 10) || (BEDROCK_BATCH_TIMEOUT_HOURS + 2) * 3600000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TEXT_PREFIX = "_TEXT/";
@@ -930,6 +974,285 @@ async function buildAndSubmitEnrichBatch(todo) {
   }
 }
 
+// ============================== BEDROCK BATCH MODE (2026-09-03, --bedrock-batch) ==============================
+// Opt-in: --bedrock-batch (or ENRICH_BEDROCK_BATCH/BEDROCK_BATCH env), Bedrock provider only
+// (LLM_PROVIDER === "bedrock"; openai/azure and the interactive per-call Bedrock lane are all
+// untouched -- see OPENAI_BATCH above for the openai lane's own, DIFFERENTLY-SHAPED batch
+// mechanism). Mirrors buildAndSubmitEnrichBatch()'s role in cmdRun() exactly: called once before
+// the worker pool starts, pre-populates BATCH_PREFETCH (and BATCH_TEXT_CACHE for the sidecar text
+// it already had to fetch) so enrichOne()'s call into callEnrichLLM() resolves instantly from the
+// cache instead of making a live call -- see that function's own header for the shared mechanics
+// this reuses UNCHANGED (worker pool, lock refresh cadence, incremental catalog flush, MAX_MIN
+// budget, per-row OpenSearch/Azure sync). A row this function does NOT populate (see the RESUME
+// note below) falls through to a normal LIVE interactive Bedrock call in the worker pool, exactly
+// as if batch mode were off for that one row -- a deliberate, harmless degradation, not a gap.
+//
+// WHY A SEPARATE MECHANISM FROM OPENAI_BATCH: OpenAI's batch API is a single hosted-file
+// upload/poll cycle against api.openai.com; Bedrock's is a CONTROL-PLANE job
+// (CreateModelInvocationJob) that reads/writes an S3 location the CALLER stages, and its
+// request/response shape must be Converse-format PROMPT-based JSON, never forced tool-use (batch
+// inference does not support tool calling or structured output -- see bedrock-batch-client.mjs's
+// header for the live AWS documentation citation this was verified against, fetched 2026-09-03).
+// Sharing one function across both providers would be the same false-economy this file's own
+// STORAGE_BACKEND/SEARCH_BACKEND header warns against ("two independent axes... conflating them
+// produced the original wrong diagnosis").
+//
+// RESUME (an interrupted batch): the state a resume needs -- the job's id and exactly which
+// catalog paths were actually submitted to it -- is persisted to
+// `_CATALOG/.enrich-bedrock-batch.json` in the room's OWN storage (getBuf/putBuf/delBuf, the SAME
+// primitives `_CATALOG/.enrich.lock` already uses -- and already excluded from enrichment by
+// isPipelineInternal's "_CATALOG/" prefix) the moment CreateModelInvocationJob returns a jobArn,
+// i.e. BEFORE any polling starts. A Bedrock batch job runs entirely server-side once submitted
+// (its lifecycle is not tied to this process's connection), so "this process died or was killed
+// while polling" and "the AWS job is still running" is the normal, expected combination this file
+// must survive: the NEXT invocation of `enrich.mjs run --llm-provider bedrock --bedrock-batch`
+// finds the marker, RE-ATTACHES to the existing job (never submits a duplicate, never re-uploads
+// the input), and picks up polling/reconciliation where the last run left off. The marker is
+// deleted only once every row it named has been reconciled (success, per-line error, or
+// missing-from-output) -- i.e. once there is nothing left to resume. A genuinely AMBIGUOUS outcome
+// (this process's OWN poll loop gives up after BEDROCK_BATCH_MAX_WAIT_MS while the AWS job is
+// still non-terminal) THROWS and leaves the marker in place ON PURPOSE, so a rerun resumes polling
+// the SAME job rather than the ambiguity being silently discarded or a duplicate job being
+// created.
+const BEDROCK_BATCH_MARKER_PATH = "_CATALOG/.enrich-bedrock-batch.json";
+async function readBedrockBatchMarker() {
+  const buf = await getBuf(BEDROCK_BATCH_MARKER_PATH);
+  if (!buf) return null;
+  try { return JSON.parse(buf.toString("utf8")); } catch { return null; } // a corrupt marker is treated as absent -- see the call site's own comment on why this is safe (a fresh submission with a stale job orphaned server-side is a cheap, self-resolving outcome, never a data-loss one)
+}
+async function writeBedrockBatchMarker(marker) {
+  await putBuf(BEDROCK_BATCH_MARKER_PATH, Buffer.from(JSON.stringify(marker, null, 2), "utf8"), "application/json");
+}
+async function deleteBedrockBatchMarker() {
+  await delBuf(BEDROCK_BATCH_MARKER_PATH);
+}
+
+/** Submit-time config only (bucket/role/S3 prefix) -- resolved via fleetSecret(), so it is ONLY
+ *  called when actually about to submit a NEW job, never on a pure resume-and-collect path (which
+ *  needs nothing beyond the persisted marker's own `bucket`/`outputPrefix` plus the top-level
+ *  poll/timeout consts above). This means a resume survives even if these env vars/secrets are
+ *  unset in whatever environment happens to run the resuming invocation. */
+async function resolveBedrockBatchSubmitConfig() {
+  const bucket = process.env.ENRICH_BEDROCK_BATCH_BUCKET || (await fleetSecret("bedrock-batch-s3-bucket"));
+  const roleArn = process.env.ENRICH_BEDROCK_BATCH_ROLE_ARN || (await fleetSecret("bedrock-batch-role-arn"));
+  if (!bucket) throw new Error("missing ENRICH_BEDROCK_BATCH_BUCKET (env) or bedrock-batch-s3-bucket (fleet secret) -- the S3 bucket a Bedrock batch job stages its input/output in. See SKILL.md's Bedrock BATCH section for what to provision.");
+  if (!roleArn) throw new Error("missing ENRICH_BEDROCK_BATCH_ROLE_ARN (env) or bedrock-batch-role-arn (fleet secret) -- the IAM role Bedrock assumes to run the batch job (trust: bedrock.amazonaws.com; permissions: s3:GetObject/PutObject/ListBucket on the staging bucket, plus bedrock:InvokeModel on the model/inference-profile). See SKILL.md's Bedrock BATCH section.");
+  const prefixRoot = (process.env.ENRICH_BEDROCK_BATCH_PREFIX || "doc-indexer-enrich-batches/").replace(/^\/+/, "").replace(/\/*$/, "/");
+  return { bucket, roleArn, prefixRoot };
+}
+
+async function buildAndSubmitBedrockBatch(todo) {
+  // Defense in depth (belt-and-suspenders). cmdRun() already refuses --profile legal --container
+  // personal before this function (or resolveStorage()/resolveLlm()) is ever reached, for every
+  // provider -- see cmdRun()'s own comment. Re-checking HERE means this specific, higher-blast-
+  // radius code path (it stages document TEXT into a SEPARATE S3 bucket, not just an in-memory LLM
+  // call) can never depend SOLELY on a caller upstream remembering to check first; see
+  // isLegalPersonalRoom's own doc comment in pipeline-paths.mjs for why the --container override
+  // makes this a real, reachable surface, not a hypothetical one.
+  const effectiveContainer = containerOverride || (STORAGE_PROFILES[PROFILE] || STORAGE_PROFILES.commerce).azContainer;
+  if (isLegalPersonalRoom(PROFILE, effectiveContainer)) {
+    throw new Error("BEDROCK_BATCH REFUSED: --profile legal --container personal (attorney-client-privileged) may never reach an LLM call or be staged to an external S3 location in this pipeline. This is a hard, code-enforced exclusion, not a flag.");
+  }
+
+  const rowsNeedingEnrich = todo.filter((r) => needsEnrich(r));
+  if (!rowsNeedingEnrich.length) return;
+  if (rowsNeedingEnrich.length > BEDROCK_BATCH_MAX_RECORDS) {
+    throw new Error(`BEDROCK_BATCH: ${rowsNeedingEnrich.length} row(s) need enrichment, above the ${BEDROCK_BATCH_MAX_RECORDS}-row safety cap for one Bedrock batch submission (ENRICH_BEDROCK_BATCH_MAX_RECORDS). Use --limit to bound this run, or raise the cap deliberately for a reviewed large backfill -- never as a default, and never on a schedule. This cap exists specifically so a bare --bedrock-batch with no --limit cannot accidentally stage an entire privileged room in one irreversible, hours-long, billed AWS job.`);
+  }
+
+  // ---- build the JSONL lines in memory. This part runs for EVERY invocation, dry-run included,
+  // so a dry run's row count / size / cost preview is computed from the real request bodies that
+  // would actually be submitted, not a separate estimate. ----
+  const lines = [];
+  for (const r of rowsNeedingEnrich) {
+    let text;
+    try {
+      text = await fetchSidecarText(r.path);
+      BATCH_TEXT_CACHE.set(r.path, text);
+    } catch (e) {
+      // Mirrors buildAndSubmitEnrichBatch()'s identical per-row sidecar-fetch-failure handling: a
+      // bad blob must not cost every OTHER document's enrichment in this batch.
+      BATCH_PREFETCH.set(r.path, { _callFailed: true, _usage: { tin: 0, tout: 0 }, _err: `sidecar text fetch failed: ${String(e.message).slice(0, 160)}` });
+      continue;
+    }
+    const needSummary = !computeRichSummaryAvailable(r);
+    logPrefixForText("doc-indexer-enrich", enrichSystemPrompt(DOMAIN, needSummary));
+    lines.push(buildConverseBatchLine({
+      recordId: r.path,
+      system: enrichSystemPrompt(DOMAIN, needSummary),
+      user: buildEnrichContext(r, text),
+      maxTokens: 1200,
+      temperature: 0,
+    }));
+  }
+  if (!lines.length) return; // every row's sidecar-text fetch failed; nothing left to submit
+
+  const jsonlText = lines.map((l) => JSON.stringify(l)).join("\n") + "\n";
+
+  // OBSERVED (not documented as a fixed universal number -- see bedrock-batch-client.mjs's own
+  // header for the full finding): a real 2-record submission on 2026-09-03 was accepted at
+  // CreateModelInvocationJob time but ended Failed with "contains less records (2) than the
+  // required minimum of: 100". Warn, never hard-block, on a batch under 100 records -- this
+  // account/region/model's observed minimum could differ elsewhere or change, and hard-gating on
+  // an unverified-as-universal number would be its own kind of overclaim; a real submission below
+  // it still fails cleanly via this function's own terminal-FAILURE handling (job.message is
+  // printed), just later and after a real S3 upload + job creation than a warning here catches.
+  if (lines.length < 100) {
+    console.error(`[enrich] BEDROCK_BATCH WARN: only ${lines.length} record(s) -- Bedrock batch inference has a real per-job minimum record count (OBSERVED 100 for this account/model/region on 2026-09-03; AWS's own docs do not publish a fixed number, only "check your service quota"). A submission under that minimum is likely to be accepted here and then end in a Failed status with a "less records... than the required minimum" message. Raise --limit, or accept the risk for a deliberate small validation run.`);
+  }
+
+  if (DRY_RUN) {
+    // ESTIMATE ONLY, and a deliberately CONSERVATIVE upper bound, not a quote: input tokens are
+    // approximated from the built request bodies' character count (~4 chars/token, a common rough
+    // ratio, not a real tokenizer), and output tokens are assumed at the FULL maxTokens cap (1200)
+    // for every single record, which real usage is normally well under -- most extractions finish
+    // long before the cap. This is intentionally pessimistic (never understates cost) rather than
+    // precise; see estBedrockBatchCostFor's own doc comment for the discount this applies on top.
+    const approxInputChars = lines.reduce((sum, l) => sum + JSON.stringify(l.modelInput).length, 0);
+    const approxInputTokens = Math.ceil(approxInputChars / 4);
+    const approxOutputTokensCeiling = lines.length * 1200;
+    const est = estBedrockBatchCostFor(approxInputTokens, approxOutputTokensCeiling);
+    console.log(`[enrich] BEDROCK_BATCH DRY RUN: would submit ${lines.length} record(s), ~${(jsonlText.length / 1024).toFixed(1)} KB JSONL, model=${MODEL}.`);
+    console.log(`[enrich] BEDROCK_BATCH DRY RUN: ESTIMATED cost ~$${est.toFixed(3)} -- a CONSERVATIVE UPPER BOUND (input ~${approxInputTokens} tokens from char-count/4; output assumed at the full 1200-token cap per record, real usage is normally well under this; ${(bedrockBatchDiscount() * 100).toFixed(0)}% batch discount already applied on top of the on-demand rate).`);
+    console.log("[enrich] BEDROCK_BATCH DRY RUN: nothing submitted -- no S3 upload and no CreateModelInvocationJob call were made.");
+    const existingMarker = await readBedrockBatchMarker();
+    if (existingMarker) {
+      console.log(`[enrich] BEDROCK_BATCH DRY RUN: NOTE a batch job is already recorded in flight for this room (jobId=${existingMarker.jobId}, submitted ${existingMarker.submittedAt}) -- run WITHOUT --dry-run to poll/collect it; that run will resume the EXISTING job, not submit this preview as a new one.`);
+    }
+    return;
+  }
+
+  let marker = await readBedrockBatchMarker();
+  if (marker) {
+    console.error(`[enrich] BEDROCK_BATCH: resuming an already-submitted job (jobId=${marker.jobId}, submitted ${marker.submittedAt}) -- not submitting a new one.`);
+  } else {
+    const cfg = await resolveBedrockBatchSubmitConfig();
+    const stamp = Date.now().toString(36);
+    const rand = crypto.randomBytes(3).toString("hex");
+    const roomTag = roomName().slice(0, 30).replace(/-+$/, "");
+    const label = `${roomName()}-${stamp}-${rand}`; // S3 folder segment -- no length constraint that matters here
+    const inputKey = `${cfg.prefixRoot}${label}/input.jsonl`;
+    const outputPrefix = `${cfg.prefixRoot}${label}/output/`;
+    // jobName is a STRICTER, SEPARATE constraint from the S3 label above: CreateModelInvocationJob
+    // requires 1-63 chars, must start alphanumeric, and only allows [a-zA-Z0-9+.-] thereafter (API
+    // reference, fetched 2026-09-03) -- roomTag/stamp/rand are already within that charset by
+    // construction, so the trailing replace below is defense-in-depth, not load-bearing.
+    const jobName = `enrich-${roomTag}-${stamp}-${rand}`.replace(/[^a-zA-Z0-9+.-]/g, "-").slice(0, 63);
+    console.error(`[enrich] BEDROCK_BATCH: uploading ${lines.length} record(s) (~${(jsonlText.length / 1024).toFixed(1)} KB) to s3://${cfg.bucket}/${inputKey} ...`);
+    await putBatchInputFile({ bucket: cfg.bucket, key: inputKey, jsonlText });
+    const { jobArn, jobId } = await createModelInvocationJob({
+      jobName, roleArn: cfg.roleArn, modelId: MODEL,
+      inputS3Uri: `s3://${cfg.bucket}/${inputKey}`,
+      outputS3Uri: `s3://${cfg.bucket}/${outputPrefix}`,
+      timeoutDurationInHours: BEDROCK_BATCH_TIMEOUT_HOURS,
+      region: BEDROCK_REGION,
+    });
+    marker = { jobArn, jobId, submittedAt: new Date().toISOString(), recordIds: lines.map((l) => l.recordId), bucket: cfg.bucket, outputPrefix };
+    // Persisted BEFORE any polling starts -- see this section's own RESUME doc comment for why
+    // that ordering is load-bearing (a crash right after this point must still be resumable).
+    await writeBedrockBatchMarker(marker);
+    console.error(`[enrich] BEDROCK_BATCH: job ${jobId} submitted (${jobArn}). Polling every ${Math.round(BEDROCK_BATCH_POLL_MS / 1000)}s (this process's own max wait: ${(BEDROCK_BATCH_MAX_WAIT_MS / 3600000).toFixed(1)}h) -- this process may be killed and resumed safely; the job itself runs server-side regardless.`);
+  }
+
+  // ---- poll until terminal, or until this process's own patience (BEDROCK_BATCH_MAX_WAIT_MS) runs
+  // out. A genuinely non-terminal job past this process's own wait ceiling THROWS (ambiguous
+  // outcome -- never silently treated as success or failure) and leaves the marker in place so a
+  // rerun resumes polling the SAME job. ----
+  const pollStart = Date.now();
+  let job;
+  for (;;) {
+    // jobIdentifier MUST be the full jobArn, never marker.jobId (the short id) -- live-verified
+    // 2026-09-03 against a real job that a bare short id is rejected with a 400 "The provided ARN
+    // is invalid" even though the API reference's own documented pattern technically allows one;
+    // see getModelInvocationJob()'s own doc comment in bedrock-batch-client.mjs for the full story.
+    job = await getModelInvocationJob({ jobIdentifier: marker.jobArn, region: BEDROCK_REGION });
+    console.error(`[enrich] BEDROCK_BATCH: job ${marker.jobId} status=${job.status} processed=${job.processedRecordCount ?? "?"}/${job.totalRecordCount ?? "?"}`);
+    if (isBedrockBatchTerminal(job.status)) break;
+    if (Date.now() - pollStart > BEDROCK_BATCH_MAX_WAIT_MS) {
+      throw new Error(`BEDROCK_BATCH: gave up waiting on job ${marker.jobId} after ${(BEDROCK_BATCH_MAX_WAIT_MS / 60000).toFixed(0)} minutes (last status "${job.status}") -- the job is very likely still running on AWS. Rerun this exact command to resume polling; the marker at ${BEDROCK_BATCH_MARKER_PATH} was left in place on purpose.`);
+    }
+    // Best-effort: a failed refresh here never aborts the wait -- acquireLock()'s own 15-min TTL is
+    // the real safety net against a genuinely stuck/crashed run holding the lock forever.
+    await refreshLock().catch(() => {});
+    await sleep(BEDROCK_BATCH_POLL_MS);
+  }
+
+  if (BEDROCK_BATCH_TERMINAL_FAILURE_STATUSES.has(job.status)) {
+    // A total job failure: mirrors the OpenAI batch lane's own awaitBatch() hard-throw-on-terminal-
+    // failure posture (never returns partial results on a Failed/Stopped/Expired batch) -- this
+    // propagates out of cmdRun() entirely, aborting the whole run before the per-row worker pool
+    // starts, the correct posture for "the batch infrastructure itself is broken" rather than a
+    // per-row quality problem. The marker is deliberately NOT deleted here: it is diagnosable
+    // evidence (jobId, AWS's own failure message) worth keeping until a human looks at it; delete
+    // ${BEDROCK_BATCH_MARKER_PATH} manually once the failure has been investigated, or the next run
+    // will re-poll this same terminal status and hit this same throw again.
+    throw new Error(`BEDROCK_BATCH: job ${marker.jobId} ended in terminal FAILURE status "${job.status}"${job.message ? `: ${job.message}` : ""}. Nothing from this batch was applied. The marker at ${BEDROCK_BATCH_MARKER_PATH} was left in place as evidence.`);
+  }
+
+  // ---- collect + reconcile. By this point job.status is Completed or PartiallyCompleted (the
+  // ONLY two statuses isBedrockBatchTerminal() admits that are not also a hard-failure status). ----
+  const outputFiles = await listBatchOutputFiles({ bucket: marker.bucket, prefix: marker.outputPrefix });
+  const manifestFile = outputFiles.find((f) => /manifest\.json\.out$/.test(f.name));
+  let manifest = null;
+  if (manifestFile) {
+    try { manifest = parseManifest(await getBatchOutputFileText({ bucket: marker.bucket, key: manifestFile.name })); } catch { /* non-fatal -- see parseManifest's own doc comment: the real per-record reconciliation below does not depend on this */ }
+  }
+  const outputLinesByRecordId = new Map();
+  for (const f of outputFiles) {
+    if (f === manifestFile) continue;
+    const text = await getBatchOutputFileText({ bucket: marker.bucket, key: f.name });
+    for (const line of parseBatchOutputJsonl(text)) {
+      if (line.recordId != null) outputLinesByRecordId.set(String(line.recordId), line);
+    }
+  }
+
+  // Reconcile against the INTERSECTION of "what this run still actually needs" (rowsNeedingEnrich,
+  // recomputed fresh from the live catalog every run) and "what was actually submitted to THIS
+  // job" (marker.recordIds). A recordId outside that intersection is either already handled by
+  // some other means since submission, or was never part of this submission at all (it appeared in
+  // the catalog after a RESUMED job's original submission -- see this section's RESUME doc comment)
+  // -- either way it is correctly left unset here for the normal live-call fallback, never force-
+  // reconciled against output that was never generated for it.
+  const stillNeeded = new Set(rowsNeedingEnrich.map((r) => r.path));
+  const toReconcile = (marker.recordIds || []).filter((id) => stillNeeded.has(id));
+  let ok = 0, errored = 0, missing = 0;
+  const missingSample = [];
+  for (const recordId of toReconcile) {
+    if (BATCH_PREFETCH.has(recordId)) continue; // already marked _callFailed above (sidecar fetch failure)
+    const line = outputLinesByRecordId.get(recordId);
+    if (!line) {
+      // MISSING FROM OUTPUT ENTIRELY -- the "short/mismatched result set" case this function exists
+      // to handle without silently discarding it. NEVER marked enriched; retried on the next run.
+      missing++;
+      if (missingSample.length < 5) missingSample.push(recordId);
+      BATCH_PREFETCH.set(recordId, { _callFailed: true, _usage: { tin: 0, tout: 0 }, _err: `missing from Bedrock batch output (job ${marker.jobId} ended status=${job.status}): recordId not present in any output file` });
+      continue;
+    }
+    if (line.error) {
+      errored++;
+      BATCH_PREFETCH.set(recordId, { _callFailed: true, _usage: { tin: 0, tout: 0 }, _err: `Bedrock batch line error: ${(line.error.errorMessage || JSON.stringify(line.error))}`.slice(0, 200) });
+      continue;
+    }
+    ok++;
+    const { text, usage } = parseBedrockBatchModelOutput(line.modelOutput);
+    const parsed = J(text) || { _parseFailed: true };
+    parsed._usage = { tin: usage.prompt_tokens, tout: usage.completion_tokens };
+    BATCH_PREFETCH.set(recordId, parsed);
+  }
+  if (missing > 0) {
+    console.error(`[enrich] BEDROCK_BATCH: ${missing} record(s) had NO result at all in job ${marker.jobId}'s output (job status=${job.status}) -- NOT marked enriched, will be retried on the next run: ${missingSample.join(", ")}${missing > missingSample.length ? ", ..." : ""}`);
+  }
+  if (errored > 0) console.error(`[enrich] BEDROCK_BATCH: ${errored} record(s) returned a per-line error from Bedrock -- NOT marked enriched, will be retried on the next run.`);
+  console.error(`[enrich] BEDROCK_BATCH: job ${marker.jobId} reconciled -- ${ok} ok, ${errored} errored, ${missing} missing, of ${toReconcile.length} requested (job status=${job.status}${manifest ? `; AWS manifest: ${manifest.successRecordCount}/${manifest.totalRecordCount} succeeded` : ""}).`);
+
+  // Every named row has now been reconciled one way or another (ok/errored/missing) -- nothing
+  // left to resume, so the marker is cleared. A row that is STILL pending (should not happen once
+  // job.status is terminal, but defensively: if it somehow were, leaving the marker around would
+  // be actively wrong here since AWS itself says the job is done) never occurs by construction of
+  // the loop above (every id in toReconcile gets exactly one outcome).
+  await deleteBedrockBatchMarker();
+}
+
 // ============================ run command ============================
 async function cmdRun() {
   // HARD, code-enforced exclusion (2026-08-29): checked FIRST, before resolveStorage()/resolveLlm()
@@ -965,6 +1288,20 @@ async function cmdRun() {
     // to before this lever existed. See buildAndSubmitEnrichBatch()'s own header for the full contract.
     if (LLM_PROVIDER === "openai" && isBatchEnabled("doc-indexer-enrich")) {
       await buildAndSubmitEnrichBatch(todo);
+    } else if (LLM_PROVIDER === "bedrock" && BEDROCK_BATCH) {
+      // BEDROCK_BATCH (2026-09-03): off by default (the state of every job today). See
+      // buildAndSubmitBedrockBatch()'s own header for the full contract, including --dry-run.
+      await buildAndSubmitBedrockBatch(todo);
+      // --dry-run's WHOLE point is "make no network call, submit nothing, enrich nothing" -- but
+      // BATCH_PREFETCH is deliberately left untouched by the dry-run branch above (there is
+      // nothing to prefetch when nothing was submitted), so without this early return the worker
+      // pool below would proceed exactly as if batch mode were off and quietly fall through to a
+      // REAL, LIVE, billed interactive Bedrock call per row -- the exact opposite of what --dry-run
+      // promised, and a genuinely dishonest dry run (see this section's own header for why a
+      // caller not in BATCH_PREFETCH degrades to a live call, which is the correct behavior EVERY
+      // other time but not this one). Scoped to this branch specifically: --dry-run has no
+      // documented effect outside the Bedrock batch lane, so it changes nothing else here.
+      if (DRY_RUN) { console.log("[enrich] --dry-run: stopping here (see the BEDROCK_BATCH DRY RUN lines above) -- no document was processed, called, or enriched."); return; }
     }
     let next = 0, since = 0;
     const start = Date.now();
@@ -1204,6 +1541,7 @@ flags: --profile finance|legal|commerce|commons --domain-pack <name> --azure-acc
        --limit n --concurrency n --max-minutes n --model <id> --reindex
        --llm-provider openai|azure|bedrock (default openai; also ENRICH_PROVIDER/ENRICH_LLM_PROVIDER)
        --bedrock-region r (default us-east-1; also BEDROCK_REGION) -- see PILOT-bedrock-enrich.md before using bedrock on a real backfill
+       --bedrock-batch (also ENRICH_BEDROCK_BATCH/BEDROCK_BATCH=1) -- Bedrock batch inference (~half price, 24h+ turnaround), 'run' only, requires --llm-provider bedrock; --dry-run shows what would be submitted + an estimated cost without submitting; see SKILL.md's "Bedrock BATCH lane" section
        --search-backend azure|opensearch (default azure; opensearch supported by 'run' and 'verify' only)`);
     process.exit(2);
   }
