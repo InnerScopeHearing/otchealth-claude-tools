@@ -356,6 +356,79 @@ export function runJudgeBatch(tasks, answerById, { dep, apiKey } = {}) {
   return runOneBatch(lines, "judge verdict", { apiKey });
 }
 
+// REASONING-EXHAUSTION RECOVERY (2026-09-03, FND-20260903-8c23) -----------------------------------
+// Batch mode has NO retry-within-the-batch mechanism (unlike the synchronous escalate-then-retry
+// paths elsewhere in this file), so awaitBatch() records a persona-answer line that burned its whole
+// max_completion_tokens budget on hidden reasoning (finish_reason=length, empty visible content) as
+// an infra-failure error -- correctly classified, but the golden task is then simply LOST for this
+// run (main()'s per-task loop throws "batch persona-answer error: ..." and skips it, exactly like
+// any other batch error). The nightly eval genuinely lost a task this way (run 33775653832,
+// 2026-09-03, task "lifecycle-reactivation"). This recovers it: re-run ONLY the affected task(s)
+// through the exact synchronous path chat() already uses for the openai provider (callChatOpenAI's
+// own internal retry+escalation, up to 4 tries, with a throttle-triggered fallback to the fallback
+// model -- mirroring chat()'s own try/catch line for line) instead of module-private chat() itself,
+// so this stays testable with a mocked fetch and explicit fake credentials, the same convention
+// runOneBatch/runPersonaBatch/runJudgeBatch above already establish for exactly this reason.
+
+/** isReasoningExhaustedBatchResult(r) -> true exactly when awaitBatch() classified this
+ *  Map<custom_id, {error, content, raw}> entry as the reasoning-exhaustion infra failure --
+ *  reconstructed by applying model-routing.mjs's own truncatedEmpty() to the SAME raw batch-line
+ *  choice that made awaitBatch() classify it that way in the first place (see that function's
+ *  `else if (truncatedEmpty(choice))` branch), never by string-matching the error text (wording can
+ *  drift; the underlying condition is the source of truth). Deliberately NARROW: a per-line API
+ *  error (model_not_found, content filter, rate limit, ...) has `line.error` set and returns false
+ *  immediately; a genuine empty answer with finish_reason:"stop" is not `truncatedEmpty` (that
+ *  requires finish_reason==="length") and also returns false -- both must be reported exactly as
+ *  they are today, never recovered. */
+export function isReasoningExhaustedBatchResult(r) {
+  const line = r?.raw;
+  if (!line || line.error) return false;
+  const respBody = line.response?.body;
+  const choice = respBody?.choices?.[0];
+  const content = choice?.message?.content;
+  if (!respBody || content == null) return false;
+  return truncatedEmpty(choice);
+}
+
+/**
+ * recoverReasoningExhaustedBatchAnswers(tasks, batchedAnswers, { apiKey, dep, fbApiKey, fbDep }) ->
+ * Promise<void>. Mutates `batchedAnswers` IN PLACE for any task whose entry is the reasoning-
+ * exhaustion class (see isReasoningExhaustedBatchResult above) and whose synchronous recovery
+ * attempt succeeds -- replacing it with a normal `{error: null, content, raw}` entry so it flows
+ * into the judge exactly like a batch line that succeeded the first time. AT MOST ONE synchronous
+ * attempt per affected task (no loop, no recursion; callChatOpenAI already retries+escalates
+ * internally, mirroring chat()'s own fallback-on-throttle for parity with the ordinary synchronous
+ * path). A task whose recovery ALSO fails is left with its ORIGINAL batchedAnswers entry untouched,
+ * so main()'s per-task loop reports the exact same honest infra-failure it does today -- a second
+ * failure is never masked as success. Zero exhausted tasks -> returns immediately with zero extra
+ * calls and zero log output, byte-identical to before this fix existed.
+ *
+ * MUST be called BEFORE `answerById`/the judge batch are built (see this file's BATCH MODE call
+ * site) -- a recovery landing after the judge batch is submitted never reaches the judge.
+ */
+export async function recoverReasoningExhaustedBatchAnswers(tasks, batchedAnswers, { apiKey, dep, fbApiKey, fbDep } = {}) {
+  const exhausted = tasks.filter((t) => isReasoningExhaustedBatchResult(batchedAnswers.get(t.id)));
+  if (!exhausted.length) return;
+  const recoveredIds = [];
+  for (const t of exhausted) {
+    const { system, user } = personaPromptFor(t);
+    try {
+      let content;
+      try { content = await callChatOpenAI(apiKey, dep, system, user, 4000, 4); }
+      catch (e) { if (e.throttled && fbDep && fbDep !== dep) content = await callChatOpenAI(fbApiKey, fbDep, system, user, 4000, 5); else throw e; }
+      batchedAnswers.set(t.id, { error: null, content, raw: batchedAnswers.get(t.id)?.raw });
+      recoveredIds.push(t.id);
+    } catch {
+      // Synchronous recovery failed too -- leave the ORIGINAL batchedAnswers entry (the honest
+      // infra-failure awaitBatch() already produced) untouched. Never mask a second failure as
+      // success; main()'s existing per-task catch reports it exactly as it does today.
+    }
+  }
+  const exhaustedIds = exhausted.map((t) => t.id);
+  const stillFailedIds = exhaustedIds.filter((id) => !recoveredIds.includes(id));
+  console.error(`[agent-evals] OPENAI_BATCH: reasoning-exhaustion recovery (batch line(s) burned their whole token budget on hidden reasoning, finish_reason=length, no visible output) -- recovered via synchronous retry: [${recoveredIds.join(", ") || "none"}]${stillFailedIds.length ? `; still failed after synchronous retry: [${stillFailedIds.join(", ")}]` : ""}`);
+}
+
 // The CLI driver. Wrapped in a function (2026-08-29, alongside the flex-lane adoption above) and
 // guarded by isMain below -- purely a test-safety refactor (mirrors critic-pass/run.mjs's and
 // mine-hard-negatives.mjs's existing isMain pattern in this same toolkit) so a test can
@@ -373,10 +446,16 @@ async function main() {
   // and the two `let`s below stay null forever -- the per-task loop below then takes the EXACT
   // pre-existing synchronous code path, byte-identical to before this lever existed.
   const BATCH_MODE = LLM_PROVIDER === "openai" && isBatchEnabled("agent-evals");
-  let batchedAnswers = null; // Map<task.id, {error, content}> from runPersonaBatch(), or null in sync mode
+  let batchedAnswers = null; // Map<task.id, {error, content}> from runPersonaBatch(), or null in sync mode -- recoverReasoningExhaustedBatchAnswers() below may mutate individual entries in place
   let batchedJudged = null;  // Map<task.id, {met,score,notes}> from runJudgeBatch(), or null when not batching the judge
   if (BATCH_MODE) {
     batchedAnswers = await runPersonaBatch(tasks, { dep: DEP, apiKey: KEY });
+    // FND-20260903-8c23: recover any reasoning-exhausted batch line via a single synchronous retry
+    // BEFORE answerById/the judge batch are built below -- ordering is load-bearing (a recovery
+    // landing after the judge batch is submitted never reaches the judge). Mutates batchedAnswers in
+    // place, so this also benefits the synchronous NOVA_JUDGE_MODEL per-task judge() dispatch further
+    // down (it reads this SAME Map). No-op (zero extra calls) when nothing was exhausted.
+    await recoverReasoningExhaustedBatchAnswers(tasks, batchedAnswers, { apiKey: KEY, dep: DEP, fbApiKey: FB_KEY, fbDep: FB_DEP });
     if (!NOVA_JUDGE_MODEL) {
       const answerById = new Map(tasks.map((t) => {
         const r = batchedAnswers.get(t.id);
