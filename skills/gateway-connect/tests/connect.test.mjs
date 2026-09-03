@@ -172,3 +172,70 @@ test('credSource: returns a fixed literal from a closed set, never an interpolat
     if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
 });
+
+// ---- headersHelper registration (2026-09-03): Claude Code's dynamic MCP-headers mechanism --------
+// register() itself is not exported (it shells out to the real `claude` CLI, which tests must never
+// invoke), so these exercise the pure argv-building functions it is built from -- buildAddJsonArgs()
+// directly, and buildRegisterArgs() (the exact env-dependent decision register() makes) via the
+// GATEWAY_CONNECT_HEADERS_HELPER rollback switch. No network, no SSM, no `claude` process spawned.
+import { buildAddJsonArgs, buildRegisterArgs, headersHelperEnabled, HEADERS_HELPER_PATH } from '../connect.mjs';
+
+function withEnv(name, value, fn) {
+  const saved = process.env[name];
+  if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  try { return fn(); } finally {
+    if (saved === undefined) delete process.env[name]; else process.env[name] = saved;
+  }
+}
+
+test('HEADERS_HELPER_PATH: an absolute path to headers-helper.mjs alongside connect.mjs', () => {
+  assert.ok(HEADERS_HELPER_PATH.startsWith('/'), 'must be absolute (Claude Code executes it directly)');
+  assert.ok(HEADERS_HELPER_PATH.endsWith('/gateway-connect/headers-helper.mjs'));
+});
+
+test('headersHelperEnabled: enabled by default and for any value except the literal string "0"', () => {
+  withEnv('GATEWAY_CONNECT_HEADERS_HELPER', undefined, () => assert.equal(headersHelperEnabled(), true, 'unset -> enabled'));
+  withEnv('GATEWAY_CONNECT_HEADERS_HELPER', '0', () => assert.equal(headersHelperEnabled(), false, '"0" -> disabled (the rollback switch)'));
+  withEnv('GATEWAY_CONNECT_HEADERS_HELPER', 'false', () => assert.equal(headersHelperEnabled(), true, 'only the literal "0" disables it'));
+  withEnv('GATEWAY_CONNECT_HEADERS_HELPER', '', () => assert.equal(headersHelperEnabled(), true, 'empty string is not "0"'));
+});
+
+test('buildAddJsonArgs: carries a static Authorization header AND the headersHelper field when given a path', () => {
+  const argv = buildAddJsonArgs('otchealth-gateway', GATEWAY_MCP, 'TOK', '/abs/path/headers-helper.mjs');
+  assert.deepEqual(argv.slice(0, 3), ['mcp', 'add-json', 'otchealth-gateway']);
+  const server = JSON.parse(argv[3]);
+  assert.deepEqual(server, {
+    type: 'http',
+    url: GATEWAY_MCP,
+    headers: { Authorization: 'Bearer TOK' },
+    headersHelper: '/abs/path/headers-helper.mjs',
+  });
+});
+
+test('buildAddJsonArgs: omits headersHelper entirely (no null/empty field) when no path is given', () => {
+  for (const noHelper of [null, undefined, '']) {
+    const argv = buildAddJsonArgs('otchealth-gateway', GATEWAY_MCP, 'TOK', noHelper);
+    const server = JSON.parse(argv[3]);
+    assert.equal(Object.prototype.hasOwnProperty.call(server, 'headersHelper'), false, `no key at all for ${JSON.stringify(noHelper)}`);
+    assert.deepEqual(server, { type: 'http', url: GATEWAY_MCP, headers: { Authorization: 'Bearer TOK' } });
+  }
+});
+
+test('buildRegisterArgs: writes the headersHelper field when the helper is enabled (the default)', () => {
+  withEnv('GATEWAY_CONNECT_HEADERS_HELPER', undefined, () => {
+    const argv = buildRegisterArgs('otchealth-gateway', GATEWAY_MCP, 'TOK');
+    assert.equal(argv[1], 'add-json', 'goes through add-json, not the plain static-header add');
+    const server = JSON.parse(argv[3]);
+    assert.equal(server.headersHelper, HEADERS_HELPER_PATH);
+    assert.equal(server.headers.Authorization, 'Bearer TOK', 'the static header stays as a fallback for the pre-trust-dialog window');
+  });
+});
+
+test('buildRegisterArgs: omits headersHelper and reverts to plain `mcp add` when GATEWAY_CONNECT_HEADERS_HELPER=0', () => {
+  withEnv('GATEWAY_CONNECT_HEADERS_HELPER', '0', () => {
+    const argv = buildRegisterArgs('otchealth-gateway', GATEWAY_MCP, 'TOK');
+    assert.deepEqual(argv, buildAddArgs('otchealth-gateway', GATEWAY_MCP, 'TOK'), 'byte-identical to the pre-headersHelper registration');
+    assert.equal(argv.includes('add-json'), false);
+    assert.ok(!JSON.stringify(argv).includes('headersHelper'));
+  });
+});
