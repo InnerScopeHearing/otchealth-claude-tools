@@ -82,7 +82,7 @@ whole point of the S3-reference design above), this file:
    document) until `JobStatus` is `SUCCEEDED`/`PARTIAL_SUCCESS` (or `FAILED`, which is a per-document
    failure), following `NextToken` to collect every page of RESULTS for a large document.
 
-Every async job is submitted with a **deterministic `ClientRequestToken`** (a sha256 of `bucket/key`),
+Every async job is submitted with a **deterministic `ClientRequestToken`** (a sha256 of `bucket/key` plus the object's listed size and `LastModified`, so an overwritten file gets its own token),
 so if this process crashes mid-poll, a later run of the SAME still-sidecar-less document reuses the
 in-flight or completed job instead of starting and billing a duplicate -- **within Textract's
 idempotency window, which AWS documents as 7 days**. A re-run more than 7 days after a crash

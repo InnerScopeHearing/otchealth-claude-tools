@@ -85,7 +85,7 @@
 // IDEMPOTENCY, TWO LAYERS. (1) The sidecar itself is the DURABLE completion marker -- selectCandidates()
 // skips any document whose _TEXT/<name>.txt already exists, so a re-run only ever touches new/failed
 // uploads, exactly like the old sweep. (2) Every async job is submitted with a DETERMINISTIC
-// ClientRequestToken (sha256 of "bucket/key"), so if this process crashes mid-poll and a later run
+// ClientRequestToken (sha256 of "bucket/key" plus the object's listed size and LastModified, so an overwritten file gets its own token), so if this process crashes mid-poll and a later run
 // picks the same still-sidecar-less document back up within Textract's idempotency window, Textract
 // returns the SAME in-flight/completed JobId instead of starting (and billing) a duplicate job. That
 // window is TIME-BOUNDED: AWS documents ClientRequestToken idempotency for 7 days. A re-run more than
@@ -337,7 +337,7 @@ export function withinBudget(state, caps) {
   return true;
 }
 
-/** A deterministic Textract ClientRequestToken for one (bucket, key) -- a 64-hex-char sha256 digest,
+/** A deterministic Textract ClientRequestToken for one (bucket, key) -- a 64-hex-char sha256 digest of bucket/key plus the object version,
  *  which fits Textract's ClientRequestToken constraints (max 64 chars, `[A-Za-z0-9-_]`) with no
  *  truncation. Reusing the SAME token across runs for the SAME still-unfinished document means a
  *  crash-and-resume never double-submits (and double-bills) an async job for the same file -- see
