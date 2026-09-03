@@ -39,7 +39,7 @@
 // has stopped accepting (revoked, invalidated, expired server-side) is replaced instead of replayed --
 // that is how the automatic 401/403 re-run actually recovers.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -93,7 +93,12 @@ export function hasSufficientLife(entry, now, minLifeMs = MIN_LIFE_MS) {
  *  holds a live bearer token — the same sensitivity class as the header connect.mjs already passes
  *  to `claude mcp add`, just now also resting on disk between invocations. */
 export function writeTokenCache(cachePath, entry) {
-  mkdirSync(dirname(cachePath), { recursive: true, mode: 0o700 });
+  const dir = dirname(cachePath);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // mkdirSync's `mode` applies only when it CREATES the directory; a pre-existing one keeps whatever
+  // permissions it had. Tighten it explicitly every time so the owner-only guarantee holds for a
+  // cache dir that was created earlier (or by something else) with looser bits.
+  try { chmodSync(dir, 0o700); } catch { /* not the owner: nothing to tighten */ }
   const tmp = `${cachePath}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(entry), { mode: 0o600 });
   renameSync(tmp, cachePath);
@@ -136,6 +141,12 @@ export async function getBearerHeaders({ lane, cacheDir, mint, now = Date.now(),
  * so no session/initialize handshake is needed). Returns true (2xx: accepted), false (401/403:
  * rejected -- the caller should mint fresh), or null (could not tell: network error, timeout, any
  * other status). Never throws. `fetchImpl` is injectable for tests.
+ *
+ * LIVE-VERIFIED 2026-09-03 against https://mcp.otchealth.app/mcp from the CTO seat, exactly this
+ * request shape (no initialize, no session id): a freshly minted cto-lane token -> true, a bogus
+ * bearer -> false, an empty bearer -> false. The gateway rejects a bad bearer with 401 BEFORE any
+ * JSON-RPC handling (auth/bearer.ts validateBearer() runs per request), so an invalid token can
+ * never surface as a protocol error that this function would read as "inconclusive".
  */
 export async function probeToken(token, { url = GATEWAY_MCP, timeoutMs = VALIDATE_TIMEOUT_MS, fetchImpl = globalThis.fetch } = {}) {
   try {

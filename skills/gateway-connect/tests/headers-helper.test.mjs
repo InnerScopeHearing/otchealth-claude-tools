@@ -254,3 +254,17 @@ test("probeToken: 2xx -> true, 401/403 -> false, any other status or a thrown fe
   assert.equal(await mod.probeToken("tok", { url: "https://x/mcp", fetchImpl: mk(503) }), null);
   assert.equal(await mod.probeToken("tok", { url: "https://x/mcp", fetchImpl: async () => { throw new Error("net"); } }), null);
 });
+
+test("writeTokenCache tightens a PRE-EXISTING cache directory to owner-only (mkdir's mode only applies on creation)", async () => {
+  const mod = await import(new URL("../headers-helper.mjs", import.meta.url).href);
+  const { mkdir, stat } = await import("node:fs/promises");
+  const base = await mkdtemp(join(tmpdir(), "hh-perm-"));
+  try {
+    const dir = join(base, "cache");
+    await mkdir(dir, { mode: 0o755 });
+    assert.equal((await stat(dir)).mode & 0o777, 0o755, "precondition: the dir starts world-readable");
+    mod.writeTokenCache(mod.cachePathFor(dir, "cto"), { token: "t", expiresAt: Date.now() + 60_000, mintedAt: Date.now() });
+    assert.equal((await stat(dir)).mode & 0o777, 0o700, "the existing dir must be tightened, not left as created");
+    assert.equal((await stat(mod.cachePathFor(dir, "cto"))).mode & 0o777, 0o600, "the cache file itself is owner-only");
+  } finally { await rm(base, { recursive: true, force: true }); }
+});
