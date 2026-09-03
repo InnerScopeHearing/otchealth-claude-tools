@@ -3,30 +3,50 @@
 # Closes roadmap item #3 (Smarter/Cheaper safety net): with Model Router auto-routing to cheaper models
 # and a steady stream of prompt/skill changes (compute-allocator, critic-pass, semantic-trust), we need a
 # scheduled check that quality still clears the bar. This runs the agent-evals golden-task suite nightly
-# (LLM-as-judge on Azure credits — credit-funded, cost-neutral), emits eval_result to PostHog (the durable
-# trend IS the regression baseline), uploads the scorecard artifact, and posts a Step Summary with a
+# (LLM-as-judge on OpenAI, via the Batch API cost lever below, see the OPENAI_BATCH_AGENT_EVALS env
+# var on the run step), emits eval_result to PostHog (the durable trend IS the regression baseline),
+# uploads the scorecard artifact, and posts a Step Summary with a
 # report-only FLOOR guard. It NEVER blocks anything: run-evals.mjs exits 1 whenever any single task fails
 # (normal signal), so the run step tolerates that; the baseline is a human-facing signal, not a gate.
 #
-# Mirrors otchealth-mcp-server's nightly-medic.yml cron pattern. Azure auth = SECRETLESS OIDC
-# (2026-07-13): run-evals.mjs resolves Azure OpenAI + PostHog secrets from Key Vault via kvSecret();
-# claude-tools CI logs in with azure/login federated OIDC (repo VARIABLES AZURE_CLIENT_ID/TENANT_ID/
-# SUBSCRIPTION_ID + id-token: write), the pattern verify-get-secret-migration.yml uses. No AZURE_SP_*
-# secret at rest; kvSecret()'s az-CLI/OIDC path mints the KV token from this login. (History: GCP SA ->
-# AZURE_SP_* secrets this repo never sets -> OIDC.) Regression-ledger tag: monitor-azure-auth-oidc.
+# Mirrors otchealth-mcp-server's nightly-medic.yml cron pattern. Auth = SECRETLESS AWS OIDC
+# (2026-09-03, TASK E-1, replacing the Azure path this comment used to describe): run-evals.mjs
+# resolves openai-api-key + posthog-fleet-ingest-key from AWS SSM Parameter Store (/otchealth/*) via
+# kvSecret() (SECRET_BACKEND defaults to ssm; see skills/kb-memory/azure-secret.mjs + aws-secret.mjs),
+# which needs a real AWS credential in the job's environment to do so. This job assumes
+# otchealth-github-nightly-eval, a GitHub-OIDC IAM role in the fleet master account (900915535335)
+# trusted ONLY on repo:InnerScopeHearing/otchealth-claude-tools:ref:refs/heads/main, scoped to
+# ssm:GetParameter on exactly those two parameter ARNs plus kms:Decrypt on the SSM default managed
+# key (alias/aws/ssm) they are encrypted under -- see otchealth-cto/infra/oidc/ (policies/
+# trust-nightly-eval.json + permissions-nightly-eval.json + apply-github-oidc-roles.sh) for the exact
+# documents and README.md there for the reasoning. No static AWS access key at rest for this job; the
+# repo variable AWS_OIDC_ROLE_ARN_NIGHTLY_EVAL (unset until the CTO runs that script and sets it)
+# gates the credentials step below -- unset is a clean no-op (the step is skipped and run-evals.mjs
+# then fails to resolve openai-api-key on its own, a failure the run step already tolerates).
+# SUPERSEDES the prior azure/login federated-OIDC design (repo VARIABLES AZURE_CLIENT_ID/TENANT_ID/
+# SUBSCRIPTION_ID): Azure subscription 55c84f6b, which that path authenticated to and which Key Vault
+# kv-otc-55c84f6bef (the store run-evals.mjs used to read) lived on, was PERMANENTLY DELETED
+# 2026-08-13 -- the azure/login step could never succeed again, not even on a manual
+# workflow_dispatch. Regression-ledger tag: monitor-azure-auth-oidc (now AWS, not Azure).
 name: Nightly Eval Baseline
 
 on:
-  # SCHEDULE DISARMED 2026-08-27: this workflow authenticates to / exercises the Azure estate
-  # on subscription 55c84f6b, which was PERMANENTLY DELETED 2026-08-13 -- every scheduled run
-  # since then has failed or produced noise against dead resources. workflow_dispatch is kept.
-  # Re-arm only as part of an AWS-native rebuild (see the 2026-08-27 migration-audit report).
+  # SCHEDULE DISARMED 2026-08-27: this workflow authenticated to / exercised the Azure estate on
+  # subscription 55c84f6b, which was PERMANENTLY DELETED 2026-08-13 -- every scheduled run since
+  # then had failed or produced noise against dead resources. workflow_dispatch is kept.
+  #
+  # STILL DISARMED 2026-09-03 (TASK E-1): the AWS-native credential path now exists (see the header
+  # comment above + otchealth-cto/infra/oidc/) so a dispatched run CAN now actually authenticate --
+  # but re-arming the schedule is deliberately left to the CTO, not done automatically by this PR,
+  # and only after a real workflow_dispatch run is proven green end to end with the new role wired
+  # up (repo variable AWS_OIDC_ROLE_ARN_NIGHTLY_EVAL set on this repo).
   # schedule:
   #   - cron: '30 6 * * *'   # daily 06:30 UTC (ahead of the 08:00 Nightly Fleet Medic)
   workflow_dispatch: {}     # manual trigger for testing
 
 permissions:
-  id-token: write   # secretless OIDC login to Azure (azure/login); no AZURE_SP_* secret at rest
+  id-token: write   # secretless OIDC role-assumption in AWS (aws-actions/configure-aws-credentials
+                    # assuming otchealth-github-nightly-eval); no static AWS key at rest
   contents: read
 
 concurrency:
@@ -47,12 +67,34 @@ jobs:
         with:
           node-version: 22
 
-      - name: Azure login (OIDC, secretless — the claude-tools Azure auth pattern)
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+      # OIDC role assumption for AWS SSM access (TASK E-1, 2026-09-03), replacing the azure/login
+      # step this file used to run: that step targeted Azure subscription 55c84f6b, which was
+      # PERMANENTLY DELETED 2026-08-13, so it could never succeed again -- not even on a manual
+      # workflow_dispatch. See the file header comment above and otchealth-cto/infra/oidc/README.md
+      # for the role's exact trust/permission scope.
+      #
+      # Guarded with `if:` on the repo variable being non-empty, deliberately NOT the
+      # role-to-assume-plus-static-key-fallback shape build-doc-indexer-ecr.yml uses elsewhere in
+      # this repo: that shape exists to fall back onto an EXISTING static AWS key when the OIDC
+      # variable is unset, and this workflow has no static AWS key to fall back to (its only prior
+      # credential was Azure, not AWS). Verified directly against aws-actions/configure-aws-credentials
+      # v4.3.1's own source (the exact pinned version below): with role-to-assume AND
+      # aws-access-key-id both empty, it does NOT no-op -- it falls through to
+      # `credentialsClient.validateCredentials()` against the ambient AWS SDK default provider chain,
+      # which finds nothing on a bare GitHub-hosted runner and FAILS the step outright. Without this
+      # `if:` guard, an unset repo variable would not be "a clean no-op" as intended -- it would swap
+      # one unconditional hard failure (the dead azure/login call) for a different unconditional hard
+      # failure (an AWS SDK "could not load credentials" error), which is not an improvement. With
+      # the guard, an unset variable means this step does not run at all, and run-evals.mjs then
+      # fails to resolve openai-api-key on its own -- a single, clear, self-explanatory error message,
+      # in the "Run golden-task suite" step that already tolerates it (continue-on-error: true).
+      - name: Configure AWS credentials (OIDC role; skipped entirely until AWS_OIDC_ROLE_ARN_NIGHTLY_EVAL is set)
+        if: vars.AWS_OIDC_ROLE_ARN_NIGHTLY_EVAL != ''
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN_NIGHTLY_EVAL }}
+          role-session-name: nightly-eval-${{ github.run_id }}
+          aws-region: us-east-1
 
       - name: Run golden-task suite (OpenAI, Batch API) + emit to PostHog
         id: run
@@ -60,6 +102,12 @@ jobs:
         continue-on-error: true
         working-directory: skills/agent-evals
         env:
+          # AWS_REGION (2026-09-03, TASK E-1): pinned explicitly so run-evals.mjs's SSM secret
+          # resolution (skills/kb-memory/aws-secret.mjs) always signs against us-east-1 regardless
+          # of whether the "Configure AWS credentials" step above ran (it exports AWS_REGION itself
+          # when it does; this covers the guarded-skip case too, and is otherwise a harmless
+          # explicit match of that same default).
+          AWS_REGION: 'us-east-1'
           # OPENAI_BATCH_AGENT_EVALS (2026-09-03, T-2, arming the cost lever documented in
           # skills/agent-evals/SKILL.md's "OPENAI_BATCH" section): submits every persona-answer
           # request (then every judge request, since the judge here is the default openai judge --
