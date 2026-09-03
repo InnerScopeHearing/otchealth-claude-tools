@@ -73,11 +73,16 @@ jobs:
           # LLM_PROVIDER=foundry/azure override on this job would make BATCH_MODE evaluate false and
           # fall back to the pre-existing synchronous per-task path, never crash (see run-evals.mjs's
           # `const BATCH_MODE = LLM_PROVIDER === "openai" && isBatchEnabled("agent-evals")`).
-          # Live-proven end to end 2026-09-03 against the real OpenAI Batch API (batch
-          # batch_6a990e037a6481908bd4088c55c88ac3, run locally with a bounded 1-task golden set --
-          # this workflow's own schedule is currently disarmed pending an AWS-native credential
-          # rebuild, see the header comment above, so a real scheduled/dispatched run of THIS
-          # workflow was not exercised as part of arming this flag).
+          # Live-proven end to end 2026-09-03 against the real OpenAI Batch API, run locally with a
+          # bounded 1-task golden set (this workflow's own schedule is currently disarmed pending an
+          # AWS-native credential rebuild, see the header comment above, so a real scheduled/dispatched
+          # run of THIS workflow was not exercised as part of arming this flag). Two runs: the first
+          # (batch batch_6a990e037a6481908bd4088c55c88ac3) confirmed the persona-answer batch leg
+          # completes for real; a second full round trip (persona batch
+          # batch_6a99904ddd4c8190bc60880b6e201883 + judge batch
+          # batch_6a9990e7a730819090dcdec7923d9908) completed BOTH legs end to end and produced a real
+          # scorecard (1/1 passed). Full narrative + exact commands:
+          # skills/agent-evals/SKILL.md's "OPENAI_BATCH" section.
           OPENAI_BATCH_AGENT_EVALS: '1'
         run: |
           set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.

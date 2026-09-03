@@ -95,6 +95,31 @@ already imported every batch helper unused).
   reached PostHog either way (inert by design, same as any `run-evals.mjs` invocation without
   `--emit`) -- the nightly workflow's own `--emit` is unaffected regardless, since
   `--emit`/`--json`/batch mode are independent.
+- **A SECOND full round trip (2026-09-03), the complete pipeline, both batches, real scorecard
+  produced:** a fresh `run-evals.mjs --agent coach --json <path>` invocation (no artificial
+  `OPENAI_BATCH_TIMEOUT_MS` override this time -- the default 24h ceiling was left in place and the
+  run was simply allowed to finish) exercised the ENTIRE `OPENAI_BATCH` contract in one shot, faster
+  than the first proof run: persona-answer batch `batch_6a99904ddd4c8190bc60880b6e201883` went
+  `validating` -> `in_progress` -> `completed` in 151s, then (since the judge is the default `openai`
+  judge, `EVAL_JUDGE`/`JUDGE_PROVIDER` unset) judge-verdict batch
+  `batch_6a9990e7a730819090dcdec7923d9908` went `validating` -> `in_progress` -> `completed` in a
+  further 92s. `main()`'s normal per-task loop then consumed both batched results exactly as it would
+  any other run and printed a real scorecard:
+  ```
+  # agent-evals (run+judge on gpt-5.6-terra, judge=gpt-5.6-terra [OPENAI_BATCH]) - 1 task(s), pass>=0.7
+  [PASS] coach/coach-gate-order  100%  (4/4)  Explicitly gates Release Captain on QA pass/N/A and
+    Guardian clearance, sequences QA→Guardian→release, rejects direct shipping, and delegates all
+    execution.
+  SCORECARD: 1/1 passed, avg 100%
+  ```
+  and a matching `--json` scorecard (`{"model":"gpt-5.6-terra","judge_model":"gpt-5.6-terra",
+  "passAt":0.7,"avg":1,"passed":1,"total":1,"results":[{"id":"coach-gate-order",...,"score":1,
+  "pass":true,"met":[true,true,true,true]}]}`). Process exit code `0`. This is the direct,
+  non-mocked, end-to-end proof the flag arms correctly: batch accepted for both persona AND judge
+  legs, each polled to completion via the real `awaitBatch()`, each result set parsed via the real
+  `assertAllBatchResultsPresent()`/`parseJudgeOutput()`, and a genuine scorecard produced -- not just
+  the persona leg proven separately (the bullet above). `--emit` was not passed here either (same
+  reasoning as above); the nightly workflow's `--emit` is unaffected.
 - **Model-not-found + per-line-error paths:** covered at two layers. `setup/model-routing.mjs`'s own
   `awaitBatch`/`submitBatch` tests (`setup/model-routing.test.mjs`) cover the generic per-line-error
   contract (a line with `response:null, error:{...}` records `{error, content:null}`, never thrown;
