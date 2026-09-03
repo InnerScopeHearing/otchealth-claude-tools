@@ -1064,3 +1064,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T17:08:06.991Z
 - **Closed:** (open)
+
+### finding:FND-20260903-9f95 severity:medium status:open | The gateway, the fleet's keystone service, has had NO in-container Datadog telemetry for at least 14 days. Live Datadog queries: container.cpu.usage{service:gateway-mcp} and trace.express.request.hits{service:gateway-mcp} both return NO DATA over a 14-day window, and otc.fleet.ledger_flush has exactly 1 point (2026-09-02 06:00Z). The ONLY gateway visibility in Datadog is aws.ecs.service.running, which comes from the AWS integration polling CloudWatch, not from inside the container (35 points, current). So APM traces and in-container metrics are dark and any monitor keyed on application metrics for service:gateway-mcp is blind. IMPORTANT: this is NOT caused by today's Graviton/ARM64 migration; the 14-day window predates it, and I checked specifically because the ARM cutover looked like the obvious culprit. Today's change did ADD a new obstacle though: the image embeds Datadog serverless-init, which logs 'serverless-init is running on an unsupported architecture (arm64). Monitoring may behave unexpectedly.' at every container start on rev 43/44, so the standard serverless-init fix path will not work while the gateway stays on Graviton. Resolving this is a design decision with a cost tradeoff: revert to amd64 and lose about 20 percent compute savings, or move emission off serverless-init to a path that supports arm64 (Datadog Agent sidecar, or OTLP export). Not urgent (broken 14+ days, no outage, liveness still covered by ECS metrics, /health and the eval job) but it should not stay invisible.
+
+- **Source audit doc:** live Datadog v1 query API from the CTO seat plus gateway CloudWatch logs, 2026-09-03; gateway task def 43/44 runtimePlatform ARM64 with DD_SERVICE=gateway-mcp
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T17:08:23.189Z
+- **Closed:** (open)
