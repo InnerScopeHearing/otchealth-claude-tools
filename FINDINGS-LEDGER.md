@@ -1033,13 +1033,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-03T15:43:12.570Z
 - **Closed:** 2026-09-03T15:50:57.112Z
 
-### finding:FND-20260903-8c23 severity:low status:open | agent-evals persona-answer batch: a reasoning-family model can spend its whole token budget on hidden reasoning and return no visible output (finish_reason=length), losing one golden task per run; correctly reported as an infra failure rather than a zero score, but the budget needs raising for gpt-5.6
+### finding:FND-20260903-8c23 severity:low status:fixed | agent-evals persona-answer batch: a reasoning-family model can spend its whole token budget on hidden reasoning and return no visible output (finish_reason=length), losing one golden task per run; correctly reported as an infra failure rather than a zero score, but the budget needs raising for gpt-5.6
 
 - **Source audit doc:** otchealth-claude-tools nightly-eval run 33775653832, 2026-09-03, the first green run since the schedule was disarmed 2026-08-27
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Fixed by claude-tools #554 (squash a2e04492). The OpenAI Batch persona lane is fire-and-forget so it cannot escalate a token budget mid-batch; recovery now re-runs only the reasoning-exhausted task through the synchronous path, which already retries with escalation. Detection reuses model-routing's own truncatedEmpty predicate against the raw batch line rather than string-matching error text, so a finish_reason=stop empty answer and a per-line API error are both correctly left alone. Ordering verified in the diff: recovery runs after runPersonaBatch and BEFORE answerById and the judge batch are built, and mutates batchedAnswers in place so the NOVA_JUDGE_MODEL path benefits too. CTO-verified from the seat: identifiers in scope, node --check clean, 15/15 tests pass, counterfactual 4 fail with recovery disabled and the file restored byte-identical to the PR head, full run-tests.sh ALL GREEN across 227 targets, CI plus the auto-critic green.
 - **Opened:** 2026-09-03T16:07:52.155Z
-- **Closed:** (open)
+- **Closed:** 2026-09-03T16:57:59.043Z
 
 ### finding:FND-20260903-9a96 severity:high status:open | CORRECTION + residual risk to FND-20260903-ba85: the flex/router failure is per-model CAPACITY (OpenAI 429 'Flex does not have sufficient resources... change service_tier=default'), not a capability limit. Proven live: gpt-5.6-luna+flex=429, gpt-5.6-terra+flex=200, gpt-5.6-sol+flex=200. fetch-budget.ts treats 429 as retryable and re-sends the IDENTICAL flex request, so the retry is structurally futile and surfaces as a hang. The rev-43 guard (tier!=router) is a PROXY for the real condition: flex capacity is dynamic and per-model, so if terra's pool runs dry the same futile-retry chain hits the STANDARD tier (default for nearly every fleet llm_azure call, user-blocking included) and the guard does nothing. Durable fix: on a flex-specific 429, retry once WITHOUT service_tier.
 
