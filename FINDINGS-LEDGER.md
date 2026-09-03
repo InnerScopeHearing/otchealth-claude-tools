@@ -984,3 +984,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T05:23:27.279Z
 - **Closed:** (open)
+
+### finding:FND-20260903-3869 severity:medium status:open | ocr-sweep Textract port (claude-tools#540) never added skills/ocr-sweep to the doc-indexer image; live task def otchealth-job-docintel-ocr-sweep:2 is still the Azure-era shape (plain node image, unauthenticated runtime git clone, AZURE_SP_*/GCP secrets)
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-03-wave3-landing-and-gpt56-cutover.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T05:23:29.657Z
+- **Closed:** (open)
