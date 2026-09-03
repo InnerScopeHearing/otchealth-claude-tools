@@ -33,28 +33,26 @@
 // the way connect.mjs's own connectOnce() path does (same mintToken(), same lane resolution, same
 // SSM-backed credential source), and the cache is updated. This is a NEW cache this skill introduces
 // (there was no on-disk token cache before headersHelper existed — the old model kept the token only
-// inside Claude Code's own MCP config, refreshed by re-running `claude mcp add`).
+// inside Claude Code's own MCP config, refreshed by re-running `claude mcp add`). Before a cached
+// token is reused it is VALIDATED against the gateway with one cheap authenticated MCP ping
+// (probeToken): Claude Code gives this helper no signal for WHY it was invoked, so a token the server
+// has stopped accepting (revoked, invalidated, expired server-side) is replaced instead of replayed --
+// that is how the automatic 401/403 re-run actually recovers.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { mintToken, hasLane, laneClaim } from './connect.mjs';
+import { mintToken, hasLane, laneClaim, GATEWAY_MCP } from './connect.mjs';
 
 const SELF_DIR = dirname(fileURLToPath(import.meta.url));
 const AGENT_ID_SH = join(SELF_DIR, '..', 'kb-memory', 'agent-id.sh');
 
 /** Reuse a cached token only while it has MORE than this much life left. */
 export const MIN_LIFE_MS = 10 * 60 * 1000; // 10 minutes
-/** TRIGGER-BLIND RETRY DETECTION. Claude Code gives the helper no signal for WHY it was invoked
- *  (session start, reconnect, or the automatic re-run after a 401/403), so a cache hit alone cannot
- *  tell "the server just rejected this exact token" from "a new session wants the same still-valid
- *  token". The one observable difference is timing: the 401/403 re-run follows the previous
- *  invocation within seconds. So a second invocation inside this window is treated as that retry
- *  and BYPASSES the cache -- a fresh token is minted even if the cached one still has life -- which
- *  is what makes a revoked/invalidated-but-unexpired token recover instead of being replayed. A
- *  session start followed by a quick reconnect pays one extra mint; that is the accepted cost. */
-export const RETRY_WINDOW_MS = 60 * 1000;
+/** Budget for the ONE cheap authenticated probe (probeToken below) that decides whether a cached
+ *  token is still ACCEPTED by the gateway before it is handed back to Claude Code. */
+export const VALIDATE_TIMEOUT_MS = 2500;
 /** Hard wall-clock budget for the whole resolve+mint flow, well under Claude Code's 10s allowance.
  *  Covers BOTH steps: main() measures what resolveLane() spent and gives the mint only the remainder. */
 export const OVERALL_TIMEOUT_MS = 8000;
@@ -108,19 +106,50 @@ export function writeTokenCache(cachePath, entry) {
  *
  * Returns { headers: { Authorization: "Bearer <token>" }, source: "cache"|"mint", cachePath }.
  */
-export async function getBearerHeaders({ lane, cacheDir, mint, now = Date.now(), minLifeMs = MIN_LIFE_MS, retryWindowMs = RETRY_WINDOW_MS }) {
+export async function getBearerHeaders({ lane, cacheDir, mint, now = Date.now(), minLifeMs = MIN_LIFE_MS, validate = null }) {
   const cachePath = cachePathFor(cacheDir, lane);
   const cached = readTokenCache(cachePath);
-  // servedAt = when this cache entry was last handed to Claude Code. A second call inside the retry
-  // window means the previous hand-out was just rejected (see RETRY_WINDOW_MS): bypass the cache.
-  const servedRecently = Boolean(cached) && Number.isFinite(cached.servedAt) && now - cached.servedAt >= 0 && now - cached.servedAt < retryWindowMs;
-  if (hasSufficientLife(cached, now, minLifeMs) && !servedRecently) {
-    writeTokenCache(cachePath, { ...cached, servedAt: now });
-    return { headers: { Authorization: `Bearer ${cached.token}` }, source: 'cache', cachePath };
+  const alive = hasSufficientLife(cached, now, minLifeMs);
+  if (alive) {
+    // A cached token with life left is REUSED -- unless the gateway itself says it no longer accepts
+    // it. Claude Code gives this helper no signal for WHY it was invoked (session start, reconnect,
+    // or the automatic re-run after a 401/403), so instead of guessing from timing the helper asks
+    // the only party that knows: `validate` (probeToken in main()) makes one cheap authenticated
+    // request with the cached token. false = rejected (revoked, invalidated, or expired server-side)
+    // -> fall through and mint fresh, which is what makes the 401/403 retry actually recover.
+    // true = accepted -> reuse. null (could not tell: network error, timeout, 5xx) -> reuse, because
+    // a mint would most likely fail the same way and a still-valid token beats no token.
+    let verdict = true;
+    if (validate) { try { verdict = await validate(cached.token); } catch { verdict = null; } }
+    if (verdict !== false) {
+      return { headers: { Authorization: `Bearer ${cached.token}` }, source: verdict === true ? 'cache' : 'cache-unverified', cachePath };
+    }
   }
   const { token, expiresIn } = await mint(lane);
-  writeTokenCache(cachePath, { token, expiresAt: now + expiresIn * 1000, mintedAt: now, servedAt: now });
-  return { headers: { Authorization: `Bearer ${token}` }, source: servedRecently ? 'mint-retry' : 'mint', cachePath };
+  writeTokenCache(cachePath, { token, expiresAt: now + expiresIn * 1000, mintedAt: now });
+  return { headers: { Authorization: `Bearer ${token}` }, source: alive ? 'mint-rejected' : 'mint', cachePath };
+}
+
+/**
+ * Ask the gateway whether `token` is still accepted: an MCP `ping` is the smallest authenticated
+ * request the stateless /mcp endpoint answers (every POST /mcp is authorized from the bearer alone,
+ * so no session/initialize handshake is needed). Returns true (2xx: accepted), false (401/403:
+ * rejected -- the caller should mint fresh), or null (could not tell: network error, timeout, any
+ * other status). Never throws. `fetchImpl` is injectable for tests.
+ */
+export async function probeToken(token, { url = GATEWAY_MCP, timeoutMs = VALIDATE_TIMEOUT_MS, fetchImpl = globalThis.fetch } = {}) {
+  try {
+    const r = await fetchImpl(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (r.status === 401 || r.status === 403) return false;
+    return r.ok ? true : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -179,7 +208,7 @@ async function main() {
     // floor, so a slow-but-successful resolve still attempts the cache/mint path).
     const remainingMs = Math.max(250, OVERALL_TIMEOUT_MS - (Date.now() - t0));
     const { headers, source } = await withTimeout(
-      getBearerHeaders({ lane, cacheDir: defaultCacheDir(), mint: mintToken }),
+      getBearerHeaders({ lane, cacheDir: defaultCacheDir(), mint: mintToken, validate: (t) => probeToken(t) }),
       remainingMs,
       `timed out resolving a gateway token for lane "${lane}" within the ${OVERALL_TIMEOUT_MS}ms overall budget ` +
         '(SSM or the gateway token endpoint unreachable?)',
@@ -187,7 +216,7 @@ async function main() {
     const claim = laneClaim(headers.Authorization.slice('Bearer '.length));
     console.error(
       `[gateway-connect headers-helper] lane=${lane} agent=${claim || '?'} server=${serverName} ` +
-        `${source === 'cache' ? 're-used cached token' : source === 'mint-retry' ? 'minted a fresh token (repeat call inside the retry window, cache bypassed)' : 'minted a fresh token'}`,
+        `${source === 'cache' ? 're-used cached token (gateway accepted it)' : source === 'cache-unverified' ? 're-used cached token (gateway probe inconclusive)' : source === 'mint-rejected' ? 'minted a fresh token (gateway rejected the cached one)' : 'minted a fresh token'}`,
     );
     process.stdout.write(JSON.stringify(headers));
   } catch (e) {
@@ -201,5 +230,5 @@ if (isMain) main();
 
 export default {
   getBearerHeaders, cachePathFor, readTokenCache, writeTokenCache, hasSufficientLife, resolveLane,
-  defaultCacheDir, withTimeout, MIN_LIFE_MS, OVERALL_TIMEOUT_MS, RESOLVE_TIMEOUT_MS, RETRY_WINDOW_MS,
+  defaultCacheDir, withTimeout, probeToken, MIN_LIFE_MS, OVERALL_TIMEOUT_MS, RESOLVE_TIMEOUT_MS, VALIDATE_TIMEOUT_MS,
 };

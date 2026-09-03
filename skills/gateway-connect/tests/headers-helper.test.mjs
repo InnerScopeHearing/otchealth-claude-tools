@@ -217,3 +217,40 @@ test("headers-helper: the resolve cap sits inside the overall budget, and the ov
   assert.ok(mod.RESOLVE_TIMEOUT_MS > 0 && mod.RESOLVE_TIMEOUT_MS < mod.OVERALL_TIMEOUT_MS, "resolve cap must leave room for the mint");
   assert.ok(mod.OVERALL_TIMEOUT_MS <= 8000, "overall budget must stay well under Claude Code's 10s headersHelper allowance");
 });
+
+test("getBearerHeaders: a cached token with life is reused only when validate() accepts it; a rejection mints fresh and overwrites the cache; an inconclusive or throwing probe reuses", async () => {
+  const mod = await import(new URL("../headers-helper.mjs", import.meta.url).href);
+  const dir = await mkdtemp(join(tmpdir(), "hh-validate-"));
+  try {
+    const now = 1_700_000_000_000;
+    mod.writeTokenCache(mod.cachePathFor(dir, "cto"), { token: "old", expiresAt: now + 3_600_000, mintedAt: now });
+    let mints = 0;
+    const mint = async () => { mints++; return { token: `fresh${mints}`, expiresIn: 86400 }; };
+    const accepted = await mod.getBearerHeaders({ lane: "cto", cacheDir: dir, mint, now, validate: async () => true });
+    assert.equal(accepted.source, "cache"); assert.equal(accepted.headers.Authorization, "Bearer old"); assert.equal(mints, 0);
+    const unsure = await mod.getBearerHeaders({ lane: "cto", cacheDir: dir, mint, now, validate: async () => null });
+    assert.equal(unsure.source, "cache-unverified"); assert.equal(unsure.headers.Authorization, "Bearer old"); assert.equal(mints, 0);
+    const thrown = await mod.getBearerHeaders({ lane: "cto", cacheDir: dir, mint, now, validate: async () => { throw new Error("boom"); } });
+    assert.equal(thrown.source, "cache-unverified"); assert.equal(mints, 0);
+    const rejected = await mod.getBearerHeaders({ lane: "cto", cacheDir: dir, mint, now, validate: async () => false });
+    assert.equal(rejected.source, "mint-rejected"); assert.equal(rejected.headers.Authorization, "Bearer fresh1"); assert.equal(mints, 1);
+    assert.equal(mod.readTokenCache(mod.cachePathFor(dir, "cto")).token, "fresh1", "the rejected token must be replaced in the cache");
+    const again = await mod.getBearerHeaders({ lane: "cto", cacheDir: dir, mint, now, validate: async () => true });
+    assert.equal(again.source, "cache"); assert.equal(again.headers.Authorization, "Bearer fresh1"); assert.equal(mints, 1);
+    const noValidator = await mod.getBearerHeaders({ lane: "cto", cacheDir: dir, mint, now });
+    assert.equal(noValidator.source, "cache", "no validate() -> plain reuse, byte-identical to the pre-probe behavior");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("probeToken: 2xx -> true, 401/403 -> false, any other status or a thrown fetch -> null; sends the bearer and an MCP ping", async () => {
+  const mod = await import(new URL("../headers-helper.mjs", import.meta.url).href);
+  const mk = (status) => async (url, init) => { mk.last = { url, init }; return { status, ok: status >= 200 && status < 300 }; };
+  assert.equal(await mod.probeToken("tok", { url: "https://x/mcp", fetchImpl: mk(200) }), true);
+  assert.equal(mk.last.url, "https://x/mcp");
+  assert.equal(mk.last.init.headers.Authorization, "Bearer tok");
+  assert.equal(JSON.parse(mk.last.init.body).method, "ping");
+  assert.equal(await mod.probeToken("tok", { url: "https://x/mcp", fetchImpl: mk(401) }), false);
+  assert.equal(await mod.probeToken("tok", { url: "https://x/mcp", fetchImpl: mk(403) }), false);
+  assert.equal(await mod.probeToken("tok", { url: "https://x/mcp", fetchImpl: mk(503) }), null);
+  assert.equal(await mod.probeToken("tok", { url: "https://x/mcp", fetchImpl: async () => { throw new Error("net"); } }), null);
+});

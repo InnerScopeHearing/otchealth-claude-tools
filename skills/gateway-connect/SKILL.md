@@ -23,7 +23,7 @@ skills/gateway-connect/cfo-gateway-connect.sh --watch    # CFO variant
 - Onboard another agent by adding a row to the `LANES` registry in `connect.mjs`.
 
 ## Notes
-- `--watch` re-mints ~5 min before expiry and re-runs `claude mcp add` (remove+add) to refresh the header. For a headless refresh, run it under `nohup`/`tmux` or a login cron on the Desktop. This is a manually-invoked, standalone utility (separate from the headersHelper mechanism below) and is unaffected by it -- keep using `--watch` on any client that predates or doesn't support `headersHelper`.
+- `--watch` re-mints ~5 min before expiry (the sleep is computed from the token's own `expires_in`, so it tracks the 24h TTL automatically) and re-runs `claude mcp add` (remove+add) to refresh the header. For a headless refresh, run it under `nohup`/`tmux` or a login cron on the Desktop. This is a manually-invoked, standalone utility (separate from the headersHelper mechanism below) and is unaffected by it -- keep using `--watch` on any client that predates or doesn't support `headersHelper`.
 - This does NOT replace an agent's own ledger discipline (e.g. CLO's `azls.mjs` → `_MEMORY/clo-personal.jsonl`); it only ADDS gateway tools (semantic recall over the agent's own rooms, `llm_azure`, guardrails).
 
 ## Dynamic headers (`headersHelper`) — how refresh actually happens now (2026-09-03)
@@ -47,13 +47,16 @@ resolution and the credential source are identical between the two code paths.
   to accept -- Claude Code prints `headersHelper not run` to stderr and falls back to the static
   header. So the connection must still work on that static header alone for a fresh/untrusted/
   non-interactive session; once trusted, the dynamic path takes over and owns refresh from then on.
-- **Caching**: `headers-helper.mjs` keeps a small per-lane on-disk cache
-  (`~/.claude/.gateway-connect-cache/<lane>.json`, owner-only permissions) and only mints a fresh
-  token when the cached one has 10 minutes of life or less left -- Claude Code can invoke the helper
-  often (session start, every reconnect, every 401 retry), and re-minting on every call would be
-  wasteful and would hammer SSM for no reason. Fails fast (non-zero exit, a clear stderr line) well
-  inside the 10s budget Claude Code allows, rather than hanging if SSM/the token endpoint is
-  unreachable.
+- **Caching + validation**: `headers-helper.mjs` keeps a small per-lane on-disk cache
+  (`~/.claude/.gateway-connect-cache/<lane>.json`, owner-only permissions). A cached token with more
+  than 10 minutes of life is reused -- Claude Code can invoke the helper often (session start, every
+  reconnect, every 401 retry), and re-minting on every call would hammer SSM for no reason -- but
+  ONLY after one cheap authenticated MCP `ping` against the gateway confirms the server still accepts
+  it (`probeToken`). Claude Code gives the helper no signal for why it was invoked, so this probe is
+  how the 401/403 re-run recovers: a token the gateway has revoked or invalidated is replaced, not
+  replayed. An inconclusive probe (network error, timeout, 5xx) reuses the cached token, since a mint
+  would most likely fail the same way. Fails fast (non-zero exit, a clear stderr line) inside one 8s
+  budget covering lane resolution, the probe, and the mint, well under the 10s Claude Code allows.
 - **UserPromptSubmit self-heal (`octools-sync.sh`)**: with the helper active, its periodic
   *timed* re-mint of the gateway registration drops from every ~50 min to a long throttle
   (`OCTOOLS_GATEWAY_THROTTLE_HELPER`, default 72000 s = 20 h, inside the gateway's 24 h token TTL).
