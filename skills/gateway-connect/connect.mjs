@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { kvSecret } from '../kb-memory/azure-secret.mjs';
 import { awsCredsPresent } from '../kb-memory/aws-secret.mjs';
 
@@ -37,6 +37,26 @@ export const LANES = {
   cro: { idSecret: 'oauth-lane-cro-id', secretSecret: 'oauth-lane-cro-secret', mcpName: 'otchealth-gateway' },
 };
 
+// ---- dynamic MCP headers (headersHelper) -------------------------------------------------------
+// Claude Code (see https://code.claude.com/docs/en/mcp) supports a per-server "headersHelper": a
+// command Claude Code runs itself at session start and on reconnect, and automatically re-runs
+// (with one retry) on a 401/403 from the server, reading a fresh `{"Authorization": "Bearer ..."}`
+// JSON object from its stdout. Dynamic headers override any static `headers` set at registration.
+// headers-helper.mjs (same directory) is that command; it re-mints via the SAME mintToken() below,
+// so both paths share one lane-resolution + credential-source implementation.
+//
+// This replaces relying on octools-sync's UserPromptSubmit hook to periodically re-mint the token
+// and re-run `claude mcp add` before it goes stale — Claude Code itself now owns that refresh.
+//
+// ROLLBACK: GATEWAY_CONNECT_HEADERS_HELPER=0 disables this and restores the exact prior behavior —
+// register() falls back to the old plain `claude mcp add --header ...` with no headersHelper field,
+// and octools-sync's periodic re-mint (session-connect.sh's --if-lane loop) keeps doing the refresh
+// work it always did. Default (unset, or any value other than the literal string "0") is enabled.
+export function headersHelperEnabled() {
+  return process.env.GATEWAY_CONNECT_HEADERS_HELPER !== '0';
+}
+export const HEADERS_HELPER_PATH = fileURLToPath(new URL('./headers-helper.mjs', import.meta.url));
+
 // ---- pure, unit-testable helpers ----
 /** Parse an OAuth token response; returns {token, expiresIn} or throws with a safe message (no secrets). */
 export function parseTokenResponse(obj) {
@@ -45,9 +65,24 @@ export function parseTokenResponse(obj) {
   const expiresIn = Number.isFinite(obj.expires_in) ? obj.expires_in : 3600;
   return { token: String(obj.access_token), expiresIn };
 }
-/** Build the `claude mcp add` argv for a gateway MCP server + bearer. Pure (token passed through, not logged here). */
+/** Build the `claude mcp add` argv for a gateway MCP server + bearer. Pure (token passed through, not logged here).
+ * Used only when headersHelperEnabled() is false (GATEWAY_CONNECT_HEADERS_HELPER=0) -- the prior, byte-identical
+ * static-header-only registration path. */
 export function buildAddArgs(mcpName, url, token) {
   return ['mcp', 'add', '--transport', 'http', mcpName, url, '--header', `Authorization: Bearer ${token}`];
+}
+/** Build the `claude mcp add-json` argv for a gateway MCP server carrying BOTH a static bearer header
+ * (kept as the fallback used until the workspace trust dialog is accepted, or in a non-interactive
+ * `claude -p` run -- see the headersHelper comment above and SKILL.md) AND, when `helperPath` is
+ * given, a dynamic `headersHelper` field (used once trusted; owns refresh from then on). `claude mcp
+ * add` has no CLI flag for headersHelper, so this goes through `add-json`'s full JSON server object
+ * instead -- verified to persist an arbitrary `headersHelper` key untouched. Pure (token passed
+ * through, not logged here). Same default scope ("local") as `claude mcp add` uses when no `--scope`
+ * flag is given. */
+export function buildAddJsonArgs(mcpName, url, token, helperPath) {
+  const server = { type: 'http', url, headers: { Authorization: `Bearer ${token}` } };
+  if (helperPath) server.headersHelper = helperPath;
+  return ['mcp', 'add-json', mcpName, JSON.stringify(server)];
 }
 /** Decode the (unverified) agent-lane claim from a JWT access token, for a post-mint sanity print. Safe: lane name only. */
 export function laneClaim(token) {
@@ -176,9 +211,18 @@ async function verify(token) {
   return { count: names.length, privileged: priv, status: r.status };
 }
 
+/** The exact argv register() passes to `claude` to (re-)add the gateway server, given the CURRENT
+ * headersHelperEnabled() setting. Pulled out as its own pure function (env-dependent, but no I/O)
+ * so a test can assert on the real decision register() makes -- with the helper field present when
+ * enabled and structurally absent (a different CLI subcommand entirely, not just an omitted key)
+ * when disabled -- without invoking the actual `claude` binary. */
+export function buildRegisterArgs(mcpName, url, token) {
+  return headersHelperEnabled() ? buildAddJsonArgs(mcpName, url, token, HEADERS_HELPER_PATH) : buildAddArgs(mcpName, url, token);
+}
+
 function register(mcpName, token) {
   try { execFileSync('claude', ['mcp', 'remove', mcpName], { stdio: 'ignore' }); } catch { /* not present yet */ }
-  execFileSync('claude', buildAddArgs(mcpName, GATEWAY_MCP, token), { stdio: 'ignore' });
+  execFileSync('claude', buildRegisterArgs(mcpName, GATEWAY_MCP, token), { stdio: 'ignore' });
 }
 
 async function connectOnce({ lane, doRegister, doVerify }) {
@@ -214,4 +258,7 @@ if (isMain) {
 /** True when `lane` is a known gateway lane. Onboarding uses this to no-op for agents without a lane. */
 export function hasLane(lane) { return Object.prototype.hasOwnProperty.call(LANES, lane); }
 
-export default { LANES, GATEWAY_MCP, TOKEN_ENDPOINT, mintToken, buildAddArgs, parseTokenResponse, laneClaim, hasLane, azureEnvPresent, credSource };
+export default {
+  LANES, GATEWAY_MCP, TOKEN_ENDPOINT, mintToken, buildAddArgs, buildAddJsonArgs, buildRegisterArgs,
+  parseTokenResponse, laneClaim, hasLane, azureEnvPresent, credSource, headersHelperEnabled, HEADERS_HELPER_PATH,
+};

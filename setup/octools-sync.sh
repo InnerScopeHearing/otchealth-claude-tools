@@ -69,7 +69,21 @@ if [ -z "${OCTOOLS_NO_GATEWAY_SYNC:-}" ] && command -v claude >/dev/null 2>&1 \
   gw_last="$(cat "$GW_STAMP" 2>/dev/null || echo 0)"
   gw_reg=0
   claude mcp list 2>/dev/null | grep -qiE 'otchealth-gateway|mcp\.otchealth\.app' && gw_reg=1
-  if [ "$gw_reg" -eq 0 ] || [ "$gw_now" -le 0 ] || [ $((gw_now - gw_last)) -ge "$GW_THROTTLE" ]; then
+  # HEADERS-HELPER (2026-09-03): registration now sets a dynamic `headersHelper` (see connect.mjs /
+  # headers-helper.mjs) whenever GATEWAY_CONNECT_HEADERS_HELPER != "0" -- the default. Once that is
+  # active, Claude Code itself re-invokes the helper at session start and on reconnect/401, so THE
+  # HELPER OWNS REFRESH and this hook's periodic timed re-mint is now a no-op. The "not registered at
+  # all" repair stays live either way -- a dropped/never-added server entry is a different failure
+  # than a stale token, and no headersHelper can fix a server that does not exist; only that branch
+  # runs when the helper is active. GATEWAY_CONNECT_HEADERS_HELPER=0 restores the exact prior
+  # behavior (both the "not registered" AND the elapsed-throttle branches, as before).
+  gw_due=0
+  if [ "${GATEWAY_CONNECT_HEADERS_HELPER:-}" = "0" ]; then
+    if [ "$gw_reg" -eq 0 ] || [ "$gw_now" -le 0 ] || [ $((gw_now - gw_last)) -ge "$GW_THROTTLE" ]; then gw_due=1; fi
+  else
+    [ "$gw_reg" -eq 0 ] && gw_due=1
+  fi
+  if [ "$gw_due" -eq 1 ]; then
     echo "$gw_now" > "$GW_STAMP" 2>/dev/null || true
     [ -f "$TOOLS_DIR/skills/gateway-connect/session-connect.sh" ] \
       && timeout 45 bash "$TOOLS_DIR/skills/gateway-connect/session-connect.sh" 2>&1 | sed 's/^/[octools-sync] /' || true
