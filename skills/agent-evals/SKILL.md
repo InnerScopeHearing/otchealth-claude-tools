@@ -42,7 +42,7 @@ The judge defaults to the SAME model the agent persona answered on (OpenAI, `res
   drops that task's comparison row — it never invalidates that task's primary scorecard entry.
   Example: `node run-evals.mjs --agent cto --compare --json /tmp/cto-scorecard.json`.
 
-## OPENAI_BATCH (2026-09-02, cost lever)
+## OPENAI_BATCH (2026-09-02, cost lever; ARMED as the nightly default 2026-09-03, T-2)
 `OPENAI_BATCH=1` (or `OPENAI_BATCH_AGENT_EVALS=1` to arm this caller alone, fleet-wide default off)
 submits every selected task's persona-answer request as ONE OpenAI Batch API job (50% off vs
 synchronous pricing, up to a 24h turnaround, stacks with automatic prompt caching), then -- only when
@@ -53,7 +53,86 @@ mode (a manual, occasional diagnostic, not the nightly cost driver this lever ta
 be `LLM_PROVIDER=openai` (the default); `LLM_PROVIDER=foundry/azure` never enters this lane. See
 `setup/model-routing.mjs`'s own BATCH API section for the shared `submitBatch`/`awaitBatch` contract
 this and five sibling callers (recall-evals' two miners, both signal-radar detectors, doc-indexer's
-enrich.mjs) all use.
+enrich.mjs) all use -- agent-evals is the FIRST of the six to actually arm it (the radar's pick: it
+already imported every batch helper unused).
+
+- **Nightly default:** `.github/workflows/nightly-eval.yml` sets `OPENAI_BATCH_AGENT_EVALS: '1'` on
+  its "Run golden-task suite" step. That workflow's own `schedule:` trigger is currently commented out
+  (disarmed 2026-08-27 -- its `azure/login` step targets the permanently-deleted Azure subscription
+  `55c84f6b`; unrelated to this flag and not fixed here), so the flag takes effect the next time that
+  workflow actually runs (`workflow_dispatch` today, or once a real scheduled run is restored). Every
+  OTHER caller of `run-evals.mjs` (`promptcheck.yml`'s per-PR base/head runs, `deploy-eval-gate.yml`'s
+  reusable gate) is UNCHANGED -- batch mode is opt-in per invocation and neither of those sets the flag.
+- **Live-submitted against the real OpenAI Batch API (2026-09-03), CONFIRMED COMPLETED:** ran
+  directly (not via the disarmed workflow -- see above) with `OPENAI_BATCH_AGENT_EVALS=1`, bounded
+  to the smallest golden set (`--agent coach`, 1 task). Persona-answer batch
+  `batch_6a990e037a6481908bd4088c55c88ac3` was ACCEPTED, progressed `validating` -> `in_progress`
+  (confirmed both by `run-evals.mjs`'s own poll log and an independent standalone
+  `GET /v1/batches/{id}` check), and then -- after the originating `run-evals.mjs` process itself hit
+  its own bounded 30-minute proof window and exited with a distinct `timedOut`-tagged error (the
+  documented fail-loud contract working correctly; a timeout is never silently treated as success) --
+  a SEPARATE standalone continuation poller (reusing the real `awaitBatch()` from
+  `setup/model-routing.mjs`, the exact function `run-evals.mjs`'s `runOneBatch()` calls, not a mock)
+  kept watching the same batch independently and observed it reach `status: "completed"` roughly 26.5
+  minutes after submission, with `request_counts: {"total":1,"completed":1,"failed":0}`. The single
+  submitted line (`custom_id: "coach-gate-order"`) resolved to `error: null` and real, on-topic
+  persona-answer content (a full release-gating policy answer matching the `coach` persona's rubric);
+  `assertAllBatchResultsPresent(["coach-gate-order"], results)` -- the exact completeness check
+  `runOneBatch()` itself calls -- did not throw, confirming the one submitted request was not silently
+  dropped. This proves the real submit -> poll -> parse cycle for the persona-answer batch works
+  end to end against OpenAI's live endpoints, not a mock, for its full lifecycle (not merely
+  "accepted"). Poll any future batch id the same way from the repo root (resolves the key via the
+  same SSM-backed `kvSecret()` path `run-evals.mjs` uses; never prints it):
+  ```
+  node -e 'import("./skills/kb-memory/azure-secret.mjs").then(async ({ kvSecret }) => {
+    const k = await kvSecret("openai-api-key");
+    const r = await fetch("https://api.openai.com/v1/batches/<batch_id>", { headers: { Authorization: "Bearer " + k } });
+    console.log(await r.json());
+  })'
+  ```
+  or re-run the same `run-evals.mjs --agent coach` command, which submits a fresh batch and polls it
+  to completion end to end. `--emit` was not passed for this proof run, so no `eval_result` events
+  reached PostHog either way (inert by design, same as any `run-evals.mjs` invocation without
+  `--emit`) -- the nightly workflow's own `--emit` is unaffected regardless, since
+  `--emit`/`--json`/batch mode are independent.
+- **A SECOND full round trip (2026-09-03), the complete pipeline, both batches, real scorecard
+  produced:** a fresh `run-evals.mjs --agent coach --json <path>` invocation (no artificial
+  `OPENAI_BATCH_TIMEOUT_MS` override this time -- the default 24h ceiling was left in place and the
+  run was simply allowed to finish) exercised the ENTIRE `OPENAI_BATCH` contract in one shot, faster
+  than the first proof run: persona-answer batch `batch_6a99904ddd4c8190bc60880b6e201883` went
+  `validating` -> `in_progress` -> `completed` in 151s, then (since the judge is the default `openai`
+  judge, `EVAL_JUDGE`/`JUDGE_PROVIDER` unset) judge-verdict batch
+  `batch_6a9990e7a730819090dcdec7923d9908` went `validating` -> `in_progress` -> `completed` in a
+  further 92s. `main()`'s normal per-task loop then consumed both batched results exactly as it would
+  any other run and printed a real scorecard:
+  ```
+  # agent-evals (run+judge on gpt-5.6-terra, judge=gpt-5.6-terra [OPENAI_BATCH]) - 1 task(s), pass>=0.7
+  [PASS] coach/coach-gate-order  100%  (4/4)  Explicitly gates Release Captain on QA pass/N/A and
+    Guardian clearance, sequences QA→Guardian→release, rejects direct shipping, and delegates all
+    execution.
+  SCORECARD: 1/1 passed, avg 100%
+  ```
+  and a matching `--json` scorecard (`{"model":"gpt-5.6-terra","judge_model":"gpt-5.6-terra",
+  "passAt":0.7,"avg":1,"passed":1,"total":1,"results":[{"id":"coach-gate-order",...,"score":1,
+  "pass":true,"met":[true,true,true,true]}]}`). Process exit code `0`. This is the direct,
+  non-mocked, end-to-end proof the flag arms correctly: batch accepted for both persona AND judge
+  legs, each polled to completion via the real `awaitBatch()`, each result set parsed via the real
+  `assertAllBatchResultsPresent()`/`parseJudgeOutput()`, and a genuine scorecard produced -- not just
+  the persona leg proven separately (the bullet above). `--emit` was not passed here either (same
+  reasoning as above); the nightly workflow's `--emit` is unaffected.
+- **Model-not-found + per-line-error paths:** covered at two layers. `setup/model-routing.mjs`'s own
+  `awaitBatch`/`submitBatch` tests (`setup/model-routing.test.mjs`) cover the generic per-line-error
+  contract (a line with `response:null, error:{...}` records `{error, content:null}`, never thrown;
+  `assertAllBatchResultsPresent` catches a custom_id ABSENT from both files) plus the model-shape
+  sanity/live-verification helpers `warnIfImplausibleOpenAIModel`/`verifyOpenAITiers`. On top of that,
+  `skills/agent-evals/tests/run-evals-eval-judge.test.mjs` adds three tests specific to THIS skill's own
+  `runPersonaBatch`/`runJudgeBatch` wrappers, using a real OpenAI `model_not_found` error shape: a bad
+  model on one persona-answer line surfaces as `{error, content:null}` (never a fabricated blank
+  answer) without contaminating a sibling task's successful line in the same batch, and a bad model on
+  a judge-batch line is proven to never reach `parseJudgeOutput` (which would otherwise fail-safe it to
+  an indistinguishable all-false/0% "judge parse failed" verdict -- a real FAIL look-alike for what is
+  actually an infra failure). Both match the exact skip-and-log contract `main()`'s per-task loop
+  depends on (`if (ar.error) throw ...` / "no judge result" -> caught, task skipped, never scored).
 
 ## Tasks
 `evals/<agent>.json` = array of `{id, agent, task, rubric:[criteria...], callsite_id?, prompt_file?}`.
