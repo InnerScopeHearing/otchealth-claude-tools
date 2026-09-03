@@ -2,12 +2,12 @@
 // growth-room — the fleet's nightly cross-app GROWTH digest. Pulls read-only signal from the three
 // growth data sources the fleet already holds credentials for (Capgo OTA rollout health, RevenueCat
 // subscription/MRR, PostHog per-app funnel), composes ONE dated Markdown "growth room" digest, and
-// stages it into the Azure commons brain (otchealthcommons/company-journal/_DOCS/growth-room/<date>.md)
+// stages it into the commons brain (otchealthcommons/company-journal/_DOCS/growth-room/<date>.md)
 // the SAME way daily-digest.mjs stages its own digest (skills/cfo-store/store.mjs put, then
-// doc-indexer's `index` step writes the _TEXT/ sidecar the S1 ixr-commons-docs pull-indexer reads on
-// its own schedule — see setup/expected-indexes.json's commons entry). Once staged, `brain_search`
-// federates it for every exec agent (CRO/CFO/COO/CTO): "what did installs/OTA/MRR/funnel look like
-// this week" becomes answerable the same way "what did we ship yesterday" already is via daily-digest.
+// doc-indexer's `index` step writes the _TEXT/ sidecar so the room stays cloud-searchable). Once
+// staged, `brain_search` federates it for every exec agent (CRO/CFO/COO/CTO): "what did installs/
+// OTA/MRR/funnel look like this week" becomes answerable the same way "what did we ship yesterday"
+// already is via daily-digest.
 //
 // READ-ONLY against every source. Never writes to Capgo/RevenueCat/PostHog; never posts anywhere but
 // the commons data room. Non-PHI ring: MedReview (PostHog project 468398, PHI-hardened) is
@@ -15,11 +15,23 @@
 // (revenue recognition, cap table, fundraising) are OUT OF SCOPE; this is app-growth/funnel telemetry
 // only, not company financials (that is the CFO's separate reconstruction/xero lane).
 //
-// Secrets (self-resolved from Azure Key Vault via skills/kb-memory/azure-secret.mjs's kvSecret();
-// GCP Secret Manager is RETIRED): capgo-token, posthog-personal-api-key, revenuecat-secret-key,
-// azure-commons-storage-key (via cfo-store). Any ONE missing degrades that source's section to
-// "not configured" rather than failing the whole run — a partial digest beats no digest, the same
-// posture cfo-reconstruction's kind-A snapshot takes for a missing manifest.
+// STORAGE (ported off Azure Blob, 2026-09-03): the digest used to stage via `store.mjs --azure`, a
+// hardcoded override of that tool's own safe default. Azure subscription 55c84f6b (which held the
+// `otchealthcommons` Blob account) was permanently deleted 2026-08-13, so that call could never have
+// succeeded; it is now `store.mjs --s3`, targeting the SAME logical room
+// (`otchealthcommons/company-journal`) via `skills/kb-memory/s3-blob.mjs`'s verified MIRROR row
+// (bucket `otchealth-brain-dr-55c84f6b`). No new bucket mapping was needed. `--key-secret` was an
+// Azure-only flag (a storage-account key secret name) and is dropped with the backend — S3 needs no
+// per-room key, only the AWS credential `store.mjs` already resolves via the ECS task role / env.
+//
+// Secrets (self-resolved via skills/kb-memory/azure-secret.mjs's kvSecret(), which defaults to AWS
+// SSM Parameter Store `/otchealth/*` — SECRET_BACKEND=ssm, the fleet default; Azure Key Vault and GCP
+// Secret Manager are both retired): `capgo-token`, `posthog-personal-api-key`, `revenuecat-secret-key`.
+// Any ONE missing degrades that source's section to "not configured" rather than failing the whole
+// run — a partial digest beats no digest, the same posture cfo-reconstruction's kind-A snapshot takes
+// for a missing manifest. The commons stage/index steps need no secret at all: AWS credentials for
+// S3 resolve via the ECS task role (or AWS_ACCESS_KEY_ID/SECRET / OTC_AWS_ACCESS_KEY_ID/SECRET on a
+// seat), the same chain every other ported skill in this fleet already uses.
 //
 // Usage:
 //   node skills/growth-room/growth-room.mjs sweep [--days N] [--dry-run] [--json] [--out path]
@@ -42,8 +54,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const STORE_MJS = join(HERE, "..", "cfo-store", "store.mjs");
 const COMMONS_ACCOUNT = "otchealthcommons";
 const COMMONS_CONTAINER = "company-journal";
-const COMMONS_KEY_SECRET = "azure-commons-storage-key";
-const STAGE_PREFIX = "_DOCS/growth-room"; // matches the ixr-commons-docs S1 pull-indexer prefix
+const STAGE_PREFIX = "_DOCS/growth-room"; // the doc-indexer `index` step below writes this prefix's _TEXT/ sidecar
 
 // ── The fleet app registry ──────────────────────────────────────────────────────────────────────
 // bundleId is each app's real Capacitor appId (verified against each repo's own capacitor.config.*,
@@ -324,7 +335,13 @@ export async function runSweep({ days = DAYS, dryRun = DRY_RUN } = {}) {
 
   let staged = false;
   if (!dryRun) {
-    execFileSync("node", [STORE_MJS, "--azure", "--account", COMMONS_ACCOUNT, "--key-secret", COMMONS_KEY_SECRET, "--container", COMMONS_CONTAINER, "put", localPath, `${STAGE_PREFIX}/${date}.md`], { stdio: ["ignore", "pipe", "pipe"] });
+    // --s3 (2026-09-03, was a hardcoded --azure override of store.mjs's own safe default). A missing
+    // or unreachable bucket throws loud here: store.mjs's --s3 path exits non-zero before any network
+    // call if the room has no verified row in s3-blob.mjs's MIRROR table, and putObjectToS3 throws on
+    // any non-2xx response — execFileSync re-throws that as a real exception, and this call is NOT
+    // wrapped in a try/catch, so growth-room-nightly.sh's `set -e` takes the whole job down loud
+    // rather than reporting a silent "ok" for a digest that never actually staged.
+    execFileSync("node", [STORE_MJS, "--s3", "--account", COMMONS_ACCOUNT, "--container", COMMONS_CONTAINER, "put", localPath, `${STAGE_PREFIX}/${date}.md`], { stdio: ["ignore", "pipe", "pipe"] });
     staged = true;
   }
 

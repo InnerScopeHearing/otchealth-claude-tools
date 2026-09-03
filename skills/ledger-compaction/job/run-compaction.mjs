@@ -1,118 +1,69 @@
 #!/usr/bin/env node
 // ledger-compaction / job/run-compaction.mjs - scheduled runner glue.
 //
-// This is the ONLY part of ledger-compaction that touches Azure Blob storage. It mirrors the same
-// self-resolving-SA + SAS + fetch pattern used throughout skills/kb-memory (mem.mjs, index-one.mjs,
-// memory-librarian.mjs): resolve the claude-driver SA, mint a JWT, pull the agent's storage account
-// and key from Secret Manager, build an account SAS, then read/write blobs with plain fetch.
+// This is the ONLY part of ledger-compaction that touches object storage. It reads each agent's
+// ledger (_MEMORY/<agent>.jsonl), runs the PURE compact.mjs against the in-memory rows (never
+// touches the source blob), and writes the compacted markdown to a SEPARATE object next to the
+// ledger, in the same room kb-memory already uses for its own derived artifact
+// (_MEMORY/<agent>.md): here that is _MEMORY/<agent>.compacted.md, so a human reading the agent's
+// memory folder finds the compacted summary right next to the live ledger and its rendered view,
+// never overwriting either.
 //
-// For each agent's ledger (_MEMORY/<agent>.jsonl), it:
-//   1) reads the ledger blob (the SAME path kb-memory's mem.mjs reads/writes),
-//   2) runs the PURE compact.mjs against the in-memory rows (never touches the source blob),
-//   3) writes the compacted markdown to a SEPARATE blob, next to the ledger, in the same container
-//      kb-memory already uses for its own derived artifact (_MEMORY/<agent>.md): here that is
-//      _MEMORY/<agent>.compacted.md, so a human reading the agent's memory folder finds the
-//      compacted summary right next to the live ledger and its rendered view, never overwriting
-//      either.
+// STORAGE (ported to S3, 2026-09-03; supersedes the 2026-08-18 credential-gate fix below, which
+// repaired ONLY the entry gate and left this file's actual storage calls pointed at dead Azure
+// Blob). This file used to hand-roll an account-key SAS and talk to
+// https://${acct}.blob.core.windows.net/... directly. Azure subscription 55c84f6b -- which held
+// every one of the three storage accounts this file targets (otchealthcfodata, otchealthlegalstore,
+// otchealthcommons) -- was permanently deleted 2026-08-13, so every one of those calls could only
+// ever fail; each agent's failure was individually caught and logged, so the job as a whole still
+// exited 0 every run -- a silent-success shape for a job that was doing nothing.
 //
-// Fail-open by design, same as skills/signal-radar/radar.mjs: one agent's compaction failing (bad
-// creds, blob not found, malformed ledger) is logged and skipped, never crashes the job. The job
-// process itself always exits 0 so a scheduled Azure Container App Job run is never marked failed
-// by a transient or partial issue; real problems are visible in the job logs instead.
+// The three (account, container) pairs this file's AGENTS map already used are ALL THREE already
+// verified rows in skills/kb-memory/s3-blob.mjs's (account,container)->(bucket,keyPrefix) MIRROR
+// table, so no new bucket mapping was needed: this port is the same shape already proven twice
+// elsewhere in this exact cluster (skills/xero/xero-token.mjs, 2026-08-27; the FND-20260827-bcfc
+// batch). getTextFromS3/putObjectToS3 replace the hand-rolled getText/putText/buildSas entirely; the
+// same "never write back to the source ledger" discipline is unchanged (see compactOneAgent below).
+//
+// EXIT CODE (changed, 2026-09-03): a missing AWS credential on every path is still a genuine
+// fail-open (exit 0) -- there is nothing this job could have done differently, and that condition
+// was already true before Azure ever existed. But an agent that DOES have a credential and still
+// cannot read or write its S3 room (an unreachable bucket, a 403, a genuinely misconfigured MIRROR
+// row) is a real backend problem, not a transient blip to shrug off -- exactly the class of defect
+// that let this job report "Succeeded" for weeks while doing nothing. The job still processes every
+// agent even after one fails (one bad room must never stop the others), but if ANY agent failed for
+// a reason other than "no ledger written yet" (a genuine, expected, quiet outcome), the process now
+// exits non-zero with a clear summary line naming which agents failed and why.
 //
 // Run: node run-compaction.mjs [--agents cfo,clo,commons] [--dry-run]
-import crypto from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { compactLedger, parseLedgerText, renderMarkdown } from "../compact.mjs";
-import { kvSecret } from "../../kb-memory/azure-secret.mjs";
 import { awsCredsPresent } from "../../kb-memory/aws-secret.mjs";
+import { getTextFromS3, putObjectToS3 } from "../../kb-memory/s3-blob.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const DRY_RUN = argv.includes("--dry-run");
 const ONLY = (val("--agents", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 
-const SM = "otchealth-shared-prod";
-// Same agent -> storage mapping as skills/kb-memory/mem.mjs (kept intentionally small and local here
-// rather than imported, since mem.mjs has no exported config surface; this list is the set of ledgers
-// worth compacting on a schedule and can grow independently of kb-memory's own agent roster).
+// Same three rooms skills/kb-memory/mem.mjs's Azure-era config used, now expressed directly as the
+// (account, container) keys skills/kb-memory/s3-blob.mjs's MIRROR table already carries a verified
+// row for -- no per-agent storage-account/key secret is needed any more (S3 auth resolves via the
+// ECS task role / AWS env, the same chain every other ported skill in this cluster already uses).
 const AGENTS = {
-  cfo:     { accountSecret: "azure-cfo-storage-account",    keySecret: "azure-cfo-storage-key",    container: "cfo-source-docs" },
-  clo:     { accountSecret: "azure-legal-storage-account",  keySecret: "azure-legal-storage-key",  container: "company" },
-  commons: { accountSecret: "azure-commons-storage-account", keySecret: "azure-commons-storage-key", container: "company-journal" },
+  cfo:     { account: "otchealthcfodata",    container: "cfo-source-docs" },
+  clo:     { account: "otchealthlegalstore", container: "company" },
+  commons: { account: "otchealthcommons",    container: "company-journal" },
 };
 
-function resolveSaJson() {
-  if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  const p = `${homedir()}/.gcp_claude_driver_sa.json`;
-  try { if (existsSync(p)) return readFileSync(p, "utf8"); } catch {}
-  return null;
-}
-
-function saJwt(sa, scope) {
-  const now = Math.floor(Date.now() / 1000);
-  const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
-  return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
-}
-
-let CACHED_TOKEN;
-async function gtoken(sa) {
-  if (CACHED_TOKEN) return CACHED_TOKEN;
-  const r = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(saJwt(sa, "https://www.googleapis.com/auth/cloud-platform"))}`,
-  });
-  return (CACHED_TOKEN = (await r.json()).access_token);
-}
-async function sm(sa, id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
-  const t = await gtoken(sa);
-  const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: "Bearer " + t } });
-  if (!r.ok) return null;
-  return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
-}
-
-function buildSas(acct, key) {
-  const sv = "2021-12-02", sp = "rwlc", ss = "b", srt = "co";
-  const st = new Date(Date.now() - 5 * 60000).toISOString().slice(0, 19) + "Z";
-  const se = new Date(Date.now() + 3600 * 1000).toISOString().slice(0, 19) + "Z";
-  const sts = [acct, sp, ss, srt, st, se, "", "https", sv, ""].join("\n") + "\n";
-  const sig = crypto.createHmac("sha256", Buffer.from(key, "base64")).update(sts, "utf8").digest("base64");
-  return new URLSearchParams({ sv, ss, srt, sp, st, se, spr: "https", sig }).toString();
-}
-const encPath = (name) => name.split("/").map(encodeURIComponent).join("/");
-
-async function getText(acct, container, sas, name) {
-  const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${encPath(name)}?${sas}`);
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`get ${r.status}`);
-  return await r.text();
-}
-async function putText(acct, container, sas, name, body, ct) {
-  const r = await fetch(`https://${acct}.blob.core.windows.net/${container}/${encPath(name)}?${sas}`, {
-    method: "PUT",
-    headers: { "x-ms-blob-type": "BlockBlob", "Content-Type": ct || "text/markdown; charset=utf-8" },
-    body,
-  });
-  if (!r.ok) throw new Error(`put ${r.status} ${(await r.text()).slice(0, 160)}`);
-}
-
-async function compactOneAgent(sa, agent, cfg) {
-  const acct = process.env.KB_ACCOUNT || (await sm(sa, cfg.accountSecret));
-  const akey = process.env.KB_KEY || (await sm(sa, cfg.keySecret));
-  if (!acct || !akey) throw new Error(`missing storage creds for agent '${agent}'`);
-  const sas = buildSas(acct, akey);
-
+async function compactOneAgent(agent, cfg) {
   const ledgerName = `_MEMORY/${agent}.jsonl`;
   const outName = `_MEMORY/${agent}.compacted.md`;
 
-  const text = await getText(acct, cfg.container, sas, ledgerName);
-  if (text == null) return { agent, skipped: true, reason: "ledger blob not found (nothing to compact yet)" };
+  // getTextFromS3 returns null ONLY on a genuine 404; it THROWS on anything else (a 403, an
+  // unmapped room, a transport failure), so a real backend problem can never read as "nothing to
+  // compact yet" -- that distinction is exactly what the exit-code change above depends on.
+  const text = await getTextFromS3(cfg.account, cfg.container, ledgerName);
+  if (text == null) return { agent, skipped: true, ok: true, reason: "ledger not found in S3 yet (nothing to compact)" };
 
   const { rows, errors } = parseLedgerText(text);
   const result = compactLedger(rows);
@@ -120,63 +71,52 @@ async function compactOneAgent(sa, agent, cfg) {
 
   if (!DRY_RUN) {
     // Write ONLY the separate compacted artifact. Never write back to ledgerName: the source ledger
-    // blob is read-only from this job's point of view.
-    await putText(acct, cfg.container, sas, outName, md, "text/markdown; charset=utf-8");
+    // object is read-only from this job's point of view.
+    await putObjectToS3(cfg.account, cfg.container, outName, md, "text/markdown; charset=utf-8");
   }
-  return { agent, skipped: false, stats: result.stats, parseErrors: errors.length, outName, dryRun: DRY_RUN };
+  return { agent, skipped: false, ok: true, stats: result.stats, parseErrors: errors.length, outName, dryRun: DRY_RUN };
 }
 
 async function main() {
-  const raw = resolveSaJson();
-  const azureOk = Boolean(process.env.AZURE_SP_CLIENT_ID && process.env.AZURE_SP_CLIENT_SECRET && process.env.AZURE_SP_TENANT_ID);
-  // AWS ADDED 2026-08-18. This gate tested ONLY the two credential paths that are now dead -- the
-  // retired GCP SA and the Azure SP -- and then returned, so the job printed "Fail-open: exiting 0"
-  // and did nothing on every run while a perfectly good credential sat unused. Proven, not inferred:
-  // on 2026-08-18 the job was run on a freshly rebuilt image (ECR digest c62680f5, pushed 19:49:32Z)
-  // as ECS task 9306de30f4e64556b6ff3a0ebf484296, and its CloudWatch log still read
-  // "no credentials (neither Azure SP nor GCP SA). Fail-open: exiting 0, nothing compacted this run."
-  //
-  // The credential it was ignoring is the ECS task role. `otchealthTaskRole` carries an inline
-  // `runtime-access` policy granting ssm:GetParameter/GetParameters/GetParametersByPath on
-  // arn:aws:ssm:us-east-1:900915535335:parameter/otchealth/*, which is exactly what kvSecret()'s SSM
-  // fallback needs -- so on Fargate this path resolves and the job can actually run.
-  //
-  // This is the SAME defect PR #453 fixed in setup/session-start.sh and gateway-connect's
-  // session-connect.sh: an OUTER gate that names only dead paths and short-circuits before the inner
-  // resolver (which already supports AWS) is ever called. skills/fleet-medic/medic.mjs:212 and :268
-  // are two further instances, deliberately NOT fixed here -- see this file's PR for why (medic runs
-  // every 30 minutes and its downstream still writes to write-blocked Azure Blob, so unblocking its
-  // gate before the S3 repoint would turn one silent failure into 48 pages a day).
   const aws = awsCredsPresent();
-  if (!raw && !azureOk && !aws.any) {
+  if (!aws.any) {
     console.error(
-      "[ledger-compaction] no credentials on ANY path: GCP SA absent, AZURE_SP_* absent, and no AWS " +
-      "credential (no ECS task role, no AWS_ACCESS_KEY_ID/SECRET, no OTC_AWS_ACCESS_KEY_ID/SECRET). " +
-      "Fail-open: exiting 0, nothing compacted this run.",
+      "[ledger-compaction] no AWS credential on any path (no ECS task role, no AWS_ACCESS_KEY_ID/SECRET, " +
+      "no OTC_AWS_ACCESS_KEY_ID/SECRET). Fail-open: exiting 0, nothing compacted this run.",
     );
     return;
   }
-  let sa = null;
-  if (raw) {
-    try { sa = JSON.parse(raw); } catch (e) {
-      console.error(`[ledger-compaction] SA JSON unparseable: ${e.message}; continuing on Azure Key Vault.`);
-      sa = null;
+
+  const targets = ONLY.length ? ONLY.filter((a) => AGENTS[a]) : Object.keys(AGENTS);
+  const failures = [];
+  for (const agent of targets) {
+    try {
+      const outcome = await compactOneAgent(agent, AGENTS[agent]);
+      console.log(`[ledger-compaction] ${agent}: ${JSON.stringify(outcome)}`);
+    } catch (e) {
+      // Still fail-open PER AGENT (one room's trouble never stops the others), but the failure is
+      // now tracked so the process as a whole can report it truthfully instead of exiting 0 no
+      // matter what happened -- see the EXIT CODE note at the top of this file.
+      console.error(`[ledger-compaction] ${agent}: FAILED (${e.message}); skipping, continuing with remaining agents.`);
+      failures.push({ agent, message: e.message });
     }
   }
 
-  const targets = ONLY.length ? ONLY.filter((a) => AGENTS[a]) : Object.keys(AGENTS);
-  for (const agent of targets) {
-    try {
-      const outcome = await compactOneAgent(sa, agent, AGENTS[agent]);
-      console.log(`[ledger-compaction] ${agent}: ${JSON.stringify(outcome)}`);
-    } catch (e) {
-      // Fail-open per agent: one agent's blob trouble never stops the others or fails the job.
-      console.error(`[ledger-compaction] ${agent}: FAILED (${e.message}); skipping, continuing with remaining agents.`);
-    }
+  if (failures.length) {
+    console.error(
+      `[ledger-compaction] ${failures.length}/${targets.length} agent(s) FAILED -- an unreachable or ` +
+      `misconfigured S3 room, not the normal "no ledger yet" case: ` +
+      failures.map((f) => `${f.agent} (${f.message})`).join("; ") +
+      ". Exiting non-zero: this is a real backend problem and must never report as a silent ok.",
+    );
+    process.exitCode = 1;
   }
 }
 
 main().catch((e) => {
-  // Last-resort fail-open: this job must never exit non-zero on an internal error.
+  // Last-resort catch for a genuinely unexpected bug in this file's own control flow (argument
+  // parsing, an import failure), NOT for a per-agent S3 failure -- those are caught and counted
+  // above and exit non-zero on their own. This remains fail-open: a scheduled run should not be
+  // marked failed by a bug this job cannot itself act on differently.
   console.error(`[ledger-compaction] unexpected error: ${e.message}. Fail-open: exiting 0.`);
 });

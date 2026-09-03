@@ -1,6 +1,6 @@
 ---
 name: growth-room
-description: The fleet's nightly cross-app GROWTH digest. Pulls read-only signal from Capgo OTA statistics (bundle rollout health per app), RevenueCat (subscription/MRR metrics), and PostHog (per-app funnel: active devices, top events), composes ONE dated Markdown "growth room" digest, and stages it into the Azure commons brain the same way daily-digest stages its own digest, so every exec agent (CRO/CFO/COO/CTO) can `brain_search` "what did installs/OTA rollout/MRR/funnel look like this week" across the whole app portfolio in one place. Non-PHI ring; MedReview's PHI-hardened PostHog project is deliberately excluded from the app registry. Run nightly as a Container Apps Job (see job/growth-room-nightly.sh); the CTO owns the deploy.
+description: The fleet's nightly cross-app GROWTH digest. Pulls read-only signal from Capgo OTA statistics (bundle rollout health per app), RevenueCat (subscription/MRR metrics), and PostHog (per-app funnel: active devices, top events), composes ONE dated Markdown "growth room" digest, and stages it into the commons brain (S3) the same way daily-digest stages its own digest, so every exec agent (CRO/CFO/COO/CTO) can `brain_search` "what did installs/OTA rollout/MRR/funnel look like this week" across the whole app portfolio in one place. Non-PHI ring; MedReview's PHI-hardened PostHog project is deliberately excluded from the app registry. Runs nightly as an AWS ECS scheduled task (see job/growth-room-nightly.sh); the task definition + schedule already exist (currently disabled); the CTO owns enabling it.
 ---
 
 # growth-room — the fleet's cross-app growth digest
@@ -79,62 +79,34 @@ needing to know each app's exact categorical-event names). Auth: `posthog-person
 ## Where it runs
 `job/growth-room-nightly.sh` mirrors every other Tier-1 job in this fleet (`nightly.sh`,
 `librarian.sh`, `cfo-reconstruction/job/cfo-nightly.sh`): sweep, then a scoped
-`doc-indexer index --prefix _DOCS/growth-room/` pass so the digest's `_TEXT/` sidecar exists for the
-S1 `ixr-commons-docs` pull-indexer to pick up on its own schedule (the commons room is S1 pull-indexer
-fed, per `setup/expected-indexes.json`'s `commons-company-journal` entry — no `push-search` step is
-needed or run, matching the `SKIP_PUSH_SEARCH=1` posture already set on `daily-digest`'s own job).
+`doc-indexer index --prefix _DOCS/growth-room/` pass so the digest's `_TEXT/` sidecar exists and the
+commons room stays cloud-searchable (the OpenSearch brain has no pull-indexer; `index` writes the
+sidecar directly, matching `daily-digest`'s own `SKIP_PUSH_SEARCH=1` posture — this job never runs
+`push-search`).
 
-### Deploy (Azure Cloud Shell or any az-authenticated shell; NOT applied by this PR — a separate,
-explicit CTO step, same posture as `runbooks/cfo-reconstruction-job.md`)
-This job needs `skills/growth-room/` baked into the shared `doc-indexer:latest` image (one new `COPY`
-line in `skills/doc-indexer/job/Dockerfile`, already added by this PR) — **rebuild the image before
-creating or trusting the job**, same requirement `cfo-reconstruction`'s runbook calls out:
-```bash
-cd otchealth-claude-tools && git pull
-az acr build -r otchealthacr -t doc-indexer:latest -f skills/doc-indexer/job/Dockerfile .
-```
-Then create the job (identifiers per `setup/expected-resources.json`, matching every other job in
-`otchealth-automation-rg` / `otchealth-jobs-env`):
-```bash
-IDENTITY_ID="/subscriptions/55c84f6b-ef90-4259-a58b-50835cc4cab4/resourceGroups/otchealth-automation-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-otc-jobs-kv"
-
-az containerapp job create \
-  --name growth-room-nightly \
-  --resource-group otchealth-automation-rg \
-  --environment otchealth-jobs-env \
-  --trigger-type Schedule \
-  --cron-expression "50 8 * * *" \
-  --replica-timeout 1200 \
-  --replica-retry-limit 1 \
-  --parallelism 1 \
-  --image otchealthacr.azurecr.io/doc-indexer:latest \
-  --registry-server otchealthacr.azurecr.io \
-  --registry-identity "$IDENTITY_ID" \
-  --mi-user-assigned "$IDENTITY_ID" \
-  --cpu 1 --memory 2Gi \
-  --command "/bin/sh" \
-  --args "/app/skills/growth-room/job/growth-room-nightly.sh"
-```
-- **`50 8 * * *`** (08:50 UTC daily) is staggered against the fleet's existing `otchealth-automation-rg`
-  crons (`daily-digest` 59 23, `librarian-*` 0/15/20/40-past-the-hour on 6h/hourly cycles,
-  `ledger-compaction` 0 8, `cfo-reconstruction-nightly` 10 8) — ten minutes after `cfo-reconstruction-
-  nightly`, not the same minute, so the two never collide in a shared log view.
-- **No `--secrets` / `--env-vars`.** Auth is entirely `id-otc-jobs-kv` managed identity, same as
-  `cfo-reconstruction-nightly` — no stored secret on the job spec at all.
-- **`--replica-timeout 1200`** (20 min) gives headroom for up to 10 apps × 3 sources with the 250ms
-  inter-call throttle on RevenueCat/rate-limited endpoints; well under the 1-hour ceiling of any single
-  API's rate limit window.
-- Smoke test before trusting the cron: `az containerapp job start -n growth-room-nightly -g
-  otchealth-automation-rg --command "/bin/sh" --args "/app/skills/growth-room/job/growth-room-nightly.sh" "--dry-run"`.
-- After deploying, add `growth-room-nightly` to `setup/expected-resources.json` (type
-  `containerAppJob`) — only once the resource actually exists, so `resource-reconcile.mjs` never
-  reports a false "expected but absent" drift.
+### Where this already lives on AWS (2026-09-03)
+An ECS task definition (`otchealth-job-growth-room-nightly`) and an EventBridge Scheduler schedule
+(`otchealth-growth-room-nightly`, `cron(50 8 * * ? *)`) already exist from the 2026-08-16 Azure ->
+AWS job-migration sweep. Both are currently **DISABLED** — the schedule was registered as a
+placeholder before this port landed, and its `State` has not been touched since. The task
+definition's image is the shared `doc-indexer:latest` (rebuilt automatically on merge to `main` via
+`.github/workflows/build-doc-indexer-ecr.yml`), command
+`/app/skills/growth-room/job/growth-room-nightly.sh`, no `--secrets` needed (auth is the ECS task
+role + AWS SSM, see Credentials below). Enabling the schedule (flip `State` to `ENABLED` via
+`aws scheduler update-schedule`) is a separate, explicit CTO step — not part of this port — after the
+task definition's env is confirmed to carry no stale Azure-only variables and the task role's S3
+access to `otchealth-brain-dr-55c84f6b` is confirmed. A manual `aws ecs run-task` against this task
+definition (or the schedule's own `--dry-run` args override) is the smoke test before flipping it on.
 
 ## Credentials
-Self-resolved from Azure Key Vault via `skills/kb-memory/azure-secret.mjs`'s `kvSecret()` (managed
-identity first, no stored job secret needed): `capgo-token`, `posthog-personal-api-key`,
-`revenuecat-secret-key`, `azure-commons-storage-key` (via `cfo-store`). Any one missing degrades that
-source's section to "NOT CONFIGURED this run" rather than failing the whole sweep.
+Self-resolved via `skills/kb-memory/azure-secret.mjs`'s `kvSecret()`, which defaults to AWS SSM
+Parameter Store `/otchealth/*` (`SECRET_BACKEND=ssm`, the fleet default; Azure Key Vault and GCP
+Secret Manager are both retired): `capgo-token`, `posthog-personal-api-key`, `revenuecat-secret-key`.
+Any one missing degrades that source's section to "NOT CONFIGURED this run" rather than failing the
+whole sweep. The commons stage (`store.mjs --s3`) and index (`indexer.mjs --s3`) steps need no
+stored secret at all — the AWS credential they need resolves via the ECS task role (or
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` / `OTC_AWS_ACCESS_KEY_ID`/`OTC_AWS_SECRET_ACCESS_KEY` on
+a developer seat), the same chain every other ported skill in this fleet already uses.
 
 ## Guardrails
 - Read-only against all three sources. Never posts/writes to Capgo, RevenueCat, or PostHog.

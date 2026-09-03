@@ -22,8 +22,8 @@ convention:
   overwritten, or mutated. `compactLedger()` is a pure function: rows in, a new result object out.
 - The CLI (`compact.mjs`) never writes to the path you gave it. It only ever writes to a new,
   separately named file (`<ledger-path>.compacted.md`, and optionally `.compacted.ndjson`).
-- The scheduled job (`job/run-compaction.mjs`) only ever reads the ledger blob and writes to a
-  separate blob (`_MEMORY/<agent>.compacted.md`). It never writes to `_MEMORY/<agent>.jsonl`.
+- The scheduled job (`job/run-compaction.mjs`) only ever reads the ledger object and writes to a
+  separate object (`_MEMORY/<agent>.compacted.md`). It never writes to `_MEMORY/<agent>.jsonl`.
 - Tests in `tests/ledger-compaction.test.mjs` freeze the input rows and the input array before
   calling the compaction function, then assert the input is byte-identical afterward, so any future
   change that tries to mutate the source is caught by the test gate.
@@ -64,9 +64,9 @@ flat list of rows over the markdown sections.
 ## When to run it
 Run it once a ledger's row count gets large enough that reading the raw `.jsonl` or the rendered
 `.md` is unwieldy (a rough starting point is a few hundred rows, or whenever a ledger's shared
-`_MEMORY/<agent>.md` view is taking a long time to scan), or on a recurring schedule via the Azure
-Container App Job so a fresh compacted summary is always available without anyone having to remember
-to run it.
+`_MEMORY/<agent>.md` view is taking a long time to scan), or on a recurring schedule (see "Where this
+already lives on AWS" below) so a fresh compacted summary is always available without anyone having
+to remember to run it.
 
 ## Usage
 
@@ -84,11 +84,46 @@ Scheduled job (mirrors `skills/signal-radar/job/radar.sh`):
 sh skills/ledger-compaction/job/compaction.sh
 sh skills/ledger-compaction/job/compaction.sh --agents cfo,clo
 ```
-This reads each agent's `_MEMORY/<agent>.jsonl` ledger blob and writes the compacted summary to
-`_MEMORY/<agent>.compacted.md` in the same storage container kb-memory already uses, right next to
-the live ledger and its rendered `.md` view. It is fail-open: a missing ledger, a bad credential, or
-an unexpected error for one agent is logged and skipped, never crashes the job, and the process
-always exits 0 so a scheduled run is never marked failed by a transient issue.
+This reads each agent's `_MEMORY/<agent>.jsonl` ledger object and writes the compacted summary to
+`_MEMORY/<agent>.compacted.md` in the same S3 room kb-memory already uses, right next to the live
+ledger and its rendered `.md` view. Per-agent resilience is unchanged: a missing ledger (a genuine,
+expected "nothing to compact yet"), or an unexpected error for one agent, is logged and skipped
+rather than crashing the job, so one room's trouble never stops the others. The PROCESS EXIT CODE is
+not always 0 any more (changed 2026-09-03): a missing AWS credential on every path still fails open
+(exit 0, there is nothing this job could have done); but if any agent's S3 room was genuinely
+unreachable or misconfigured, the job exits non-zero with a clear summary line naming which agents
+failed and why, so a scheduled run that compacted nothing is reported as failed rather than as a
+silent "ok". This closes the exact gap that let this job report "Succeeded" every day while every
+one of its three agents failed against dead Azure Blob storage underneath it.
+
+## Storage
+Ported off Azure Blob to AWS S3, 2026-09-03 (Azure subscription 55c84f6b, which held every storage
+account this job could target, was permanently deleted 2026-08-13). `job/run-compaction.mjs` reads
+and writes via `skills/kb-memory/s3-blob.mjs`'s `getTextFromS3`/`putObjectToS3`; the three
+`(account, container)` rooms this skill uses are all three already verified rows in that file's
+MIRROR table:
+- `cfo` -> `otchealthcfodata` / `cfo-source-docs` -> bucket `otchealth-finance-legal-dr-55c84f6b`
+- `clo` -> `otchealthlegalstore` / `company` -> bucket `otchealth-finance-legal-dr-55c84f6b`
+- `commons` -> `otchealthcommons` / `company-journal` -> bucket `otchealth-brain-dr-55c84f6b`
+
+No per-agent storage-account or key secret is needed any more (the old `azure-*-storage-account` /
+`azure-*-storage-key` secrets this job used to read are gone from the code entirely). AWS credentials
+resolve via the ECS task role, or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` /
+`OTC_AWS_ACCESS_KEY_ID`/`OTC_AWS_SECRET_ACCESS_KEY` on a developer seat — the same chain
+`skills/kb-memory/aws-secret.mjs`'s `awsCredsPresent()` already checks fleet-wide.
+
+### Where this already lives on AWS (2026-09-03)
+An ECS task definition (`otchealth-job-ledger-compaction`) and an EventBridge Scheduler schedule
+(`otchealth-ledger-compaction`, `cron(0 8 * * ? *)`) already exist from the 2026-08-16 Azure -> AWS
+job-migration sweep. Both are currently **DISABLED** — the schedule was registered as a placeholder
+before this port landed and its `State` has not been touched since. The task definition's image is
+the shared `doc-indexer:latest` (rebuilt automatically on merge to `main` via
+`.github/workflows/build-doc-indexer-ecr.yml`), command
+`/app/skills/ledger-compaction/job/compaction.sh`. Enabling the schedule (flip `State` to `ENABLED`
+via `aws scheduler update-schedule`) is a separate, explicit CTO step — not part of this port — after
+the task definition's env is confirmed to carry no stale Azure-only variables and the task role's S3
+access to the two mapped buckets above is confirmed. A manual `aws ecs run-task` against this task
+definition is the smoke test before flipping it on.
 
 ## Guardrails
 - Non-PHI ring, same as the rest of the fleet tooling. This skill only ever reads/writes the ledger
