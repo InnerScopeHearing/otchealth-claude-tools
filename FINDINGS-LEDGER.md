@@ -985,13 +985,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-03T05:23:27.279Z
 - **Closed:** 2026-09-03T05:30:31.419Z
 
-### finding:FND-20260903-3869 severity:medium status:open | ocr-sweep Textract port (claude-tools#540) never added skills/ocr-sweep to the doc-indexer image; live task def otchealth-job-docintel-ocr-sweep:2 is still the Azure-era shape (plain node image, unauthenticated runtime git clone, AZURE_SP_*/GCP secrets)
+### finding:FND-20260903-3869 severity:medium status:fixed | ocr-sweep Textract port (claude-tools#540) never added skills/ocr-sweep to the doc-indexer image; live task def otchealth-job-docintel-ocr-sweep:2 is still the Azure-era shape (plain node image, unauthenticated runtime git clone, AZURE_SP_*/GCP secrets)
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-03-wave3-landing-and-gpt56-cutover.md
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** Reconciled live 2026-09-03. Image half was already fixed (claude-tools#542, 49e7388, COPY skills/ocr-sweep) and doc-indexer:latest was rebuilt 15:29Z after it; PROVEN by a read-only ECS probe on rev 3 (task 24fd3f27): sweep.mjs present 45723 bytes, SYNTAX_OK, IMPORT_OK (so setup/aws-sigv4.mjs + kb-memory/s3-blob.mjs also resolve). Real bounded run (task e6ffddb9, MAX_DOCS_PER_RUN=2 CONC=2 STORES=cfo) exit 0: 2 sidecars written, of 2 processed, ~2 Textract pages -- exactly 2, not 3, which is counterfactual proof the T-1 reservation fix (FND-20260903-43c9) is live in the running image. Remaining real half was the SCHEDULE: DISABLED since 2026-09-02 00:10Z and still pinned to the Azure-era rev 2. Repointed to rev 3 and re-enabled via a leaf-diffed update (only State and TaskDefinitionArn changed; FARGATE_SPOT, network config and otchealthSchedulerRole preserved), readback confirms ENABLED on rev 3. Backlog measured by dry run: 569 docs (legal/company 326, legal/personal 93, cfo 150). Ring checked before arming: sidecars are written by putObjectToS3(it.account, it.container, ...) back into the SAME account+container as the source, and Textract runs in-account, so no privileged data crosses a ring or reaches a third party.
 - **Opened:** 2026-09-03T05:23:29.657Z
-- **Closed:** (open)
+- **Closed:** 2026-09-03T16:30:42.920Z
 
 ### finding:FND-20260903-9cd5 severity:medium status:fixed | gateway llm_azure task=classify (and summarize/synthesize/complete) with jsonMode=true fails on every tier with OpenAI 400 "'messages' must contain the word 'json'" because those task prompts never mention JSON; the tool returns {output:'',error} in-band; the tool description itself recommends jsonMode for classify pipelines
 
