@@ -1080,3 +1080,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T17:11:21.310Z
 - **Closed:** (open)
+
+### finding:FND-20260903-2d71 severity:medium status:open | 110 zero-byte source documents in the CFO and company-legal data rooms, surfaced by the first scheduled OCR sweep. Measured live 2026-09-03 by listing object SIZES: cfo/cfo-source-docs 49 of 19,053 (0.26%), legal/company 61 of 5,557 (1.10%). These are real files with real names occupying real keys that contain zero bytes, so every consumer sees a document that exists and has no content. NOT an OCR bug and NOT caused by the sweep: Textract's BadDocumentException 'The document is empty' is literally correct. Full reconciliation of the run's 77 failures: 75 zero-byte (33 cfo + 42 legal/company) plus exactly 2 genuine format refusals that match the 2 non-BadDocument errors one-for-one (a 12.5MB coupletalking.jpeg hit IMAGE_SIZE_LIMIT_EXCEEDED; a 2.19MB signed LOI/SPA PDF hit INVALID_IMAGE_TYPE). ZERO failures came from legal/personal, so the attorney-privileged room is unaffected and was never enumerated. WHY IT MATTERS: the visible cluster is INND FinanceTeam bank statements for accounts 4524/6532/6877, where the FY2021 monthly PDFs are empty while the FY2022 file sitting beside them is 30,873 bytes and OCR'd fine -- that is source evidence the CFO's FY2021-present reconstruction would silently lack, and INND financials are MNPI. Most of the 110 carry no year token in the path so the true period spread is wider than the 13 path-dated 2021 files. NEXT: this is a data-recovery question for the CFO/CLO (re-fetch from OneDrive/SharePoint originals or the pre-migration source), not a code fix; the sweep will keep reporting them as failures every run until the bytes exist, which is correct fail-loud behavior and should not be suppressed.
+
+- **Source audit doc:** docintel-ocr-sweep scheduled run 0e53d23f (2026-09-03 18:00Z) + live s3api object-size listings of both rooms
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T18:20:35.216Z
+- **Closed:** (open)
