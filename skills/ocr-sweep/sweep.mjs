@@ -46,7 +46,7 @@
 // multi-page document raises `UnsupportedDocumentException` (AWS re:Post, confirmed 2026-09-03: "The
 // Synchronous APIs of AWS Textract only support single-page documents... you'll encounter the
 // UnsupportedDocumentException error"; StartDocumentTextDetection/GetDocumentTextDetection accept the
-// SAME formats -- JPEG, PNG, PDF, TIFF -- with no page limit). Rather than guess a document's page
+// SAME formats -- JPEG, PNG, PDF, TIFF -- up to Textract's 3,000-page async ceiling). Rather than guess a document's page
 // count up front (which would need downloading it, defeating the whole point of the S3Object-reference
 // design above), this file ALWAYS tries the fast/cheap sync path first for anything under the 10MB
 // limit, and falls back to the async job API ONLY when Textract itself reports the document does not
@@ -342,8 +342,13 @@ export function withinBudget(state, caps) {
  *  truncation. Reusing the SAME token across runs for the SAME still-unfinished document means a
  *  crash-and-resume never double-submits (and double-bills) an async job for the same file -- see
  *  this file's header "IDEMPOTENCY, TWO LAYERS" note. */
-export function clientRequestToken(bucket, key) {
-  return crypto.createHash("sha256").update(`${bucket}/${key}`).digest("hex");
+/** `version` is the object's `${size}:${lastModified}` from the S3 listing. Hashing it in makes the
+ *  token specific to THIS version of the object: a file overwritten at the same key while still
+ *  sidecar-less (inside Textract's 7-day idempotency window) gets a new token and a new job, instead
+ *  of Textract handing back the job -- and the text -- of the previous bytes. Omitted/empty version
+ *  keeps the bare bucket/key token (the unit tests' pure-helper cases). */
+export function clientRequestToken(bucket, key, version = "") {
+  return crypto.createHash("sha256").update(`${bucket}/${key}#${version}`).digest("hex");
 }
 
 export function textractUrl(region) {
@@ -441,10 +446,10 @@ async function pollJob(jobId) {
   throw taggedError(`Textract async job ${jobId} did not finish within ${MAX_POLL_ATTEMPTS} polls`, { textractType: "PollTimeout" });
 }
 
-async function ocrAsync(bucket, key) {
+async function ocrAsync(bucket, key, version) {
   const start = await callTextract("StartDocumentTextDetection", {
     DocumentLocation: { S3Object: { Bucket: bucket, Name: key } },
-    ClientRequestToken: clientRequestToken(bucket, key),
+    ClientRequestToken: clientRequestToken(bucket, key, version),
   });
   if (!start.ok) {
     if (start.cls.kind === "systemic") throw taggedError(start.cls.message, { systemic: true, textractType: start.cls.type });
@@ -459,7 +464,7 @@ async function ocrAsync(bucket, key) {
  *  itself reports as sync-ineligible (ROUTE_ASYNC_TYPES) is retried once via the async job API. Any
  *  OTHER sync failure is a genuine per-document failure and is NOT retried via async (a truly corrupt
  *  or unsupported file fails the same way either path). */
-async function ocrOneDocument(bucket, key, sizeBytes) {
+async function ocrOneDocument(bucket, key, sizeBytes, version) {
   if (preferSync(sizeBytes)) {
     const sync = await callTextract("DetectDocumentText", { Document: { S3Object: { Bucket: bucket, Name: key } } });
     if (sync.ok) return { via: "sync", pages: pageCountOf(sync.json), text: blocksToText(sync.json.Blocks) };
@@ -467,7 +472,7 @@ async function ocrOneDocument(bucket, key, sizeBytes) {
     if (sync.cls.kind !== "route-async") throw taggedError(`Textract DetectDocumentText failed (${sync.cls.type}): ${sync.cls.message}`, { textractType: sync.cls.type });
     // fall through: Textract itself says this document needs the async path (e.g. multi-page).
   }
-  return ocrAsync(bucket, key);
+  return ocrAsync(bucket, key, version);
 }
 
 // ============================ orchestration ============================
@@ -526,10 +531,11 @@ export async function runSweep(opts = {}) {
       }
       const names = listed.map((o) => o.name);
       const sizeByName = new Map(listed.map((o) => [o.name, o.size]));
+      const lmByName = new Map(listed.map((o) => [o.name, o.lastModified || ""]));
       const docs = names.filter(isEligibleDocName);
       const todo = selectCandidates(names);
       stats[`${room.name}/${container}`] = { docs: docs.length, todo: todo.length };
-      for (const n of todo) candidates.push({ room: room.name, account: room.account, container, name: n, size: sizeByName.get(n) || 0 });
+      for (const n of todo) candidates.push({ room: room.name, account: room.account, container, name: n, size: sizeByName.get(n) || 0, lastModified: lmByName.get(n) || "" });
     }
   }
   console.log("[ocr-sweep] scope:", JSON.stringify(stats));
@@ -567,7 +573,9 @@ export async function runSweep(opts = {}) {
       const loc = s3LocationFor(it.account, it.container);
       const key = `${loc.keyPrefix}${it.name}`;
       try {
-        const result = await ocrOneDocument(loc.bucket, key, it.size);
+        // The object version (size + LastModified from the listing) rides into the async idempotency
+        // token, so an overwritten file never inherits the previous bytes' Textract job.
+        const result = await ocrOneDocument(loc.bucket, key, it.size, `${it.size}:${it.lastModified}`);
         try {
           await putObjectToS3(it.account, it.container, sideFor(it.name), Buffer.from(result.text, "utf8"), "text/plain; charset=utf-8");
         } catch (putErr) {

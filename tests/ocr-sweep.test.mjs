@@ -227,7 +227,6 @@ test("textractUrl: the plain AWS JSON-protocol endpoint for a region, no path/qu
 // exercises the ACTUAL resolved location, not a stand-in.
 const CFO_BUCKET = "otchealth-finance-legal-dr-55c84f6b";
 const CFO_PREFIX = "otchealthcfodata/cfo-source-docs/";
-const CFO_HOST = `${CFO_BUCKET}.s3.us-east-1.amazonaws.com`;
 const TEXTRACT_HOST = "textract.us-east-1.amazonaws.com";
 
 const FAKE_ENV = { AWS_ACCESS_KEY_ID: "AKIAUNITTESTFAKE0002", AWS_SECRET_ACCESS_KEY: "unit-test-fake-secret-not-real" };
@@ -397,7 +396,8 @@ test("runSweep: sync-to-async fallback -- DetectDocumentText reports Unsupported
   const startCalls = world.calls.filter((c) => c.action === "StartDocumentTextDetection");
   assert.equal(startCalls.length, 1);
   assert.equal(startCalls[0].body.DocumentLocation.S3Object.Name, `${CFO_PREFIX}multi.pdf`);
-  assert.equal(startCalls[0].body.ClientRequestToken, clientRequestToken(CFO_BUCKET, `${CFO_PREFIX}multi.pdf`), "must reuse the deterministic idempotency token");
+  assert.equal(startCalls[0].body.ClientRequestToken, clientRequestToken(CFO_BUCKET, `${CFO_PREFIX}multi.pdf`, "2000:2026-01-01T00:00:00.000Z"), "must reuse the deterministic idempotency token, bound to the listed size + LastModified");
+  assert.notEqual(startCalls[0].body.ClientRequestToken, clientRequestToken(CFO_BUCKET, `${CFO_PREFIX}multi.pdf`, "2000:2026-02-02T00:00:00.000Z"), "an overwritten object (new LastModified) must get a different token, never the previous bytes' job");
   assert.equal(world.calls.filter((c) => c.action === "GetDocumentTextDetection").length, 2, "must poll until SUCCEEDED, not just once");
 });
 

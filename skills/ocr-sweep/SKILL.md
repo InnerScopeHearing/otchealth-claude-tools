@@ -68,7 +68,7 @@ Textract's synchronous `DetectDocumentText` only accepts a document up to 10MB (
 only the FIRST page of a multi-page PDF/TIFF -- a genuinely multi-page document raises
 `UnsupportedDocumentException` (confirmed 2026-09-03 against AWS's own documentation and a live-quoted
 AWS re:Post answer). `StartDocumentTextDetection`/`GetDocumentTextDetection` (the async job API)
-accept the identical format set with no page limit.
+accept the identical format set, up to Textract's 3,000-page ceiling per async document.
 
 Rather than guess a document's page count up front (which would require downloading it, defeating the
 whole point of the S3-reference design above), this file:
