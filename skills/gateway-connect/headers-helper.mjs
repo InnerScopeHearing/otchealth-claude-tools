@@ -18,6 +18,9 @@
 //   - The bearer token is NEVER printed anywhere except inside that one JSON object on stdout.
 //   - Must finish well inside the 10s budget Claude Code allows; a hang (e.g. SSM/network genuinely
 //     unreachable) must fail FAST (non-zero exit, a clear stderr line) rather than eat the timeout.
+//     OVERALL_TIMEOUT_MS (8s) is the budget for the WHOLE invocation: lane resolution (a local-files
+//     bash source, capped at RESOLVE_TIMEOUT_MS) plus the mint, which gets whatever remains -- so the
+//     two caps can never stack past the budget.
 //   - Lane resolution mirrors session-connect.sh EXACTLY (same script, same precedence, same
 //     KB_NO_AUTOCLAIM=1 — this never guesses a privileged lane): session marker
 //     (~/.claude/.kb-agent) > repo .kb-agent (walked to the git root) > KB_AGENT env. No autoclaim.
@@ -43,8 +46,13 @@ const AGENT_ID_SH = join(SELF_DIR, '..', 'kb-memory', 'agent-id.sh');
 
 /** Reuse a cached token only while it has MORE than this much life left. */
 export const MIN_LIFE_MS = 10 * 60 * 1000; // 10 minutes
-/** Hard wall-clock budget for the whole resolve+mint flow, well under Claude Code's 10s allowance. */
+/** Hard wall-clock budget for the whole resolve+mint flow, well under Claude Code's 10s allowance.
+ *  Covers BOTH steps: main() measures what resolveLane() spent and gives the mint only the remainder. */
 export const OVERALL_TIMEOUT_MS = 8000;
+/** Cap on resolveLane()'s bash source of agent-id.sh (local file reads only; a normal run is tens of
+ *  ms). Deliberately small so that even a stalled resolver leaves most of OVERALL_TIMEOUT_MS for
+ *  the mint, and so the two timeouts can never sum past the overall budget. */
+export const RESOLVE_TIMEOUT_MS = 1500;
 
 /** Default on-disk cache directory: one small JSON file per lane, alongside this skill's other
  *  ~/.claude/.* state files (.kb-agent, .gateway-connect-last, ...). Tests override via `cacheDir`. */
@@ -116,7 +124,7 @@ export function resolveLane() {
     ag = execFileSync(
       'bash',
       ['-c', 'KB_NO_AUTOCLAIM=1 . "$0" 2>/dev/null; printf "%s" "$AG"', AGENT_ID_SH],
-      { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] },
+      { encoding: 'utf8', timeout: RESOLVE_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] },
     ).trim();
   } catch {
     ag = '';
@@ -136,6 +144,7 @@ export function withTimeout(promise, ms, message) {
 
 async function main() {
   const serverName = process.env.CLAUDE_CODE_MCP_SERVER_NAME || '?';
+  const t0 = Date.now();
   const lane = resolveLane();
   if (!lane) {
     console.error(
@@ -153,10 +162,13 @@ async function main() {
     process.exit(1);
   }
   try {
+    // The mint gets only what lane resolution left of the overall budget (never less than a small
+    // floor, so a slow-but-successful resolve still attempts the cache/mint path).
+    const remainingMs = Math.max(250, OVERALL_TIMEOUT_MS - (Date.now() - t0));
     const { headers, source } = await withTimeout(
       getBearerHeaders({ lane, cacheDir: defaultCacheDir(), mint: mintToken }),
-      OVERALL_TIMEOUT_MS,
-      `timed out after ${OVERALL_TIMEOUT_MS}ms resolving a gateway token for lane "${lane}" ` +
+      remainingMs,
+      `timed out resolving a gateway token for lane "${lane}" within the ${OVERALL_TIMEOUT_MS}ms overall budget ` +
         '(SSM or the gateway token endpoint unreachable?)',
     );
     const claim = laneClaim(headers.Authorization.slice('Bearer '.length));
@@ -176,5 +188,5 @@ if (isMain) main();
 
 export default {
   getBearerHeaders, cachePathFor, readTokenCache, writeTokenCache, hasSufficientLife, resolveLane,
-  defaultCacheDir, withTimeout, MIN_LIFE_MS, OVERALL_TIMEOUT_MS,
+  defaultCacheDir, withTimeout, MIN_LIFE_MS, OVERALL_TIMEOUT_MS, RESOLVE_TIMEOUT_MS,
 };

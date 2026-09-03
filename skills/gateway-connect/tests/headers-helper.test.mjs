@@ -211,3 +211,9 @@ test('resolveLane: returns null when nothing resolves at all (no marker, no KB_A
     assert.equal(resolveLane(), null);
   });
 });
+
+test("headers-helper: the resolve cap sits inside the overall budget, and the overall budget sits inside Claude Code's 10s allowance (the two timeouts can never stack past 10s)", async () => {
+  const mod = await import(new URL("../headers-helper.mjs", import.meta.url).href);
+  assert.ok(mod.RESOLVE_TIMEOUT_MS > 0 && mod.RESOLVE_TIMEOUT_MS < mod.OVERALL_TIMEOUT_MS, "resolve cap must leave room for the mint");
+  assert.ok(mod.OVERALL_TIMEOUT_MS <= 8000, "overall budget must stay well under Claude Code's 10s headersHelper allowance");
+});

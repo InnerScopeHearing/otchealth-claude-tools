@@ -55,13 +55,18 @@ resolution and the credential source are identical between the two code paths.
   inside the 10s budget Claude Code allows, rather than hanging if SSM/the token endpoint is
   unreachable.
 - **UserPromptSubmit self-heal (`octools-sync.sh`)**: with the helper active, its periodic
-  *timed* re-mint of the gateway registration is now a no-op -- the helper owns refresh. The "the
-  server entry isn't registered at all" repair path stays live regardless (a dropped registration is
-  a different failure than a stale token; no helper can fix a server that doesn't exist).
+  *timed* re-mint of the gateway registration drops from every ~50 min to a long throttle
+  (`OCTOOLS_GATEWAY_THROTTLE_HELPER`, default 72000 s = 20 h, inside the gateway's 24 h token TTL).
+  The helper owns refresh in a trusted interactive session, but it never runs before the trust
+  dialog is accepted or in a non-interactive `claude -p` run (see above), and in those clients the
+  static header registered at session start is the only credential -- the long-throttle re-mint is
+  the belt-and-suspenders that keeps it from expiring silently there. The "the server entry isn't
+  registered at all" repair path stays live regardless (a dropped registration is a different
+  failure than a stale token; no helper can fix a server that doesn't exist).
 - **Rollback**: set `GATEWAY_CONNECT_HEADERS_HELPER=0` to disable all of the above and restore the
   exact prior behavior byte-for-byte -- plain `claude mcp add --header ...` (no `headersHelper`
-  field at all), and `octools-sync.sh`'s periodic timed re-mint resumes doing the refresh work it
-  always did.
+  field at all), and `octools-sync.sh`'s periodic timed re-mint returns to its short (~50 min)
+  throttle and resumes doing all of the refresh work it always did.
 
 ## Automatic onboarding (session-start)
 `setup/session-start.sh` calls `session-connect.sh` on every session start: it resolves the agent (kb-memory resolver — no auto-claim), and if that agent has a gateway lane, one-shot mints + registers the gateway MCP for it. Fail-open + no-op for agents without a lane, non-Desktop envs (no `claude` CLI), or a missing SA — so it never blocks startup and only ever wires an agent into its OWN lane. Long sessions still want `--watch` (via the `clo-`/`cfo-` wrapper) to refresh past the 1h token.
