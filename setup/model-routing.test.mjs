@@ -325,14 +325,21 @@ test("chatBody omits reasoning_effort entirely when it is not passed (byte-ident
   assert.equal("reasoning_effort" in reasoningFamily, false);
 });
 
-test("chatBody adds reasoning_effort verbatim when a valid value is passed, on both chat-family and reasoning-family deployments", async () => {
+test("chatBody adds reasoning_effort verbatim for every valid value on a reasoning-family deployment", async () => {
   const { chatBody } = await freshImport();
   for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
-    const chatFamily = chatBody("gpt-4.1", { messages: [], reasoningEffort: effort });
-    assert.equal(chatFamily.reasoning_effort, effort);
     const reasoningFamily = chatBody("gpt-5.6-luna", { messages: [], maxTokens: 50, reasoningEffort: effort });
     assert.equal(reasoningFamily.reasoning_effort, effort);
   }
+});
+
+test("chatBody OMITS reasoning_effort on a chat-family deployment even when a valid value is passed (OpenAI 400s 'Unsupported parameter' on gpt-4o/gpt-4.1; an env override naming a chat-family model must keep a byte-identical body)", async () => {
+  const { chatBody } = await freshImport();
+  const withEffort = chatBody("gpt-4o-mini", { messages: [{ role: "user", content: "x" }], maxTokens: 40, reasoningEffort: "low" });
+  const without = chatBody("gpt-4o-mini", { messages: [{ role: "user", content: "x" }], maxTokens: 40 });
+  assert.equal("reasoning_effort" in withEffort, false);
+  assert.deepEqual(withEffort, without, "passing reasoningEffort to a chat-family deployment must not change the body at all");
+  assert.equal(withEffort.max_tokens, 40, "still the chat-family shape");
 });
 
 test("chatBody rejects an invalid reasoningEffort value instead of silently sending it", async () => {

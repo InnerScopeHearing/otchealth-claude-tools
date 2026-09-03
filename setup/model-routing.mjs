@@ -208,10 +208,13 @@ const REASONING_EFFORT_VALUES = new Set(['none', 'low', 'medium', 'high', 'xhigh
  * `reasoning_effort: <value>` to the body; an invalid value THROWS immediately (fail loud, matching
  * this module's existing FAIL-LOUD CONTRACT, rather than silently sending a value OpenAI would 400
  * on anyway). Default `undefined` -- omitted entirely, so every pre-existing call site (none of which
- * pass this) gets a byte-identical body to before this option existed. Deliberately NOT gated to
- * reasoning-family deployments here (this function stays a pure, mechanical body-shape builder, like
- * the rest of the module) -- a caller decides where reasoning_effort makes sense to send, the same
- * way it already decides which tier/deployment to resolve in the first place.
+ * pass this) gets a byte-identical body to before this option existed. Emitted ONLY for
+ * reasoning-family deployments: chat-family models (gpt-4o, gpt-4o-mini, gpt-4.1-*) reject
+ * `reasoning_effort` with HTTP 400 "Unsupported parameter", and the cheap-tier callers that pass
+ * "low" resolve their deployment through an env override (LIBRARIAN_MODEL, GROUNDEDNESS_MODEL) that
+ * may legitimately name a chat-family model -- the same family gate that already picks max_tokens vs
+ * max_completion_tokens and drops `temperature` keeps those bodies byte-identical instead of 400ing.
+ * The value is validated BEFORE the family gate, so a typo fails loud on every family.
  */
 export function chatBody(deployment, { messages, maxTokens = 900, temperature, jsonMode, serviceTier, reasoningEffort } = {}) {
   const isReasoning = modelFamilyOf(deployment) === 'reasoning';
@@ -228,7 +231,7 @@ export function chatBody(deployment, { messages, maxTokens = 900, temperature, j
     if (!REASONING_EFFORT_VALUES.has(reasoningEffort)) {
       throw new Error(`chatBody: invalid reasoningEffort "${reasoningEffort}" -- must be one of ${[...REASONING_EFFORT_VALUES].join(', ')}`);
     }
-    body.reasoning_effort = reasoningEffort;
+    if (isReasoning) body.reasoning_effort = reasoningEffort;
   }
   return body;
 }

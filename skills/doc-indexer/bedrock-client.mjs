@@ -35,10 +35,12 @@
 // models) is NOT verified by this file; that is a live pre-flight check for whoever runs the first
 // real backfill (see the design doc's verify pass, REQUIRED FIX #3), not something to fake-check here.
 //
-// VERIFY BEFORE A REAL BACKFILL: the model ids and per-token prices baked into deep-pass.mjs's RATES
-// table are drawn from training-data knowledge of Bedrock's on-demand catalog, not a live probe run
-// by this PR. Confirm both (`aws bedrock list-inference-profiles --region us-east-1`,
-// https://aws.amazon.com/bedrock/pricing/) before trusting a cost estimate or scheduling real spend.
+// PRICES (updated 2026-09-03): the per-token rates in deep-pass.mjs's RATES table for Haiku 4.5 and
+// Sonnet 5 are now MEASURED from this account's own billing (Cost Explorer gross cost divided by
+// usage units, credits excluded) -- the `us.` cross-region profiles bill Anthropic's list price plus
+// 10% -- not drawn from training-data knowledge or a price page. Model ids are live-verified ACTIVE
+// on this account (`aws bedrock list-inference-profiles --region us-east-1`). When a model or profile
+// changes, re-measure the same way before trusting a cost estimate or scheduling real spend.
 
 import { awsCreds } from "../kb-memory/aws-secret.mjs";
 import { signOpenSearchRequest } from "./opensearch-client.mjs";
