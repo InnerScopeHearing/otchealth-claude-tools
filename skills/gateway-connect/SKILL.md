@@ -1,6 +1,6 @@
 ---
 name: gateway-connect
-description: One-and-done connect (+ auto-refresh) of an agent's Claude Code Desktop session to the OTCHealth MCP gateway on its RING-SCOPED lane. Mints the lane's short-lived client_credentials token, registers the gateway as a Claude Code MCP server, verifies the lane sees its tools, and re-mints before the 1h expiry so the agent connects once and stays connected. Ring-safe; secrets never printed.
+description: One-and-done connect (+ auto-refresh) of an agent's Claude Code Desktop session to the OTCHealth MCP gateway on its RING-SCOPED lane. Mints the lane's short-lived client_credentials token, registers the gateway as a Claude Code MCP server, verifies the lane sees its tools, and re-mints before the token expires (client_credentials tokens live 24h, OAUTH_CC_TTL_SECONDS on the gateway, verified 2026-07-16) so the agent connects once and stays connected. Ring-safe; secrets never printed.
 ---
 
 # gateway-connect — put an agent's Desktop session on its gateway lane, durably
@@ -69,4 +69,4 @@ resolution and the credential source are identical between the two code paths.
   throttle and resumes doing all of the refresh work it always did.
 
 ## Automatic onboarding (session-start)
-`setup/session-start.sh` calls `session-connect.sh` on every session start: it resolves the agent (kb-memory resolver — no auto-claim), and if that agent has a gateway lane, one-shot mints + registers the gateway MCP for it. Fail-open + no-op for agents without a lane, non-Desktop envs (no `claude` CLI), or a missing SA — so it never blocks startup and only ever wires an agent into its OWN lane. Long sessions still want `--watch` (via the `clo-`/`cfo-` wrapper) to refresh past the 1h token.
+`setup/session-start.sh` calls `session-connect.sh` on every session start: it resolves the agent (kb-memory resolver — no auto-claim), and if that agent has a gateway lane, one-shot mints + registers the gateway MCP for it. Fail-open + no-op for agents without a lane, non-Desktop envs (no `claude` CLI), or a missing SA — so it never blocks startup and only ever wires an agent into its OWN lane. A session that outlives the 24h token on a client without `headersHelper` support still wants `--watch` (via the `clo-`/`cfo-` wrapper) to refresh past it.

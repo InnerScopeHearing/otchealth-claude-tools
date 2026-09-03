@@ -6,7 +6,7 @@
 # (a) there's no `claude` CLI (web/job env, not a Desktop), (b) the agent has no gateway lane (--if-lane),
 # or (c) the SA/creds aren't present. Resolves the agent via the shared kb-memory resolver (session
 # marker > repo .kb-agent > KB_AGENT > repo auto-claim) so clo->clo lane, cfo->cfo lane, etc. One-shot
-# mint+register (token is valid ~1h, covering a typical session). Registration also sets a dynamic
+# mint+register (token is valid 24h, OAUTH_CC_TTL_SECONDS on the gateway, covering a typical session). Registration also sets a dynamic
 # `headersHelper` (headers-helper.mjs) by default, so once the workspace is trusted Claude Code
 # re-mints on its own past that window with no further action here; GATEWAY_CONNECT_HEADERS_HELPER=0
 # reverts to the old static-header-only registration. Either way, `clo-gateway-connect.sh --watch`

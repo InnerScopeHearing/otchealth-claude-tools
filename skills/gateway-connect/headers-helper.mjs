@@ -46,6 +46,15 @@ const AGENT_ID_SH = join(SELF_DIR, '..', 'kb-memory', 'agent-id.sh');
 
 /** Reuse a cached token only while it has MORE than this much life left. */
 export const MIN_LIFE_MS = 10 * 60 * 1000; // 10 minutes
+/** TRIGGER-BLIND RETRY DETECTION. Claude Code gives the helper no signal for WHY it was invoked
+ *  (session start, reconnect, or the automatic re-run after a 401/403), so a cache hit alone cannot
+ *  tell "the server just rejected this exact token" from "a new session wants the same still-valid
+ *  token". The one observable difference is timing: the 401/403 re-run follows the previous
+ *  invocation within seconds. So a second invocation inside this window is treated as that retry
+ *  and BYPASSES the cache -- a fresh token is minted even if the cached one still has life -- which
+ *  is what makes a revoked/invalidated-but-unexpired token recover instead of being replayed. A
+ *  session start followed by a quick reconnect pays one extra mint; that is the accepted cost. */
+export const RETRY_WINDOW_MS = 60 * 1000;
 /** Hard wall-clock budget for the whole resolve+mint flow, well under Claude Code's 10s allowance.
  *  Covers BOTH steps: main() measures what resolveLane() spent and gives the mint only the remainder. */
 export const OVERALL_TIMEOUT_MS = 8000;
@@ -99,15 +108,19 @@ export function writeTokenCache(cachePath, entry) {
  *
  * Returns { headers: { Authorization: "Bearer <token>" }, source: "cache"|"mint", cachePath }.
  */
-export async function getBearerHeaders({ lane, cacheDir, mint, now = Date.now(), minLifeMs = MIN_LIFE_MS }) {
+export async function getBearerHeaders({ lane, cacheDir, mint, now = Date.now(), minLifeMs = MIN_LIFE_MS, retryWindowMs = RETRY_WINDOW_MS }) {
   const cachePath = cachePathFor(cacheDir, lane);
   const cached = readTokenCache(cachePath);
-  if (hasSufficientLife(cached, now, minLifeMs)) {
+  // servedAt = when this cache entry was last handed to Claude Code. A second call inside the retry
+  // window means the previous hand-out was just rejected (see RETRY_WINDOW_MS): bypass the cache.
+  const servedRecently = Boolean(cached) && Number.isFinite(cached.servedAt) && now - cached.servedAt >= 0 && now - cached.servedAt < retryWindowMs;
+  if (hasSufficientLife(cached, now, minLifeMs) && !servedRecently) {
+    writeTokenCache(cachePath, { ...cached, servedAt: now });
     return { headers: { Authorization: `Bearer ${cached.token}` }, source: 'cache', cachePath };
   }
   const { token, expiresIn } = await mint(lane);
-  writeTokenCache(cachePath, { token, expiresAt: now + expiresIn * 1000, mintedAt: now });
-  return { headers: { Authorization: `Bearer ${token}` }, source: 'mint', cachePath };
+  writeTokenCache(cachePath, { token, expiresAt: now + expiresIn * 1000, mintedAt: now, servedAt: now });
+  return { headers: { Authorization: `Bearer ${token}` }, source: servedRecently ? 'mint-retry' : 'mint', cachePath };
 }
 
 /**
@@ -174,7 +187,7 @@ async function main() {
     const claim = laneClaim(headers.Authorization.slice('Bearer '.length));
     console.error(
       `[gateway-connect headers-helper] lane=${lane} agent=${claim || '?'} server=${serverName} ` +
-        `${source === 'cache' ? 're-used cached token' : 'minted a fresh token'}`,
+        `${source === 'cache' ? 're-used cached token' : source === 'mint-retry' ? 'minted a fresh token (repeat call inside the retry window, cache bypassed)' : 'minted a fresh token'}`,
     );
     process.stdout.write(JSON.stringify(headers));
   } catch (e) {
@@ -188,5 +201,5 @@ if (isMain) main();
 
 export default {
   getBearerHeaders, cachePathFor, readTokenCache, writeTokenCache, hasSufficientLife, resolveLane,
-  defaultCacheDir, withTimeout, MIN_LIFE_MS, OVERALL_TIMEOUT_MS, RESOLVE_TIMEOUT_MS,
+  defaultCacheDir, withTimeout, MIN_LIFE_MS, OVERALL_TIMEOUT_MS, RESOLVE_TIMEOUT_MS, RETRY_WINDOW_MS,
 };

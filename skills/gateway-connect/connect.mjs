@@ -2,7 +2,7 @@
 // gateway-connect — one-and-done connect (+ auto-refresh) of an agent's Claude Code session to the
 // OTCHealth MCP gateway on its RING-SCOPED lane.
 //
-// WHY: the gateway (mcp.otchealth.app) issues short-lived (1h) access tokens via the client_credentials
+// WHY: the gateway (mcp.otchealth.app) issues short-lived (24h since 2026-07-16, OAUTH_CC_TTL_SECONDS; was 1h) access tokens via the client_credentials
 // grant, and each lane's token carries its agent identity so the gateway ring-gates privileged RAG. A
 // static bearer header therefore expires hourly. This mints the lane token, registers the gateway as a
 // Claude Code MCP server, verifies the lane sees its tools, and (in --watch) re-mints just before expiry.
