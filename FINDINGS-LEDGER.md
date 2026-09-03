@@ -1024,3 +1024,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T15:29:50.052Z
 - **Closed:** (open)
+
+### finding:FND-20260903-ba85 severity:high status:open | OpenAI flex service tier on the router model times out inside the gateway budget: llm_azure tier=router + latencyClass=background failed 2 of 2 on rev 41; mitigated by OPENAI_FLEX_BACKGROUND=0 in rev 42
+
+- **Source audit doc:** live post-deploy probe of gateway rev 41 (image 718364d), 2026-09-03, correlation ids 79c28c49 / 959a8f22 / 1bb8bca0
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T15:43:12.570Z
+- **Closed:** (open)
