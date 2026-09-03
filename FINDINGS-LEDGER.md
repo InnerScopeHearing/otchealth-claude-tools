@@ -993,13 +993,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-03T05:23:29.657Z
 - **Closed:** (open)
 
-### finding:FND-20260903-9cd5 severity:medium status:open | gateway llm_azure task=classify (and summarize/synthesize/complete) with jsonMode=true fails on every tier with OpenAI 400 "'messages' must contain the word 'json'" because those task prompts never mention JSON; the tool returns {output:'',error} in-band; the tool description itself recommends jsonMode for classify pipelines
+### finding:FND-20260903-9cd5 severity:medium status:fixed | gateway llm_azure task=classify (and summarize/synthesize/complete) with jsonMode=true fails on every tier with OpenAI 400 "'messages' must contain the word 'json'" because those task prompts never mention JSON; the tool returns {output:'',error} in-band; the tool description itself recommends jsonMode for classify pipelines
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-03-wave3-landing-and-gpt56-cutover.md
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 6ab320514a645fb29f33d243f0c9299a0b05060e
+- **Verified by:** mcp-server #276 merged 6ab3205, gateway task def rev 40 deployed (catalog_probe reports otchealth-gateway:40 image 6ab3205); the identical llm_azure classify+jsonMode call that 400'd on all three tiers now returns {"label":"success"} on gpt-5.6-luna, plain classify unchanged on gpt-5.6-terra; foundry-json-mode.test.ts 4/4 + foundry/chat-provider suites 32/32
 - **Opened:** 2026-09-03T05:36:18.111Z
-- **Closed:** (open)
+- **Closed:** 2026-09-03T05:48:32.023Z
 
 ### finding:FND-20260903-43c9 severity:low status:open | ocr-sweep MAX_DOCS_PER_RUN can overshoot by up to CONC-1: the bounded live run with MAX_DOCS_PER_RUN=5 CONC=2 processed 6 documents (budget checked before dispatch, in-flight workers not reserved); pages budget has the same shape
 
