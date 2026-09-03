@@ -2,11 +2,13 @@
 // decision-clock — the answer to "what decisions/gates are OPEN and how overdue are they."
 //
 // One doc per open gate (rotate a secret, a Matt-only gate, a pending review, ...) lives in the
-// `decisions_pending` container of the SAME agent-state Cosmos account the fleet's Cosmos-backed task
-// plane uses (cosmos-otc-agentstate-55c84, db agent-state), partitioned by /owner so a single owner's
-// clock is a cheap single-partition query. Reuses the fleet's classify/cooldown/escalate discipline
-// (see fleet-medic/medic.mjs) so decision-clock never spams a single overdue item every run; it batches
-// ONE per-owner nudge via fleet-dispatch.
+// `decisions_pending` container, partitioned by /owner so a single owner's clock is a cheap
+// single-partition query. That container is served by ./cosmos-client.mjs, which despite its name now
+// talks to the fleet's RDS Postgres agent-state store (../kb-memory/pg-state.mjs), not Azure Cosmos DB
+// -- see cosmos-client.mjs's own header for the removal history (Azure subscription 55c84f6b was
+// permanently deleted 2026-08-13). Reuses the fleet's classify/cooldown/escalate discipline (see
+// fleet-medic/medic.mjs) so decision-clock never spams a single overdue item every run; it batches ONE
+// per-owner nudge via fleet-dispatch.
 //
 // RING-SAFE: non-PHI. Rows tagged category "innd-*" or owner in {"cfo","clo"} for an INND-flagged row
 // are filtered out of any non-CFO/CLO listing (list --owner other-agent never surfaces them); the
@@ -93,7 +95,7 @@ function daysBetween(a, b) { return (Date.parse(b) - Date.parse(a)) / 86400000; 
 
 // ============================ PURE CORE (hermetically tested) ============================
 /**
- * Classify one decision row against `now`. Pure, no I/O -> unit-testable without Cosmos.
+ * Classify one decision row against `now`. Pure, no I/O -> unit-testable without an agent-state store.
  * Returns { status: "open"|"overdue"|"near-due"|"ack"|"closed", daysOverdue, daysUntilDue, terminal }.
  * `near-due` = open, not yet overdue, but due within `nearDueDays` (default 2). This is the signal the
  * sweep uses to nudge BEFORE something actually blows its SLA, not just after.
@@ -181,7 +183,7 @@ export function batchNudges(rowsWithClassification, opts = {}) {
   return out;
 }
 
-// ================================== Cosmos I/O ==================================
+// ================================== agent-state I/O ==================================
 async function open() {
   const category = val("--category", "");
   const owner = (val("--owner", "") || "").toLowerCase();
@@ -214,7 +216,7 @@ async function open() {
     terminal_policy: terminalPolicyRaw || undefined,
   };
   if (!(await cosmos.isConfigured())) {
-    console.log(`[decision-clock] DRY-RUN (Cosmos not reachable in this sandbox): would open ${JSON.stringify(doc)}`);
+    console.log(`[decision-clock] DRY-RUN (agent-state store not reachable in this sandbox): would open ${JSON.stringify(doc)}`);
     return doc;
   }
   await cosmos.createDoc(CONTAINER, owner, doc);
@@ -244,7 +246,7 @@ async function queryAllRows() {
 async function list() {
   const owner = (val("--owner", "") || "").toLowerCase();
   const overdueOnly = FLAG("--overdue");
-  if (!(await cosmos.isConfigured())) { console.log("[decision-clock] Cosmos not reachable in this sandbox (dry-run mode; nothing to list)."); return; }
+  if (!(await cosmos.isConfigured())) { console.log("[decision-clock] agent-state store not reachable in this sandbox (dry-run mode; nothing to list)."); return; }
   const rows = owner ? await queryOwnerRows(owner) : await queryAllRows();
   const now = new Date().toISOString();
   const withClass = rows.map((r) => ({ ...r, _class: classifyRow(r, now) }));
@@ -257,6 +259,13 @@ async function list() {
   }
 }
 
+/** Default dispatch: the real fleet-dispatch subprocess call. Injectable (see runSweep's `dispatch`
+ *  param) so a test can prove a nudge actually routes to an owner's inbox without shelling out. */
+function defaultDispatch(owner, message) {
+  const dispatchPath = join(HERE, "..", "fleet-dispatch", "dispatch.mjs");
+  execFileSync("node", [dispatchPath, "send", owner, message, "--from", "decision-clock"], { stdio: "inherit" });
+}
+
 // Daily Tier-1 sweep entrypoint (see job/decision-clock-sweep.sh): compute overdue/near-due rows and
 // fleet-dispatch ONE batched per-owner nudge (reuses fleet-medic's cooldown discipline via a small
 // per-owner cooldown state blob so re-running the sweep does not re-spam within the window).
@@ -265,23 +274,40 @@ async function list() {
 // (severely overdue, still "open"/never ack'd, and carrying a terminal_policy) are handled per policy:
 //   - "escalate": folded into the normal batched nudge, but the line is CRITICAL/ESCALATED-tagged
 //     (see batchNudges). No separate I/O needed here.
-//   - "proceed":  auto-closed right here (real write to Cosmos) with a clearly logged note; NOT included
-//     in the nudge (batchNudges already excludes proceed rows from nudge lines).
+//   - "proceed":  auto-closed right here (a real write to the agent-state store) with a clearly logged
+//     note; NOT included in the nudge (batchNudges already excludes proceed rows from nudge lines).
 //   - "block":    NOT auto-resolved. Surfaced prominently in the dispatched message (batchNudges tags it
 //     BLOCKING) AND makes the sweep process exit non-zero, so a CI/CD or heartbeat check consuming this
 //     exit code can treat "a gate blew its terminal timeout with zero human action" as a real failure.
 // Rows with no terminal_policy (`_class.terminal` is always false for them) are completely unaffected.
-async function sweep() {
-  if (!(await cosmos.isConfigured())) { console.log("[decision-clock] sweep: Cosmos not reachable in this sandbox (dry-run; nothing to sweep)."); return; }
-  const rows = await queryAllRows();
+//
+// FAIL LOUD, not silent-success: this is the scheduled-job entrypoint (job/decision-clock-sweep.sh runs
+// exactly `sweep --dispatch`, nothing else), so "the agent-state store is not configured" must never be
+// reported the same way as "the store is fine and there was nothing to do" -- see cosmos-client.mjs's
+// header for the live incident (signal-radar's identical bug) this mirrors and closes.
+//
+// Exported and parameterized (io/dispatch injectable, defaulting to the real cosmos-client.mjs module
+// and the real fleet-dispatch subprocess call) so both the fail-loud path and the "persist + dispatch
+// actually happen when configured" path are testable with a fake agent-state backend, in process, with
+// no real Postgres connection and no node:test module mocking (see cosmos-client.mjs's own
+// _setBackendForTests() seam for why mock.module() is not an option here).
+export async function runSweep(opts = {}) {
+  const { io = cosmos, dispatch = defaultDispatch, dispatching = false, asJson = false } = opts;
+
+  if (!(await io.isConfigured())) {
+    console.error("[decision-clock] sweep: agent-state store not configured (aws-pg-host/aws-pg-master-user/aws-pg-master-password unavailable in AWS SSM /otchealth/*) -- refusing to report success while persisting or dispatching nothing.");
+    process.exitCode = 1;
+    return { ok: false, reason: "not-configured" };
+  }
+
+  const rows = await io.queryDocs(CONTAINER, "SELECT * FROM c", [], { max: 2000 });
   const now = new Date().toISOString();
   const withClass = rows.map((r) => ({ ...r, _class: classifyRow(r, now) }));
   const nudges = batchNudges(withClass);
-  const dispatching = FLAG("--dispatch");
   const toAutoClose = withClass.filter((r) => r._class.terminal && r.terminal_policy === "proceed");
   const anyBlocking = nudges.some((n) => n.blocking && n.blocking.length > 0);
 
-  if (FLAG("--json")) {
+  if (asJson) {
     console.log(JSON.stringify({ ts: now, nudges, autoClosed: toAutoClose.map((r) => r.id), blocking: anyBlocking }, null, 2));
   } else {
     console.log(`# decision-clock sweep ${now}  (${nudges.length} owner(s) with attention items; ${dispatching ? "DISPATCH" : "dry-run"})`);
@@ -295,34 +321,41 @@ async function sweep() {
     const note = `auto-resolved by terminal_policy=proceed after exceeding its terminal timeout (daysOverdue=${Math.round(r._class.daysOverdue)}, never ack'd)`;
     console.log(`[decision-clock] AUTO-CLOSE ${r.id} owner=${r.owner}: ${note}`);
     try {
-      const found = await cosmos.readDoc(CONTAINER, r.owner, r.id);
+      const found = await io.readDoc(CONTAINER, r.owner, r.id);
       if (!found) { console.error(`  auto-close ${r.id} failed: not found under owner=${r.owner}`); continue; }
       const doc = { ...found.doc, status: "closed", closed_at: now, closed_by: "decision-clock-sweep-terminal-policy", closed_note: note };
-      await cosmos.replaceDoc(CONTAINER, r.owner, r.id, doc, found.etag);
+      await io.replaceDoc(CONTAINER, r.owner, r.id, doc, found.etag);
     } catch (e) { console.error(`  auto-close ${r.id} failed: ${e.message}`); }
   }
 
+  const dispatchedOwners = [];
   if (dispatching) {
     for (const n of nudges) {
       // INND-gated rows are CFO/CLO-visible only: never dispatch an innd item's detail to a non-CFO/CLO
       // owner lane (an owner should only ever be its own row's owner, but this is a defense-in-depth check).
       try {
-        const dispatch = join(HERE, "..", "fleet-dispatch", "dispatch.mjs");
-        execFileSync("node", [dispatch, "send", n.owner, n.message, "--from", "decision-clock"], { stdio: "inherit" });
+        await dispatch(n.owner, n.message);
+        dispatchedOwners.push(n.owner);
       } catch (e) { console.error(`  dispatch to ${n.owner} failed: ${e.message}`); }
     }
   }
 
   if (anyBlocking) {
-    console.error("[decision-clock] sweep: one or more items are BLOCKING — exceeded terminal timeout with no human action.");
+    console.error("[decision-clock] sweep: one or more items are BLOCKING: exceeded terminal timeout with no human action.");
     process.exitCode = 1;
   }
+
+  return { ok: true, nudges, autoClosed: toAutoClose.map((r) => r.id), blocking: anyBlocking, dispatchedOwners };
+}
+
+async function sweep() {
+  return runSweep({ dispatching: FLAG("--dispatch"), asJson: FLAG("--json") });
 }
 
 /**
  * Queue-depth / oldest-wait monitoring entrypoint: aggregate across ALL open + near-due + overdue rows
  * (never filtered to one owner — the point is a fleet-wide health signal). Pure aggregation over already
- * classified rows so the shape is easy to eyeball/test; the Cosmos fetch is the only I/O.
+ * classified rows so the shape is easy to eyeball/test; the agent-state fetch is the only I/O.
  */
 export function computeMetrics(rowsWithClassification) {
   const active = rowsWithClassification.filter((r) => r._class.status === "open" || r._class.status === "near-due" || r._class.status === "overdue" || r._class.status === "ack");
@@ -342,7 +375,7 @@ export function computeMetrics(rowsWithClassification) {
 }
 
 async function metrics() {
-  if (!(await cosmos.isConfigured())) { console.log("[decision-clock] metrics: Cosmos not reachable in this sandbox (dry-run; nothing to compute)."); return; }
+  if (!(await cosmos.isConfigured())) { console.log("[decision-clock] metrics: agent-state store not reachable in this sandbox (dry-run; nothing to compute)."); return; }
   const rows = await queryAllRows();
   const now = new Date().toISOString();
   const withClass = rows.map((r) => ({ ...r, _class: classifyRow(r, now) }));

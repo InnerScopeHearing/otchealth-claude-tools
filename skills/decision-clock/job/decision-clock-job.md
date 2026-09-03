@@ -1,5 +1,13 @@
 # decision-clock-sweep Container Apps Job — deploy (copy-paste)
 
+SUPERSEDED (2026-09-03): Azure subscription `55c84f6b` (which held `otchealth-jobs-env` /
+`otchealth-automation-rg`) was permanently deleted 2026-08-13; this Azure Container Apps provisioning
+path can never run again. The job is already provisioned on AWS instead: ECS task definition
+`otchealth-job-decision-clock` fired by EventBridge Scheduler `otchealth-decision-clock`
+(`cron(15 23 * * ? *)`, currently DISABLED pending its own operational verification -- see
+`skills/decision-clock/SKILL.md`'s "Where it runs" section). Kept below only as a historical record of
+the job's shape (one secret, dependency-free Node, reuses the shared image); do not run these commands.
+
 Reuses the existing `doc-indexer:latest` image family's environment (`otchealth-jobs-env`,
 `otchealth-automation-rg`) since the sweep is dependency-free Node needing only the claude-driver SA;
 no new image is required if `doc-indexer:latest` is already built (it carries the whole

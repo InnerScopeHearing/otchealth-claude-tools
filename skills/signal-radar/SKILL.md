@@ -1,6 +1,6 @@
 ---
 name: signal-radar
-description: A deterministic, detector-based watcher over the fleet's EXISTING telemetry (Sentry, PostHog, grant-tracker, Secret Manager, iHEARtest's release ledger). Report and observe only, it never acts on production and never mutates another system, it only surfaces high-precision Signals into a Cosmos DB signals container and routes high-severity or escalated ones to the owning agent's fleet-dispatch inbox (cto for infra/security/release, cfo for burn and any MNPI subject, growth for funnel, commerce for inventory). Reuses the fleet-medic classify-cooldown-escalate-fail-open discipline. Use to run a scan on demand or on a Container Apps Job cron.
+description: A deterministic, detector-based watcher over the fleet's EXISTING telemetry (Sentry, PostHog, grant-tracker, Secret Manager, iHEARtest's release ledger). Report and observe only, it never acts on production and never mutates another system, it only surfaces high-precision Signals into the agent-state `signals` container (RDS Postgres via skills/kb-memory/pg-state.mjs) and routes high-severity or escalated ones to the owning agent's fleet-dispatch inbox (cto for infra/security/release, cfo for burn and any MNPI subject, growth for funnel, commerce for inventory). `--emit` FAILS LOUD (non-zero exit) if the agent-state store is unconfigured or a write fails, rather than silently succeeding. Reuses the fleet-medic classify-cooldown-escalate-fail-open discipline. Use to run a scan on demand or on the AWS EventBridge Scheduler cron.
 ---
 
 # signal-radar — the fleet's own smoke detector, not a fire truck
@@ -44,8 +44,8 @@ production; it only classifies, records, and routes a Signal to the human/agent 
    NEVER writes the ledger; its `suggested_action` DRAFTS the exact `mem.mjs correct ...` command a
    human/agent may choose to run. MNPI/PHI rows are dropped before the LLM ever sees them (defense in
    depth on top of radar.mjs's central MNPI hard-route). Fail-open (no creds / no network -> idle,
-   never throws). New consumers of the shared exec feed; adds NO new infra (no Cosmos container, no new
-   secret) beyond what kb-memory + model-routing already resolve. Pure core (`extractEntityKeys`,
+   never throws). New consumers of the shared exec feed; adds NO new infra (no new agent-state
+   container, no new secret) beyond what kb-memory + model-routing already resolve. Pure core (`extractEntityKeys`,
    `candidateSlice`, `gateVerdict`, `recentClaimRows`, `scanRows`) is unit-tested with an injected fake
    entailment fn (no live network in tests).
 7. **`groundedness`** — a FAITHFULNESS/GROUNDEDNESS detector, a report-mode hallucination guard.
@@ -82,11 +82,19 @@ uses instead.
 node skills/signal-radar/radar.mjs scan [--emit] [--json] [--only <detector-name>]
 ```
 Without `--emit` this is a pure dry-run: runs every detector against LIVE data sources, prints what
-would fire, touches no external state (no Cosmos write, no PostHog emit, no dispatch). `--emit`
-persists each firing Signal to the Cosmos `signals` container, emits a `signal_detected` PostHog event
-(Fleet Agents project), and routes `high` severity / escalated Signals to the owning agent's
+would fire, touches no external state (no agent-state write, no PostHog emit, no dispatch). `--emit`
+persists each firing Signal to the agent-state `signals` container, emits a `signal_detected` PostHog
+event (Fleet Agents project), and routes `high` severity / escalated Signals to the owning agent's
 `fleet-dispatch` inbox. `--json` emits a single machine-parseable JSON object on stdout (all narration
 goes to stderr in this mode) for a cron wrapper or another tool to consume.
+
+**FAIL LOUD, not silent-success (2026-09-03).** `--emit` used to print `cosmos NOT configured ...
+nothing persisted or dispatched` to stderr and still exit 0 -- a scheduled job that ran every 30
+minutes, looked perfectly healthy (fresh logs, every detector `[ok]`), and silently did nothing since
+at least the 2026-08-28 SSM cleanup that removed the dead `cosmos-endpoint` secret. `--emit` now sets a
+non-zero exit code in BOTH failure shapes: the store is unconfigured (checked before any write is
+attempted), or the store reports configured but a real write still fails (unreachable/permission/auth).
+A quiet fleet with nothing to persist is unaffected -- that is a genuine, honest success.
 
 ## Signal schema (see `schema.mjs`)
 `{ id, detector, owner, subject, severity, why, evidence_link, suggested_action, mnpi, ts }`. `id` is a
@@ -96,41 +104,52 @@ and consecutive-escalate possible without fuzzy matching). `owner` is the routin
 is hard-force-routed to `owner=cfo` and flagged `mnpi=true` regardless of which detector produced it,
 so it can never leak into a fleet-wide digest.
 
-## Storage: Cosmos DB `signals` container
-Lives in the SAME Cosmos account the gateway's agent-state plane uses
-(`cosmos-otc-agentstate-55c84`, db `agent-state`), as a sibling container to `tasks`/`memory`/`events`,
-partitioned by `/owner` with a 90-day TTL (`defaultTtl: 7776000`, so the container self-prunes and never
-grows unbounded). Connection secrets (`cosmos-endpoint`, `cosmos-key`, `cosmos-db`) are in
-`otchealth-shared-prod` Secret Manager; the container itself was created via an ARM REST PUT against
-the account's `sqlDatabases/agent-state/containers/signals` resource (see "Provisioning" below) -
-already done for this PR, so `--emit` works out of the box.
+## Storage: RDS Postgres `signals` container, via pg-state.mjs (ported 2026-09-03)
+`skills/signal-radar/common.mjs` (`cosmosConfig`/`cosmosPutSignal`/`cosmosQuerySignals` -- names kept
+for the two other live callers, radar.mjs's own cooldown lookup and
+`compute-allocator/allocate.mjs`'s `recentSignalsFor()`) used to be a raw Azure Cosmos DB for NoSQL
+REST client against the SAME Cosmos account decision-clock used. Azure subscription `55c84f6b` was
+permanently deleted 2026-08-13, so it now delegates to `skills/kb-memory/pg-state.mjs`, the fleet's
+RDS Postgres agent-state backend (built 2026-08-16 in PR #437, wired into this and
+`decision-clock/cosmos-client.mjs` -- its only two intended callers -- on 2026-09-03). There is no
+Cosmos fallback: this file had no `STATE_BACKEND`-style switch before the port, and a default-to-Cosmos
+branch could only reproduce the exact silent-no-op bug the port fixes (see the FAIL LOUD note above for
+the live incident this was caught from).
 
-## Provisioning (already done for this repo's Cosmos account; documented for a future account/region)
-```
-# create the container (idempotent PUT; 202 = accepted async operation)
-curl -X PUT "https://management.azure.com/subscriptions/<SUB>/resourceGroups/rg-otchealth-shared-prod/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-otc-agentstate-55c84/sqlDatabases/agent-state/containers/signals?api-version=2023-11-15" \
-  -H "Authorization: Bearer <ARM_TOKEN>" -H "Content-Type: application/json" \
-  -d '{"properties":{"resource":{"id":"signals","partitionKey":{"paths":["/owner"],"kind":"Hash"},"defaultTtl":7776000},"options":{}}}'
-```
+**Connection**: `pg-state.mjs` resolves `aws-pg-host` / `aws-pg-master-user` /
+`aws-pg-master-password` / `aws-pg-port` via `kvSecret()` -- under the fleet default
+`SECRET_BACKEND=ssm` that means AWS SSM `/otchealth/aws-pg-host` etc. This skill's ECS task definition
+(`otchealth-job-signal-radar`) and its EventBridge schedule (`otchealth-signal-radar`, `rate(30
+minutes)`, currently ENABLED) already run under the shared `otchealthTaskRole`, which already holds
+`ssm:GetParameter*` on `/otchealth/*` and network access to the RDS security group -- **no
+task-definition or IAM change was needed** to make this work.
 
-## Deploy shape: Container Apps Job (cron, mirrors the doc-indexer job pattern)
-Not yet created as a live Azure job in this PR (code + config ship together; creating the actual
-scheduled job is a one-command follow-up, same pattern as every other Tier-1 job in
-`skills/doc-indexer/job/`):
-```
-# entrypoint (see skills/signal-radar/job/radar.sh in this PR)
-az containerapp job create -n signal-radar -g otchealth-automation-rg \
-  --environment otchealth-jobs-env --trigger-type Schedule --cron-expression "*/30 * * * *" \
-  --replica-timeout 600 --replica-retry-limit 1 \
-  --image otchealthacr.azurecr.io/doc-indexer:latest --registry-server otchealthacr.azurecr.io \
-  --cpu 1 --memory 2Gi \
-  --secrets "gcpsa=<ONE_LINE_CLAUDE_DRIVER_SA_JSON>" \
-  --env-vars "GCP_CLAUDE_DRIVER_SA_JSON=secretref:gcpsa" \
-  --command "/bin/sh" --args "/app/skills/signal-radar/job/radar.sh"
-```
-Reuses the existing `doc-indexer` image (same repo, same one-secret self-resolving pattern) rather than
-building a new image, since `radar.mjs` has no dependencies beyond what that image already ships
-(Node + the repo checkout). If a dedicated image is later wanted, copy `skills/doc-indexer/job/Dockerfile`.
+**Known caveat, worth checking before relying on this in production**: `skills/kb-memory/
+pg-state-schema.sql`'s own header states it was NOT YET APPLIED as of 2026-08-16 ("applied by the CTO
+via a Fargate task" against the VPC-internal RDS instance, since this sandbox cannot reach it
+directly). If the `agentstate_signals` table does not exist yet, the first real `--emit` tick after
+this port lands will fail loud (a Postgres "relation does not exist" error propagating out of
+`queryDocs`/`upsertDoc`) rather than the old silent no-op -- which is the CORRECT new behavior, but
+confirm the schema has actually been applied (or apply it) so the schedule's very next tick succeeds
+rather than merely failing correctly.
+
+**Testing without a real Postgres connection**: `common.mjs` exports a test-only
+`_setStateBackendForTests(fake)` / `_resetStateBackendForTests()` seam, and `radar.mjs` exports
+`runScan({ io, dispatch, detectors, only, emitting, asJson, now })` with `io` (cosmosConfig/
+cosmosPutSignal/cosmosQuerySignals/posthogEmit), `dispatch`, and `detectors` all injectable.
+`node:test`'s `mock.module()` is not an option here (it needs `--experimental-test-module-mocks`,
+which `run-tests.sh`'s `node --test` invocation does not pass); see
+`tests/signal-radar-pg-state.test.mjs` for the working pattern -- including the gotcha that
+`posthogEmit` must ALSO be injected in any test that reaches the persist loop, or a test with real AWS
+credentials in its environment (as this sandbox has) will make a real network call and could post a
+genuine event to the live Fleet Agents PostHog project.
+
+## Deploy shape: AWS ECS + EventBridge Scheduler (already provisioned)
+ECS task definition `otchealth-job-signal-radar` (image `doc-indexer:latest`, command
+`/app/skills/signal-radar/job/radar.sh`), fired by EventBridge Scheduler `otchealth-signal-radar`
+(`rate(30 minutes)`, currently ENABLED). Reuses the shared `doc-indexer` image (same repo, same
+self-resolving secret pattern) rather than a dedicated image, since `radar.mjs` has no dependencies
+beyond what that image already ships (Node + the repo checkout).
 
 ## Guardrails (make explicit, not implicit)
 - **MNPI**: INND / Xero / Plaid / stock / cap-table / investor / securities subjects are hard-routed to
@@ -138,20 +157,28 @@ building a new image, since `radar.mjs` has no dependencies beyond what that ima
   + applied unconditionally in `radar.mjs` before any signal is persisted or dispatched.
 - **PHI**: MedReview is never a data source. `sentry-error-spike` hard-excludes MedReview Sentry
   projects via `schema.isPhiExcluded`; no other detector touches a PHI-ring system at all.
-- **Fail-open**: one detector throwing an error produces zero signals + one diagnostic note for that
-  detector only; it never aborts the scan or crashes the process (`radar.mjs`'s `runDetectorSafely`).
-  The top-level `scan` command also wraps in try/catch and always exits 0 on error (mirrors fleet-medic).
+- **Fail-open on a DETECTOR error, fail-loud on a STORE error**: one detector throwing an error produces
+  zero signals + one diagnostic note for that detector only; it never aborts the scan or crashes the
+  process (`radar.mjs`'s `runDetectorSafely`), and the top-level `scan` command wraps in try/catch and
+  exits 0 on an unexpected internal error (mirrors fleet-medic). This is deliberately NARROWER than it
+  used to be: `--emit` failing to persist or dispatch because the agent-state store is unconfigured or
+  unreachable is its OWN, separate, non-zero exit code (see "FAIL LOUD" above) set BEFORE that top-level
+  catch is ever reached -- a broken detector staying quiet must never be confused with a healthy fleet
+  whose findings simply never got recorded.
 - **Never-cry-wolf**: `schema.shouldFire` applies a per-severity cooldown (high 4h, medium 12h, low 24h)
   before the SAME finding (same `detector::subject` id) can re-fire, and only escalates (bumps to a
   human-visible flag) after 3 consecutive un-resolved firings. A flapping metric gets ONE dispatch, then
   goes quiet until it either clears or persists long enough to be worth re-flagging.
 - **Report-only**: no detector or the radar core ever calls a mutating API on another system (no
   restarts, no rollbacks, no secret rotation, no billing changes). The only writes Radar itself performs
-  are (a) its own Cosmos `signals` container and (b) a `fleet-dispatch` inbox message; both are
+  are (a) its own agent-state `signals` container and (b) a `fleet-dispatch` inbox message; both are
   observability/coordination writes, never a production action.
 
 ## Testing
 `tests/signal-radar.test.mjs` covers every detector's PURE logic function hermetically (no network): 
 `schema.shouldFire` cooldown/escalate, `schema.isMnpiSubject`/`isPhiExcluded`, `sentry-error-spike.evaluateSeries`,
 `eval-regression.findRegressions`, `grant-burn-expiry.classifyGrants`, `rotate-secret-age.findAgedRotateSecrets`,
-`mark-review-overdue.parseLedger`/`isReviewCandidate`. `node --check` passes on every file (see `run-tests.sh`).
+`mark-review-overdue.parseLedger`/`isReviewCandidate`. `tests/signal-radar-pg-state.test.mjs` covers the
+agent-state wiring itself with a fake backend: `common.mjs`'s delegation, and `radar.mjs`'s `runScan()`
+persisting + dispatching when configured and failing loud (non-zero exit) when not, or when a
+configured store's write still fails. `node --check` passes on every file (see `run-tests.sh`).

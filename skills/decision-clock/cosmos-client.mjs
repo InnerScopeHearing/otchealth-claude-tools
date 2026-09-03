@@ -1,181 +1,89 @@
-// cosmos-client.mjs — dependency-free Azure Cosmos DB for NoSQL data-plane client for decision-clock.
-// Mirrors otchealth-mcp-server's src/agentstate/cosmos.ts auth scheme exactly (master-key HMAC, same
-// stringToSign casing) so this skill talks to the SAME agent-state Cosmos account
-// (cosmos-otc-agentstate-55c84, db agent-state) the gateway uses, without needing a Node/TS build step
-// or the gateway's runtime. Creds resolve from GCP Secret Manager via the claude-driver SA (the
-// standard kb-memory sm() pattern), never from a committed config.
+// cosmos-client.mjs -- agent-state client for decision-clock's `decisions_pending` container.
 //
-// Auth (do NOT "tidy" the casing, it is load-bearing, matches the gateway's cosmos.ts):
-//   stringToSign = verb.toLowerCase() + "\n" + resType.toLowerCase() + "\n" +
-//                  resourceLink + "\n" + date.toLowerCase() + "\n" + "" + "\n"
-//   sig = base64( HMAC-SHA256( base64decode(masterKey), stringToSign ) )
-//   Authorization = urlencode("type=master&ver=1.0&sig=" + sig)
-// resourceLink keeps its original case (db/container/doc ids are case-sensitive). Header
-// construction itself (this key-mode HMAC, or AAD/managed-identity when COSMOS_AUTH_MODE=aad) is
-// centralized in ../kb-memory/cosmos-auth.mjs, shared by all 4 job Cosmos clients.
+// REMOVAL NOTICE (2026-09-03): this file used to be a dependency-free Azure Cosmos DB for NoSQL REST
+// client (master-key HMAC auth, mirroring otchealth-mcp-server's src/agentstate/cosmos.ts) against the
+// fleet's Cosmos account cosmos-otc-agentstate-55c84 (db agent-state). That account is permanently
+// unreachable: Azure subscription 55c84f6b was deleted 2026-08-13, and the
+// cosmos-agent-state-endpoint secret was removed in the 2026-08-28 SSM cleanup (FND-20260827-acce; its
+// cosmos-agent-state-key/-db companions were left behind, useless without the endpoint). The raw
+// Cosmos REST implementation (master-key HMAC headers, GCP-Secret-Manager credential resolution,
+// partition-key-range fan-out) has been REMOVED here rather than kept behind a STATE_BACKEND=cosmos
+// switch: this file had no such switch before today (grep confirmed zero occurrences of
+// STATE_BACKEND/pg-state/postgres prior to this change), there is no live Cosmos endpoint left to fall
+// back to, and a default-to-Cosmos branch would only ever reproduce the exact silent-success bug this
+// change exists to close -- see skills/signal-radar/common.mjs's identical history and radar.mjs's
+// paired fail-loud fix for the live incident this was caught from (a scheduled job running every 30
+// minutes, exiting 0, and persisting nothing since at least the 2026-08-28 cleanup).
 //
-// Inert without creds: isConfigured() is false if Secret Manager lacks cosmos-agent-state-*, and every
-// caller in this skill degrades to a clear "Cosmos not reachable, dry-run" note instead of throwing.
-import crypto from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { cosmosAuthHeader } from "../kb-memory/cosmos-auth.mjs";
+// This file now delegates its whole exported surface to ../kb-memory/pg-state.mjs, the fleet's RDS
+// Postgres agent-state backend (added 2026-08-16 in PR #437, never wired into either intended caller
+// until now). Every exported function NAME and CALL SHAPE is unchanged on purpose, so existing
+// importers need no changes at all: decision.mjs (open/ack/close/list/sweep/metrics),
+// digest-section.mjs (buildDigestSectionFromCosmos), and skills/legal-deadline-pager/pager.mjs (its
+// company-namespace sync into this same `decisions_pending` container).
+//
+// CONFIG: resolves via pg-state.mjs -> kvSecret() (AWS SSM /otchealth/* under SECRET_BACKEND=ssm, the
+// fleet default) under aws-pg-host / aws-pg-master-user / aws-pg-master-password / aws-pg-port.
+// isConfigured() reflects only whether those VALUES resolved; it does not prove the database is
+// reachable. A value present but a dead host or bad credential still fails on the first real query,
+// which throws -- decision.mjs's sweep() (the one entrypoint the scheduled job actually calls) treats
+// both "unconfigured" and "configured but unreachable" as a hard, non-zero-exit failure, never a
+// silent no-op. See decision.mjs's runSweep() for that fail-loud logic.
+import * as pgState from "../kb-memory/pg-state.mjs";
 
-const SM = "otchealth-shared-prod";
-const COSMOS_API_VERSION = "2018-12-31";
-
-// ---- Secret Manager (claude-driver SA), same pattern as kb-memory/mem.mjs ----
-function resolveSaJson() {
-  if (process.env.GCP_CLAUDE_DRIVER_SA_JSON) return process.env.GCP_CLAUDE_DRIVER_SA_JSON;
-  const p = `${homedir()}/.gcp_claude_driver_sa.json`;
-  try { if (existsSync(p)) return readFileSync(p, "utf8"); } catch {}
-  return null;
-}
-function saJwt(scope) {
-  const raw = resolveSaJson();
-  if (!raw) return null;
-  const sa = JSON.parse(raw);
-  const now = Math.floor(Date.now() / 1000);
-  const e = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const i = `${e({ alg: "RS256", typ: "JWT" })}.${e({ iss: sa.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 })}`;
-  return i + "." + crypto.createSign("RSA-SHA256").update(i).sign(sa.private_key, "base64url");
-}
-async function sm(id) { const _kv = await kvSecret(id); if (_kv != null) return _kv;
-  const jwt = saJwt("https://www.googleapis.com/auth/cloud-platform");
-  if (!jwt) return null;
-  const r0 = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}` });
-  const t = (await r0.json()).access_token;
-  if (!t) return null;
-  const r = await fetch(`https://secretmanager.googleapis.com/v1/projects/${SM}/secrets/${id}/versions/latest:access`, { headers: { Authorization: `Bearer ${t}` } });
-  if (!r.ok) return null;
-  return Buffer.from((await r.json()).payload.data, "base64").toString("utf8").trim();
+// Path-injection guard. Narrower than pg-state.mjs's own two-container allowlist on purpose:
+// decision-clock has only ever touched `decisions_pending` (signal-radar's `signals` container is a
+// separate module, skills/signal-radar/common.mjs, with its own equivalent guard).
+const CONTAINERS = new Set(["decisions_pending"]);
+function assertColl(coll) {
+  if (!CONTAINERS.has(coll)) throw new Error(`unknown container "${coll}" (allowed: ${[...CONTAINERS].join(", ")})`);
 }
 
-let _cfg; // memoized {endpoint, key, db} | null
-async function cfg() {
-  if (_cfg !== undefined) return _cfg;
-  const endpoint = process.env.COSMOS_ENDPOINT || (await sm("cosmos-agent-state-endpoint"));
-  const key = process.env.COSMOS_KEY || (await sm("cosmos-agent-state-key"));
-  const dbName = process.env.COSMOS_DB || (await sm("cosmos-agent-state-db")) || "agent-state";
-  _cfg = (endpoint && key) ? { endpoint: endpoint.replace(/\/+$/, ""), key, db: dbName } : null;
-  return _cfg;
-}
+// Test-only backend swap, mirroring pg-state.mjs's own _resetForTests() naming convention. `_backend`
+// defaults to the real pg-state module; a test can substitute a fake object implementing the same
+// six-function shape (isConfigured/createDoc/readDoc/replaceDoc/upsertDoc/queryDocs) without touching
+// the real module or a real Postgres connection. This exists because node:test's mock.module() needs
+// --experimental-test-module-mocks, which run-tests.sh's `node --test` invocation does not pass (and
+// should not gain just for this file) -- confirmed empirically, not assumed. Never invoked from any
+// real call path; a no-op unless a test explicitly calls it.
+let _backend = pgState;
+export function _setBackendForTests(fake) { _backend = fake; }
+export function _resetBackendForTests() { _backend = pgState; }
 
 export async function isConfigured() {
-  return (await cfg()) !== null;
+  return _backend.isConfigured();
 }
-
-/** The Cosmos master-key Authorization header value (URL-encoded token). Pure + testable. Kept as a
- *  named export for backward compatibility (this module has always documented it as part of its
- *  surface); delegates to the ONE real implementation in cosmos-auth.mjs so there is exactly one
- *  place the HMAC formula lives. */
-export { keyAuthToken as authToken } from "../kb-memory/cosmos-auth.mjs";
-
-// Path-injection guard, same allowlist discipline as the gateway's cosmos.ts.
-const CONTAINERS = new Set(["decisions_pending"]);
-const ID_RE = /^[A-Za-z0-9_.\-]{1,255}$/;
-function assertColl(coll) { if (!CONTAINERS.has(coll)) throw new Error(`unknown container "${coll}" (allowed: ${[...CONTAINERS].join(", ")})`); }
-function assertId(value, label = "id") { if (typeof value !== "string" || !ID_RE.test(value) || /^\.+$/.test(value)) throw new Error(`invalid ${label} (must match Cosmos id charset)`); }
-
-async function request(verb, resType, resourceLink, urlPath, opts = {}) {
-  const c = await cfg();
-  if (!c) throw new Error("Cosmos agent-state not configured (cosmos-agent-state-endpoint/key unavailable).");
-  const date = new Date().toUTCString();
-  const headers = {
-    Authorization: await cosmosAuthHeader({ verb, resType, resourceLink, date, masterKey: c.key }),
-    "x-ms-date": date,
-    "x-ms-version": COSMOS_API_VERSION,
-    Accept: "application/json",
-  };
-  if (opts.pk !== undefined) headers["x-ms-documentdb-partitionkey"] = JSON.stringify([opts.pk]);
-  if (opts.pkRangeId !== undefined) headers["x-ms-documentdb-partitionkeyrangeid"] = opts.pkRangeId;
-  if (opts.ifMatch) headers["If-Match"] = opts.ifMatch;
-  if (opts.upsert) headers["x-ms-documentdb-is-upsert"] = "true";
-  if (opts.continuation) headers["x-ms-continuation"] = opts.continuation;
-  if (opts.maxItemCount) headers["x-ms-max-item-count"] = String(opts.maxItemCount);
-  if (opts.isQuery) {
-    headers["Content-Type"] = "application/query+json";
-    headers["x-ms-documentdb-isquery"] = "true";
-    if (opts.pk === undefined) headers["x-ms-documentdb-query-enablecrosspartition"] = "true";
-  } else if (opts.body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-  const r = await fetch(`${c.endpoint}/${urlPath}`, { method: verb, headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
-  const txt = await r.text();
-  let body = null;
-  try { body = txt ? JSON.parse(txt) : null; } catch { body = { raw: txt }; }
-  return { status: r.status, ok: r.ok, body, etag: r.headers.get("etag"), continuation: r.headers.get("x-ms-continuation") };
-}
-
-function dbName(c) { return c.db; }
 
 export async function createDoc(coll, pkValue, doc) {
-  assertColl(coll); assertId(pkValue, "partition key");
-  const c = await cfg(); const link = `dbs/${dbName(c)}/colls/${coll}`;
-  const res = await request("POST", "docs", link, `${link}/docs`, { pk: pkValue, body: doc });
-  if (!res.ok) throw new Error(`Cosmos createDoc ${coll} -> ${res.status}: ${JSON.stringify(res.body).slice(0, 240)}`);
-  return res;
+  assertColl(coll);
+  return _backend.createDoc(coll, pkValue, doc);
 }
 
 export async function upsertDoc(coll, pkValue, doc) {
-  assertColl(coll); assertId(pkValue, "partition key");
-  const c = await cfg(); const link = `dbs/${dbName(c)}/colls/${coll}`;
-  const res = await request("POST", "docs", link, `${link}/docs`, { pk: pkValue, body: doc, upsert: true });
-  if (!res.ok) throw new Error(`Cosmos upsertDoc ${coll} -> ${res.status}: ${JSON.stringify(res.body).slice(0, 240)}`);
-  return res;
+  assertColl(coll);
+  return _backend.upsertDoc(coll, pkValue, doc);
 }
 
 export async function readDoc(coll, pkValue, id) {
-  assertColl(coll); assertId(pkValue, "partition key"); assertId(id);
-  const c = await cfg(); const link = `dbs/${dbName(c)}/colls/${coll}/docs/${id}`;
-  const res = await request("GET", "docs", link, link, { pk: pkValue });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Cosmos readDoc ${coll}/${id} -> ${res.status}: ${JSON.stringify(res.body).slice(0, 240)}`);
-  return { doc: res.body, etag: res.etag };
+  assertColl(coll);
+  return _backend.readDoc(coll, pkValue, id);
 }
 
 export async function replaceDoc(coll, pkValue, id, doc, ifMatch) {
-  assertColl(coll); assertId(pkValue, "partition key"); assertId(id);
-  const c = await cfg(); const link = `dbs/${dbName(c)}/colls/${coll}/docs/${id}`;
-  return request("PUT", "docs", link, link, { pk: pkValue, body: doc, ifMatch });
+  assertColl(coll);
+  return _backend.replaceDoc(coll, pkValue, id, doc, ifMatch);
 }
 
-async function pkRanges(coll) {
-  const c = await cfg(); const link = `dbs/${dbName(c)}/colls/${coll}`;
-  const res = await request("GET", "pkranges", link, `${link}/pkranges`, {});
-  if (!res.ok) throw new Error(`Cosmos pkranges ${coll} -> ${res.status}`);
-  return ((res.body?.PartitionKeyRanges) || []).map((r) => r.id);
-}
-
-/** Run a SQL query. Single-partition when pk given; else fan out per pk-range and merge (mirrors the
- *  gateway's cosmos.ts, since the REST gateway cannot itself fan out cross-partition queries). */
+/** Run a SQL query (Cosmos-SQL syntax; pg-state.mjs translates it -- see its own pg-sql-translate.mjs
+ *  for the supported grammar). Matches the original Cosmos client's shape exactly, including the
+ *  cross-partition case (opts.pk omitted): pg-state.mjs's Postgres table has no partition concept to
+ *  fan out over, so an unscoped query is simply a plain scan, which is the correct Postgres analog of
+ *  "search every partition and merge." */
 export async function queryDocs(coll, query, parameters = [], opts = {}) {
   assertColl(coll);
-  const max = opts.max ?? 200;
-  const c = await cfg(); const link = `dbs/${dbName(c)}/colls/${coll}`;
-  const MAX_PAGE_RETRIES = 3, PAGE_RETRY_BASE_MS = 250;
-  const runOne = async (extra) => {
-    const out = [];
-    let continuation;
-    do {
-      let res, pageAttempt = 0;
-      for (;;) {
-        res = await request("POST", "docs", link, `${link}/docs`, { isQuery: true, body: { query, parameters }, continuation, maxItemCount: 100, ...extra });
-        if (res.status === 429 && pageAttempt < MAX_PAGE_RETRIES) { pageAttempt++; await new Promise((r) => setTimeout(r, PAGE_RETRY_BASE_MS * pageAttempt)); continue; }
-        break;
-      }
-      if (!res.ok) throw new Error(`Cosmos query ${coll} -> ${res.status}: ${JSON.stringify(res.body).slice(0, 240)}`);
-      out.push(...((res.body?.Documents) || []));
-      continuation = res.continuation ?? undefined;
-    } while (continuation && out.length < max);
-    return out;
-  };
-  if (opts.pk !== undefined) { assertId(opts.pk, "partition key"); return (await runOne({ pk: opts.pk })).slice(0, max); }
-  const ranges = await pkRanges(coll);
-  const merged = [];
-  for (const rid of ranges) { merged.push(...(await runOne({ pkRangeId: rid }))); if (merged.length >= max) break; }
-  return merged.slice(0, max);
+  return _backend.queryDocs(coll, query, parameters, opts);
 }
 
-export function newId(prefix) { return `${prefix}_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`; }
+export function newId(prefix) {
+  return _backend.newId(prefix);
+}
