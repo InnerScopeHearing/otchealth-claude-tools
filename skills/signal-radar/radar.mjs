@@ -7,9 +7,11 @@
 //
 // Verbs:
 //   node radar.mjs scan [--emit] [--json] [--only <detector-name>]
-//     --emit persists each NEW-OR-PAST-COOLDOWN signal to Cosmos `signals`, emits a signal_detected
-//     PostHog event, and dispatches high/escalated signals to the owning agent's inbox. Without --emit
-//     this is a pure dry-run (prints what WOULD fire; touches no external state).
+//     --emit persists each NEW-OR-PAST-COOLDOWN signal to the agent-state `signals` container (RDS
+//     Postgres via ../kb-memory/pg-state.mjs, see common.mjs), emits a signal_detected PostHog event,
+//     and dispatches high/escalated signals to the owning agent's inbox. Without --emit this is a pure
+//     dry-run (prints what WOULD fire; touches no external state). With --emit, an unconfigured or
+//     unreachable agent-state store is a hard failure (non-zero exit), never a silent no-op.
 //
 // GUARDRAILS (see schema.mjs for the pure logic):
 //   - MNPI (INND/securities/Xero/Plaid/stock) signals are hard-routed to owner=cfo and NEVER appear in
@@ -62,15 +64,37 @@ async function runDetectorSafely(mod) {
   }
 }
 
-async function scan() {
-  const only = val("--only", "");
-  const emitting = FLAG("--emit");
-  const asJson = FLAG("--json");
-  const targets = only ? DETECTORS.filter((d) => d.NAME === only) : DETECTORS;
-  if (only && !targets.length) { console.error(`unknown detector "${only}". known: ${DETECTORS.map((d) => d.NAME).join(", ")}`); process.exit(2); }
+/** Default dispatch: the real fleet-dispatch subprocess call. Injectable (see runScan's `dispatch`
+ *  param) so a test can prove a signal actually routes to an owner's inbox without shelling out. */
+function defaultDispatch(owner, text) {
+  execFileSync("node", [DISPATCH_PATH, "send", owner, text, "--from", "signal-radar"], { stdio: ["ignore", "pipe", "pipe"] });
+}
 
-  const cosmosCfg = await cosmosConfig().catch(() => null);
-  const now = Date.now();
+/**
+ * The whole scan: run every detector, classify + cooldown-gate the findings, and (with emitting=true)
+ * persist + dispatch. Exported and parameterized (io/dispatch/detectors/now all injectable, defaulting
+ * to the real module-level implementations) so decision-clock's counterpart FAIL-LOUD requirement and
+ * the "persist + dispatch actually happen" requirement are both testable with a fake state backend, in
+ * process, with no real Postgres connection and no node:test module mocking (see common.mjs's own
+ * backend-swap seam for why mock.module() is not an option here).
+ *
+ * Returns a small result object so a caller (a test, or a future --json consumer) can inspect exactly
+ * what happened without re-parsing console output: { firing, configured, persisted, dispatched }.
+ */
+export async function runScan(opts = {}) {
+  const {
+    only = "",
+    emitting = false,
+    asJson = false,
+    io = { cosmosConfig, cosmosPutSignal, cosmosQuerySignals, posthogEmit },
+    dispatch = defaultDispatch,
+    detectors = DETECTORS,
+    now = Date.now(),
+  } = opts;
+  const targets = only ? detectors.filter((d) => d.NAME === only) : detectors;
+  if (only && !targets.length) { console.error(`unknown detector "${only}". known: ${detectors.map((d) => d.NAME).join(", ")}`); process.exit(2); }
+
+  const cosmosCfg = await io.cosmosConfig().catch(() => null);
 
   const perDetector = [];
   let allSignals = [];
@@ -86,14 +110,14 @@ async function scan() {
     if (isMnpiSubject(s.detector, s.subject)) { s.mnpi = true; s.owner = "cfo"; }
   }
 
-  // cooldown / consecutive-escalate per signal id, using Cosmos history when configured. Without
-  // Cosmos configured, every signal is treated as "fire" (dry-run-safe; --emit still requires Cosmos
-  // to actually persist, so a mis-provisioned Cosmos never silently double-dispatches).
+  // cooldown / consecutive-escalate per signal id, using agent-state history when configured. Without
+  // it configured, every signal is treated as "fire" (dry-run-safe; --emit still requires the
+  // agent-state store to actually persist, so a mis-provisioned store never silently double-dispatches).
   const decisions = [];
   for (const s of allSignals) {
     let history = [];
     if (cosmosCfg) {
-      try { history = await cosmosQuerySignals(s.owner, "SELECT c.ts FROM c WHERE c.id = @id", [{ name: "@id", value: s.id }]); }
+      try { history = await io.cosmosQuerySignals(s.owner, "SELECT c.ts FROM c WHERE c.id = @id", [{ name: "@id", value: s.id }]); }
       catch { /* fail-open: treat as no history */ }
     }
     const cooldownMin = COOLDOWN_MIN_BY_SEVERITY[s.severity] ?? 720;
@@ -107,7 +131,7 @@ async function scan() {
   if (asJson) {
     console.log(JSON.stringify({ ts: new Date(now).toISOString(), emitting, detectors: perDetector.map((r) => ({ name: r.name, count: r.signals.length, error: r.error, notes: r.notes })), firing: firing.map((d) => d.signal), suppressed: decisions.length - firing.length }, null, 2));
   } else {
-    console.log(`# SIGNAL RADAR scan ${new Date(now).toISOString()}  (${emitting ? "EMIT" : "dry-run"}; cosmos ${cosmosCfg ? "configured" : "NOT configured"})`);
+    console.log(`# SIGNAL RADAR scan ${new Date(now).toISOString()}  (${emitting ? "EMIT" : "dry-run"}; agent-state ${cosmosCfg ? "configured" : "NOT configured"})`);
     for (const r of perDetector) {
       console.log(`  [${r.error ? "ERR " : "ok  "}] ${r.name.padEnd(22)} ${String(r.signals.length).padStart(2)} signal(s)${r.error ? `  (${r.error})` : ""}`);
       for (const note of r.notes) console.log(`         note: ${note}`);
@@ -124,11 +148,19 @@ async function scan() {
     if (suppressed) console.log(`\n  (${suppressed} finding(s) suppressed by cooldown; a flapping metric will not spam an inbox)`);
   }
 
-  if (!emitting) return;
+  if (!emitting) return { firing: firing.map((d) => d.signal), configured: !!cosmosCfg, persisted: null, dispatched: null };
 
+  // FAIL LOUD, not silent-success: this is the exact incident that motivated this whole rewrite (see
+  // the header notice above and common.mjs's identical history) -- a scheduled job that ran every 30
+  // minutes, exited 0, and printed this same line to stderr, but NEVER a non-zero exit code, so
+  // CloudWatch looked perfectly healthy while the job persisted and dispatched nothing. `--emit` means
+  // the caller EXPECTS persistence/dispatch to happen; if the agent-state store cannot answer even
+  // "am I configured", that expectation was not met and the job must say so with its exit code, not
+  // just a log line nobody is watching in real time.
   if (!cosmosCfg) {
-    console.error("[signal-radar] --emit requested but Cosmos is not configured (cosmos-endpoint/cosmos-key/cosmos-db secrets missing); nothing persisted or dispatched.");
-    return;
+    console.error("[signal-radar] --emit requested but the agent-state store is not configured (aws-pg-host/aws-pg-master-user/aws-pg-master-password unavailable in AWS SSM /otchealth/*); nothing persisted or dispatched.");
+    process.exitCode = 1;
+    return { firing: firing.map((d) => d.signal), configured: false, persisted: 0, dispatched: [] };
   }
 
   const dispatched = [];
@@ -143,18 +175,25 @@ async function scan() {
     // ZERO signals reporting one persisted, silently, every 30 minutes. `persisted` now counts only
     // writes that actually returned success, so the summary line -- and any --json/dispatch consumer
     // reading it -- reflects what happened, not what was attempted.
-    try { await cosmosPutSignal({ id: s.id, owner: s.owner, ...s, escalate: d.escalate, consecutive: d.consecutive }); persisted++; }
+    try {
+      const put = await io.cosmosPutSignal({ id: s.id, owner: s.owner, ...s, escalate: d.escalate, consecutive: d.consecutive });
+      // cosmosPutSignal reports "not-configured" as a value, not a throw; a write that did not happen
+      // must never count as persisted, whichever way it says so.
+      if (put && put.ok === false) throw new Error(`put refused: ${put.reason || "unknown"}`);
+      persisted++;
+    }
     catch (e) { console.error(`  [warn] could not persist signal ${s.id}: ${e.message}`); }
 
-    await posthogEmit("signal_detected", s.owner, { detector: s.detector, subject: s.subject, severity: s.severity, mnpi: s.mnpi, escalate: d.escalate, consecutive: d.consecutive });
+    await io.posthogEmit("signal_detected", s.owner, { detector: s.detector, subject: s.subject, severity: s.severity, mnpi: s.mnpi, escalate: d.escalate, consecutive: d.consecutive });
 
     // Route to the owning agent's inbox. Only high severity or an escalated finding actually pages an
-    // agent (a "low" or first-time "medium" is left in Cosmos for the operator/company-brain to query,
-    // not pushed into an inbox) - this is the never-cry-wolf discipline applied to routing, not just cooldown.
+    // agent (a "low" or first-time "medium" is left in the agent-state store for the operator/
+    // company-brain to query, not pushed into an inbox) - this is the never-cry-wolf discipline applied
+    // to routing, not just cooldown.
     if (s.severity === "high" || d.escalate) {
       const text = `[signal-radar] ${s.severity.toUpperCase()} ${s.detector}: ${s.why} Action: ${s.suggested_action}`;
       try {
-        execFileSync("node", [DISPATCH_PATH, "send", s.owner, text, "--from", "signal-radar"], { stdio: ["ignore", "pipe", "pipe"] });
+        await dispatch(s.owner, text);
         dispatched.push(s.id);
       } catch (e) { console.error(`  [warn] dispatch to ${s.owner} failed for ${s.id}: ${e.message}`); }
     }
@@ -166,6 +205,18 @@ async function scan() {
       ? `[signal-radar] persisted ${persisted} signal(s); dispatched ${dispatched.length} to owner inbox(es).`
       : `[signal-radar] persisted ${persisted}/${firing.length} signal(s) (${firing.length - persisted} FAILED, see [warn] lines above); dispatched ${dispatched.length} to owner inbox(es).`;
   if (asJson) console.error(summaryLine); else console.log(`\n${summaryLine}`);
+
+  // FAIL LOUD on a partial or total persist failure too: the store answered "configured" but a real
+  // write still failed (unreachable/permission/auth), the second half of "unconfigured or unreachable"
+  // this whole change exists to make loud. Only firing.length > 0 can trip this -- a quiet fleet with
+  // nothing to persist is a genuine, honest success, not this failure class.
+  if (persisted < firing.length) process.exitCode = 1;
+
+  return { firing: firing.map((d) => d.signal), configured: true, persisted, dispatched };
+}
+
+async function scan() {
+  return runScan({ only: val("--only", ""), emitting: FLAG("--emit"), asJson: FLAG("--json") });
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

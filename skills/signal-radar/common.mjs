@@ -8,7 +8,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { cosmosAuthHeader } from "../kb-memory/cosmos-auth.mjs";
+import * as pgState from "../kb-memory/pg-state.mjs";
 
 export const SM = "otchealth-shared-prod";
 
@@ -160,61 +160,59 @@ export async function armToken() {
   return _armToken;
 }
 
-// ------------------------------------ Cosmos DB for NoSQL (signals container) ------------------------------------
-// Dependency-free REST data-plane client, same auth scheme as otchealth-mcp-server's
-// src/agentstate/cosmos.ts (master-key HMAC by default, AAD/managed-identity when
-// COSMOS_AUTH_MODE=aad). Header construction is centralized in ../kb-memory/cosmos-auth.mjs, shared
-// by all 4 job Cosmos clients; kept dependency-free by design (no npm packages), matching the rest
-// of this file.
+// ------------------------------ agent-state store (`signals` container) ------------------------------
+// REMOVAL NOTICE (2026-09-03): this used to be a dependency-free Azure Cosmos DB for NoSQL REST client
+// (master-key HMAC auth, same scheme as otchealth-mcp-server's src/agentstate/cosmos.ts) against the
+// SAME agent-state account decision-clock used. That account is permanently unreachable: Azure
+// subscription 55c84f6b was deleted 2026-08-13, and the cosmos-endpoint SSM mirror was removed in the
+// 2026-08-28 cleanup (FND-20260827-acce; its cosmos-key/cosmos-db companions were left behind, useless
+// without the endpoint). The live incident this closes: radar.mjs's own `--emit` path has been running
+// every 30 minutes since at least that cleanup, exiting 0 every time and printing "cosmos NOT
+// configured ... nothing persisted or dispatched" -- a scheduled job that looks perfectly healthy
+// (fresh CloudWatch logs, RunTask succeeds every run, every detector prints [ok]) while silently doing
+// nothing. See radar.mjs's scan()/runScan() for the paired fail-loud fix.
+//
+// This section now delegates to ../kb-memory/pg-state.mjs (RDS Postgres, added 2026-08-16 in PR #437,
+// never wired in until now) instead of the raw Cosmos REST calls, and was removed rather than kept
+// behind a STATE_BACKEND=cosmos switch: this file had no such switch before today, so there was
+// nothing to preserve a fallback path for, and a Cosmos default would only reproduce the same silent
+// no-op against a permanently dead endpoint. Exported function NAMES and CALL SHAPES
+// (cosmosConfig/cosmosPutSignal/cosmosQuerySignals) are unchanged on purpose, so the other two live
+// callers of this exact API -- radar.mjs's own cooldown-history lookup, and
+// compute-allocator/allocate.mjs's recentSignalsFor() -- need no changes.
+const SIGNALS_CONTAINER = "signals";
 
-let _cosmosCfg = null;
-/** Resolve {endpoint, key, db} from Secret Manager. Returns null (feature-detect) if not provisioned. */
+// Test-only backend swap (see decision-clock/cosmos-client.mjs's identical seam for the rationale:
+// node:test's mock.module() needs --experimental-test-module-mocks, which run-tests.sh's `node --test`
+// invocation does not pass -- confirmed empirically, not assumed). Never invoked from any real path.
+let _stateBackend = pgState;
+export function _setStateBackendForTests(fake) { _stateBackend = fake; }
+export function _resetStateBackendForTests() { _stateBackend = pgState; }
+
+/** Resolve the agent-state connection config. Returns a truthy value when configured, else null --
+ *  the same feature-detect contract the Cosmos implementation always had. Every live caller
+ *  (radar.mjs, compute-allocator/allocate.mjs) only ever checks truthiness, never inspects the
+ *  returned object's fields, so the shape here is deliberately minimal. */
 export async function cosmosConfig() {
-  if (_cosmosCfg !== null) return _cosmosCfg || null;
-  const endpoint = await sm("cosmos-endpoint");
-  const key = await sm("cosmos-key");
-  const db = await sm("cosmos-db");
-  if (!endpoint || !key || !db) { _cosmosCfg = false; return null; }
-  _cosmosCfg = { endpoint: endpoint.replace(/\/+$/, ""), key, db };
-  return _cosmosCfg;
+  return (await _stateBackend.isConfigured()) ? { backend: "postgres" } : null;
 }
 
-async function cosmosRequest(verb, resType, resourceLink, urlPath, opts = {}) {
-  const c = await cosmosConfig();
-  if (!c) throw new Error("Cosmos not configured (cosmos-endpoint/cosmos-key/cosmos-db secrets missing)");
-  const date = new Date().toUTCString();
-  const headers = {
-    Authorization: await cosmosAuthHeader({ verb, resType, resourceLink, date, masterKey: c.key }),
-    "x-ms-date": date, "x-ms-version": "2018-12-31", Accept: "application/json",
-  };
-  if (opts.pk !== undefined) headers["x-ms-documentdb-partitionkey"] = JSON.stringify([opts.pk]);
-  if (opts.isQuery) { headers["Content-Type"] = "application/query+json"; headers["x-ms-documentdb-isquery"] = "true"; }
-  else if (opts.body !== undefined) headers["Content-Type"] = "application/json";
-  if (opts.upsert) headers["x-ms-documentdb-is-upsert"] = "true";
-  const r = await fetch(`${c.endpoint}/${urlPath}`, { method: verb, headers, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
-  const txt = await r.text();
-  let body = null; try { body = txt ? JSON.parse(txt) : null; } catch { body = { raw: txt }; }
-  return { status: r.status, ok: r.ok, body };
-}
-
-/** Write a Signal doc into the `signals` container, partitioned by owner. Idempotent upsert. */
+/** Write a Signal doc into the `signals` container, partitioned by owner. Idempotent upsert. Throws
+ *  on a real failure; radar.mjs wraps every call in a per-signal try/catch (its own 2026-08-18 fix for
+ *  the incident where a failed write was miscounted as a success -- see radar.mjs for that history). */
 export async function cosmosPutSignal(doc) {
-  const c = await cosmosConfig();
-  if (!c) return { ok: false, reason: "not-configured" };
-  const link = `dbs/${c.db}/colls/signals`;
-  const res = await cosmosRequest("POST", "docs", link, `${link}/docs`, { pk: doc.owner, body: doc, upsert: true });
-  if (!res.ok) throw new Error(`Cosmos put signal -> ${res.status}: ${JSON.stringify(res.body).slice(0, 200)}`);
+  if (!(await _stateBackend.isConfigured())) return { ok: false, reason: "not-configured" };
+  await _stateBackend.upsertDoc(SIGNALS_CONTAINER, doc.owner, doc);
   return { ok: true };
 }
 
-/** Query the `signals` container for a single owner partition (used for cooldown/consecutive lookups). */
+/** Query the `signals` container for a single owner partition (used for cooldown/consecutive lookups
+ *  and by compute-allocator's recentSignalsFor()). Fails open to "no rows" when not configured, same
+ *  as the original Cosmos implementation; a real query failure once configured still throws, and
+ *  every caller already wraps this in its own try/catch treating a throw as "no history". */
 export async function cosmosQuerySignals(owner, query, parameters = []) {
-  const c = await cosmosConfig();
-  if (!c) return [];
-  const link = `dbs/${c.db}/colls/signals`;
-  const res = await cosmosRequest("POST", "docs", link, `${link}/docs`, { isQuery: true, pk: owner, body: { query, parameters } });
-  if (!res.ok) return [];
-  return (res.body && res.body.Documents) || [];
+  if (!(await _stateBackend.isConfigured())) return [];
+  return _stateBackend.queryDocs(SIGNALS_CONTAINER, query, parameters, { pk: owner });
 }
 
 // ------------------------------------------- fleet-dispatch -------------------------------------------
