@@ -977,13 +977,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T22:19:51.254Z
 - **Closed:** 2026-09-02T22:19:51.254Z
 
-### finding:FND-20260903-8b12 severity:high status:open | gateway-connect register() leaked a live lane bearer into SessionStart hook output: execFileSync Error.message carries the full argv (Authorization header) and the catch printed it raw; also non-idempotent remove-then-add (local scope is per-cwd; scope-less remove can refuse) with stdio ignored so the real CLI reason was invisible
+### finding:FND-20260903-8b12 severity:high status:fixed | gateway-connect register() leaked a live lane bearer into SessionStart hook output: execFileSync Error.message carries the full argv (Authorization header) and the catch printed it raw; also non-idempotent remove-then-add (local scope is per-cwd; scope-less remove can refuse) with stdio ignored so the real CLI reason was invisible
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-03-wave3-landing-and-gpt56-cutover.md
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 0623c4c4805a4fa414adaa83786c9c6751598601
+- **Verified by:** claude-tools PR #543 merged as 0623c4c: redactBearer + captured/redacted runClaude + idempotent register() with the local-scope retry; 5/5 new tests incl. a source scan, 33/34 existing gateway-connect suites (34th = opt-in live probe); root cause reproduced live on Claude Code 2.1.259 (scope-less remove refuses on multi-scope names; add collides with 'already exists in local config')
 - **Opened:** 2026-09-03T05:23:27.279Z
-- **Closed:** (open)
+- **Closed:** 2026-09-03T05:30:31.419Z
 
 ### finding:FND-20260903-3869 severity:medium status:open | ocr-sweep Textract port (claude-tools#540) never added skills/ocr-sweep to the doc-indexer image; live task def otchealth-job-docintel-ocr-sweep:2 is still the Azure-era shape (plain node image, unauthenticated runtime git clone, AZURE_SP_*/GCP secrets)
 
