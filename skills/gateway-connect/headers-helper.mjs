@@ -116,18 +116,32 @@ export async function getBearerHeaders({ lane, cacheDir, mint, now = Date.now(),
   const cached = readTokenCache(cachePath);
   const alive = hasSufficientLife(cached, now, minLifeMs);
   if (alive) {
-    // A cached token with life left is REUSED -- unless the gateway itself says it no longer accepts
+    // A cached token with life left is REUSED only when the gateway itself confirms it still accepts
     // it. Claude Code gives this helper no signal for WHY it was invoked (session start, reconnect,
     // or the automatic re-run after a 401/403), so instead of guessing from timing the helper asks
     // the only party that knows: `validate` (probeToken in main()) makes one cheap authenticated
-    // request with the cached token. false = rejected (revoked, invalidated, or expired server-side)
-    // -> fall through and mint fresh, which is what makes the 401/403 retry actually recover.
-    // true = accepted -> reuse. null (could not tell: network error, timeout, 5xx) -> reuse, because
-    // a mint would most likely fail the same way and a still-valid token beats no token.
+    // request with the cached token.
+    //   true  = accepted -> reuse ("cache").
+    //   false = rejected (revoked, invalidated, expired server-side) -> mint fresh ("mint-rejected");
+    //           this is what makes the 401/403 re-run actually recover.
+    //   null  = could not tell (no HTTP response, or a 5xx from in front of auth) -> ALSO mint fresh
+    //           ("mint-unverified"), because this invocation may be the one retry Claude Code gives a
+    //           rejected credential and replaying a token nobody could vouch for would burn it. Only if
+    //           that mint itself fails does the still-alive cached token get returned
+    //           ("cache-unverified") -- a valid-looking token beats no token when the network is down.
     let verdict = true;
     if (validate) { try { verdict = await validate(cached.token); } catch { verdict = null; } }
-    if (verdict !== false) {
-      return { headers: { Authorization: `Bearer ${cached.token}` }, source: verdict === true ? 'cache' : 'cache-unverified', cachePath };
+    if (verdict === true) {
+      return { headers: { Authorization: `Bearer ${cached.token}` }, source: 'cache', cachePath };
+    }
+    if (verdict === null) {
+      try {
+        const { token, expiresIn } = await mint(lane);
+        writeTokenCache(cachePath, { token, expiresAt: now + expiresIn * 1000, mintedAt: now });
+        return { headers: { Authorization: `Bearer ${token}` }, source: 'mint-unverified', cachePath };
+      } catch {
+        return { headers: { Authorization: `Bearer ${cached.token}` }, source: 'cache-unverified', cachePath };
+      }
     }
   }
   const { token, expiresIn } = await mint(lane);
@@ -138,9 +152,15 @@ export async function getBearerHeaders({ lane, cacheDir, mint, now = Date.now(),
 /**
  * Ask the gateway whether `token` is still accepted: an MCP `ping` is the smallest authenticated
  * request the stateless /mcp endpoint answers (every POST /mcp is authorized from the bearer alone,
- * so no session/initialize handshake is needed). Returns true (2xx: accepted), false (401/403:
- * rejected -- the caller should mint fresh), or null (could not tell: network error, timeout, any
- * other status). Never throws. `fetchImpl` is injectable for tests.
+ * so no session/initialize handshake is needed). Returns false on 401/403 (rejected -- the caller
+ * should mint fresh), null on a 5xx or no HTTP response at all (a load balancer with no healthy
+ * target, a crash, a timeout: inconclusive), and true on ANY other HTTP status. That last rule is
+ * deliberate and is what makes the probe robust to protocol details: the gateway evaluates the
+ * bearer (auth/bearer.ts validateBearer()) BEFORE any JSON-RPC handling, so a 200, and equally a 400
+ * or 404 from the MCP layer complaining about the ping itself, can only be reached by a request whose
+ * bearer already passed auth. A future gateway that stopped answering bare pings would therefore
+ * still validate correctly; only an actual auth rejection reads as rejection. Never throws.
+ * `fetchImpl` is injectable for tests.
  *
  * LIVE-VERIFIED 2026-09-03 against https://mcp.otchealth.app/mcp from the CTO seat, exactly this
  * request shape (no initialize, no session id): a freshly minted cto-lane token -> true, a bogus
@@ -157,7 +177,8 @@ export async function probeToken(token, { url = GATEWAY_MCP, timeoutMs = VALIDAT
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (r.status === 401 || r.status === 403) return false;
-    return r.ok ? true : null;
+    if (r.status >= 500) return null;
+    return true;
   } catch {
     return null;
   }
@@ -227,7 +248,7 @@ async function main() {
     const claim = laneClaim(headers.Authorization.slice('Bearer '.length));
     console.error(
       `[gateway-connect headers-helper] lane=${lane} agent=${claim || '?'} server=${serverName} ` +
-        `${source === 'cache' ? 're-used cached token (gateway accepted it)' : source === 'cache-unverified' ? 're-used cached token (gateway probe inconclusive)' : source === 'mint-rejected' ? 'minted a fresh token (gateway rejected the cached one)' : 'minted a fresh token'}`,
+        `${source === 'cache' ? 're-used cached token (gateway accepted it)' : source === 'cache-unverified' ? 're-used cached token (probe inconclusive AND a fresh mint failed)' : source === 'mint-unverified' ? 'minted a fresh token (probe inconclusive, not replaying the cached one)' : source === 'mint-rejected' ? 'minted a fresh token (gateway rejected the cached one)' : 'minted a fresh token'}`,
     );
     process.stdout.write(JSON.stringify(headers));
   } catch (e) {
