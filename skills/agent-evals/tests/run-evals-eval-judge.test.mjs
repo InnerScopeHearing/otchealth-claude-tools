@@ -234,3 +234,71 @@ test("runOneBatch: propagates assertAllBatchResultsPresent's throw when a submit
     /custom_id\(s\) got NO result at all/
   );
 });
+
+// ---- model-not-found / per-line-error paths (2026-09-03, T-2: arming OPENAI_BATCH_AGENT_EVALS) ----
+// These exercise the EXACT shape a real OpenAI batch output line carries when a request fails --
+// e.g. a misconfigured AGENT_MODEL/OPENAI_TIER_MID override naming a model the account cannot use
+// (OpenAI's real invalid_request_error/model_not_found shape: `response:null, error:{message,
+// code, type}` on that line -- see model-routing.mjs's own awaitBatch tests for the generic
+// per-line-error contract this reuses). The behavior under test is agent-evals' OWN consumption of
+// that contract via runPersonaBatch/runJudgeBatch -- i.e. that a bad model on ONE line surfaces as
+// a distinguishable `{error, content:null}` map entry through THESE wrappers specifically (not
+// merely through awaitBatch() in isolation, which model-routing.test.mjs already covers), matching
+// what main()'s per-task loop depends on: `if (ar.error) throw new Error("batch persona-answer
+// error: " + ar.error)` for the persona side, and "leave unset -> the per-task loop throws 'no
+// judge result'" for the judge side (see run-evals.mjs's BATCH MODE section) -- in both cases the
+// task is SKIPPED and logged, never silently scored as a real 0%/blank answer.
+function modelNotFoundLine(customId, model) {
+  return { custom_id: customId, response: null, error: { message: `The model \`${model}\` does not exist or you do not have access to it.`, type: "invalid_request_error", param: null, code: "model_not_found" } };
+}
+
+test("runPersonaBatch: a model_not_found per-line error surfaces as {error, content:null} for that task's custom_id, not a fabricated blank answer", async () => {
+  const { runPersonaBatch } = await freshRunEvals();
+  const tasks = [{ id: "t1", agent: "cto", task: "diagnose X" }];
+  const results = await withStubbedFetch(
+    batchApiStub([modelNotFoundLine("t1", "gpt-nonexistent")]),
+    () => runPersonaBatch(tasks, { dep: "gpt-nonexistent", apiKey: "sk-test" })
+  );
+  const r = results.get("t1");
+  assert.equal(r.content, null, "a model_not_found line must never resolve to a real (blank) answer");
+  assert.match(r.error, /model_not_found|does not exist/);
+  // The exact check main()'s per-task loop performs on this result (see run-evals.mjs: `if
+  // (ar.error) throw new Error(...)`) -- pinning the CONTRACT, not just the raw shape above.
+  assert.ok(r.error, "ar.error must be truthy so main() throws and skips the task instead of using r.content");
+});
+
+test("runPersonaBatch: a model_not_found error on ONE task's line never contaminates a sibling task's successful line in the same batch", async () => {
+  const { runPersonaBatch } = await freshRunEvals();
+  const tasks = [{ id: "bad", agent: "cto", task: "diagnose X" }, { id: "good", agent: "cfo", task: "reconcile Y" }];
+  const results = await withStubbedFetch(
+    batchApiStub([modelNotFoundLine("bad", "gpt-nonexistent"), { custom_id: "good", response: { body: { choices: [{ message: { content: "reconciled cleanly" } }] } }, error: null }]),
+    () => runPersonaBatch(tasks, { dep: "gpt-nonexistent", apiKey: "sk-test" })
+  );
+  assert.equal(results.get("bad").content, null);
+  assert.ok(results.get("bad").error);
+  assert.equal(results.get("good").content, "reconciled cleanly");
+  assert.equal(results.get("good").error, null);
+});
+
+test("runJudgeBatch: a model_not_found per-line error on the judge call surfaces as {error, content:null}, never as parseable (fabricated) judge JSON", async () => {
+  const { runJudgeBatch, parseJudgeOutput } = await freshRunEvals();
+  const tasks = [{ id: "t1", agent: "cto", task: "diagnose X", rubric: ["names a root cause"] }];
+  const answerById = new Map([["t1", "the container OOM'd"]]);
+  const results = await withStubbedFetch(
+    batchApiStub([modelNotFoundLine("t1", "gpt-nonexistent-judge")]),
+    () => runJudgeBatch(tasks, answerById, { dep: "gpt-nonexistent-judge", apiKey: "sk-test" })
+  );
+  const r = results.get("t1");
+  assert.equal(r.content, null);
+  assert.match(r.error, /model_not_found|does not exist/);
+  // Mirrors main()'s own judge-batch loop precisely (see run-evals.mjs: `if (!r.error)
+  // batchedJudged.set(t.id, parseJudgeOutput(...))`) -- with r.error truthy, main() never calls
+  // parseJudgeOutput(r.content, ...) for this task at all, so `batchedJudged` stays unset for it and
+  // the per-task loop later throws "no judge result" (skipping the task, logged) instead of the
+  // silent all-false/0% "judge parse failed" verdict that WOULD result if r.content (null) were
+  // wrongly fed to parseJudgeOutput -- demonstrated directly here so the failure mode this guards
+  // against is not just described but shown:
+  const misroutedIfCallerForgotTheGuard = parseJudgeOutput(r.content, tasks[0].rubric);
+  assert.equal(misroutedIfCallerForgotTheGuard.notes, "judge parse failed");
+  assert.equal(misroutedIfCallerForgotTheGuard.score, 0, "a real FAIL look-alike for an infra failure -- exactly why main() must gate on r.error BEFORE calling parseJudgeOutput, never after");
+});
