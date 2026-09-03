@@ -1040,3 +1040,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T16:07:52.155Z
 - **Closed:** (open)
+
+### finding:FND-20260903-9a96 severity:high status:open | CORRECTION + residual risk to FND-20260903-ba85: the flex/router failure is per-model CAPACITY (OpenAI 429 'Flex does not have sufficient resources... change service_tier=default'), not a capability limit. Proven live: gpt-5.6-luna+flex=429, gpt-5.6-terra+flex=200, gpt-5.6-sol+flex=200. fetch-budget.ts treats 429 as retryable and re-sends the IDENTICAL flex request, so the retry is structurally futile and surfaces as a hang. The rev-43 guard (tier!=router) is a PROXY for the real condition: flex capacity is dynamic and per-model, so if terra's pool runs dry the same futile-retry chain hits the STANDARD tier (default for nearly every fleet llm_azure call, user-blocking included) and the guard does nothing. Durable fix: on a flex-specific 429, retry once WITHOUT service_tier.
+
+- **Source audit doc:** direct OpenAI probe with the fleet key 2026-09-03 against gateway rev 43 (image 1578126); src/util/fetch-budget.ts isRetryableStatus + src/tools/llm/azure.ts:80
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T16:16:14.214Z
+- **Closed:** (open)
