@@ -1008,3 +1008,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T05:36:20.814Z
 - **Closed:** (open)
+
+### finding:FND-20260903-d583 severity:medium status:fixed | gateway-connect register() issued a scope-less 'claude mcp remove' which, in a checkout where the gateway exists only in the committed project .mcp.json, deleted the project entry and left the repo dirty with an emptied .mcp.json (otchealth-cto + fourvault, restored from git); fixed by local-scope-only removes (claude-tools #545)
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-03-wave3-landing-and-gpt56-cutover.md
+- **Fix commit:** d6a8e10346ad057fb183e9065574690077e3c358
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T06:06:39.330Z
+- **Closed:** 2026-09-03T06:06:39.330Z
