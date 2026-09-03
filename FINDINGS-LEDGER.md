@@ -961,13 +961,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-02T17:32:12.311Z
 - **Closed:** 2026-09-02T20:32:21.517Z
 
-### finding:FND-20260902-3ab8 severity:low status:open | Xero map-by-identity write guard inspects only LineItems (BankTransactions/CreditNotes/Invoices); ManualJournal JournalLines coded by AccountCode pass untouched, so the cross-org wrong-account risk the guard exists for is unguarded on the one object type the CFO posts most. Not a refusal bug: the four CFO refusals were correct behaviour (AccountCode without AccountID); fix is AccountID on every line, guard extension is the follow-up.
+### finding:FND-20260902-3ab8 severity:low status:fixed | Xero map-by-identity write guard inspects only LineItems (BankTransactions/CreditNotes/Invoices); ManualJournal JournalLines coded by AccountCode pass untouched, so the cross-org wrong-account risk the guard exists for is unguarded on the one object type the CFO posts most. Not a refusal bug: the four CFO refusals were correct behaviour (AccountCode without AccountID); fix is AccountID on every line, guard extension is the follow-up.
 
 - **Source audit doc:** otchealth-mcp-server/src/tools/xero/write-guard.ts findAccountCodeViolations (CFO packet 2026-09-02, correlations 554a6006 / 94ec8338 / a97fa37a / ea2eb4b5)
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** e4c11893
+- **Verified by:** otchealth-mcp-server#278 merged; the map-by-identity write guard now inspects ManualJournal JournalLines and the account-reference fields alongside LineItems. Re-run from the CTO seat: typecheck clean, 163/163 Xero tests.
 - **Opened:** 2026-09-02T22:07:19.754Z
-- **Closed:** (open)
+- **Closed:** 2026-09-03T15:54:56.415Z
 
 ### finding:FND-20260902-f22e severity:low status:fixed | skills/xero/consent-authurl.mjs carried a 2026-08-14 header calling the /Journals 401 a mere scope omission and inviting a --with-journals re-consent, the exact instruction the 2026-07-29 record withdrew (accounting.journals.read is not grantable to the INND app: granular-scope cutover 2026-04-29, Advanced tier plus security assessment, decision of record DECLINE). Fixed: comment corrected, flag gated behind XERO_JOURNALS_EXPERIMENT=1, sanctioned substitutes named (xero_gl_assemble, GET /BankTransactions/{id}, Xero UI GL export).
 
