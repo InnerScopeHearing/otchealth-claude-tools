@@ -113,8 +113,8 @@ The old sweep only ever fail-opened -- any per-document error was logged and the
 
 | env | default | meaning |
 |---|---|---|
-| `MAX_PAGES` | `500` | cumulative Textract pages counted this run (~$0.75 at $1.50/1,000 pages). Checked before dispatching each NEW document, so it is a **soft**, run-boundary cap with a bounded but real overshoot: up to `CONC` documents are in flight when it trips and Textract processes each in full (up to 3,000 pages per async document), so the hard worst case is `MAX_PAGES + CONC x 3000` pages (~$14.25 at the defaults); typical scanned letters and invoices stay near the cap. Every attempted document is counted: real pages on success or on a failed sidecar write, a one-page floor when Textract reported nothing. |
-| `MAX_DOCS_PER_RUN` | `500` | doc-count backstop, independent of the page budget. Legacy alias: `LIMIT`. |
+| `MAX_PAGES` | `500` | cumulative Textract pages counted this run (~$0.75 at $1.50/1,000 pages). As of 2026-09-03 (`FND-20260903-43c9`) each worker **reserves** a document's cost the instant it claims it -- synchronously, before the Textract call that would reveal the real page count -- so the DISPATCH decision is a hard, race-free cap: no concurrent worker's check can ever be stale by more than one already-reserved document. What can still exceed `MAX_PAGES` is the CUMULATIVE total once those reservations are trued up: a document's true page count is unknown until Textract responds (the async API has no "stop after N pages" primitive and accepts up to 3,000 pages per document), so up to `CONC` documents can be reserved-but-not-yet-realized at once, each processed in full, giving a hard worst case of `MAX_PAGES + CONC x 3000` pages (~$14.25 at the defaults); typical scanned letters and invoices stay near the cap. Every attempted document is counted: real pages on success or on a failed sidecar write, a one-page floor when Textract reported nothing. |
+| `MAX_DOCS_PER_RUN` | `500` | doc-count HARD cap, independent of the page budget. As of 2026-09-03 (`FND-20260903-43c9`) this is enforced by the SAME dispatch-time reservation as `MAX_PAGES` above, but for docs it is exact rather than a floor (a document always costs exactly 1, known up front): no more than this many documents are EVER dispatched in one run, regardless of `CONC`. Before that fix, a live run with `MAX_DOCS_PER_RUN=5`/`CONC=2` processed 6 documents, because the check only looked at COMPLETED work and could not see what a sibling worker had already claimed. Legacy alias: `LIMIT`. |
 | `MAX_MB` | `200` | any file over this size is skipped ENTIRELY, before any Textract call (a cost/sanity ceiling, comfortably under Textract's own 500MB async hard limit). |
 | `CONC` | `3` | worker concurrency. Workers stagger their first Textract call by 750ms each (the 2026-08-01 throttle-storm fix, carried forward from the Azure-era version) and back off with jitter on a retryable error. |
 | `STORES` | `legal,cfo` | which rooms to scan this run, comma-separated (`legal`, `cfo`, or both). |
@@ -195,7 +195,8 @@ CTO/IAM action, not something this skill does:
 `tests/ocr-sweep.test.mjs` -- pure-function tests for selection, sidecar-path shape, routing/budget
 decisions, and Textract-error classification (no network), plus stubbed-`fetch` integration tests of
 `runSweep()` itself covering sync success, sync-to-async fallback on a multi-page document, an
-over-10MB document routing straight to async, page-cap and doc-cap enforcement, an oversize file never
-reaching Textract, a per-document failure staying fail-open, and the three fail-loud cases
-(AccessDenied, network-unreachable, an S3 write 403 on a ring-gated room). No test contacts a real AWS
-endpoint.
+over-10MB document routing straight to async, page-cap and doc-cap enforcement under BOTH `CONC:1`
+(sequential) and `CONC:2` (concurrent, gated releases proving the dispatch-time reservation is a real
+hard cap -- the `FND-20260903-43c9` regression case), an oversize file never reaching Textract, a
+per-document failure staying fail-open, and the three fail-loud cases (AccessDenied,
+network-unreachable, an S3 write 403 on a ring-gated room). No test contacts a real AWS endpoint.
