@@ -40,8 +40,18 @@ on:
   # but re-arming the schedule is deliberately left to the CTO, not done automatically by this PR,
   # and only after a real workflow_dispatch run is proven green end to end with the new role wired
   # up (repo variable AWS_OIDC_ROLE_ARN_NIGHTLY_EVAL set on this repo).
-  # schedule:
-  #   - cron: '30 6 * * *'   # daily 06:30 UTC (ahead of the 08:00 Nightly Fleet Medic)
+  # RE-ARMED 2026-09-03 by the CTO, after the gate stated above was actually met: run
+  # 33775653832 was dispatched manually on main with AWS_OIDC_ROLE_ARN_NIGHTLY_EVAL set, and was
+  # green END TO END on real work, not merely green as a step conclusion. Evidence read from the
+  # run log rather than the step status (the run step carries continue-on-error, so a failure and
+  # a pass look identical from the outside): the OIDC credential step ran rather than being
+  # skipped, run-evals.mjs resolved openai-api-key and posthog-fleet-ingest-key from SSM, all 44
+  # golden tasks were scored through the OpenAI Batch lane (39 passed, average 94 percent, judge
+  # gpt-5.6-terra), eval_result events were emitted to PostHog, and the scorecard artifact
+  # uploaded. The trailing exit code 1 is this harness's documented normal signal that at least
+  # one task failed, not a workflow error.
+  schedule:
+    - cron: '30 6 * * *'   # daily 06:30 UTC (ahead of the 08:00 Nightly Fleet Medic)
   workflow_dispatch: {}     # manual trigger for testing
 
 permissions:
