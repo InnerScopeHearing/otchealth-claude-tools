@@ -84,7 +84,11 @@ whole point of the S3-reference design above), this file:
 
 Every async job is submitted with a **deterministic `ClientRequestToken`** (a sha256 of `bucket/key`),
 so if this process crashes mid-poll, a later run of the SAME still-sidecar-less document reuses the
-same Textract job instead of silently starting (and billing) a duplicate.
+in-flight or completed job instead of starting and billing a duplicate -- **within Textract's
+idempotency window, which AWS documents as 7 days**. A re-run more than 7 days after a crash
+re-submits (and re-bills) any document that still has no sidecar. That is accepted: the schedule runs
+far more often than weekly, and the `_TEXT/` sidecar, not the token, is the durable marker of
+record; no job state is persisted anywhere else on purpose.
 
 ## Fail-open vs fail-loud (the real behavior change from the old sweep)
 
@@ -109,7 +113,7 @@ The old sweep only ever fail-opened -- any per-document error was logged and the
 
 | env | default | meaning |
 |---|---|---|
-| `MAX_PAGES` | `500` | cumulative Textract pages billed this run (~$0.75 at $1.50/1,000 pages -- "about 1 USD"). Checked before dispatching each NEW document -- a **soft**, run-boundary cap: a single very large in-flight document can carry the run slightly past it (Textract has no mid-document "stop after N pages" primitive). |
+| `MAX_PAGES` | `500` | cumulative Textract pages counted this run (~$0.75 at $1.50/1,000 pages). Checked before dispatching each NEW document, so it is a **soft**, run-boundary cap with a bounded but real overshoot: up to `CONC` documents are in flight when it trips and Textract processes each in full (up to 3,000 pages per async document), so the hard worst case is `MAX_PAGES + CONC x 3000` pages (~$14.25 at the defaults); typical scanned letters and invoices stay near the cap. Every attempted document is counted: real pages on success or on a failed sidecar write, a one-page floor when Textract reported nothing. |
 | `MAX_DOCS_PER_RUN` | `500` | doc-count backstop, independent of the page budget. Legacy alias: `LIMIT`. |
 | `MAX_MB` | `200` | any file over this size is skipped ENTIRELY, before any Textract call (a cost/sanity ceiling, comfortably under Textract's own 500MB async hard limit). |
 | `CONC` | `3` | worker concurrency. Workers stagger their first Textract call by 750ms each (the 2026-08-01 throttle-storm fix, carried forward from the Azure-era version) and back off with jitter on a retryable error. |
@@ -119,7 +123,13 @@ The old sweep only ever fail-opened -- any per-document error was logged and the
 `node skills/ocr-sweep/sweep.mjs` runs with these defaults. No Secret Manager / Key Vault credential
 is read by this file.
 
-## IAM the job role needs (grant this; this skill does not touch IAM itself)
+## IAM the job role needs (this skill does not touch IAM itself)
+
+Live state, verified with `aws iam list-role-policies` / `get-role-policy` on 2026-09-03:
+`otchealthTaskRole` carries inline policy `textract-ocr-sweep` (exactly the three Textract actions
+below, granted 2026-09-03) and, in `runtime-access`, bucket-wide `s3:GetObject`/`PutObject`/
+`ListBucket` on both target buckets. So NOTHING below is a missing grant today; the prefix-scoped
+shape is the least-privilege target for a future dedicated job role.
 
 Three Textract actions, plus S3 read+write scoped to exactly the room prefixes this sweep touches
 (never a bucket-wide grant -- `otchealth-finance-legal-dr-55c84f6b` also holds `exec`,
@@ -144,21 +154,14 @@ Textract's service does the actual byte transfer on your behalf):
     `s3:prefix` `StringLike` condition to `otchealthlegalstore/company/*` and
     `otchealthcfodata/cfo-source-docs/*` so listing the room does not also expose neighboring
     prefixes in the same bucket.
-- Bucket `otchealth-legal-personal-dr-55c84f6b` (`legal/personal` -- **ring-sensitive, read this before
-  granting**):
-  - `s3:GetObject` + `s3:ListBucket` (scoped to `otchealthlegalstore/personal/*`) are the read side and
-    are not, by themselves, a new exposure.
-  - `s3:PutObject` on this prefix is the SAME standing grant `otchealth-cto`'s `CLAUDE.md` already
-    tracks as deliberately withheld pending a Matt decision ("Personal-legal S3 write ROUTING...
-    the live IAM grant is still ReadOnly -- verified -- so nothing changes until Matt approves one
-    put-role-policy"). Granting OCR-sweep write access to `legal/personal` is the SAME decision, not a
-    separate one -- bundle it with that approval rather than granting it in isolation. Until then, run
-    with `STORES=cfo,legal` and scope the IAM policy's `PutObject` statement to
-    `otchealthlegalstore/company/*` only (omit the `personal/*` PutObject resource); the sweep will
-    still discover `legal/personal` candidates and OCR them, but the sidecar write will 403 --
-    correctly aborting THAT room's processing loud (fail-loud by design) rather than silently
-    skipping it. The cleaner interim is to run two separate schedules (`STORES=cfo` fully granted,
-    `STORES=legal` limited to `company` only) until the personal-room write decision lands.
+- Bucket `otchealth-legal-personal-dr-55c84f6b` (`legal/personal` -- **ring-sensitive**): the job role
+  ALREADY holds `s3:GetObject` + `s3:PutObject` + `s3:ListBucket` on this bucket (`otchealthTaskRole`
+  inline policy `runtime-access`, statement `PersonalLegalRingReadWrite`, verified live with
+  `aws iam get-role-policy` on 2026-09-03), so no new grant is needed and sidecars are written there
+  like any other room. A sidecar is the document's own extracted text and never leaves the bucket.
+  If that statement is ever removed, the sweep will 403 on the first personal sidecar write and abort
+  the run loud (fail-loud by design); the code has no container-level selector, so the fix is the
+  grant, not a schedule split.
 
 ## Re-arming the schedule
 

@@ -66,29 +66,40 @@
 // (see otchealth-claude-tools CLAUDE.md's "RunTask succeeded and the task did something are different
 // claims" lesson) or a job that reports 0 processed and exits 0 with no explanation why.
 //
-// COST/BUDGET CAPS. MAX_PAGES (default 500, ~$0.75, "about 1 USD" per the task brief) bounds
-// CUMULATIVE Textract pages billed across a whole run -- checked before each NEW document is
-// dispatched (a soft, run-boundary cap: a single very large in-flight document can carry the run
-// slightly past the cap, but no MORE documents get started once it is crossed; Textract has no
-// mid-document "stop after N pages" primitive to enforce a harder bound). MAX_DOCS_PER_RUN (default
+// COST/BUDGET CAPS. MAX_PAGES (default 500, ~$0.75 at Textract's $1.50 per 1,000 pages) bounds
+// CUMULATIVE Textract pages counted across a whole run -- checked before each NEW document is
+// dispatched. It is a SOFT, run-boundary cap, and the overshoot is bounded but NOT small: up to CONC
+// documents are in flight when the cap trips, each of which Textract processes in full (the async
+// API has no "stop after N pages" primitive and accepts up to 3,000 pages per document), so the hard
+// worst case for one run is MAX_PAGES + CONC x 3,000 pages (~$14.25 at the defaults), while a typical
+// run of scanned letters and invoices stays near MAX_PAGES. Pages are counted for every ATTEMPTED
+// document: the real count on success, the real count when a sidecar write fails after a successful
+// OCR, and a one-page floor when Textract itself failed and reported nothing -- so a run full of
+// failures still exhausts its budget instead of looping on free retries. MAX_DOCS_PER_RUN (default
 // 500, legacy env alias LIMIT) is a doc-count backstop. MAX_MB (default 200, matching the old sweep's
 // OOM-guard default, though the reason has changed: it is now a cost/sanity ceiling, not an OOM guard,
 // since nothing is ever buffered into memory) skips a file entirely before any Textract call, and
 // separately, ANY file over Textract's own 10MB sync limit routes straight to the async path without
 // wasting a doomed sync attempt (preferSync()).
 //
-// IDEMPOTENCY, TWO LAYERS. (1) The sidecar itself is the completion marker -- selectCandidates() skips
-// any document whose _TEXT/<name>.txt already exists, so a re-run only ever touches new/failed
+// IDEMPOTENCY, TWO LAYERS. (1) The sidecar itself is the DURABLE completion marker -- selectCandidates()
+// skips any document whose _TEXT/<name>.txt already exists, so a re-run only ever touches new/failed
 // uploads, exactly like the old sweep. (2) Every async job is submitted with a DETERMINISTIC
 // ClientRequestToken (sha256 of "bucket/key"), so if this process crashes mid-poll and a later run
-// picks the same still-sidecar-less document back up, Textract returns the SAME in-flight/completed
-// JobId instead of silently starting (and billing) a duplicate job for the same document.
+// picks the same still-sidecar-less document back up within Textract's idempotency window, Textract
+// returns the SAME in-flight/completed JobId instead of starting (and billing) a duplicate job. That
+// window is TIME-BOUNDED: AWS documents ClientRequestToken idempotency for 7 days. A re-run more than
+// 7 days after a crash re-submits (and re-bills) any document that still has no sidecar -- accepted,
+// because the schedule runs far more often than that and the sidecar, not the token, is the marker
+// of record; no job state is persisted anywhere else on purpose.
 //
 // PHI WALL (unchanged): only the legal + cfo (finance) rooms -- NEVER MedReview/Companion (no BAA).
-// RING NOTE: the `legal/personal` container is attorney-privileged; per otchealth-claude-tools'
-// standing fleet policy the S3 write grant for that room is deliberately withheld pending a Matt
-// decision (see SKILL.md) -- this file does not special-case that, it is an IAM-grant decision, and an
-// AccessDenied there will (correctly) abort the run loud rather than silently skip it.
+// RING NOTE: the `legal/personal` container is attorney-privileged. Its S3 read+write grant to the
+// job role (`PersonalLegalRingReadWrite` on otchealthTaskRole) is LIVE as of 2026-09-03 (verified
+// with `aws iam get-role-policy`), so sidecars there are written like any other room's; a sidecar is
+// the document's own extracted text and stays inside the same ring-gated bucket. This file does not
+// special-case the room -- ring policy is an IAM decision, and an AccessDenied there would (correctly)
+// abort the run loud rather than silently skip it.
 //
 // Run: node sweep.mjs   (env MAX_DOCS_PER_RUN [legacy alias: LIMIT], MAX_PAGES, MAX_MB, CONC, DRYRUN,
 // STORES). No Secret Manager / Key Vault credential is read by this file.
@@ -319,7 +330,7 @@ export function preflightRooms(rooms) {
  *  already spent. 0 (for either cap) means "unlimited", matching this toolkit's established
  *  MAX_MIN/CU_MAX_MINUTES convention (skills/doc-indexer/indexer.mjs). This is a soft, run-boundary
  *  cap checked BEFORE dispatching a new document -- see this file's header "COST/BUDGET CAPS" note
- *  for why a single large in-flight document can still carry the run slightly past it. */
+ *  for the bounded-but-real overshoot (up to CONC in-flight documents) and how failures are charged. */
 export function withinBudget(state, caps) {
   if (caps.maxDocs > 0 && state.docsUsed >= caps.maxDocs) return false;
   if (caps.maxPages > 0 && state.pagesUsed >= caps.maxPages) return false;
@@ -560,8 +571,10 @@ export async function runSweep(opts = {}) {
         try {
           await putObjectToS3(it.account, it.container, sideFor(it.name), Buffer.from(result.text, "utf8"), "text/plain; charset=utf-8");
         } catch (putErr) {
-          if (isSystemicS3Error(putErr)) throw taggedError(`sidecar write for ${it.room}/${it.container}/${it.name} failed: ${putErr.message}`, { systemic: true });
-          throw putErr; // a non-systemic write failure is still this document's failure, not a reason to keep the OCR result unpersisted and call it success
+          // The OCR already happened and was billed: carry its real page count on the error so the
+          // budget accounting in the catch below charges what Textract actually processed.
+          if (isSystemicS3Error(putErr)) throw taggedError(`sidecar write for ${it.room}/${it.container}/${it.name} failed: ${putErr.message}`, { systemic: true, pagesBilled: result.pages || 1 });
+          throw taggedError(`sidecar write for ${it.room}/${it.container}/${it.name} failed: ${putErr.message}`, { pagesBilled: result.pages || 1 }); // a non-systemic write failure is still this document's failure, not a reason to keep the OCR result unpersisted and call it success
         }
         state.ok++;
         state.docsUsed++;
@@ -573,6 +586,11 @@ export async function runSweep(opts = {}) {
         }
         state.fail++;
         state.docsUsed++;
+        // Charge the budget for a failed attempt too: the real page count when it is known (a sidecar
+        // write that failed AFTER a successful OCR), otherwise a one-page floor -- Textract reports no
+        // page count on a failure, and a run full of failures must still exhaust MAX_PAGES rather than
+        // retry for free forever.
+        state.pagesUsed += e && Number.isFinite(e.pagesBilled) && e.pagesBilled > 0 ? e.pagesBilled : 1;
         console.error(`[ocr-sweep]   FAILED ${it.room}/${it.container}/${it.name}: ${e.message}`);
       }
       if ((state.ok + state.fail) % 25 === 0) console.log(`[ocr-sweep]   ...${state.ok + state.fail} processed (ok ${state.ok}, fail ${state.fail})`);

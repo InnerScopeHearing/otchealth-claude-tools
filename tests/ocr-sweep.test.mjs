@@ -315,7 +315,6 @@ function makeWorld({ bucket = CFO_BUCKET, s3Objects = {}, textract = {} } = {}) 
 }
 
 test("runSweep: an unrecognized STORES value is a systemic, zero-network failure", async () => {
-  const world = makeWorld({});
   const r = await withStubbedFetch(
     async () => {
       throw new Error("must not touch the network at all");
@@ -503,7 +502,6 @@ test("runSweep: FAIL LOUD -- Textract AccessDeniedException aborts the whole run
 });
 
 test("runSweep: FAIL LOUD -- Textract unreachable (a real network-level fetch failure) aborts the whole run, non-ok, systemic", async () => {
-  const bucketHost = CFO_HOST;
   const world = makeWorld({ s3Objects: { [`/${CFO_PREFIX}a.pdf`]: { size: 1000 } } });
   const stub = async (url, opts = {}) => {
     const { hostname } = new URL(String(url));
