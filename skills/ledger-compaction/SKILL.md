@@ -113,6 +113,13 @@ resolve via the ECS task role, or `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` /
 `skills/kb-memory/aws-secret.mjs`'s `awsCredsPresent()` already checks fleet-wide.
 
 ### Where this already lives on AWS (2026-09-03)
+Every fact in this section was read back live on 2026-09-03 with `aws scheduler get-schedule`
+(an EventBridge **Scheduler** schedule, not an EventBridge rule: `ScheduleExpression`, `State`,
+`CreationDate` 2026-08-16, and the `Target.EcsParameters.TaskDefinitionArn` below) and
+`aws ecs describe-task-definition`; re-read the same way before relying on it later.
+`--dry-run` on this job is READ-ONLY, not network-free: it still performs the S3 GET of each ledger
+(compaction has to read the rows to report what it would write) and skips only the PUT; the
+`s3-persistence.test.mjs` suite pins exactly that shape.
 An ECS task definition (`otchealth-job-ledger-compaction`) and an EventBridge Scheduler schedule
 (`otchealth-ledger-compaction`, `cron(0 8 * * ? *)`) already exist from the 2026-08-16 Azure -> AWS
 job-migration sweep. Both are currently **DISABLED** — the schedule was registered as a placeholder

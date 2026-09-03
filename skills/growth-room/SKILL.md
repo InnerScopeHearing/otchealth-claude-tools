@@ -85,6 +85,10 @@ sidecar directly, matching `daily-digest`'s own `SKIP_PUSH_SEARCH=1` posture —
 `push-search`).
 
 ### Where this already lives on AWS (2026-09-03)
+Every fact in this section was read back live on 2026-09-03 with `aws scheduler get-schedule`
+(an EventBridge **Scheduler** schedule, not an EventBridge rule: `ScheduleExpression`, `State`,
+`CreationDate` 2026-08-16, and the `Target.EcsParameters.TaskDefinitionArn` below) and
+`aws ecs describe-task-definition`; re-read the same way before relying on it later.
 An ECS task definition (`otchealth-job-growth-room-nightly`) and an EventBridge Scheduler schedule
 (`otchealth-growth-room-nightly`, `cron(50 8 * * ? *)`) already exist from the 2026-08-16 Azure ->
 AWS job-migration sweep. Both are currently **DISABLED** — the schedule was registered as a
