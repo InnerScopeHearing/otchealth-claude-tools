@@ -1048,3 +1048,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T16:16:14.214Z
 - **Closed:** (open)
+
+### finding:FND-20260903-3e56 severity:low status:open | Parked EventBridge schedules are encoded as State=ENABLED with a once-a-year cron(0 5 1 1 ? *), which reads as HEALTHY in any schedule audit while never firing. All three deep-* schedules use it (deep-finance, deep-legal-company, deep-legal-personal), matching the deliberate hold in FND-20260821-97e9/-783d pending Matt's deep-pass processor decision. The parking is intentional and correct; the ENCODING is the problem, because a sweep that checks for DISABLED schedules passes them and a sweep that checks last-run-freshness has to know Jan 1 is deliberate. Clearer: State=DISABLED with the reason in Description. Related trap now DEFUSED: both enabled deep-* schedules were pinned to task def rev 3, which still carried AZURE_UAMI_CLIENT_ID and AZURE_KEYVAULT_NAME=kv-otc-55c84f6bef (deleted 2026-08-13), while the AWS-native rev 4 existed; repointed to rev 4 on 2026-09-03 with the parked cron preserved, so un-parking later cannot silently run the dead-Azure definition.
+
+- **Source audit doc:** full 34-schedule sweep from the CTO seat 2026-09-03 (state + task-def staleness), otchealth-cto/runbooks/2026-09-03-wave5-flex-mechanism-and-ocr-sweep-rearm.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T16:41:30.069Z
+- **Closed:** (open)
