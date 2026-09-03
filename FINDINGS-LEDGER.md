@@ -1056,3 +1056,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T16:41:30.069Z
 - **Closed:** (open)
+
+### finding:FND-20260903-bf43 severity:medium status:open | doc-indexer enrich.mjs still DEFAULTS --search-backend to 'azure', a permanently deleted service: const BACKEND = (takeVal('--search-backend', process.env.SEARCH_BACKEND || 'azure') || 'azure'). Masked today only because session-start.sh and every ECS task def set SEARCH_BACKEND=opensearch explicitly, so a fresh caller or a new job that forgets the env var silently targets dead Azure instead of failing loud. The CLI help text advertises the same dead default. Pre-existing (NOT introduced by the Bedrock batch PR #553, found while reviewing it) and adjacent to claude-tools#466, which flipped other defaults to AWS but evidently not this one. Fix: default to opensearch, or refuse with a loud error when the backend is unset, and correct the help text.
+
+- **Source audit doc:** CTO review of claude-tools PR #553, skills/doc-indexer/enrich.mjs line 212 and the dispatch help text, 2026-09-03
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T17:08:06.991Z
+- **Closed:** (open)
