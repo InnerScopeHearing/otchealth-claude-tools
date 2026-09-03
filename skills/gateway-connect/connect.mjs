@@ -259,7 +259,13 @@ export function runClaude(args, token, exec = execFileSync) {
  * exists" collision one explicit local-scope remove + one retry. Any remaining failure throws a
  * REDACTED error carrying the exit code and the CLI's own text, never the argv. */
 export function register(mcpName, token, exec = execFileSync) {
-  runClaude(['mcp', 'remove', mcpName], token, exec);
+  // LOCAL SCOPE ONLY, always explicit. A scope-less `claude mcp remove` "removes from whichever scope
+  // it exists in": in a repo checkout where the gateway is present ONLY in the committed project
+  // .mcp.json (the ${OTCHEALTH_GATEWAY_TOKEN} placeholder), it deleted that project entry and left
+  // the repo dirty with an emptied .mcp.json (seen 2026-09-03 in otchealth-cto right after the
+  // 2026-09-03 register() rewrite, via the UserPromptSubmit sync hook). This skill owns the LOCAL
+  // registration and nothing else; the project file is the repo's, never touched here.
+  runClaude(['mcp', 'remove', '-s', 'local', mcpName], token, exec);
   let r = runClaude(buildRegisterArgs(mcpName, GATEWAY_MCP, token), token, exec);
   if (!r.ok && /already exists/i.test(r.out)) {
     runClaude(['mcp', 'remove', '-s', 'local', mcpName], token, exec);
