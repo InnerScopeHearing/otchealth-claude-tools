@@ -125,6 +125,14 @@ submitting a NEW job, never on a pure resume-and-poll run):
   independent of `--limit`, so a bare `--bedrock-batch` cannot accidentally submit an entire
   privileged room in one irreversible, billed, hours-long job).
 
+**There is also a real per-job MINIMUM record count.** Live-verified 2026-09-03: a genuine 2-record
+submission was accepted by `CreateModelInvocationJob` and then ended `Failed` with "contains less
+records (2) than the required minimum of: 100". AWS's docs do not publish a fixed number for this
+(only "check your service quota"), so 100 is this account/model/region's OBSERVED value on that
+date, not a guaranteed universal constant -- `enrich.mjs` warns (never hard-blocks) below it rather
+than hard-coding an unverified-as-universal minimum. Size any real submission's `--limit` well above
+it (`PILOT-bedrock-enrich.md`'s batch section uses 150+).
+
 **The cost model.** `estBedrockBatchCostFor()`/`bedrockBatchDiscount()` in `enrich-llm.mjs` apply a
 50% discount (env-overridable via `ENRICH_BEDROCK_BATCH_DISCOUNT`) ON TOP of the existing
 `ENRICH_BEDROCK_RATE_IN`/`_OUT` on-demand rate pair -- never a second, independent rate table, so a

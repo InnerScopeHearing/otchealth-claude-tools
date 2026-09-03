@@ -197,6 +197,11 @@ flag/cost-model/resume reference; this section is the step-by-step runbook.
    file's/`enrich-llm.mjs`'s default) is listed that way for `us-east-1` as of 2026-09-03; re-check
    <https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-supported.html> if this
    pilot runs much later or against a different model.
+4. **A real per-job MINIMUM record count applies** -- OBSERVED 100 for this exact account/model/
+   region on 2026-09-03 (a genuine 2-record submission was accepted at `CreateModelInvocationJob`
+   time, then ended `Failed` with "contains less records (2) than the required minimum of: 100").
+   AWS's own docs do not publish a fixed number, only "check your service quota", so re-verify if
+   this account/model/region changes. Every `--limit` below is sized comfortably above it.
 
 ### Step 1: a network-free dry run, on a small slice
 
@@ -205,23 +210,30 @@ node enrich.mjs run --profile finance --search-backend opensearch --llm-provider
 ```
 
 Confirms the row count, the built JSONL's size, and the ESTIMATED cost (a deliberate upper bound --
-see `SKILL.md`) before anything touches the network. If this looks wrong (wrong row count, an
-unexpectedly huge JSONL), stop here; nothing has been submitted or charged.
+see `SKILL.md`) before anything touches the network -- `--dry-run` never submits, so the minimum
+record count does not apply here; a small `--limit` is fine purely to sanity-check the shape and
+size of what would be built. `enrich.mjs` also prints its own `BEDROCK_BATCH WARN` line whenever the
+row count is under the observed 100-record minimum, dry run or not, as a second, harder-to-miss
+reminder before Step 2's real submission.
 
-### Step 2: a real small batch submission
+### Step 2: a real batch submission, sized above the minimum
 
 ```bash
-node enrich.mjs run --profile finance --search-backend opensearch --llm-provider bedrock --bedrock-batch --limit 20 --reindex
+node enrich.mjs run --profile finance --search-backend opensearch --llm-provider bedrock --bedrock-batch --limit 150 --reindex
 ```
 
-`--reindex` re-targets the SAME 20 rows Step 2 of the interactive pilot above already enriched (via
-OpenAI and via the interactive Bedrock lane), for a genuine three-way comparison. This call blocks
-until the batch reaches a terminal state (Bedrock batch jobs are asynchronous and can take
-meaningfully longer than the interactive lane -- expect minutes to hours, not seconds; the process
-polls at `ENRICH_BEDROCK_BATCH_POLL_MS`, default 60s, and prints a status line on every poll).
-**If this process needs to be interrupted (Ctrl-C, a session timeout, a killed container), that is
-safe** -- the job keeps running on AWS regardless, and rerunning the EXACT SAME command resumes
-polling it rather than submitting a duplicate (see `SKILL.md`'s "Resuming an interrupted batch").
+`--limit 150` is deliberately above the observed 100-record minimum (Prerequisite 4) with margin,
+and re-targets the first 150 rows the interactive pilot above already enriched (via OpenAI and via
+the interactive Bedrock lane) -- a real, if not perfectly 1:1, comparison sample (the interactive
+pilot's own Step 2 only sampled 20 of these 150 for a hand comparison; spot-check a similar handful
+here). This call blocks until the batch reaches a terminal state (Bedrock batch jobs are
+asynchronous and can take meaningfully longer than the interactive lane -- live-observed 2026-09-03:
+a 100-record submission was still `Validating`/`InProgress` more than 20 minutes after submission,
+so budget minutes to hours, not seconds; the process polls at `ENRICH_BEDROCK_BATCH_POLL_MS`,
+default 60s, and prints a status line on every poll). **If this process needs to be interrupted
+(Ctrl-C, a session timeout, a killed container), that is safe** -- the job keeps running on AWS
+regardless, and rerunning the EXACT SAME command resumes polling it rather than submitting a
+duplicate (see `SKILL.md`'s "Resuming an interrupted batch").
 
 **Inspect after this run**, the same checks Step 2/3 of the interactive pilot already describe
 (`verify` each path, the `llm: N/N calls ok` line, `_REVIEW/metadata-review-queue.csv`), plus:
@@ -234,13 +246,14 @@ polling it rather than submitting a duplicate (see `SKILL.md`'s "Resuming an int
 ### Step 3: the real bounded backfill (only after Steps 1-2 look right)
 
 ```bash
-node enrich.mjs run --profile finance --search-backend opensearch --llm-provider bedrock --bedrock-batch --limit 200
+node enrich.mjs run --profile finance --search-backend opensearch --llm-provider bedrock --bedrock-batch --limit 300
 ```
 
-Targets the next ~200 distinct eligible rows (the first 20 are already enriched at their current
+Targets the next ~300 distinct eligible rows (the first 150 are already enriched at their current
 sha256 from Step 2). This is the exact command to scale up from once Steps 1-2 are trusted; run it
-again with a larger `--limit` (never omitting `--limit` against an unbounded room -- see
-`ENRICH_BEDROCK_BATCH_MAX_RECORDS`'s own 2000-row safety cap in `SKILL.md`) for a larger reviewed
+again with a larger `--limit` (never omitting `--limit` against an unbounded room, and always well
+above the 100-record minimum -- see `ENRICH_BEDROCK_BATCH_MAX_RECORDS`'s own 2000-row safety cap in
+`SKILL.md`) for a larger reviewed
 batch, and run `legal-company`'s own version of this section separately, afterward, exactly as the
 interactive pilot's own closing note says.
 
