@@ -347,3 +347,67 @@ export async function deleteObjectFromS3(account, container, path, extraHeaders)
 export async function s3Configured() {
   return (await creds()) !== null;
 }
+
+// ---- explicit-location variants (2026-09-03) -----------------------------------------------
+// Every export above resolves its bucket through the (account, container) -> MIRROR table, which
+// is correct for the doc-indexer/mem.mjs ROOMS this file was built for, but wrong to extend for a
+// SCRATCH processing location that is not a room at all -- e.g. the S3 staging bucket a Bedrock
+// batch-inference job reads its input from and writes its output to
+// (skills/doc-indexer/bedrock-batch-client.mjs). Adding such a bucket to MIRROR would misrepresent
+// it as an audited document room next to the real ones, and MIRROR's whole point (per its own
+// comment above) is "pick the bucket from an observed object listing, never invent one" -- a
+// caller that already KNOWS its bucket (because it owns/provisioned it directly) is not the
+// unmapped-room case that guard exists to catch.
+//
+// These two functions expose the SAME proven signer/request path (s3Request/signS3, `creds()`,
+// the identical single-encode-only S3 SigV4 quirk, the identical null-on-404/throw-on-403
+// contract) for a caller that supplies `{bucket, keyPrefix}` directly instead of going through
+// `locOrThrow`. Nothing above is changed by this addition; every MIRROR-backed call site keeps
+// its exact existing behavior.
+
+/** Like s3Request() above, but for a bucket NOT in MIRROR -- `bucket`/`keyPrefix` are supplied by
+ *  the caller, not resolved. `keyPrefix` defaults to "" (no prefix) since a dedicated scratch
+ *  bucket, unlike a shared room bucket, has no reason to need one; a caller MAY still pass one to
+ *  namespace multiple use-cases in the same bucket. Returns the raw fetch Response, exactly like
+ *  the private s3Request() this wraps, so a caller gets full control over status handling (2xx vs
+ *  404 vs other) the same way every MIRROR-backed export above hand-rolls its own. */
+export async function s3RequestExplicit({ bucket, keyPrefix = "", method, path, query, body, contentType, extraHeaders } = {}) {
+  if (!bucket) throw new Error("s3-blob: s3RequestExplicit requires a bucket");
+  return s3Request({ method, loc: { bucket, keyPrefix }, path, query, body, contentType, extraHeaders });
+}
+
+/** LIST objects in a bucket NOT in MIRROR, under an explicit, caller-supplied full prefix (unlike
+ *  listBlobsMetaFromS3, which always prepends the mirror's OWN keyPrefix). Returns
+ *  `{name,size,lastModified}[]` with `name` the FULL object key (not stripped of any prefix --
+ *  there is no mirror keyPrefix here to strip), mirroring listBlobsMetaFromS3's bucket-root LIST
+ *  mechanics (query-string `prefix`, not a path-scoped GET) exactly, since S3's ListObjectsV2 is a
+ *  bucket-level operation regardless of which bucket. Throws on any non-2xx; an empty result set
+ *  is a normal 200 with zero `<Contents>`, never confused with a failed call. */
+export async function listObjectsExplicit({ bucket, prefix = "" } = {}) {
+  if (!bucket) throw new Error("s3-blob: listObjectsExplicit requires a bucket");
+  const out = [];
+  let token = null;
+  for (let page = 0; page < 200; page++) {
+    const query = { "list-type": "2", "max-keys": "1000", prefix };
+    if (token) query["continuation-token"] = token;
+    const credentials = await creds();
+    if (!credentials) throw new Error("s3-blob: AWS credentials unavailable for list");
+    const host = `${bucket}.s3.${REGION}.amazonaws.com`;
+    const headers = signS3({ method: "GET", host, path: "/", query, credentials, extraHeaders: {} });
+    const r = await fetch(`https://${host}/?${canonicalQueryString(query)}`, { headers });
+    if (!r.ok) throw new Error(`s3 list ${r.status} (refusing to report a failed listing as empty): ${(await r.text()).slice(0, 200)}`);
+    const xml = await r.text();
+    for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+      const block = m[1];
+      const full = (block.match(/<Key>([^<]+)<\/Key>/) || [])[1];
+      if (!full) continue;
+      const size = +((block.match(/<Size>([^<]+)<\/Size>/) || [])[1] || 0);
+      const lastModified = (block.match(/<LastModified>([^<]+)<\/LastModified>/) || [])[1] || "";
+      out.push({ name: full, size, lastModified });
+    }
+    const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+    token = isTruncated ? (xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/) || [])[1] || null : null;
+    if (!token) break;
+  }
+  return out;
+}

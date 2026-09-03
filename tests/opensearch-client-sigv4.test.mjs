@@ -241,3 +241,92 @@ test("signingUriFor: es double-encodes reserved characters in the canonical URI;
   const signed = signOpenSearchRequest({ method: "GET", host: "h.es.amazonaws.com", path, region: "us-east-1", accessKeyId: "AKIA", secretAccessKey: "s", now: new Date("2026-09-02T00:00:00Z") });
   assert.equal(signed.path, "/_tasks/ep6nhLURSj2KQj4faFU_KA%3A100789", "what goes on the wire is still the single-encoded path");
 });
+
+// ============================================================================================
+// 2026-09-03: canonicalUri() array-of-segments input (Bedrock GetModelInvocationJob path-parameter
+// fix). Live-verified the same day against the real Bedrock control plane (HTTP 200, a real job's
+// status/details returned) -- see bedrock-batch-client.mjs's header for the full incident, and
+// canonicalUri()'s own doc comment for why a pre-joined STRING cannot express "this segment's value
+// itself contains a literal '/'".
+// ============================================================================================
+
+test("canonicalUri: an array of raw segments encodes EACH element exactly once, even one containing '/' and ':' -- the case a pre-joined string cannot express", () => {
+  const arn = "arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/tcf29in6w6ts";
+  assert.equal(
+    canonicalUri(["model-invocation-job", arn]),
+    "/model-invocation-job/arn%3Aaws%3Abedrock%3Aus-east-1%3A900915535335%3Amodel-invocation-job%2Ftcf29in6w6ts",
+    "the ARN's internal '/' must become %2F (a literal DATA character, not a new path segment) and every ':' must be single-encoded",
+  );
+});
+
+test("canonicalUri: the fail-on-old-code proof -- the SAME arn as a pre-joined STRING (the code this replaced) produces the WRONG, live-reproduced-broken wire path", () => {
+  const arn = "arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/tcf29in6w6ts";
+  // This is exactly what a naive `"/model-invocation-job/" + arn` string produces: canonicalUri
+  // splits on the ARN's OWN internal '/', so it comes out as FOUR segments, not two, and the
+  // internal '/' survives as a literal wire character instead of becoming %2F. Sent to the real
+  // Bedrock control plane, this specific wire shape was rejected with 404 UnknownOperationException
+  // (the router could not match it to any known operation at all) -- reproduced live 2026-09-03.
+  const brokenStringForm = canonicalUri("/model-invocation-job/" + arn);
+  assert.equal(brokenStringForm, "/model-invocation-job/arn%3Aaws%3Abedrock%3Aus-east-1%3A900915535335%3Amodel-invocation-job/tcf29in6w6ts");
+  assert.notEqual(brokenStringForm, canonicalUri(["model-invocation-job", arn]), "the string form and the array form must NOT agree -- this is the exact bug the array form fixes, not a cosmetic alternative");
+});
+
+test("canonicalUri: a manually-pre-encoded arn passed as a STRING (the OTHER broken variant this replaced) double-encodes -- also live-reproduced as a distinct failure (400 'provided ARN is invalid')", () => {
+  const arn = "arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/tcf29in6w6ts";
+  const doublyEncoded = canonicalUri("/model-invocation-job/" + encodeURIComponent(arn));
+  assert.match(doublyEncoded, /%253A/, "the '%' from the caller's own pre-encoding gets re-escaped to %25 by canonicalUri's OWN per-segment pass -- the double-encoding bug");
+  assert.notEqual(doublyEncoded, canonicalUri(["model-invocation-job", arn]));
+});
+
+test("canonicalUri: array input composes correctly with doubleEncodeUri (via signingUriFor) for the SIGNING string, with no special-casing needed in that function", () => {
+  const arn = "arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/tcf29in6w6ts";
+  const segments = ["model-invocation-job", arn];
+  // The wire path (single-encoded) and the signing URI (double-encoded) must both start from the
+  // array form and differ from each other exactly the way every other non-S3 service's path does.
+  assert.equal(signingUriFor(segments, "s3"), canonicalUri(segments), "s3 signs from the single-encoded (wire) form");
+  const doubleEncoded = signingUriFor(segments, "bedrock");
+  assert.notEqual(doubleEncoded, canonicalUri(segments));
+  assert.match(doubleEncoded, /%253A/, "bedrock (non-S3) must double-encode the ARN's colons in the SIGNING string");
+  assert.match(doubleEncoded, /%252F/, "and double-encode the ARN's internal slash the same way -- it is just another character by the time the array form has already resolved it to %2F once");
+});
+
+test("canonicalUri: array input, live-verified end to end -- signOpenSearchRequest produces the EXACT signature independently hand-computed against this fleet's real 2026-09-03 Bedrock pilot call", () => {
+  // This is the real request that returned HTTP 200 against the live Bedrock control plane
+  // (job arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/tcf29in6w6ts, account
+  // 900915535335) -- reproduced here with fixed test credentials/timestamp so the expected
+  // signature can be hand-computed once and pinned, matching this file's own established
+  // convention for every other SigV4 edge case (see the two tests above this comment block's own
+  // header cites).
+  const arn = "arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/tcf29in6w6ts";
+  const result = signOpenSearchRequest({
+    method: "GET", host: "bedrock.us-east-1.amazonaws.com", path: ["model-invocation-job", arn],
+    region: "us-east-1", accessKeyId: "AKIDEXAMPLE", secretAccessKey: "secret",
+    now: new Date("2026-01-01T00:00:00Z"), service: "bedrock",
+  });
+  assert.equal(result.path, "/model-invocation-job/arn%3Aaws%3Abedrock%3Aus-east-1%3A900915535335%3Amodel-invocation-job%2Ftcf29in6w6ts");
+
+  const doubleEncodedPath = "/model-invocation-job/arn%253Aaws%253Abedrock%253Aus-east-1%253A900915535335%253Amodel-invocation-job%252Ftcf29in6w6ts";
+  const amzDate = "20260101T000000Z";
+  const dateStamp = "20260101";
+  const bodyHash = crypto.createHash("sha256").update("", "utf8").digest("hex");
+  const canonicalHeaders = `host:bedrock.us-east-1.amazonaws.com\nx-amz-date:${amzDate}\n`;
+  const signedHeaders = "host;x-amz-date";
+  const canonicalRequest = ["GET", doubleEncodedPath, "", canonicalHeaders, signedHeaders, bodyHash].join("\n");
+  const scope = `${dateStamp}/us-east-1/bedrock/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, crypto.createHash("sha256").update(canonicalRequest, "utf8").digest("hex")].join("\n");
+  const hmac = (key, data) => crypto.createHmac("sha256", key).update(data, "utf8").digest();
+  const kDate = hmac("AWS4secret", dateStamp);
+  const kRegion = hmac(kDate, "us-east-1");
+  const kService = hmac(kRegion, "bedrock");
+  const kSigning = hmac(kService, "aws4_request");
+  const expectedSignature = hmac(kSigning, stringToSign).toString("hex");
+  const expectedAuth = `AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/${scope}, SignedHeaders=${signedHeaders}, Signature=${expectedSignature}`;
+  assert.equal(result.headers.Authorization, expectedAuth);
+});
+
+test("canonicalUri: array input is a NEW, additive branch -- every pre-existing string-path caller (plain index names, '_bulk', a colon-bearing task id) is byte-identical to before", () => {
+  assert.equal(canonicalUri("/commerce-commerce-source-docs/_bulk"), "/commerce-commerce-source-docs/_bulk");
+  assert.equal(canonicalUri("/_tasks/ep6nhLURSj2KQj4faFU_KA:100789"), "/_tasks/ep6nhLURSj2KQj4faFU_KA%3A100789");
+  assert.equal(canonicalUri(""), "/");
+  assert.equal(canonicalUri("/"), "/");
+});

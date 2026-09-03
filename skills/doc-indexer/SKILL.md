@@ -55,6 +55,125 @@ is ~80% cheaper than gpt-4.1. `cu-calibrate` reads CU's `usage` object for the r
   (never silently) when unconfigured. `--embeddings-provider openai|foundry` (default openai) is an
   independent axis. People browse the reorg'd taxonomy on **OneDrive** (`cfo-onedrive`) + `catalog.csv`.
 
+## enrich.mjs metadata enrichment: LLM providers, and the Bedrock BATCH lane
+
+`enrich.mjs` (the S1/OpenSearch metadata-enrichment pass -- `ensure-schema`/`run`/`reindex-room`/
+`verify`, see that file's own header for the full pipeline) calls an LLM once per new/changed
+document. `--llm-provider openai|azure|bedrock` selects the provider (default `openai`); the
+`bedrock` lane is the chosen processor for the two PRIVILEGED rooms this pipeline reaches
+(`finance-cfo-source-docs`, `legal-company`) because it runs inside this fleet's own AWS account --
+see `PILOT-bedrock-enrich.md` for the full rationale and the bounded interactive pilot to run before
+trusting a real backfill.
+
+### The Bedrock BATCH lane (`--bedrock-batch`, 2026-09-03)
+
+Bedrock's **batch inference** is the same model family at roughly **half the on-demand price**
+(verified live 2026-09-03 against AWS's own current documentation), the right shape for a large,
+latency-tolerant backfill (finance ~36,454 docs, legal-company ~9,873). It is a genuinely different
+mechanism from the interactive per-call lane -- a control-plane job that reads/writes a caller-
+staged S3 location, not a per-document HTTP round trip -- and from OpenAI's own batch API (a hosted-
+file upload/poll cycle), so it has its own flag, its own client (`bedrock-batch-client.mjs`), and
+its own section here.
+
+**The flag.** `--bedrock-batch` (also `ENRICH_BEDROCK_BATCH=1` / `BEDROCK_BATCH=1`), only meaningful
+together with `--llm-provider bedrock` and the `run` command. Off by default; nothing in this
+codebase enables it on a schedule. `--dry-run` alongside it shows what would be submitted (row
+count, JSONL size, an estimated cost) and makes **zero** network calls -- no S3 upload, no
+`CreateModelInvocationJob`, and it needs neither the staging bucket nor the IAM role configured.
+Without `--dry-run`, it uploads one JSONL file, submits one Bedrock batch job, polls it, and applies
+the result back onto the catalog exactly like the interactive lane's own `_callFailed`/
+`_parseFailed`/enriched-marker contract (see `enrich-llm.mjs`'s `parseBedrockBatchModelOutput` --
+no downstream code, including the review queue or the run's final summary line, has a
+batch-specific branch).
+
+**Why prompt-based JSON, not forced tool-use.** Verified live against
+<https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html> (fetched 2026-09-03):
+*"Batch inference does not support tool calling (function calling) or structured output
+(`response_format`). Each record in the input JSONL file is processed independently without
+multi-turn interaction, so features that require back-and-forth exchanges between the model and
+client are not available."* This holds even after Bedrock's 2026-02 Converse-format support for
+batch input (which this lane uses -- `modelInvocationType: "Converse"`, verified against
+<https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference-data.html>'s own worked
+Converse example): that update added a request/response SHAPE, not tool support. So the batch
+prompt asks for a single JSON object directly -- exactly `enrichSystemPrompt()`'s existing "Output
+ONLY a JSON object, no prose" instruction, already used by the openai/azure lanes' own
+`response_format: json_object` -- and the reply (an ordinary Converse text content block) is parsed
+by the SAME `extractJsonObject()`/`J()` salvage parser every provider already shares. No new parsing
+strategy exists for batch.
+
+**Required configuration** (env, or the equivalent fleet secret -- resolved ONLY when actually
+submitting a NEW job, never on a pure resume-and-poll run):
+- `ENRICH_BEDROCK_BATCH_BUCKET` / secret `bedrock-batch-s3-bucket` -- an S3 bucket the CALLER
+  controls (never a document room's own bucket) that Bedrock reads the input JSONL from and writes
+  output to.
+- `ENRICH_BEDROCK_BATCH_ROLE_ARN` / secret `bedrock-batch-role-arn` -- the IAM role Bedrock itself
+  assumes to run the job. Trust policy: principal `bedrock.amazonaws.com`, `sts:AssumeRole`,
+  conditioned on `aws:SourceAccount` + `aws:SourceArn` scoped to
+  `arn:aws:bedrock:<region>:<account>:model-invocation-job/*` (verbatim template at
+  <https://docs.aws.amazon.com/bedrock/latest/userguide/batch-iam-sr.html>). Permissions: `s3:GetObject`/
+  `s3:PutObject`/`s3:ListBucket` on the staging bucket, plus `bedrock:InvokeModel` on the chosen
+  model/inference-profile ARN (the SAME `us.` cross-region profile the interactive lane already
+  uses, e.g. `us.anthropic.claude-haiku-4-5-20251001-v1:0` -- Bedrock's batch support table lists it
+  as cross-region-profile-only, not single-region, so the profile ARN is required, not optional).
+  Neither of these is provisioned by this PR; provisioning them is a separate, deliberate step (see
+  "Before a real backfill" below).
+- Optional: `ENRICH_BEDROCK_BATCH_PREFIX` (default `doc-indexer-enrich-batches/`),
+  `ENRICH_BEDROCK_BATCH_TIMEOUT_HOURS` (default 24, clamped to AWS's documented [24,168]),
+  `ENRICH_BEDROCK_BATCH_POLL_MS` (default 60000), `ENRICH_BEDROCK_BATCH_MAX_WAIT_MS` (default: the
+  timeout plus a 2h buffer -- this process's OWN patience before it gives up polling, distinct from
+  the job's server-side timeout), `ENRICH_BEDROCK_BATCH_MAX_RECORDS` (default 2000 -- a safety cap,
+  independent of `--limit`, so a bare `--bedrock-batch` cannot accidentally submit an entire
+  privileged room in one irreversible, billed, hours-long job).
+
+**The cost model.** `estBedrockBatchCostFor()`/`bedrockBatchDiscount()` in `enrich-llm.mjs` apply a
+50% discount (env-overridable via `ENRICH_BEDROCK_BATCH_DISCOUNT`) ON TOP of the existing
+`ENRICH_BEDROCK_RATE_IN`/`_OUT` on-demand rate pair -- never a second, independent rate table, so a
+rate override is automatically reflected in both estimates. `--dry-run`'s printed estimate is a
+DELIBERATE UPPER BOUND, not a quote: input tokens are approximated from the built request bodies'
+character count (~4 chars/token, not a real tokenizer) and output tokens are assumed at the full
+1200-token cap for every single record, which real usage is normally well under. After a real run,
+the printed summary line's `tokens_in=.../tokens_out=...` are the REAL counts from AWS's own
+`manifest.json.out` and per-line `usage` fields, checkable against the Bedrock billing console
+directly, exactly like the interactive lane's own honesty line.
+
+**Resuming an interrupted batch.** A Bedrock batch job runs entirely server-side once submitted --
+it is not tied to this process's connection. The moment `CreateModelInvocationJob` returns a jobArn
+(BEFORE any polling starts), its id and the exact set of catalog paths submitted are persisted to
+`_CATALOG/.enrich-bedrock-batch.json` in the room's own storage (the same `getBuf`/`putBuf`/`delBuf`
+primitives `_CATALOG/.enrich.lock` already uses, and already excluded from enrichment by
+`isPipelineInternal`'s `_CATALOG/` prefix). If this process is killed, crashes, or is simply
+rerun -- mid-poll or any time later -- the NEXT invocation of the identical command
+(`node enrich.mjs run --profile <p> --llm-provider bedrock --bedrock-batch`) finds that marker and
+RE-ATTACHES to the existing job instead of submitting a duplicate: it never re-uploads the input,
+never calls `CreateModelInvocationJob` again, and simply resumes polling the same job id. The marker
+is deleted only once every row it named has been reconciled one way or another (a real result, a
+per-line error, or missing from the output -- see the reconciliation contract below); a Failed/
+Stopped/Expired job's marker is deliberately LEFT IN PLACE as diagnosable evidence -- delete
+`_CATALOG/.enrich-bedrock-batch.json` by hand once that failure has been investigated, or the next
+run will hit the same terminal-failure error again. The one case that is never silently resumed is
+THIS PROCESS's own patience running out while the job is still non-terminal
+(`ENRICH_BEDROCK_BATCH_MAX_WAIT_MS`): that throws (an explicitly ambiguous outcome, not treated as
+success or failure) and leaves the marker in place for the same reason.
+
+**Reconciliation never marks a missing or errored row enriched.** A Bedrock batch job can end
+`PartiallyCompleted` ("not all of your records could be processed in time" -- a real, terminal,
+non-failure AWS status, not a bug) or, more rarely, simply omit a recordId from its own output. Every
+row this pipeline submitted is reconciled against the actual output: present with a real result ->
+parsed exactly like an interactive response; present with a per-line `error` -> `_callFailed`;
+**absent from the output entirely -> also `_callFailed`, loudly logged (the missing recordIds are
+named in stderr, capped at 5), never silently dropped and never marked enriched** -- it is retried on
+the next run like any other unreachable-model case. Only a genuinely FAILED/Stopped/Expired job
+(no usable output at all) aborts the whole run (a throw, mirroring the interactive lane's own
+"FATAL: all N LLM calls failed" posture); a partial completion degrades to a `WARN: M/N LLM call(s)
+failed` line instead, exactly the codebase's existing "all failed vs any failed" distinction.
+
+**Before a real backfill:** provision the staging bucket + IAM role above, then run the SAME
+comparison steps `PILOT-bedrock-enrich.md` already describes for the interactive lane (a small
+control batch, a like-for-like re-run under `--bedrock-batch`, inspect before scaling up), starting
+with `--dry-run` to sanity-check the row count and estimated cost before ever touching the network.
+Nothing here is wired into `job/librarian.sh` or any scheduled task -- arming that is a separate,
+deliberate, CTO-reviewed decision, same as the interactive Bedrock lane's own rollout gate.
+
 ## k-NN vector quantization (fp32 -> disk-optimized, OpenSearch 3.x only)
 
 Closes FND-20260829-f7fa: every index on `otchealth-brain` was created fp32 (`in_memory` mode,
