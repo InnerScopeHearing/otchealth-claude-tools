@@ -1032,3 +1032,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** live probe on gateway rev 43 (image 1578126): tier=router + latencyClass=background returned in under a second on gpt-5.6-luna (correlation 84d1f0be), and tier=standard + background still returns with flex applied (correlation 132793ef). Mitigation path was rev 42 (OPENAI_FLEX_BACKGROUND=0), superseded by the code-level router exclusion in mcp-server #283 so the other tiers keep the 50 percent discount.
 - **Opened:** 2026-09-03T15:43:12.570Z
 - **Closed:** 2026-09-03T15:50:57.112Z
+
+### finding:FND-20260903-8c23 severity:low status:open | agent-evals persona-answer batch: a reasoning-family model can spend its whole token budget on hidden reasoning and return no visible output (finish_reason=length), losing one golden task per run; correctly reported as an infra failure rather than a zero score, but the budget needs raising for gpt-5.6
+
+- **Source audit doc:** otchealth-claude-tools nightly-eval run 33775653832, 2026-09-03, the first green run since the schedule was disarmed 2026-08-27
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T16:07:52.155Z
+- **Closed:** (open)
