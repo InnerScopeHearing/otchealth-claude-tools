@@ -66,21 +66,38 @@
 // (see otchealth-claude-tools CLAUDE.md's "RunTask succeeded and the task did something are different
 // claims" lesson) or a job that reports 0 processed and exits 0 with no explanation why.
 //
-// COST/BUDGET CAPS. MAX_PAGES (default 500, ~$0.75 at Textract's $1.50 per 1,000 pages) bounds
-// CUMULATIVE Textract pages counted across a whole run -- checked before each NEW document is
-// dispatched. It is a SOFT, run-boundary cap, and the overshoot is bounded but NOT small: up to CONC
-// documents are in flight when the cap trips, each of which Textract processes in full (the async
-// API has no "stop after N pages" primitive and accepts up to 3,000 pages per document), so the hard
-// worst case for one run is MAX_PAGES + CONC x 3,000 pages (~$14.25 at the defaults), while a typical
-// run of scanned letters and invoices stays near MAX_PAGES. Pages are counted for every ATTEMPTED
-// document: the real count on success, the real count when a sidecar write fails after a successful
-// OCR, and a one-page floor when Textract itself failed and reported nothing -- so a run full of
-// failures still exhausts its budget instead of looping on free retries. MAX_DOCS_PER_RUN (default
-// 500, legacy env alias LIMIT) is a doc-count backstop. MAX_MB (default 200, matching the old sweep's
-// OOM-guard default, though the reason has changed: it is now a cost/sanity ceiling, not an OOM guard,
-// since nothing is ever buffered into memory) skips a file entirely before any Textract call, and
-// separately, ANY file over Textract's own 10MB sync limit routes straight to the async path without
-// wasting a doomed sync attempt (preferSync()).
+// COST/BUDGET CAPS. MAX_DOCS_PER_RUN (default 500, legacy env alias LIMIT) is a HARD doc-count cap:
+// no more than this many documents are EVER dispatched in one run, independent of CONC. MAX_PAGES
+// (default 500, ~$0.75 at Textract's $1.50 per 1,000 pages) bounds CUMULATIVE Textract pages counted
+// across a whole run. Both are enforced by withinBudget() checked before each NEW document is
+// dispatched, AND -- as of 2026-09-03 (FND-20260903-43c9) -- by a RESERVATION the worker loop makes
+// synchronously the instant it claims a candidate, before the (possibly slow) Textract call even
+// starts (see reservedPageEstimate() and the worker loop's "RESERVE"/"RELEASE" comments). Before that
+// reservation existed, withinBudget() was checked against ONLY completed work, so up to CONC-1 other
+// documents already claimed by sibling workers but not yet finished were invisible to it -- a live
+// run with MAX_DOCS_PER_RUN=5/CONC=2 processed 6 documents this way. Reserving at claim time (rather
+// than counting only at completion) closes that race for BOTH caps, because the check-then-reserve
+// step is synchronous with no `await` in between, so no concurrent worker's check can ever be stale
+// by more than the ONE document each already reserves. For MAX_DOCS_PER_RUN this makes the cap
+// EXACT: a document costs exactly 1, known up front, so the reservation IS the true cost and the cap
+// can never be exceeded. For MAX_PAGES the DISPATCH decision is equally race-free, but the true page
+// count of an in-flight document is still unknowable until Textract responds (the async API has no
+// "stop after N pages" primitive and accepts up to 3,000 pages per document), so the reservation is
+// only a conservative one-page floor per in-flight document -- meaning the CUMULATIVE pagesUsed total
+// can still finish a run above MAX_PAGES once those floors are trued up to their real counts. The
+// bound on that residual overshoot is UNCHANGED from before this fix (it was never the race, it is
+// the "page count unknown pre-call" design tradeoff, see the SYNC VS ASYNC ROUTING note above for why
+// this file never downloads a document just to count its pages first): up to CONC documents can be
+// reserved-but-not-yet-realized at once, each processed in full once dispatched, so the hard worst
+// case for one run is MAX_PAGES + CONC x 3,000 pages (~$14.25 at the defaults), while a typical run of
+// scanned letters and invoices stays near MAX_PAGES. Pages are counted for every ATTEMPTED document:
+// the real count on success, the real count when a sidecar write fails after a successful OCR, and a
+// one-page floor when Textract itself failed and reported nothing -- so a run full of failures still
+// exhausts its budget instead of looping on free retries. MAX_MB (default 200, matching the old
+// sweep's OOM-guard default, though the reason has changed: it is now a cost/sanity ceiling, not an
+// OOM guard, since nothing is ever buffered into memory) skips a file entirely before any Textract
+// call, and separately, ANY file over Textract's own 10MB sync limit routes straight to the async path
+// without wasting a doomed sync attempt (preferSync()).
 //
 // IDEMPOTENCY, TWO LAYERS. (1) The sidecar itself is the DURABLE completion marker -- selectCandidates()
 // skips any document whose _TEXT/<name>.txt already exists, so a re-run only ever touches new/failed
@@ -328,13 +345,37 @@ export function preflightRooms(rooms) {
 
 /** Whether the run should still take on ONE MORE document, given how much of the page/doc budget is
  *  already spent. 0 (for either cap) means "unlimited", matching this toolkit's established
- *  MAX_MIN/CU_MAX_MINUTES convention (skills/doc-indexer/indexer.mjs). This is a soft, run-boundary
- *  cap checked BEFORE dispatching a new document -- see this file's header "COST/BUDGET CAPS" note
- *  for the bounded-but-real overshoot (up to CONC in-flight documents) and how failures are charged. */
+ *  MAX_MIN/CU_MAX_MINUTES convention (skills/doc-indexer/indexer.mjs). This is checked BEFORE
+ *  dispatching a new document, and (as of 2026-09-03) the worker loop reserves a document's cost
+ *  against `state` synchronously the instant it is claimed -- BEFORE the Textract call that would
+ *  reveal its real page count -- so a concurrent worker's next call here is never stale by more than
+ *  one already-reserved document. That makes maxDocs an EXACT hard cap; maxPages' dispatch decision
+ *  is equally race-free but its cumulative total can still finish a run above the cap once an
+ *  in-flight document's true (still-unknown-at-reservation-time) page count is realized -- see this
+ *  file's header "COST/BUDGET CAPS" note for the exact bound and reservedPageEstimate() for the
+ *  reservation itself. */
 export function withinBudget(state, caps) {
   if (caps.maxDocs > 0 && state.docsUsed >= caps.maxDocs) return false;
   if (caps.maxPages > 0 && state.pagesUsed >= caps.maxPages) return false;
   return true;
+}
+
+/** Conservative page-count RESERVATION for a document not yet OCR'd -- what the worker loop charges
+ *  against `state.pagesUsed` at DISPATCH time, before the Textract call that would reveal the real
+ *  count. This is what makes MAX_PAGES a hard cap under concurrency: reserving here (synchronously,
+ *  in the same tick as the MAX_DOCS_PER_RUN reservation) means a concurrent worker's withinBudget()
+ *  check can never be stale by more than this one document, closing the same race that let
+ *  MAX_DOCS_PER_RUN be exceeded (see the worker loop's "RESERVE" comment, FND-20260903-43c9). Floors
+ *  to 1 (every real document has at least one page) when no page count is already known; honors a
+ *  candidate's own already-known page count when present. No caller sets `knownPages` today -- the
+ *  S3 listing this sweep reads (`listBlobsMetaFromS3`) carries no page-count field, so this always
+ *  resolves to 1 in practice -- but the reservation should not have to change if a future listing
+ *  source ever does carry one. The real value the worker loop trues this up to once Textract responds
+ *  can still be much larger (up to Textract's own 3,000-page async ceiling), which is why MAX_PAGES'
+ *  cumulative total can still finish a run above the cap even though dispatch itself is now race-free
+ *  -- see this file's header "COST/BUDGET CAPS" note and SKILL.md's budget-cap table. */
+export function reservedPageEstimate(candidate) {
+  return candidate && Number.isFinite(candidate.knownPages) && candidate.knownPages > 0 ? candidate.knownPages : 1;
 }
 
 /** A deterministic Textract ClientRequestToken for one (bucket, key) -- a 64-hex-char sha256 digest of bucket/key plus the object version,
@@ -570,6 +611,21 @@ export async function runSweep(opts = {}) {
         state.over++;
         continue;
       }
+      // RESERVE this document against the budget IMMEDIATELY -- synchronously, before the (possibly
+      // slow) Textract call even starts, and with NO `await` between the withinBudget() check above,
+      // the `state.idx++` claim, and this reservation. That is what makes MAX_DOCS_PER_RUN/MAX_PAGES
+      // actual HARD caps under concurrency (CONC>1): previously withinBudget() was checked against
+      // ONLY completed work, so up to CONC-1 other documents already claimed by sibling workers but
+      // not yet finished were invisible to it -- a live run with MAX_DOCS_PER_RUN=5/CONC=2 processed
+      // 6 documents this way (FND-20260903-43c9). Because this reservation happens in the same
+      // synchronous tick as the claim above, no other worker's withinBudget() check can ever observe
+      // a state that omits it -- see reservedPageEstimate() for why the page half is a floor, not the
+      // real count. True-up/release below corrects both counters to the REAL outcome once it is
+      // known, so the FINAL accounting (state.ok/state.fail/state.pagesUsed) is byte-identical to
+      // before this fix -- only the TIMING of the reservation moved earlier, not what gets counted.
+      const reservedPages = reservedPageEstimate(it);
+      state.docsUsed++;
+      state.pagesUsed += reservedPages;
       const loc = s3LocationFor(it.account, it.container);
       const key = `${loc.keyPrefix}${it.name}`;
       try {
@@ -585,20 +641,27 @@ export async function runSweep(opts = {}) {
           throw taggedError(`sidecar write for ${it.room}/${it.container}/${it.name} failed: ${putErr.message}`, { pagesBilled: result.pages || 1 }); // a non-systemic write failure is still this document's failure, not a reason to keep the OCR result unpersisted and call it success
         }
         state.ok++;
-        state.docsUsed++;
-        state.pagesUsed += result.pages || 1;
+        // True UP the page reservation to the REAL count now that Textract has told us. docsUsed was
+        // already reserved above -- do not increment it again here (that would double-count it).
+        state.pagesUsed += (result.pages || 1) - reservedPages;
       } catch (e) {
         if ((e && e.systemic) || isSystemicS3Error(e)) {
+          // RELEASE the reservation: a systemic abort has never counted against the budget (there is
+          // no further dispatch decision left to protect once state.systemic is set -- every worker
+          // stops at the top of its next loop iteration regardless of the counters), and releasing
+          // keeps that pre-existing accounting behavior exact.
+          state.docsUsed--;
+          state.pagesUsed -= reservedPages;
           state.systemic = e;
           return;
         }
         state.fail++;
-        state.docsUsed++;
         // Charge the budget for a failed attempt too: the real page count when it is known (a sidecar
         // write that failed AFTER a successful OCR), otherwise a one-page floor -- Textract reports no
         // page count on a failure, and a run full of failures must still exhaust MAX_PAGES rather than
-        // retry for free forever.
-        state.pagesUsed += e && Number.isFinite(e.pagesBilled) && e.pagesBilled > 0 ? e.pagesBilled : 1;
+        // retry for free forever. (docsUsed was already reserved above -- do not increment it again.)
+        const billed = e && Number.isFinite(e.pagesBilled) && e.pagesBilled > 0 ? e.pagesBilled : 1;
+        state.pagesUsed += billed - reservedPages;
         console.error(`[ocr-sweep]   FAILED ${it.room}/${it.container}/${it.name}: ${e.message}`);
       }
       if ((state.ok + state.fail) % 25 === 0) console.log(`[ocr-sweep]   ...${state.ok + state.fail} processed (ok ${state.ok}, fail ${state.fail})`);

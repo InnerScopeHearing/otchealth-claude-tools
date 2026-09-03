@@ -25,6 +25,7 @@ import {
   isSystemicS3Error,
   preflightRooms,
   withinBudget,
+  reservedPageEstimate,
   clientRequestToken,
   textractUrl,
   runSweep,
@@ -204,6 +205,16 @@ test("withinBudget: page-cap and doc-cap enforcement, and 0 meaning unlimited fo
   assert.equal(withinBudget({ docsUsed: 0, pagesUsed: 500 }, { maxDocs: 5, maxPages: 500 }), false, "page cap reached");
   assert.equal(withinBudget({ docsUsed: 0, pagesUsed: 499 }, { maxDocs: 5, maxPages: 500 }), true, "one page under the cap is still fine");
   assert.equal(withinBudget({ docsUsed: 999999, pagesUsed: 999999 }, { maxDocs: 0, maxPages: 0 }), true, "0/0 means unlimited on both axes");
+});
+
+test("reservedPageEstimate: floors to 1 when no page count is known (the real case today -- the S3 listing carries none), honors a candidate's own known count when present", () => {
+  assert.equal(reservedPageEstimate({ name: "a.pdf" }), 1);
+  assert.equal(reservedPageEstimate({}), 1);
+  assert.equal(reservedPageEstimate(null), 1);
+  assert.equal(reservedPageEstimate({ knownPages: 0 }), 1, "a zero/falsy known count must not reserve zero pages");
+  assert.equal(reservedPageEstimate({ knownPages: -3 }), 1, "a nonsensical negative known count must not reserve a negative amount");
+  assert.equal(reservedPageEstimate({ knownPages: NaN }), 1);
+  assert.equal(reservedPageEstimate({ knownPages: 7 }), 7, "a real known count is honored, not overridden by the floor");
 });
 
 test("clientRequestToken: deterministic per (bucket,key), 64 lowercase-hex characters (fits Textract's ClientRequestToken constraints with no truncation)", () => {
@@ -450,6 +461,107 @@ test("runSweep: MAX_DOCS_PER_RUN enforcement, independent of the page budget", a
   const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({ stores: "cfo", maxDocsPerRun: 2, maxPages: 0, concurrency: 1 })));
   assert.equal(r.okCount, 2);
   assert.equal(world.calls.filter((c) => c.host === TEXTRACT_HOST).length, 2, "the third document must never be dispatched once the doc-count cap is hit");
+});
+
+// =====================================================================================
+// 2b. concurrency-race regressions (FND-20260903-43c9): the doc/page budgets under CONC>1
+// =====================================================================================
+// The tests above (`concurrency: 1`) can never exercise the bug: with one worker there is never a
+// SECOND, sibling-claimed-but-not-yet-completed document for withinBudget() to miss. The harness below
+// deterministically forces exactly that precondition (>1 document simultaneously "dispatched but not
+// yet counted"), independent of any incidental Node microtask/macrotask scheduling detail, by gating
+// every Textract call behind a manually-controlled release and draining them one at a time, oldest
+// first, letting each release's FULL synchronous continuation (completion accounting, the next
+// withinBudget() check, and -- if budget allows -- the next dispatch) settle before the next release.
+// This reproduces the exact interleaving a live multi-worker run exhibits (Textract responses never
+// arrive in lockstep either): under the pre-fix code, this ordering lets BOTH workers claim one more
+// document each while the OTHER's in-flight claim is still uncounted, exactly matching the reported
+// live incident ("MAX_DOCS_PER_RUN=5 CONC=2 processed 6 documents").
+function makeGatedWorld({ bucket = CFO_BUCKET, s3Objects = {}, action = "DetectDocumentText", pagesPerDoc = 1 } = {}) {
+  const world = makeWorld({ bucket, s3Objects });
+  const releases = [];
+  const stub = async (url, opts = {}) => {
+    const { hostname } = new URL(String(url));
+    if (hostname === TEXTRACT_HOST) {
+      const called = String(header(opts, "X-Amz-Target") || "").split(".").pop();
+      if (called === action) {
+        await new Promise((resolve) => releases.push(resolve));
+        return { ok: true, status: 200, text: async () => JSON.stringify({ DocumentMetadata: { Pages: pagesPerDoc }, Blocks: [{ BlockType: "LINE", Text: "x" }] }) };
+      }
+    }
+    return world.stub(url, opts);
+  };
+  return { stub, releases };
+}
+
+/** Drains a gated world (above) to completion: releases whatever call is pending, oldest first,
+ *  flushing the macrotask queue once after each release (letting that release's synchronous
+ *  continuation fully settle, including any NEW dispatch it triggers), until `runPromise` itself
+ *  settles. The iteration cap is a harness-safety net only (a real deadlock in the harness itself
+ *  becomes a clear assertion failure instead of a hung test) -- it is never meant to be reached by a
+ *  correctly-behaving run against 6 candidates. */
+async function drainGatedRun(releases, runPromise) {
+  const microflush = () => new Promise((resolve) => setImmediate(resolve));
+  let settled = false;
+  runPromise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+  let released = 0;
+  for (let i = 0; i < 10000 && !settled; i++) {
+    if (released < releases.length) releases[released++]();
+    await microflush();
+  }
+  assert.equal(settled, true, "TEST HARNESS: the run did not settle within the drain bound -- a real deadlock, not the race under test");
+  return runPromise;
+}
+
+test("runSweep: MAX_DOCS_PER_RUN is a HARD cap under concurrency -- closes FND-20260903-43c9 (a live MAX_DOCS_PER_RUN=5/CONC=2 run processed 6 documents; the check was correct, but it only ever looked at COMPLETED work, so it could not see a sibling worker's own in-flight claim)", async () => {
+  const NAMES = ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf", "f.pdf"]; // 6 candidates, cap = 5
+  const s3Objects = {};
+  for (const n of NAMES) s3Objects[`/${CFO_PREFIX}${n}`] = { size: 1000 };
+  const { stub, releases } = makeGatedWorld({ s3Objects });
+
+  _setSleepForTests(async () => {}); // no startup stagger -- both workers reach their first dispatch immediately, maximizing overlap
+  let r;
+  try {
+    const runPromise = withEnv(FAKE_ENV, () => withStubbedFetch(stub, () => runSweep({ stores: "cfo", maxDocsPerRun: 5, maxPages: 0, concurrency: 2 })));
+    r = await drainGatedRun(releases, runPromise);
+  } finally {
+    _setSleepForTests();
+  }
+
+  assert.equal(r.ok, true);
+  assert.equal(r.systemic, false);
+  assert.equal(r.okCount, 5, "exactly MAX_DOCS_PER_RUN documents must be processed -- not 6, the pre-fix overshoot this regression test reproduces and closes");
+  assert.equal(r.processed, 5);
+  assert.equal(releases.length, 5, "the 6th candidate must never even reach Textract once the doc-count cap is exactly hit -- dispatch-time reservation, not a post-completion count, is what stops it");
+});
+
+test("runSweep: MAX_PAGES is a HARD cap under concurrency too -- the identical race pattern (the finding's 'pages budget has the same shape'), closed by the SAME dispatch-time reservation", async () => {
+  const NAMES = ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf", "f.pdf"]; // 6 candidates, each exactly 1 real page, cap = 5 pages
+  const s3Objects = {};
+  for (const n of NAMES) s3Objects[`/${CFO_PREFIX}${n}`] = { size: 1000 };
+  const { stub, releases } = makeGatedWorld({ s3Objects, pagesPerDoc: 1 });
+
+  _setSleepForTests(async () => {});
+  let r;
+  try {
+    const runPromise = withEnv(FAKE_ENV, () => withStubbedFetch(stub, () => runSweep({ stores: "cfo", maxDocsPerRun: 0, maxPages: 5, concurrency: 2 })));
+    r = await drainGatedRun(releases, runPromise);
+  } finally {
+    _setSleepForTests();
+  }
+
+  assert.equal(r.ok, true);
+  assert.equal(r.systemic, false);
+  assert.equal(r.pagesUsed, 5, "exactly MAX_PAGES pages must be counted -- not 6, reproducing (and closing) the doc-cap race's identical shape for the cumulative page budget");
+  assert.equal(r.okCount, 5);
+  assert.equal(releases.length, 5, "the 6th candidate must never even reach Textract once the page budget is exactly hit (each document here costs exactly 1 real page, so the floor reservation is exact)");
 });
 
 test("runSweep: an oversize file (over MAX_MB) is skipped WITHOUT ever calling Textract, and does not consume the page/doc budget", async () => {
