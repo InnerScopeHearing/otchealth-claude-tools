@@ -220,9 +220,55 @@ export function buildRegisterArgs(mcpName, url, token) {
   return headersHelperEnabled() ? buildAddJsonArgs(mcpName, url, token, HEADERS_HELPER_PATH) : buildAddArgs(mcpName, url, token);
 }
 
-function register(mcpName, token) {
-  try { execFileSync('claude', ['mcp', 'remove', mcpName], { stdio: 'ignore' }); } catch { /* not present yet */ }
-  execFileSync('claude', buildRegisterArgs(mcpName, GATEWAY_MCP, token), { stdio: 'ignore' });
+/** Scrub a bearer token from any text that might be printed or logged: the exact value (when known)
+ * AND the generic `Bearer <token>` shape, which also covers the JSON form `claude mcp add-json` embeds
+ * ("Authorization":"Bearer ..."). Shape matching means a rotated or different token is still caught.
+ * 2026-09-03: a `claude mcp add` failure inside the SessionStart hook printed execFileSync's own
+ * Error.message -- which is "Command failed: <the ENTIRE argv>", Authorization header included --
+ * straight into the hook output, so a live 24h lane token landed in a session transcript. Same class
+ * as the eval-runner leak closed in otchealth-mcp-server#256: redact at the point of OUTPUT; never
+ * trust that the argv stays off the error path. */
+export function redactBearer(text, token) {
+  let s = String(text ?? '');
+  if (typeof token === 'string' && token.length >= 8) s = s.split(token).join('[REDACTED]');
+  return s.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer [REDACTED]');
+}
+
+/** Run one `claude` CLI invocation with stdout+stderr CAPTURED (not ignored), so a failure carries the
+ * CLI's own reason -- e.g. "MCP server X already exists in local config" -- with any bearer scrubbed.
+ * Never throws; returns {ok, status, out}. `exec` is injectable so tests never spawn the real CLI. */
+export function runClaude(args, token, exec = execFileSync) {
+  try {
+    const out = exec('claude', args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+    return { ok: true, status: 0, out: redactBearer(out || '', token) };
+  } catch (e) {
+    const out = `${(e && e.stdout) || ''}\n${(e && e.stderr) || ''}`.trim();
+    return { ok: false, status: e && Number.isInteger(e.status) ? e.status : null, out: redactBearer(out, token) };
+  }
+}
+
+/** (Re-)register the gateway MCP server in Claude Code's LOCAL scope, idempotently.
+ * `claude mcp remove` and `claude mcp add` act on the local config of the CURRENT cwd only (verified
+ * 2026-09-03 on 2.1.259: a remove from another cwd says "No MCP server named ..."; an add where an
+ * entry already exists fails "already exists in local config", exit 1), and a scope-less remove
+ * REFUSES outright when the same name exists in more than one scope (exit 1, prints the two `-s`
+ * variants) -- exactly a seat whose repo .mcp.json (project scope) AND local scope both name the
+ * gateway, i.e. every fleet repo with the ${OTCHEALTH_GATEWAY_TOKEN} placeholder. The old blind remove-then-add
+ * therefore failed whenever the remove could not see the entry the add then collided with -- and
+ * with stdio ignored, nobody could tell why. Now: best-effort remove, add, and on an "already
+ * exists" collision one explicit local-scope remove + one retry. Any remaining failure throws a
+ * REDACTED error carrying the exit code and the CLI's own text, never the argv. */
+export function register(mcpName, token, exec = execFileSync) {
+  runClaude(['mcp', 'remove', mcpName], token, exec);
+  let r = runClaude(buildRegisterArgs(mcpName, GATEWAY_MCP, token), token, exec);
+  if (!r.ok && /already exists/i.test(r.out)) {
+    runClaude(['mcp', 'remove', '-s', 'local', mcpName], token, exec);
+    r = runClaude(buildRegisterArgs(mcpName, GATEWAY_MCP, token), token, exec);
+  }
+  if (!r.ok) {
+    const verb = headersHelperEnabled() ? 'add-json' : 'add';
+    throw new Error(`claude mcp ${verb} "${mcpName}" failed (exit ${r.status ?? '?'}): ${r.out || '(no output from the CLI)'}`);
+  }
 }
 
 async function connectOnce({ lane, doRegister, doVerify }) {
@@ -251,7 +297,7 @@ if (isMain) {
         console.log(`[gateway-connect] --watch: next refresh in ${Math.round(sleepMs / 60000)} min`);
         await new Promise((s) => setTimeout(s, sleepMs));
       } while (watch);
-    } catch (e) { console.error('[gateway-connect] ERROR:', String((e && e.message) || e)); process.exit(1); }
+    } catch (e) { console.error('[gateway-connect] ERROR:', redactBearer(String((e && e.message) || e))); process.exit(1); }
   })();
 }
 
@@ -261,4 +307,5 @@ export function hasLane(lane) { return Object.prototype.hasOwnProperty.call(LANE
 export default {
   LANES, GATEWAY_MCP, TOKEN_ENDPOINT, mintToken, buildAddArgs, buildAddJsonArgs, buildRegisterArgs,
   parseTokenResponse, laneClaim, hasLane, azureEnvPresent, credSource, headersHelperEnabled, HEADERS_HELPER_PATH,
+  redactBearer, runClaude, register,
 };
