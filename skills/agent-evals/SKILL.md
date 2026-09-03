@@ -63,27 +63,38 @@ already imported every batch helper unused).
   workflow actually runs (`workflow_dispatch` today, or once a real scheduled run is restored). Every
   OTHER caller of `run-evals.mjs` (`promptcheck.yml`'s per-PR base/head runs, `deploy-eval-gate.yml`'s
   reusable gate) is UNCHANGED -- batch mode is opt-in per invocation and neither of those sets the flag.
-- **Live-submitted against the real OpenAI Batch API (2026-09-03):** ran directly (not via the
-  disarmed workflow -- see above) with `OPENAI_BATCH_AGENT_EVALS=1`, bounded to the smallest golden
-  set (`--agent coach`, 1 task). Persona-answer batch `batch_6a990e037a6481908bd4088c55c88ac3` was
-  ACCEPTED and progressed `validating` -> `in_progress` (confirmed both by `run-evals.mjs`'s own
-  poll log and an independent standalone `GET /v1/batches/{id}` check) -- proving the real submit +
-  poll code path against OpenAI's live batch endpoints, not a mock. It had not yet reached
-  `completed` as of this PR (OpenAI's own guide describes up to a 24h window; a real 1-line batch can
-  still take well over ten minutes). Poll it forward from the repo root (resolves the key via the same
-  SSM-backed `kvSecret()` path `run-evals.mjs` uses; never prints it):
+- **Live-submitted against the real OpenAI Batch API (2026-09-03), CONFIRMED COMPLETED:** ran
+  directly (not via the disarmed workflow -- see above) with `OPENAI_BATCH_AGENT_EVALS=1`, bounded
+  to the smallest golden set (`--agent coach`, 1 task). Persona-answer batch
+  `batch_6a990e037a6481908bd4088c55c88ac3` was ACCEPTED, progressed `validating` -> `in_progress`
+  (confirmed both by `run-evals.mjs`'s own poll log and an independent standalone
+  `GET /v1/batches/{id}` check), and then -- after the originating `run-evals.mjs` process itself hit
+  its own bounded 30-minute proof window and exited with a distinct `timedOut`-tagged error (the
+  documented fail-loud contract working correctly; a timeout is never silently treated as success) --
+  a SEPARATE standalone continuation poller (reusing the real `awaitBatch()` from
+  `setup/model-routing.mjs`, the exact function `run-evals.mjs`'s `runOneBatch()` calls, not a mock)
+  kept watching the same batch independently and observed it reach `status: "completed"` roughly 26.5
+  minutes after submission, with `request_counts: {"total":1,"completed":1,"failed":0}`. The single
+  submitted line (`custom_id: "coach-gate-order"`) resolved to `error: null` and real, on-topic
+  persona-answer content (a full release-gating policy answer matching the `coach` persona's rubric);
+  `assertAllBatchResultsPresent(["coach-gate-order"], results)` -- the exact completeness check
+  `runOneBatch()` itself calls -- did not throw, confirming the one submitted request was not silently
+  dropped. This proves the real submit -> poll -> parse cycle for the persona-answer batch works
+  end to end against OpenAI's live endpoints, not a mock, for its full lifecycle (not merely
+  "accepted"). Poll any future batch id the same way from the repo root (resolves the key via the
+  same SSM-backed `kvSecret()` path `run-evals.mjs` uses; never prints it):
   ```
   node -e 'import("./skills/kb-memory/azure-secret.mjs").then(async ({ kvSecret }) => {
     const k = await kvSecret("openai-api-key");
-    const r = await fetch("https://api.openai.com/v1/batches/batch_6a990e037a6481908bd4088c55c88ac3", { headers: { Authorization: "Bearer " + k } });
+    const r = await fetch("https://api.openai.com/v1/batches/<batch_id>", { headers: { Authorization: "Bearer " + k } });
     console.log(await r.json());
   })'
   ```
   or re-run the same `run-evals.mjs --agent coach` command, which submits a fresh batch and polls it
-  to completion end to end. `--emit` was not passed
-  for this proof run, so no `eval_result` events reached PostHog either way (inert by design, same as
-  any `run-evals.mjs` invocation without `--emit`) -- the nightly workflow's own `--emit` is
-  unaffected regardless, since `--emit`/`--json`/batch mode are independent.
+  to completion end to end. `--emit` was not passed for this proof run, so no `eval_result` events
+  reached PostHog either way (inert by design, same as any `run-evals.mjs` invocation without
+  `--emit`) -- the nightly workflow's own `--emit` is unaffected regardless, since
+  `--emit`/`--json`/batch mode are independent.
 - **Model-not-found + per-line-error paths:** covered at two layers. `setup/model-routing.mjs`'s own
   `awaitBatch`/`submitBatch` tests (`setup/model-routing.test.mjs`) cover the generic per-line-error
   contract (a line with `response:null, error:{...}` records `{error, content:null}`, never thrown;
