@@ -133,8 +133,9 @@ async function bedrockFetch({ region, path, bodyStr, timeoutMs }) {
  * a throw (or vice versa) reintroduces exactly the flood bug this port was built to close.
  *
  * `cachePrefix` (2026-09-03, opt-in, default OFF -- also readable from env `BEDROCK_CACHE_PREFIX=1`
- * when the option itself is omitted; an explicit boolean always wins over the env value): when
- * truthy, inserts `{ cachePoint: { type: "default" } }` immediately after the system text block in
+ * when the option itself is omitted; an explicit boolean always wins over the env value; any other
+ * non-boolean value THROWS rather than being coerced, so a caller can never believe caching is on
+ * while it silently fell back to an unset env flag): when `true`, inserts `{ cachePoint: { type: "default" } }` immediately after the system text block in
  * `system`, so a repeated, byte-identical system prompt (deep-pass.mjs's per-room prompt is static
  * across every document in a run) is served from Bedrock's prompt cache on subsequent calls instead
  * of being re-processed at full price. Live-verified on Sonnet 5: a first call with an identical
@@ -156,6 +157,9 @@ export async function converseJson({
 } = {}) {
   if (!modelId) throw new Error("bedrock-client: converseJson requires modelId");
   if (!toolName || !toolSchema) throw new Error("bedrock-client: converseJson requires toolName + toolSchema (forced tool-use is the only supported JSON-mode strategy)");
+  if (cachePrefix !== undefined && typeof cachePrefix !== "boolean") {
+    throw new Error(`bedrock-client: cachePrefix must be a boolean or omitted (got ${typeof cachePrefix} ${JSON.stringify(cachePrefix)}) -- a non-boolean value is never coerced, because "1" or "true" would otherwise fall back to the env flag and leave caching OFF while the caller believes it is ON`);
+  }
   const reg = region || process.env.BEDROCK_REGION || process.env.AWS_REGION || "us-east-1";
   const path = `/model/${modelId}/converse`;
   // Explicit true/false always wins over BEDROCK_CACHE_PREFIX; omitting `cachePrefix` entirely falls

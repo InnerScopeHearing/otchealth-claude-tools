@@ -141,6 +141,12 @@ test("converseJson: BEDROCK_CACHE_PREFIX=1 arms the cache point when cachePrefix
   assert.deepEqual(captured.system, [{ text: "sys" }, { cachePoint: { type: "default" } }]);
 });
 
+test("converseJson: a non-boolean cachePrefix THROWS before any request instead of being coerced or silently falling back to the env flag", async () => {
+  for (const bad of ["1", "true", 1, "false", null]) {
+    await assert.rejects(converseJson({ ...BASE_ARGS, ...NO_RETRY, cachePrefix: bad }), /cachePrefix must be a boolean or omitted/, `cachePrefix=${JSON.stringify(bad)} must be rejected`);
+  }
+});
+
 test("converseJson: cachePrefix does not disturb the forced-tool-use JSON-mode strategy (toolConfig unchanged)", async () => {
   let captured;
   await withCachePrefixEnv(undefined, () =>
