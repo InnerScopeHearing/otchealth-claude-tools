@@ -121,8 +121,8 @@ the shared `doc-indexer:latest` (rebuilt automatically on merge to `main` via
 `.github/workflows/build-doc-indexer-ecr.yml`), command
 `/app/skills/ledger-compaction/job/compaction.sh`. Enabling the schedule (flip `State` to `ENABLED`
 via `aws scheduler update-schedule`) is a separate, explicit CTO step — not part of this port — after
-the task definition's env is confirmed to carry no stale Azure-only variables and the task role's S3
-access to the two mapped buckets above is confirmed. A manual `aws ecs run-task` against this task
+a smoke run on the rebuilt image passes. The task definition still carries a vestigial `AZURE_*` env
+var; the ported code never reads it and it needs no change. A manual `aws ecs run-task` against this task
 definition is the smoke test before flipping it on.
 
 ## Guardrails

@@ -171,3 +171,31 @@ test("growth-room-nightly.sh's indexer.mjs invocation passes --s3, not --azure",
   assert.doesNotMatch(codeOnly, /indexer\.mjs[^\n]*--azure/, "the commons index step must not force --azure");
   assert.match(codeOnly, /indexer\.mjs"?\s*index --no-ocr --profile commons --s3\b/, "must explicitly select the s3 backend for the index step");
 });
+
+test("entrypoint: --dry-run anywhere in the arguments skips the commons index step (not only as $1), so a dry run makes zero S3 calls; without it the index step runs after the sweep", async () => {
+  const { mkdtemp, rm, writeFile, readFile, chmod } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { fileURLToPath } = await import("node:url");
+  const run = promisify(execFile);
+  const dir = await mkdtemp(join(tmpdir(), "gr-entry-"));
+  try {
+    const log = join(dir, "calls.log");
+    // A PATH shim for `node` that only records its argv: the entrypoint's real callees never run.
+    await writeFile(join(dir, "node"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\n`);
+    await chmod(join(dir, "node"), 0o755);
+    const entry = fileURLToPath(new URL("../job/growth-room-nightly.sh", import.meta.url));
+    const env = { ...process.env, PATH: `${dir}:${process.env.PATH}` };
+    await run("sh", [entry, "--days", "3", "--dry-run"], { env });
+    const dry = (await readFile(log, "utf8")).trim().split("\n");
+    assert.equal(dry.length, 1, "only the sweep itself may run under --dry-run");
+    assert.match(dry[0], /growth-room\.mjs sweep --json --days 3 --dry-run$/);
+    await writeFile(log, "");
+    await run("sh", [entry, "--days", "3"], { env });
+    const wet = (await readFile(log, "utf8")).trim().split("\n");
+    assert.equal(wet.length, 2, "without --dry-run the index step must run after the sweep");
+    assert.match(wet[1], /indexer\.mjs index --no-ocr --profile commons --s3 --prefix _DOCS\/growth-room\/$/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

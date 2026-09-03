@@ -93,9 +93,9 @@ definition's image is the shared `doc-indexer:latest` (rebuilt automatically on 
 `.github/workflows/build-doc-indexer-ecr.yml`), command
 `/app/skills/growth-room/job/growth-room-nightly.sh`, no `--secrets` needed (auth is the ECS task
 role + AWS SSM, see Credentials below). Enabling the schedule (flip `State` to `ENABLED` via
-`aws scheduler update-schedule`) is a separate, explicit CTO step — not part of this port — after the
-task definition's env is confirmed to carry no stale Azure-only variables and the task role's S3
-access to `otchealth-brain-dr-55c84f6b` is confirmed. A manual `aws ecs run-task` against this task
+`aws scheduler update-schedule`) is a separate, explicit CTO step — not part of this port — after a
+dry-run smoke on the rebuilt image passes. The task definition still carries vestigial `AZURE_*` env
+vars; the ported code never reads them and they need no change. A manual `aws ecs run-task` against this task
 definition (or the schedule's own `--dry-run` args override) is the smoke test before flipping it on.
 
 ## Credentials

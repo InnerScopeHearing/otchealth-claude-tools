@@ -15,7 +15,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const execFileP = promisify(execFile);
@@ -182,4 +182,10 @@ test("run-compaction.mjs no longer talks to Azure Blob or the GCP SA directly (p
   assert.doesNotMatch(stripped, /buildSas|encPath\(/, "the old hand-rolled Azure SAS primitives must be gone");
   assert.match(src, /from "\.\.\/\.\.\/kb-memory\/s3-blob\.mjs"/, "must route storage through s3-blob.mjs");
   assert.match(src, /getTextFromS3|putObjectToS3/, "must actually call the S3 client, not just import it");
+});
+
+test("source scan: the compaction.sh wrapper reads no GCP service-account credential either (the runner no longer consumes one, so the export would be dead plumbing)", () => {
+  const sh = readFileSync(join(SKILL_DIR, "job", "compaction.sh"), "utf8");
+  assert.doesNotMatch(sh, /GCP_CLAUDE_DRIVER_SA_JSON/);
+  assert.doesNotMatch(sh, /AZURE_SP_CLIENT|azure-.*-storage/);
 });
