@@ -44,6 +44,7 @@
 
 import { awsCreds } from "../kb-memory/aws-secret.mjs";
 import { signOpenSearchRequest } from "./opensearch-client.mjs";
+import { emitLlmObsSpan } from "../datadog/llmobs-emit.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -146,7 +147,7 @@ async function bedrockFetch({ region, path, bodyStr, timeoutMs }) {
  * to fall under that floor. Does NOT change the forced-tool-use JSON-mode strategy above; the cache
  * point is additive content in `system` only.
  */
-export async function converseJson({
+async function converseJsonCore({
   modelId, region, system, userContent, toolName, toolSchema, maxTokens = 900, temperature = 0.1, timeoutMs, cachePrefix,
   // Retry-timing overrides. NOT part of the stable public contract -- production callers (deep-pass.mjs)
   // never pass these and get the real MAX_RETRIES/RETRY_BASE_MS/RETRY_MAX_MS policy. They exist so a
@@ -216,6 +217,63 @@ export async function converseJson({
     return { obj: toolBlock.toolUse.input ?? null, usage, stopReason };
   }
   throw new Error(`bedrock converse: retries exhausted after ${_maxRetries} attempts: ${lastErr ? String(lastErr.message || lastErr).slice(0, 200) : "unknown error"}`);
+}
+
+/**
+ * Public entrypoint. converseJsonCore above is the real Bedrock Converse implementation (retries,
+ * SigV4 signing, JSON-mode-via-forced-tool-use) and is UNCHANGED by this wrapper -- every existing
+ * behavior, return shape, and thrown-error contract is byte-identical. This wrapper adds ONLY
+ * fire-and-forget Datadog LLM Observability telemetry (../datadog/llmobs-emit.mjs,
+ * DD_LLMOBS_ENABLED-gated, inert by default -- see that file's own doc comment for the full
+ * research + safety contract) around the same call.
+ *
+ * Deliberately NEVER forwards `system`/`userContent` (the real document text/prompt) or the
+ * model's parsed `obj` (the real completion) to the emitter -- only categorical/numeric signals
+ * (model id, tool name, token counts, latency, stop reason). See llmobs-emit.mjs's SAFETY
+ * CONTRACT doc comment for why: this function is the SAME choke point deep-pass.mjs's document
+ * enrichment and enrich.mjs's entity/graph backfill both call (directly, and via
+ * enrich-llm.mjs's callBedrockChat respectively) against rooms that can be MNPI/attorney-
+ * privileged (finance-cfo-source-docs, legal-company) -- content must never reach a third-party
+ * observability vendor regardless of DD_LLMOBS_CAPTURE_CONTENT.
+ *
+ * Every existing caller keeps importing/calling `converseJson` under this exact name and shape --
+ * no call-site changes needed. Tests that inject their OWN fake `converse` function (e.g.
+ * enrich-llm.test.mjs's callBedrockChat tests) never reach this wrapper at all, since they never
+ * invoke the real export; bedrock-client.test.mjs's own tests exercise this wrapper directly but
+ * run with DD_LLMOBS_ENABLED unset, so the emitter is a no-op for every one of them (see
+ * llmobs-emit.test.mjs for the dedicated gating/payload-shape coverage of the emitter itself).
+ */
+export async function converseJson(args) {
+  const startedAtMs = Date.now();
+  try {
+    const res = await converseJsonCore(args);
+    emitLlmObsSpan({
+      name: "bedrock.converse",
+      kind: "llm",
+      startNs: startedAtMs * 1e6,
+      durationNs: (Date.now() - startedAtMs) * 1e6,
+      ok: true,
+      model: args && args.modelId,
+      provider: "bedrock",
+      inputTokens: res && res.usage && res.usage.prompt_tokens,
+      outputTokens: res && res.usage && res.usage.completion_tokens,
+      metadata: { stop_reason: res && res.stopReason, tool_name: args && args.toolName },
+    });
+    return res;
+  } catch (err) {
+    emitLlmObsSpan({
+      name: "bedrock.converse",
+      kind: "llm",
+      startNs: startedAtMs * 1e6,
+      durationNs: (Date.now() - startedAtMs) * 1e6,
+      ok: false,
+      model: args && args.modelId,
+      provider: "bedrock",
+      errorMessage: err instanceof Error ? err.message : String(err),
+      metadata: { tool_name: args && args.toolName },
+    });
+    throw err;
+  }
 }
 
 // Exported for tests only (not used by converseJson's own control flow above -- kept here so a test
