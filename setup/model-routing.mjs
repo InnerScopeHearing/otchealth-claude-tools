@@ -185,9 +185,15 @@ export function resolveTier(tierOrDeployment, provider = 'azure') {
   return { deployment, modelFamily: modelFamilyOf(deployment) };
 }
 
+// Valid `reasoning_effort` values (2026-09-03, live-verified: a real POST /v1/chat/completions to
+// gpt-5.6-luna with reasoning_effort "low" and "none" both returned HTTP 200). Exposed as a Set, not
+// inlined in chatBody(), so the allowed-value list has exactly one source of truth if OpenAI ever
+// adds/removes a level.
+const REASONING_EFFORT_VALUES = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+
 /**
  * Build the correctly-shaped chat/completions request body for a given deployment.
- *   chatBody(deployment, { messages, maxTokens, temperature, jsonMode, serviceTier })
+ *   chatBody(deployment, { messages, maxTokens, temperature, jsonMode, serviceTier, reasoningEffort })
  * Reasoning-family: { messages, max_completion_tokens } (no temperature override, ever - the API
  * rejects a non-default value). Chat-family: { messages, max_tokens, temperature } (temperature
  * defaults to 0.2 when not given, matching the fleet's existing synthesis/judge callers).
@@ -197,8 +203,17 @@ export function resolveTier(tierOrDeployment, provider = 'azure') {
  * at all, so every caller that does not pass it gets a byte-identical body to before this option
  * existed. Never inferred from env here -- resolve the value with serviceTierFor() first and pass
  * it in explicitly, keeping this function pure (no I/O, no env reads) like the rest of the module.
+ * `reasoningEffort` (2026-09-03, one of none/low/medium/high/xhigh/max -- OpenAI's own accepted
+ * values on the gpt-5.6 family, live-verified above): when a string is passed, adds
+ * `reasoning_effort: <value>` to the body; an invalid value THROWS immediately (fail loud, matching
+ * this module's existing FAIL-LOUD CONTRACT, rather than silently sending a value OpenAI would 400
+ * on anyway). Default `undefined` -- omitted entirely, so every pre-existing call site (none of which
+ * pass this) gets a byte-identical body to before this option existed. Deliberately NOT gated to
+ * reasoning-family deployments here (this function stays a pure, mechanical body-shape builder, like
+ * the rest of the module) -- a caller decides where reasoning_effort makes sense to send, the same
+ * way it already decides which tier/deployment to resolve in the first place.
  */
-export function chatBody(deployment, { messages, maxTokens = 900, temperature, jsonMode, serviceTier } = {}) {
+export function chatBody(deployment, { messages, maxTokens = 900, temperature, jsonMode, serviceTier, reasoningEffort } = {}) {
   const isReasoning = modelFamilyOf(deployment) === 'reasoning';
   const body = { messages };
   if (isReasoning) {
@@ -209,6 +224,12 @@ export function chatBody(deployment, { messages, maxTokens = 900, temperature, j
   }
   if (jsonMode) body.response_format = { type: 'json_object' };
   if (serviceTier) body.service_tier = serviceTier;
+  if (reasoningEffort !== undefined) {
+    if (!REASONING_EFFORT_VALUES.has(reasoningEffort)) {
+      throw new Error(`chatBody: invalid reasoningEffort "${reasoningEffort}" -- must be one of ${[...REASONING_EFFORT_VALUES].join(', ')}`);
+    }
+    body.reasoning_effort = reasoningEffort;
+  }
   return body;
 }
 

@@ -148,6 +148,7 @@ test("the daily digest uses the QUALITY-tier model (gpt-5.6-terra, 2026-08-29 OP
   const digestBody = JSON.parse(digestCall.body);
   assert.equal("max_completion_tokens" in digestBody, true, "reasoning-family (gpt-5.6-terra) must use max_completion_tokens");
   assert.equal("temperature" in digestBody, false, "reasoning-family models reject a temperature override");
+  assert.equal("reasoning_effort" in digestBody, false, "the quality-tier digest call must NOT get the cheap-tier's reasoningEffort:'low' (2026-09-03)");
   const digestKey = "/" + S3_KEY_PREFIX + `_JOURNAL/porttest/${TODAY}/_DIGEST.md`;
   assert.ok(r.store[digestKey], "the digest must have been written to the exact expected S3 key");
   assert.match(r.store[digestKey], /Worked on the S3 port/);
@@ -165,6 +166,7 @@ test("the distillation step uses the CHEAP-tier model (gpt-5.6-luna, 2026-08-29 
   const distillBody = JSON.parse(distillCall.body);
   assert.equal("max_completion_tokens" in distillBody, true, "reasoning-family (gpt-5.6-luna) must use max_completion_tokens");
   assert.equal("temperature" in distillBody, false, "reasoning-family models reject a temperature override");
+  assert.equal(distillBody.reasoning_effort, "low", "the cheap-tier bounded extraction call must set reasoning_effort:'low' (2026-09-03)");
 });
 
 test("initModel resolves the OpenAI key via the SSM fleet-secret path when OPENAI_API_KEY is unset (kvSecret's SSM-first default), not just from env", async () => {

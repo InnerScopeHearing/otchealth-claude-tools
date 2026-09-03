@@ -74,6 +74,7 @@ test("THE OPENAI PATH WORKS: makeChecker() with OPENAI_API_KEY set calls api.ope
   assert.equal("max_completion_tokens" in captured.body, true, "reasoning-family (gpt-5.6-luna) must use max_completion_tokens");
   assert.equal("max_tokens" in captured.body, false);
   assert.equal("temperature" in captured.body, false, "reasoning-family models reject a temperature override");
+  assert.equal(captured.body.reasoning_effort, "low", "this detector's cheap-tier faithfulness call sets reasoning_effort:'low' (2026-09-03)");
   assert.deepEqual(verdict, { rowId: ROW.id, label: "supported", reason: "directly stated" });
 });
 

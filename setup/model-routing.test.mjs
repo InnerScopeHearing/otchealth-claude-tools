@@ -315,6 +315,40 @@ test("chatBody adds service_tier verbatim when passed, on both chat-family and r
   assert.equal("temperature" in reasoningFamily, false, "serviceTier must not resurrect a temperature key on a reasoning-family body");
 });
 
+// ---- chatBody's reasoningEffort option (2026-09-03) ---------------------------------------------
+
+test("chatBody omits reasoning_effort entirely when it is not passed (byte-identical to every pre-existing call site)", async () => {
+  const { chatBody } = await freshImport();
+  const chatFamily = chatBody("gpt-4.1", { messages: [{ role: "user", content: "hi" }] });
+  assert.equal("reasoning_effort" in chatFamily, false);
+  const reasoningFamily = chatBody("gpt-5.6-terra", { messages: [], maxTokens: 50 });
+  assert.equal("reasoning_effort" in reasoningFamily, false);
+});
+
+test("chatBody adds reasoning_effort verbatim when a valid value is passed, on both chat-family and reasoning-family deployments", async () => {
+  const { chatBody } = await freshImport();
+  for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
+    const chatFamily = chatBody("gpt-4.1", { messages: [], reasoningEffort: effort });
+    assert.equal(chatFamily.reasoning_effort, effort);
+    const reasoningFamily = chatBody("gpt-5.6-luna", { messages: [], maxTokens: 50, reasoningEffort: effort });
+    assert.equal(reasoningFamily.reasoning_effort, effort);
+  }
+});
+
+test("chatBody rejects an invalid reasoningEffort value instead of silently sending it", async () => {
+  const { chatBody } = await freshImport();
+  assert.throws(() => chatBody("gpt-5.6-luna", { messages: [], reasoningEffort: "extreme" }), /invalid reasoningEffort/);
+  assert.throws(() => chatBody("gpt-4.1", { messages: [], reasoningEffort: "" }), /invalid reasoningEffort/, "an explicitly-passed empty string is still an invalid value, not treated as omitted");
+});
+
+test("chatBody's reasoningEffort and serviceTier are independent -- passing one never affects the other's presence", async () => {
+  const { chatBody } = await freshImport();
+  const body = chatBody("gpt-5.6-sol", { messages: [], maxTokens: 20, serviceTier: "flex", reasoningEffort: "low" });
+  assert.equal(body.service_tier, "flex");
+  assert.equal(body.reasoning_effort, "low");
+  assert.equal(body.max_completion_tokens, 20);
+});
+
 // ---- flexRetryPolicy ----------------------------------------------------------------------------
 
 test("flexRetryPolicy is a pure passthrough for any non-flex tier -- byte-identical to the caller's own values", async () => {

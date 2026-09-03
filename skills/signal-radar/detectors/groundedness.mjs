@@ -300,7 +300,11 @@ async function callOpenAI(key, dep, system, user, maxTokens, tries) {
   let curTokens = maxTokens;
   let escalated = false;
   for (let a = 0; a < effTries; a++) {
-    const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: curTokens, jsonMode: true, serviceTier: GROUNDEDNESS_TIER }), model: dep };
+    // reasoningEffort:"low" (2026-09-03): this detector's ONLY synchronous OpenAI call site is the
+    // cheap/classification tier (see this function's own doc comment above) -- a binary
+    // supported/unsupported/contradicted verdict against a fixed excerpt, not open-ended synthesis,
+    // so a lower reasoning budget is appropriate here and nowhere else in this file.
+    const body = { ...chatBody(dep, { messages: [{ role: "system", content: system }, { role: "user", content: user }], maxTokens: curTokens, jsonMode: true, serviceTier: GROUNDEDNESS_TIER, reasoningEffort: "low" }), model: dep };
     const init = { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) };
     if (policy.timeoutMs) init.signal = AbortSignal.timeout(policy.timeoutMs);
     const r = await fetch(OPENAI_CHAT_URL, init);
