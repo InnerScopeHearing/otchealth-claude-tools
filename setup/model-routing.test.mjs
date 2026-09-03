@@ -315,6 +315,47 @@ test("chatBody adds service_tier verbatim when passed, on both chat-family and r
   assert.equal("temperature" in reasoningFamily, false, "serviceTier must not resurrect a temperature key on a reasoning-family body");
 });
 
+// ---- chatBody's reasoningEffort option (2026-09-03) ---------------------------------------------
+
+test("chatBody omits reasoning_effort entirely when it is not passed (byte-identical to every pre-existing call site)", async () => {
+  const { chatBody } = await freshImport();
+  const chatFamily = chatBody("gpt-4.1", { messages: [{ role: "user", content: "hi" }] });
+  assert.equal("reasoning_effort" in chatFamily, false);
+  const reasoningFamily = chatBody("gpt-5.6-terra", { messages: [], maxTokens: 50 });
+  assert.equal("reasoning_effort" in reasoningFamily, false);
+});
+
+test("chatBody adds reasoning_effort verbatim for every valid value on a reasoning-family deployment", async () => {
+  const { chatBody } = await freshImport();
+  for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
+    const reasoningFamily = chatBody("gpt-5.6-luna", { messages: [], maxTokens: 50, reasoningEffort: effort });
+    assert.equal(reasoningFamily.reasoning_effort, effort);
+  }
+});
+
+test("chatBody OMITS reasoning_effort on a chat-family deployment even when a valid value is passed (OpenAI 400s 'Unsupported parameter' on gpt-4o/gpt-4.1; an env override naming a chat-family model must keep a byte-identical body)", async () => {
+  const { chatBody } = await freshImport();
+  const withEffort = chatBody("gpt-4o-mini", { messages: [{ role: "user", content: "x" }], maxTokens: 40, reasoningEffort: "low" });
+  const without = chatBody("gpt-4o-mini", { messages: [{ role: "user", content: "x" }], maxTokens: 40 });
+  assert.equal("reasoning_effort" in withEffort, false);
+  assert.deepEqual(withEffort, without, "passing reasoningEffort to a chat-family deployment must not change the body at all");
+  assert.equal(withEffort.max_tokens, 40, "still the chat-family shape");
+});
+
+test("chatBody rejects an invalid reasoningEffort value instead of silently sending it", async () => {
+  const { chatBody } = await freshImport();
+  assert.throws(() => chatBody("gpt-5.6-luna", { messages: [], reasoningEffort: "extreme" }), /invalid reasoningEffort/);
+  assert.throws(() => chatBody("gpt-4.1", { messages: [], reasoningEffort: "" }), /invalid reasoningEffort/, "an explicitly-passed empty string is still an invalid value, not treated as omitted");
+});
+
+test("chatBody's reasoningEffort and serviceTier are independent -- passing one never affects the other's presence", async () => {
+  const { chatBody } = await freshImport();
+  const body = chatBody("gpt-5.6-sol", { messages: [], maxTokens: 20, serviceTier: "flex", reasoningEffort: "low" });
+  assert.equal(body.service_tier, "flex");
+  assert.equal(body.reasoning_effort, "low");
+  assert.equal(body.max_completion_tokens, 20);
+});
+
 // ---- flexRetryPolicy ----------------------------------------------------------------------------
 
 test("flexRetryPolicy is a pure passthrough for any non-flex tier -- byte-identical to the caller's own values", async () => {

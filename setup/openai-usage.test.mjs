@@ -78,10 +78,63 @@ test("estimateCostUsd: known embedding model (text-embedding-3-large) prices at 
 });
 
 test("estimateCostUsd: an unrecognized chat model falls through to unknown_model, priced at the MOST expensive known chat family (never under-counts)", () => {
-  const unknownModel = estimateCostUsd({ model: "gpt-5.6-luna", kind: "chat", promptTokens: 1_000_000, completionTokens: 1_000_000 });
+  // NOT gpt-5.6-luna/-sol/-terra: those are now KNOWN rows in CHAT_PRICES (see the dedicated
+  // gpt-5.6-* tests below) -- this needs a name genuinely absent from the table.
+  const unknownModel = estimateCostUsd({ model: "gpt-9.9-nova", kind: "chat", promptTokens: 1_000_000, completionTokens: 1_000_000 });
   const knownGpt4o = estimateCostUsd({ model: "gpt-4o", kind: "chat", promptTokens: 1_000_000, completionTokens: 1_000_000 });
+  const knownSol = estimateCostUsd({ model: "gpt-5.6-sol", kind: "chat", promptTokens: 1_000_000, completionTokens: 1_000_000 });
   assert.equal(unknownModel.unknown, true);
-  assert.ok(unknownModel.costUsd >= knownGpt4o.costUsd, "the unknown bucket must never be cheaper than the most expensive KNOWN family");
+  assert.ok(unknownModel.costUsd >= knownGpt4o.costUsd, "the unknown bucket must never be cheaper than the most expensive KNOWN short-context family");
+  assert.ok(unknownModel.costUsd >= knownSol.costUsd, "the unknown bucket must never be cheaper than gpt-5.6-sol's own short-context rate either");
+});
+
+// ============================== gpt-5.6 family (2026-09-03 price-table addition) ==============================
+
+// NOTE: these short-context tests deliberately use 100,000 prompt/completion tokens, NOT 1,000,000 --
+// 1,000,000 is well past GPT_5_6_LONG_CONTEXT_THRESHOLD (272,000) and would silently exercise the
+// LONG-context rate instead of the short one this block means to pin (caught by this suite's own
+// first draft: a 1,000,000-prompt-token gpt-5.6-sol case landed on $38, not the expected $24, because
+// it was actually pricing at the long-context 8.00/30.00 rates). The dedicated long-context tests
+// below use a prompt size on the correct side of the boundary on purpose.
+test("estimateCostUsd: gpt-5.6-sol short-context prices at the published promotional rate (4.00 in / 20.00 out per 1M)", () => {
+  const { costUsd, unknown } = estimateCostUsd({ model: "gpt-5.6-sol", kind: "chat", promptTokens: 100_000, completionTokens: 100_000 });
+  assert.equal(unknown, false);
+  assert.ok(Math.abs(costUsd - 2.4) < 1e-9, `expected $2.40 (0.1M x 4.00 in + 0.1M x 20.00 out), got ${costUsd}`);
+});
+
+test("estimateCostUsd: gpt-5.6-terra short-context prices at 2.00 in / 12.00 out per 1M", () => {
+  const { costUsd, unknown } = estimateCostUsd({ model: "gpt-5.6-terra", kind: "chat", promptTokens: 100_000, completionTokens: 100_000 });
+  assert.equal(unknown, false);
+  assert.ok(Math.abs(costUsd - 1.4) < 1e-9, `expected $1.40 (0.1M x 2.00 in + 0.1M x 12.00 out), got ${costUsd}`);
+});
+
+test("estimateCostUsd: gpt-5.6-luna short-context prices at 0.20 in / 1.20 out per 1M (the fleet's OPENAI_TIERS cheap default)", () => {
+  const { costUsd, unknown } = estimateCostUsd({ model: "gpt-5.6-luna", kind: "chat", promptTokens: 100_000, completionTokens: 100_000 });
+  assert.equal(unknown, false);
+  assert.ok(Math.abs(costUsd - 0.14) < 1e-9, `expected $0.14 (0.1M x 0.20 in + 0.1M x 1.20 out), got ${costUsd}`);
+});
+
+test("estimateCostUsd: gpt-5.6-luna cached prompt tokens price at its cheaper cached-input rate (0.02/1M), not the fresh 0.20/1M rate", () => {
+  const allFresh = estimateCostUsd({ model: "gpt-5.6-luna", kind: "chat", promptTokens: 100_000, completionTokens: 0, cachedTokens: 0 });
+  const allCached = estimateCostUsd({ model: "gpt-5.6-luna", kind: "chat", promptTokens: 100_000, completionTokens: 0, cachedTokens: 100_000 });
+  assert.ok(allCached.costUsd < allFresh.costUsd, "an all-cached-prompt gpt-5.6-luna call must cost less than an all-fresh one");
+  assert.ok(Math.abs(allCached.costUsd - 0.002) < 1e-9, `expected the $0.02/1M cached rate (0.1M tokens -> $0.002), got ${allCached.costUsd}`);
+});
+
+test("estimateCostUsd: gpt-5.6-* long-context boundary -- AT exactly 272,000 prompt_tokens still prices short-context; one token OVER switches to the long-context rate", () => {
+  const atThreshold = estimateCostUsd({ model: "gpt-5.6-sol", kind: "chat", promptTokens: 272_000, completionTokens: 0 });
+  const overThreshold = estimateCostUsd({ model: "gpt-5.6-sol", kind: "chat", promptTokens: 272_001, completionTokens: 0 });
+  assert.ok(Math.abs(atThreshold.costUsd - (272_000 / 1e6) * 4.0) < 1e-9, "at exactly the threshold, gpt-5.6-sol must still price at its 4.00/1M short-context input rate");
+  assert.ok(Math.abs(overThreshold.costUsd - (272_001 / 1e6) * 8.0) < 1e-6, "one token past the threshold, gpt-5.6-sol must price at its 8.00/1M long-context input rate");
+  assert.ok(overThreshold.costUsd > atThreshold.costUsd * 1.9, "the long-context rate is roughly double the short-context rate for the same near-threshold prompt size");
+});
+
+test("estimateCostUsd: gpt-5.6-sol long-context tier also applies its own long-context cached-input and output rates, not just input", () => {
+  const longFresh = estimateCostUsd({ model: "gpt-5.6-sol", kind: "chat", promptTokens: 300_000, completionTokens: 1_000_000, cachedTokens: 0 });
+  const longCached = estimateCostUsd({ model: "gpt-5.6-sol", kind: "chat", promptTokens: 300_000, completionTokens: 0, cachedTokens: 300_000 });
+  const expectedFresh = (300_000 / 1e6) * 8.0 + (1_000_000 / 1e6) * 30.0;
+  assert.ok(Math.abs(longFresh.costUsd - expectedFresh) < 1e-6, `expected long-context input+output pricing, got ${longFresh.costUsd} vs ${expectedFresh}`);
+  assert.ok(Math.abs(longCached.costUsd - (300_000 / 1e6) * 0.8) < 1e-9, "an all-cached long-context prompt must use the long-context cached-input rate (0.80/1M), not the short-context one (0.40/1M)");
 });
 
 test("estimateCostUsd: an unrecognized embedding model falls through to unknown_model, priced at the most expensive known embedding family", () => {
@@ -148,8 +201,14 @@ test("recordOpenAIUsage: costUsdOverride wins outright over the price-table esti
 });
 
 test("recordOpenAIUsage: an unrecognized model name is tagged unknown:true when no override is given", () => {
-  recordOpenAIUsage({ model: "gpt-5.6-terra", kind: "chat", promptTokens: 100, completionTokens: 50, caller: "company-brain" });
+  // NOT gpt-5.6-terra: it is now a KNOWN row in CHAT_PRICES (see openai-usage.mjs's price table).
+  recordOpenAIUsage({ model: "gpt-9.9-nova", kind: "chat", promptTokens: 100, completionTokens: 50, caller: "company-brain" });
   assert.equal(_peekBufferForTests()[0].unknown, true);
+});
+
+test("recordOpenAIUsage: gpt-5.6-terra (a KNOWN model since the 2026-09-03 price-table addition) is tagged unknown:false", () => {
+  recordOpenAIUsage({ model: "gpt-5.6-terra", kind: "chat", promptTokens: 100, completionTokens: 50, caller: "company-brain" });
+  assert.equal(_peekBufferForTests()[0].unknown, false);
 });
 
 test("recordOpenAIUsage: a missing local ledger directory is created on demand (mkdirSync recursive)", () => {

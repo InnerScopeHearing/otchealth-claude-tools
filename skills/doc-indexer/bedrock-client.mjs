@@ -35,10 +35,12 @@
 // models) is NOT verified by this file; that is a live pre-flight check for whoever runs the first
 // real backfill (see the design doc's verify pass, REQUIRED FIX #3), not something to fake-check here.
 //
-// VERIFY BEFORE A REAL BACKFILL: the model ids and per-token prices baked into deep-pass.mjs's RATES
-// table are drawn from training-data knowledge of Bedrock's on-demand catalog, not a live probe run
-// by this PR. Confirm both (`aws bedrock list-inference-profiles --region us-east-1`,
-// https://aws.amazon.com/bedrock/pricing/) before trusting a cost estimate or scheduling real spend.
+// PRICES (updated 2026-09-03): the per-token rates in deep-pass.mjs's RATES table for Haiku 4.5 and
+// Sonnet 5 are now MEASURED from this account's own billing (Cost Explorer gross cost divided by
+// usage units, credits excluded) -- the `us.` cross-region profiles bill Anthropic's list price plus
+// 10% -- not drawn from training-data knowledge or a price page. Model ids are live-verified ACTIVE
+// on this account (`aws bedrock list-inference-profiles --region us-east-1`). When a model or profile
+// changes, re-measure the same way before trusting a cost estimate or scheduling real spend.
 
 import { awsCreds } from "../kb-memory/aws-secret.mjs";
 import { signOpenSearchRequest } from "./opensearch-client.mjs";
@@ -129,9 +131,23 @@ async function bedrockFetch({ region, path, bodyStr, timeoutMs }) {
  * retries exhausted on a retryable one) -- see deep-pass.mjs's two-tier failure taxonomy, which this
  * distinction exists to serve. Never conflate the two: a caller that treats a null `obj` the same as
  * a throw (or vice versa) reintroduces exactly the flood bug this port was built to close.
+ *
+ * `cachePrefix` (2026-09-03, opt-in, default OFF -- also readable from env `BEDROCK_CACHE_PREFIX=1`
+ * when the option itself is omitted; an explicit boolean always wins over the env value; any other
+ * non-boolean value THROWS rather than being coerced, so a caller can never believe caching is on
+ * while it silently fell back to an unset env flag): when `true`, inserts `{ cachePoint: { type: "default" } }` immediately after the system text block in
+ * `system`, so a repeated, byte-identical system prompt (deep-pass.mjs's per-room prompt is static
+ * across every document in a run) is served from Bedrock's prompt cache on subsequent calls instead
+ * of being re-processed at full price. Live-verified on Sonnet 5: a first call with an identical
+ * system+cache-point prefix reported `cacheWriteInputTokens`, a second call reported
+ * `cacheReadInputTokens` for the same prefix. Below a model's minimum cacheable prefix (roughly 1,024
+ * tokens on Sonnet, roughly 4,096 on Haiku 4.5) Bedrock simply does not cache and does not charge
+ * anything extra for the marker -- so this is safe to enable even when a given system prompt happens
+ * to fall under that floor. Does NOT change the forced-tool-use JSON-mode strategy above; the cache
+ * point is additive content in `system` only.
  */
 export async function converseJson({
-  modelId, region, system, userContent, toolName, toolSchema, maxTokens = 900, temperature = 0.1, timeoutMs,
+  modelId, region, system, userContent, toolName, toolSchema, maxTokens = 900, temperature = 0.1, timeoutMs, cachePrefix,
   // Retry-timing overrides. NOT part of the stable public contract -- production callers (deep-pass.mjs)
   // never pass these and get the real MAX_RETRIES/RETRY_BASE_MS/RETRY_MAX_MS policy. They exist so a
   // test can prove "retries exhausted after N attempts" and "backoff escalates" without waiting out a
@@ -141,10 +157,19 @@ export async function converseJson({
 } = {}) {
   if (!modelId) throw new Error("bedrock-client: converseJson requires modelId");
   if (!toolName || !toolSchema) throw new Error("bedrock-client: converseJson requires toolName + toolSchema (forced tool-use is the only supported JSON-mode strategy)");
+  if (cachePrefix !== undefined && typeof cachePrefix !== "boolean") {
+    throw new Error(`bedrock-client: cachePrefix must be a boolean or omitted (got ${typeof cachePrefix} ${JSON.stringify(cachePrefix)}) -- a non-boolean value is never coerced, because "1" or "true" would otherwise fall back to the env flag and leave caching OFF while the caller believes it is ON`);
+  }
   const reg = region || process.env.BEDROCK_REGION || process.env.AWS_REGION || "us-east-1";
   const path = `/model/${modelId}/converse`;
+  // Explicit true/false always wins over BEDROCK_CACHE_PREFIX; omitting `cachePrefix` entirely falls
+  // back to the env flag, so a fleet-wide arm/disarm needs no per-call-site code change. Default OFF
+  // (unset param, unset env) -- byte-identical `system` shape to before this option existed.
+  const useCachePrefix = typeof cachePrefix === "boolean" ? cachePrefix : /^(1|true)$/i.test(String(process.env.BEDROCK_CACHE_PREFIX || "").trim());
+  const systemBlocks = [{ text: system || "" }];
+  if (useCachePrefix) systemBlocks.push({ cachePoint: { type: "default" } });
   const body = {
-    system: [{ text: system || "" }],
+    system: systemBlocks,
     messages: [{ role: "user", content: userContent }],
     inferenceConfig: { maxTokens, temperature },
     toolConfig: {

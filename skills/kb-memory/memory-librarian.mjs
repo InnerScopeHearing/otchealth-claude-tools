@@ -86,11 +86,14 @@ async function initModel() {
 // (LIBRARIAN_DIGEST_MODEL / LIBRARIAN_MODEL) are unchanged for backward compat.
 const QUALITY_MODEL = resolveTier(process.env.LIBRARIAN_DIGEST_MODEL || "standard", "openai").deployment;
 const CHEAP_MODEL = resolveTier(process.env.LIBRARIAN_MODEL || "cheap", "openai").deployment;
-async function openaiChat(model, sys, user, max, attempt = 0) {
+async function openaiChat(model, sys, user, max, attempt = 0, reasoningEffort) {
   // chatBody() picks the family-correct request shape (2026-08-29 fix, required now that QUALITY_MODEL/
   // CHEAP_MODEL resolve through OPENAI_TIERS, which moved both tiers to reasoning-family -- the prior
   // hardcoded {max_tokens, temperature} literal only worked because gpt-4o/gpt-4o-mini were chat-family).
-  const reqBody = { ...chatBody(model, { messages: [{ role: "system", content: sys }, { role: "user", content: user }], maxTokens: max, temperature: 0.2 }), model };
+  // reasoningEffort (2026-09-03) is undefined for chatQuality's narrative-digest call (leaves it
+  // omitted from the body, byte-identical to before this param existed) and "low" only for
+  // chatCheap's bounded 0-4-item extraction -- see chatCheap's own call below.
+  const reqBody = { ...chatBody(model, { messages: [{ role: "system", content: sys }, { role: "user", content: user }], maxTokens: max, temperature: 0.2, reasoningEffort }), model };
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${OAI_KEY}`, "Content-Type": "application/json" },
@@ -99,7 +102,7 @@ async function openaiChat(model, sys, user, max, attempt = 0) {
   if (r.status === 429 && attempt < 4) {
     const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10);
     await new Promise((s) => setTimeout(s, (retryAfter > 0 ? retryAfter * 1000 : 2000 * (attempt + 1)) + Math.floor(Math.random() * 500)));
-    return openaiChat(model, sys, user, max, attempt + 1);
+    return openaiChat(model, sys, user, max, attempt + 1, reasoningEffort);
   }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error("chat " + r.status + " " + JSON.stringify(j).slice(0, 160));
@@ -114,7 +117,7 @@ async function openaiChat(model, sys, user, max, attempt = 0) {
   return j.choices?.[0]?.message?.content || "";
 }
 async function chatQuality(sys, user, max = 900) { return openaiChat(QUALITY_MODEL, sys, user, max); }
-async function chatCheap(sys, user, max = 900) { return openaiChat(CHEAP_MODEL, sys, user, max); }
+async function chatCheap(sys, user, max = 900) { return openaiChat(CHEAP_MODEL, sys, user, max, 0, "low"); }
 
 function recentMemory(agent) { try { return execFileSync("node", [join(HERE, "mem.mjs"), "tail", "--agent", agent, "--n", "40"], { encoding: "utf8" }).slice(0, 7000); } catch { return ""; } }
 function writeMem(agent, type, text, share) { try { const a = [join(HERE, "mem.mjs"), type, text, "--agent", agent, "--tags", "librarian"]; if (share) a.push("--share"); execFileSync("node", a, { stdio: "ignore" }); return true; } catch { return false; } }

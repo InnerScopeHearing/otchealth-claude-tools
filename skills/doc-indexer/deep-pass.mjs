@@ -131,15 +131,18 @@ const STORAGE = (
 // this one included). A prefixed, script-specific name is the fix in both directions.
 const PROVIDER = (val('--llm-provider', process.env.DEEP_LLM_PROVIDER || 'bedrock')).toLowerCase();
 const BEDROCK_REGION = val('--bedrock-region', process.env.BEDROCK_REGION || 'us-east-1');
-// Per-room model split (design doc section 2): Sonnet 4.5 for legal (INND MNPI; the strongest
+// Per-room model split (design doc section 2): Sonnet for legal (INND MNPI; the strongest
 // faithfulness + signature-vision judgment), Haiku 4.5 for finance bulk (mini-class models are BANNED
 // for decision-grade summarization per setup/model-routing.mjs -- Haiku 4.5 is NOT mini-class).
-// UNVERIFIED LIVE as of this port: confirm both the model id and its current on-demand price via
-// `aws bedrock list-inference-profiles --region us-east-1` + https://aws.amazon.com/bedrock/pricing/
-// before trusting a real backfill's cost estimate (see bedrock-client.mjs's header for the same note).
+// 2026-09-03: bumped the non-Haiku default from claude-sonnet-4-5-20250929-v1:0 to
+// us.anthropic.claude-sonnet-5 -- live-verified ACTIVE on Bedrock (us-east-1) and answering Converse
+// on this account. Its Bedrock rate on this account's `us.` cross-region profile is MEASURED from real
+// billing, not copied from a price page -- see the RATES table below. `--model` / DEEP_MODEL still win over this default
+// (see MODEL_ID's own precedence chain immediately below) -- this bump only changes what a caller gets
+// when neither is set.
 const BEDROCK_DEFAULT_MODEL = PROFILE === 'finance'
   ? 'us.anthropic.claude-haiku-4-5-20251001-v1:0'
-  : 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
+  : 'us.anthropic.claude-sonnet-5';
 const MODEL_ID = val('--model', process.env.DEEP_MODEL || (PROVIDER === 'bedrock' ? BEDROCK_DEFAULT_MODEL : 'gpt-4.1'));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -319,12 +322,24 @@ const SIGNATURE_SCHEMA = {
 };
 
 // ---------- per-model cost table (2026-08-28 port; C9). A loud fallback beats a wrong number ----------
-// gpt-4.1 kept for the --llm-provider azure history path. Bedrock prices are UNVERIFIED LIVE -- see
-// the file header's "VERIFY BEFORE A REAL BACKFILL" note.
+// gpt-4.1 kept for the --llm-provider azure history path.
+// Bedrock rates MEASURED 2026-09-03 from this account's own billing (Cost Explorer, gross cost divided
+// by usage units with credits excluded, service "Claude <model> (Amazon Bedrock Edition)"): the `us.`
+// cross-region inference profiles bill Anthropic's list price PLUS 10%. Haiku 4.5: $133.20 for 121.1M
+// input tokens and $142.24 for 25.9M output tokens (the 2026-08-29..31 backfill) = 1.10 in / 5.50 out,
+// exact against the unrounded usage quantity. Sonnet 5: 2.20 in / 11.00 out (a tiny probe, but the
+// ratio is exact). Neither Anthropic's direct list price (2.00 / 10.00 for Sonnet 5) nor a guessed
+// 3.00 / 15.00 is what this account pays. When the model or the profile changes, re-measure the same
+// way instead of copying a price page.
+// 'us.anthropic.claude-sonnet-4-5-20250929-v1:0' KEPT (not replaced) so a historical cost figure
+// computed while that model was the default still resolves a real rate instead of silently falling to
+// the $0 unknown-rate placeholder below; its row is the list price plus the same 10% uplift
+// (extrapolated, not separately measured -- that model has no billed usage on this account).
 const RATES = {
   'gpt-4.1': { in: 2.00, out: 8.00 },
-  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': { in: 3.00, out: 15.00 },
-  'us.anthropic.claude-haiku-4-5-20251001-v1:0': { in: 1.00, out: 5.00 },
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': { in: 3.30, out: 16.50 },
+  'us.anthropic.claude-sonnet-5': { in: 2.20, out: 11.00 },
+  'us.anthropic.claude-haiku-4-5-20251001-v1:0': { in: 1.10, out: 5.50 },
   'us.amazon.nova-pro-v1:0': { in: 0.80, out: 3.20 },
 };
 let _unknownRateWarned = false;

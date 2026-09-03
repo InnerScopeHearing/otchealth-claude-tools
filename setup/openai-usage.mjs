@@ -48,20 +48,36 @@ import { ddMetric as _realDdMetric } from "../skills/datadog/dd-emit.mjs";
 // OpenAI revises pricing without notice, so treat this as a planning estimate and reconcile it
 // against https://openai.com/api/pricing/ periodically (see docs/OPENAI-COST-VISIBILITY.md).
 //
-// Deliberately does NOT try to price every model id the fleet might resolve to. In particular the
-// fleet's own OPENAI_TIERS (setup/model-routing.mjs) moved to the gpt-5.6-luna/-sol/-terra family on
-// 2026-08-29 with no published per-model pricing available at the time this table was written --
-// rather than guess a number and assert it with false confidence, those (and any other unrecognized
-// model id) fall through to the UNKNOWN_MODEL bucket below: priced at the MOST EXPENSIVE family this
-// table DOES know (so real spend is never under-counted) and tagged unknown:true (so a dashboard can
-// tell "confident" apart from "conservative guess" at a glance).
+// Deliberately does NOT try to price every model id the fleet might resolve to. The fleet's own
+// OPENAI_TIERS (setup/model-routing.mjs) moved to the gpt-5.6-luna/-sol/-terra family on 2026-08-29;
+// this table now carries their published per-1M rates (live-verified against
+// developers.openai.com/api/docs/pricing on 2026-09-03 -- see the gpt-5.6-* rows in CHAT_PRICES
+// below, including each model's long-context tier, which applies once a call's prompt_tokens exceeds
+// GPT_5_6_LONG_CONTEXT_THRESHOLD). gpt-5.6-sol's short-context rate is a published OpenAI PROMOTIONAL
+// price in effect through 2026-11-21 -- re-verify against the live pricing page after that date
+// rather than assuming it still holds. Any OTHER unrecognized model id (a genuinely new or renamed
+// model this table has not been updated for yet) still falls through to the UNKNOWN_MODEL bucket:
+// priced at the MOST EXPENSIVE rate this table DOES know, across every known model AND context tier
+// (so real spend is never under-counted), and tagged unknown:true (so a dashboard can tell
+// "confident" apart from "conservative guess" at a glance).
 // ============================================================================================
-export const PRICE_TABLE_VERSION = "2026-09-02";
+export const PRICE_TABLE_VERSION = "2026-09-03";
+
+// The gpt-5.6 family's long-context threshold: OpenAI applies each model's higher long-context rate
+// once a request's prompt_tokens exceeds this figure (live-verified against
+// developers.openai.com/api/docs/pricing, 2026-09-03). Shared by all three gpt-5.6-* rows below so
+// the boundary value is defined exactly once.
+const GPT_5_6_LONG_CONTEXT_THRESHOLD = 272_000;
 
 // Ordered rules, first regex match wins. `re` matches a bare model id or one with an OpenAI-style
 // dated snapshot suffix (e.g. "gpt-4o-2024-08-06"); it does NOT loosely prefix-match, so a genuinely
-// different/newer model (gpt-4.15, gpt-4o-turbo, gpt-5.6-luna, ...) falls through to UNKNOWN_MODEL_CHAT
+// different/newer model (gpt-4.15, gpt-4o-turbo, gpt-5.7-luna, ...) falls through to UNKNOWN_MODEL_CHAT
 // instead of silently absorbing a family's pricing it was never confirmed to share.
+//
+// An entry MAY carry an optional `longContext: { threshold, input, output, cachedInput }` -- when
+// present, matchChatPrice() uses those rates instead of the entry's own short-context ones once the
+// call's prompt_tokens exceeds `threshold`. Only the gpt-5.6-* family has this two-tier shape today;
+// every other entry is priced flat regardless of prompt length, unchanged from before this shape existed.
 const CHAT_PRICES = [
   { re: /^gpt-4o-mini(-\d{4}-\d{2}-\d{2})?$/i, input: 0.15, output: 0.6, cachedInput: 0.075 },
   { re: /^gpt-4o(-\d{4}-\d{2}-\d{2})?$/i, input: 2.5, output: 10.0, cachedInput: 1.25 },
@@ -69,6 +85,12 @@ const CHAT_PRICES = [
   { re: /^gpt-4\.1-mini(-\d{4}-\d{2}-\d{2})?$/i, input: 0.4, output: 1.6, cachedInput: 0.1 },
   { re: /^gpt-4\.1(-\d{4}-\d{2}-\d{2})?$/i, input: 2.0, output: 8.0, cachedInput: 0.5 },
   { re: /^gpt-3\.5-turbo(-\d{4})?$/i, input: 0.5, output: 1.5, cachedInput: 0.25 },
+  // gpt-5.6 family (2026-08-29 OPENAI_TIERS cutover; rates live-verified against
+  // developers.openai.com/api/docs/pricing on 2026-09-03). sol's short-context rate is a published
+  // OpenAI PROMOTIONAL price in effect through 2026-11-21 -- see PRICE_TABLE_VERSION's header note.
+  { re: /^gpt-5\.6-sol(-\d{4}-\d{2}-\d{2})?$/i, input: 4.0, output: 20.0, cachedInput: 0.4, longContext: { threshold: GPT_5_6_LONG_CONTEXT_THRESHOLD, input: 8.0, output: 30.0, cachedInput: 0.8 } },
+  { re: /^gpt-5\.6-terra(-\d{4}-\d{2}-\d{2})?$/i, input: 2.0, output: 12.0, cachedInput: 0.2, longContext: { threshold: GPT_5_6_LONG_CONTEXT_THRESHOLD, input: 4.0, output: 18.0, cachedInput: 0.4 } },
+  { re: /^gpt-5\.6-luna(-\d{4}-\d{2}-\d{2})?$/i, input: 0.2, output: 1.2, cachedInput: 0.02, longContext: { threshold: GPT_5_6_LONG_CONTEXT_THRESHOLD, input: 0.4, output: 1.8, cachedInput: 0.04 } },
 ];
 
 const EMBEDDING_PRICES = [
@@ -86,12 +108,33 @@ const EMBEDDING_PRICES = [
 const IMAGE_FLAT_FALLBACK_USD = 0.04;
 const KNOWN_IMAGE_MODEL_RE = /^gpt-image(-1)?(-mini)?$/i;
 
-const MOST_EXPENSIVE_CHAT = CHAT_PRICES.reduce((a, b) => (b.output > a.output ? b : a));
+// Flattens each entry's short-context rates AND (when present) its long-context rates into one list
+// of plain {input,output,cachedInput} points, so the "most expensive known" fallback below reflects
+// the worst-case published rate across every known model/context-tier combination -- not just each
+// model's short-context row -- keeping the "never under-counts an unrecognized model" guarantee true
+// now that a single model id can carry two different rates depending on prompt length.
+const CHAT_PRICE_POINTS = CHAT_PRICES.flatMap((p) => {
+  const points = [{ input: p.input, output: p.output, cachedInput: p.cachedInput }];
+  if (p.longContext) points.push({ input: p.longContext.input, output: p.longContext.output, cachedInput: p.longContext.cachedInput });
+  return points;
+});
+const MOST_EXPENSIVE_CHAT = CHAT_PRICE_POINTS.reduce((a, b) => (b.output > a.output ? b : a));
 const MOST_EXPENSIVE_EMBEDDING = EMBEDDING_PRICES.reduce((a, b) => (b.input > a.input ? b : a));
 
-function matchChatPrice(model) {
+/** `promptTokens` picks between an entry's short- and long-context rates (see CHAT_PRICES' own doc
+ *  comment) -- STRICTLY greater than the threshold selects long-context, matching the fleet's stated
+ *  "apply the long-context rate when prompt_tokens exceed 272,000" rule (a call AT exactly the
+ *  threshold still prices at the short-context rate). Defaults to 0 so every pre-existing call site
+ *  that does not pass promptTokens keeps resolving the short-context rate, unchanged. */
+function matchChatPrice(model, promptTokens = 0) {
   const m = String(model || "");
-  for (const p of CHAT_PRICES) if (p.re.test(m)) return { input: p.input, output: p.output, cachedInput: p.cachedInput, unknown: false };
+  for (const p of CHAT_PRICES) {
+    if (!p.re.test(m)) continue;
+    if (p.longContext && Number(promptTokens) > p.longContext.threshold) {
+      return { input: p.longContext.input, output: p.longContext.output, cachedInput: p.longContext.cachedInput, unknown: false };
+    }
+    return { input: p.input, output: p.output, cachedInput: p.cachedInput, unknown: false };
+  }
   return { input: MOST_EXPENSIVE_CHAT.input, output: MOST_EXPENSIVE_CHAT.output, cachedInput: MOST_EXPENSIVE_CHAT.cachedInput, unknown: true };
 }
 
@@ -113,9 +156,11 @@ export function estimateCostUsd({ model, kind, promptTokens = 0, completionToken
     const n = images > 0 ? images : 1;
     return { costUsd: n * IMAGE_FLAT_FALLBACK_USD, unknown: !known };
   }
-  // 'chat' and 'other' (moderation, unclassified) priced as chat-shaped token usage.
-  const price = matchChatPrice(model);
+  // 'chat' and 'other' (moderation, unclassified) priced as chat-shaped token usage. `pt` is computed
+  // BEFORE matchChatPrice() so a gpt-5.6-* call whose prompt_tokens exceeds
+  // GPT_5_6_LONG_CONTEXT_THRESHOLD is priced at that model's long-context rate, not its short one.
   const pt = Math.max(0, promptTokens);
+  const price = matchChatPrice(model, pt);
   const cached = Math.max(0, Math.min(cachedTokens, pt));
   const fresh = Math.max(0, pt - cached);
   const inputCost = (fresh / 1e6) * price.input + (cached / 1e6) * (price.cachedInput ?? price.input);

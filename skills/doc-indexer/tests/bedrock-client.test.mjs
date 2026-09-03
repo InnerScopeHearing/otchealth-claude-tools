@@ -93,6 +93,69 @@ test("converseJson: happy path returns the parsed tool input, mapped usage, and 
   assert.equal(calls, 1);
 });
 
+// ============================== cachePrefix (2026-09-03) ==============================
+// `BEDROCK_CACHE_PREFIX` is not one of withStubbedFetch's tracked ENV_KEYS (it is unrelated to AWS
+// credentials), so these tests save/restore it themselves rather than relying on that helper.
+async function withCachePrefixEnv(value, fn) {
+  const had = Object.prototype.hasOwnProperty.call(process.env, "BEDROCK_CACHE_PREFIX");
+  const original = process.env.BEDROCK_CACHE_PREFIX;
+  if (value === undefined) delete process.env.BEDROCK_CACHE_PREFIX;
+  else process.env.BEDROCK_CACHE_PREFIX = value;
+  try {
+    return await fn();
+  } finally {
+    if (had) process.env.BEDROCK_CACHE_PREFIX = original;
+    else delete process.env.BEDROCK_CACHE_PREFIX;
+  }
+}
+
+test("converseJson: cachePrefix defaults OFF -- system carries only the text block, byte-identical to before this option existed", async () => {
+  let captured;
+  await withCachePrefixEnv(undefined, () =>
+    withStubbedFetch(async (url, opts) => { captured = JSON.parse(opts.body); return bedrockResponse(); }, FAKE_ENV, () =>
+      converseJson({ ...BASE_ARGS, ...NO_RETRY })));
+  assert.deepEqual(captured.system, [{ text: "sys" }]);
+});
+
+test("converseJson: cachePrefix:true inserts a cachePoint block immediately after the system text block", async () => {
+  let captured;
+  await withCachePrefixEnv(undefined, () =>
+    withStubbedFetch(async (url, opts) => { captured = JSON.parse(opts.body); return bedrockResponse(); }, FAKE_ENV, () =>
+      converseJson({ ...BASE_ARGS, ...NO_RETRY, cachePrefix: true })));
+  assert.deepEqual(captured.system, [{ text: "sys" }, { cachePoint: { type: "default" } }]);
+});
+
+test("converseJson: cachePrefix:false stays OFF even when BEDROCK_CACHE_PREFIX=1 is set -- an explicit param always wins over the env flag", async () => {
+  let captured;
+  await withCachePrefixEnv("1", () =>
+    withStubbedFetch(async (url, opts) => { captured = JSON.parse(opts.body); return bedrockResponse(); }, FAKE_ENV, () =>
+      converseJson({ ...BASE_ARGS, ...NO_RETRY, cachePrefix: false })));
+  assert.deepEqual(captured.system, [{ text: "sys" }]);
+});
+
+test("converseJson: BEDROCK_CACHE_PREFIX=1 arms the cache point when cachePrefix itself is omitted (fleet-wide arm/disarm needs no per-call-site change)", async () => {
+  let captured;
+  await withCachePrefixEnv("1", () =>
+    withStubbedFetch(async (url, opts) => { captured = JSON.parse(opts.body); return bedrockResponse(); }, FAKE_ENV, () =>
+      converseJson({ ...BASE_ARGS, ...NO_RETRY })));
+  assert.deepEqual(captured.system, [{ text: "sys" }, { cachePoint: { type: "default" } }]);
+});
+
+test("converseJson: a non-boolean cachePrefix THROWS before any request instead of being coerced or silently falling back to the env flag", async () => {
+  for (const bad of ["1", "true", 1, "false", null]) {
+    await assert.rejects(converseJson({ ...BASE_ARGS, ...NO_RETRY, cachePrefix: bad }), /cachePrefix must be a boolean or omitted/, `cachePrefix=${JSON.stringify(bad)} must be rejected`);
+  }
+});
+
+test("converseJson: cachePrefix does not disturb the forced-tool-use JSON-mode strategy (toolConfig unchanged)", async () => {
+  let captured;
+  await withCachePrefixEnv(undefined, () =>
+    withStubbedFetch(async (url, opts) => { captured = JSON.parse(opts.body); return bedrockResponse(); }, FAKE_ENV, () =>
+      converseJson({ ...BASE_ARGS, ...NO_RETRY, cachePrefix: true })));
+  assert.deepEqual(captured.toolConfig.toolChoice, { tool: { name: "emit_analysis" } });
+  assert.deepEqual(captured.toolConfig.tools[0].toolSpec.inputSchema.json, TOOL_SCHEMA);
+});
+
 test("converseJson: no toolUse block in the response is a CONTENT failure -- returns obj:null, does NOT throw", async () => {
   await withStubbedFetch(async () => bedrockResponse({ toolUse: false, stopReason: "end_turn" }), FAKE_ENV, async () => {
     const res = await converseJson({ ...BASE_ARGS, ...NO_RETRY });
