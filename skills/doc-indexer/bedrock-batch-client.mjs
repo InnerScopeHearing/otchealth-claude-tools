@@ -152,8 +152,19 @@ export function shortJobIdFromArn(jobArn) {
   return m[1];
 }
 
-async function bedrockControlFetch({ region, method, path, bodyStr, timeoutMs, fetchImpl = fetch }) {
-  const creds = await awsCreds();
+async function bedrockControlFetch({ region, method, path, bodyStr, timeoutMs, fetchImpl = fetch, creds: presetCreds }) {
+  // `creds` mirrors kb-memory/sigv4.mjs's signAwsRequest({..., creds: presetCreds}) seam verbatim
+  // (see that file's own doc comment: "mainly for tests, which need a deterministic signature from
+  // fixed inputs and must not depend on this sandbox's real AWS credential resolution"). A caller
+  // that supplies `creds` skips awsCreds() entirely; every real caller in this codebase (enrich.mjs's
+  // buildAndSubmitBedrockBatch()) omits it, so production credential SOURCING is byte-for-byte
+  // unchanged -- this is a test seam, not a behavior change. Added 2026-09-03 because the 12
+  // fetchImpl-stubbed tests below (createModelInvocationJob x6, getModelInvocationJob x6) reached
+  // this awsCreds() call BEFORE their injected fetchImpl ever ran, so they silently depended on
+  // whichever seat happened to run them having real ambient AWS credentials -- passing in a
+  // developer/CTO sandbox (which does) and failing in CI (which correctly has none), i.e. a gate
+  // that could never actually gate this file's request-shape logic in the one place meant to enforce it.
+  const creds = presetCreds || (await awsCreds());
   if (!creds) {
     const err = new Error(
       "bedrock-batch-client: AWS credentials unavailable (checked the ECS task role, " +
@@ -193,6 +204,9 @@ async function bedrockControlFetch({ region, method, path, bodyStr, timeoutMs, f
  * this file's callers already take elsewhere (e.g. enrich.mjs's CONCURRENCY `Math.max(1, ...)`).
  * `clientRequestToken` is optional (idempotency; a caller resuming a specific submission attempt
  * can pass a stable token so a network-retried create is a no-op rather than a duplicate job).
+ * `creds` is an optional pre-resolved `{ak,sk,st}` (see bedrockControlFetch()'s own doc comment) --
+ * omit it in production; tests pass a fixed fake credential so the request-shape assertions below
+ * never depend on this seat's ambient AWS credentials.
  * Returns `{jobArn, jobId}` (jobId = the short id, via shortJobIdFromArn -- a label/log convenience
  * ONLY; pass `jobArn`, never `jobId`, to getModelInvocationJob() below). Throws with the response
  * body's detail on any non-2xx.
@@ -200,7 +214,7 @@ async function bedrockControlFetch({ region, method, path, bodyStr, timeoutMs, f
 export async function createModelInvocationJob({
   jobName, roleArn, modelId, inputS3Uri, outputS3Uri,
   timeoutDurationInHours = BEDROCK_BATCH_MIN_TIMEOUT_HOURS,
-  clientRequestToken, region = "us-east-1", fetchImpl = fetch,
+  clientRequestToken, region = "us-east-1", fetchImpl = fetch, creds,
 } = {}) {
   for (const [k, v] of Object.entries({ jobName, roleArn, modelId, inputS3Uri, outputS3Uri })) {
     if (!v) throw new Error(`bedrock-batch-client: createModelInvocationJob requires "${k}"`);
@@ -214,7 +228,7 @@ export async function createModelInvocationJob({
     timeoutDurationInHours: clampedTimeout,
     ...(clientRequestToken ? { clientRequestToken } : {}),
   };
-  const r = await bedrockControlFetch({ region, method: "POST", path: "/model-invocation-job", bodyStr: JSON.stringify(body), fetchImpl });
+  const r = await bedrockControlFetch({ region, method: "POST", path: "/model-invocation-job", bodyStr: JSON.stringify(body), fetchImpl, creds });
   const text = await r.text();
   if (!r.ok) throw new Error(`bedrock-batch-client: CreateModelInvocationJob ${r.status}: ${text.slice(0, 400)}`);
   let j; try { j = text ? JSON.parse(text) : {}; } catch { j = {}; }
@@ -254,10 +268,14 @@ export async function createModelInvocationJob({
  * (`["model-invocation-job", jobIdentifier]`) tells `canonicalUri()` to treat the ARN as ONE atomic
  * segment and encode it exactly once, which is the fix -- live-verified the same day: HTTP 200,
  * a real job's full status/details returned.
+ *
+ * `creds` is an optional pre-resolved `{ak,sk,st}` (see bedrockControlFetch()'s own doc comment) --
+ * omit it in production; tests pass a fixed fake credential so the request-shape assertions below
+ * never depend on this seat's ambient AWS credentials.
  */
-export async function getModelInvocationJob({ jobIdentifier, region = "us-east-1", fetchImpl = fetch } = {}) {
+export async function getModelInvocationJob({ jobIdentifier, region = "us-east-1", fetchImpl = fetch, creds } = {}) {
   if (!jobIdentifier) throw new Error("bedrock-batch-client: getModelInvocationJob requires jobIdentifier");
-  const r = await bedrockControlFetch({ region, method: "GET", path: ["model-invocation-job", jobIdentifier], fetchImpl });
+  const r = await bedrockControlFetch({ region, method: "GET", path: ["model-invocation-job", jobIdentifier], fetchImpl, creds });
   const text = await r.text();
   if (!r.ok) throw new Error(`bedrock-batch-client: GetModelInvocationJob ${r.status}: ${text.slice(0, 400)}`);
   try { return text ? JSON.parse(text) : {}; } catch { throw new Error(`bedrock-batch-client: GetModelInvocationJob returned unparseable JSON: ${text.slice(0, 200)}`); }

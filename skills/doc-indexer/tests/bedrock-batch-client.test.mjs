@@ -9,6 +9,22 @@
 // file's own header. Every assertion here traces back to one of those citations, not to what the
 // implementation happens to do.
 //
+// HERMETICITY (added 2026-09-03, same day, after a CI run on 6fa059e failed 12 of these tests with
+// "AWS credentials unavailable"): every `fetchImpl`-stubbed call below also passes `creds:
+// FAKE_CREDS` (see that constant's own comment). Without it, bedrockControlFetch() calls the real
+// awsCreds() BEFORE ever reaching the injected fetchImpl, so these tests only ran their real
+// assertions on a seat with ambient AWS credentials already resolvable -- true in an interactive
+// CTO/developer sandbox, false in CI, so CI could pass or fail this file for a reason that had
+// nothing to do with what it actually tests. FAKE_CREDS makes that irrelevant: these tests now
+// genuinely run and genuinely assert their request-shape claims with ZERO AWS credentials present
+// anywhere in the environment (verified by running this exact file under `env -u
+// AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u OTC_AWS_ACCESS_KEY_ID -u
+// OTC_AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN`, both failing before this change and passing
+// after it -- see this PR's own description for the exact before/after counts). The ONE test that
+// deliberately omits `creds` is "both throw a clear 'AWS credentials unavailable' error..." below,
+// which exists specifically to prove the real no-credentials path still fails loud, not silently --
+// giving that one test a fake credential would defeat its entire purpose.
+//
 // The S3-staging wrappers (putBatchInputFile/listBatchOutputFiles/getBatchOutputFileText)
 // deliberately do NOT get a fetchImpl seam here -- they delegate to skills/kb-memory/s3-blob.mjs's
 // s3RequestExplicit/listObjectsExplicit, which (like every other export in that file) talk to the
@@ -29,6 +45,23 @@ import {
   putBatchInputFile, listBatchOutputFiles, getBatchOutputFileText,
   parseBatchOutputJsonl, parseManifest,
 } from "../bedrock-batch-client.mjs";
+
+// FAKE_CREDS: the SAME publicly-documented AWS example credential pair
+// skills/kb-memory/tests/sigv4.test.mjs already uses (its own FAKE_CREDS constant) -- not invented
+// here, reused for consistency. It is AWS's own worked-example access key from the SigV4 signing
+// docs (note the literal "EXAMPLE" baked into both halves); it authenticates to nothing. Passed as
+// `creds` to createModelInvocationJob()/getModelInvocationJob() below (the injectable seam added
+// 2026-09-03 to bedrockControlFetch(), mirroring kb-memory/sigv4.mjs's signAwsRequest({creds:
+// presetCreds}) pattern verbatim) so these tests reach their injected `fetchImpl` deterministically
+// regardless of this seat's ambient AWS credentials -- see bedrock-batch-client.mjs's own doc
+// comment on bedrockControlFetch() for why that matters: without this, every test below that
+// exercises createModelInvocationJob/getModelInvocationJob's real request-building logic silently
+// depended on awsCreds() resolving something from the environment first, which is true on a
+// developer/CTO sandbox and false in CI -- so CI could never actually run the assertions this file
+// exists to make (a gate that cannot fail is not a gate). This is a TEST credential only; it never
+// reaches production code, since every production call site (enrich.mjs's
+// buildAndSubmitBedrockBatch()) omits `creds` and falls through to the real awsCreds() unchanged.
+const FAKE_CREDS = { ak: "AKIAIOSFODNN7EXAMPLE", sk: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", st: null };
 
 // =========================================================================================
 // status classification (verbatim from GetModelInvocationJob's documented status enum)
@@ -136,7 +169,7 @@ test("createModelInvocationJob: POSTs to the exact control-plane host/path from 
   const fetchImpl = fakeCreateResponse();
   await createModelInvocationJob({
     jobName: "test-job", roleArn: "arn:aws:iam::900915535335:role/TestRole", modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    inputS3Uri: "s3://bucket/in.jsonl", outputS3Uri: "s3://bucket/out/", region: "us-east-1", fetchImpl,
+    inputS3Uri: "s3://bucket/in.jsonl", outputS3Uri: "s3://bucket/out/", region: "us-east-1", fetchImpl, creds: FAKE_CREDS,
   });
   const call = fakeCreateResponse.lastCall;
   assert.equal(new URL(call.url).host, "bedrock.us-east-1.amazonaws.com");
@@ -148,7 +181,7 @@ test("createModelInvocationJob: body matches the documented shape exactly -- mod
   const fetchImpl = fakeCreateResponse();
   await createModelInvocationJob({
     jobName: "test-job", roleArn: "arn:aws:iam::900915535335:role/TestRole", modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    inputS3Uri: "s3://bucket/in.jsonl", outputS3Uri: "s3://bucket/out/", timeoutDurationInHours: 48, region: "us-east-1", fetchImpl,
+    inputS3Uri: "s3://bucket/in.jsonl", outputS3Uri: "s3://bucket/out/", timeoutDurationInHours: 48, region: "us-east-1", fetchImpl, creds: FAKE_CREDS,
   });
   const body = JSON.parse(fakeCreateResponse.lastCall.opts.body);
   assert.deepEqual(body, {
@@ -167,13 +200,13 @@ test("createModelInvocationJob: timeoutDurationInHours clamps into AWS's documen
   // (fakeCreateResponse.lastCall), not on the returned fetchImpl closure -- read it back from
   // there after each call, not from the local `low`/`high`/`dflt` bindings (which are just the
   // returned functions and carry no properties of their own).
-  await createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", timeoutDurationInHours: 1, fetchImpl: fakeCreateResponse() });
+  await createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", timeoutDurationInHours: 1, fetchImpl: fakeCreateResponse(), creds: FAKE_CREDS });
   assert.equal(JSON.parse(fakeCreateResponse.lastCall.opts.body).timeoutDurationInHours, 24);
 
-  await createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", timeoutDurationInHours: 999, fetchImpl: fakeCreateResponse() });
+  await createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", timeoutDurationInHours: 999, fetchImpl: fakeCreateResponse(), creds: FAKE_CREDS });
   assert.equal(JSON.parse(fakeCreateResponse.lastCall.opts.body).timeoutDurationInHours, 168);
 
-  await createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", fetchImpl: fakeCreateResponse() });
+  await createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", fetchImpl: fakeCreateResponse(), creds: FAKE_CREDS });
   assert.equal(JSON.parse(fakeCreateResponse.lastCall.opts.body).timeoutDurationInHours, 24, "omitted timeout defaults to the minimum, not a hardcoded 0 or undefined");
 });
 
@@ -181,6 +214,7 @@ test("createModelInvocationJob: returns {jobArn, jobId} parsed from a real 200 r
   const res = await createModelInvocationJob({
     jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/",
     fetchImpl: fakeCreateResponse("arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/ffffeeeeaaaa"),
+    creds: FAKE_CREDS,
   });
   assert.deepEqual(res, { jobArn: "arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/ffffeeeeaaaa", jobId: "ffffeeeeaaaa" });
 });
@@ -188,7 +222,7 @@ test("createModelInvocationJob: returns {jobArn, jobId} parsed from a real 200 r
 test("createModelInvocationJob: throws with the response body's detail on a non-2xx", async () => {
   const fetchImpl = async () => new Response("Input validation failed: modelId not found", { status: 400 });
   await assert.rejects(
-    () => createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", fetchImpl }),
+    () => createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", fetchImpl, creds: FAKE_CREDS }),
     /CreateModelInvocationJob 400.*Input validation failed/s,
   );
 });
@@ -196,7 +230,7 @@ test("createModelInvocationJob: throws with the response body's detail on a non-
 test("createModelInvocationJob: throws (never a silent undefined) when the 2xx response carries no jobArn", async () => {
   const fetchImpl = async () => new Response("{}", { status: 200 });
   await assert.rejects(
-    () => createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", fetchImpl }),
+    () => createModelInvocationJob({ jobName: "t", roleArn: "r", modelId: "m", inputS3Uri: "s3://b/i.jsonl", outputS3Uri: "s3://b/o/", fetchImpl, creds: FAKE_CREDS }),
     /returned no jobArn/,
   );
 });
@@ -222,7 +256,7 @@ test("getModelInvocationJob: GETs the exact documented path with the jobIdentifi
     seen = { url: String(url), method: opts?.method || "GET" };
     return new Response(JSON.stringify({ status: "InProgress", totalRecordCount: 100, processedRecordCount: 40 }), { status: 200 });
   };
-  const job = await getModelInvocationJob({ jobIdentifier: "abc123def456", region: "us-east-1", fetchImpl });
+  const job = await getModelInvocationJob({ jobIdentifier: "abc123def456", region: "us-east-1", fetchImpl, creds: FAKE_CREDS });
   assert.equal(new URL(seen.url).host, "bedrock.us-east-1.amazonaws.com");
   assert.equal(new URL(seen.url).pathname, "/model-invocation-job/abc123def456");
   assert.equal(seen.method, "GET");
@@ -233,18 +267,18 @@ test("getModelInvocationJob: GETs the exact documented path with the jobIdentifi
 test("getModelInvocationJob: returns the response object AS-IS, no reshaping (a caller reading an unmentioned field still gets it)", async () => {
   const raw = { status: "Completed", totalRecordCount: 5, processedRecordCount: 5, successRecordCount: 5, errorRecordCount: 0, jobArn: "x", jobName: "y", modelInvocationType: "Converse", someFutureFieldNotYetDocumented: "z" };
   const fetchImpl = async () => new Response(JSON.stringify(raw), { status: 200 });
-  const job = await getModelInvocationJob({ jobIdentifier: "abc123def456", fetchImpl });
+  const job = await getModelInvocationJob({ jobIdentifier: "abc123def456", fetchImpl, creds: FAKE_CREDS });
   assert.deepEqual(job, raw);
 });
 
 test("getModelInvocationJob: throws on a non-2xx (a 404 for an unknown job id is a real error, never 'not ready yet')", async () => {
   const fetchImpl = async () => new Response("ResourceNotFoundException", { status: 404 });
-  await assert.rejects(() => getModelInvocationJob({ jobIdentifier: "abc123def456", fetchImpl }), /GetModelInvocationJob 404/);
+  await assert.rejects(() => getModelInvocationJob({ jobIdentifier: "abc123def456", fetchImpl, creds: FAKE_CREDS }), /GetModelInvocationJob 404/);
 });
 
 test("getModelInvocationJob: throws on an unparseable 2xx body rather than returning garbage", async () => {
   const fetchImpl = async () => new Response("not json", { status: 200 });
-  await assert.rejects(() => getModelInvocationJob({ jobIdentifier: "abc123def456", fetchImpl }), /unparseable JSON/);
+  await assert.rejects(() => getModelInvocationJob({ jobIdentifier: "abc123def456", fetchImpl, creds: FAKE_CREDS }), /unparseable JSON/);
 });
 
 test("getModelInvocationJob: requires jobIdentifier before any network call", async () => {
@@ -262,7 +296,7 @@ test("getModelInvocationJob: a full jobArn (containing '/' and ':') produces the
   const arn = "arn:aws:bedrock:us-east-1:900915535335:model-invocation-job/tcf29in6w6ts";
   let seenPath = null;
   const fetchImpl = async (url) => { seenPath = new URL(url).pathname; return new Response(JSON.stringify({ status: "Completed" }), { status: 200 }); };
-  await getModelInvocationJob({ jobIdentifier: arn, region: "us-east-1", fetchImpl });
+  await getModelInvocationJob({ jobIdentifier: arn, region: "us-east-1", fetchImpl, creds: FAKE_CREDS });
   assert.equal(seenPath, "/model-invocation-job/arn%3Aaws%3Abedrock%3Aus-east-1%3A900915535335%3Amodel-invocation-job%2Ftcf29in6w6ts");
   assert.doesNotMatch(seenPath, /%25/, "must never contain a re-encoded percent sign -- the exact double-encoding bug this test locks against");
 });
@@ -270,7 +304,7 @@ test("getModelInvocationJob: a full jobArn (containing '/' and ':') produces the
 test("getModelInvocationJob: a bare short id (no '/', no ':') is byte-identical to the pre-fix path shape -- the array-input change is additive, not a regression for the simple case", async () => {
   let seenPath = null;
   const fetchImpl = async (url) => { seenPath = new URL(url).pathname; return new Response(JSON.stringify({ status: "InProgress" }), { status: 200 }); };
-  await getModelInvocationJob({ jobIdentifier: "abc123def456", fetchImpl });
+  await getModelInvocationJob({ jobIdentifier: "abc123def456", fetchImpl, creds: FAKE_CREDS });
   assert.equal(seenPath, "/model-invocation-job/abc123def456");
 });
 
