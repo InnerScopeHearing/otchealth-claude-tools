@@ -268,3 +268,16 @@ test("writeTokenCache tightens a PRE-EXISTING cache directory to owner-only (mkd
     assert.equal((await stat(mod.cachePathFor(dir, "cto"))).mode & 0o777, 0o600, "the cache file itself is owner-only");
   } finally { await rm(base, { recursive: true, force: true }); }
 });
+
+// Opt-in LIVE integration test (never runs in CI or by default): proves the probe contract against the
+// real gateway, not a mock. Needs the seat's AWS/SSM credentials to mint a real lane token.
+//   GATEWAY_LIVE_PROBE=1 SECRET_BACKEND=ssm node --test skills/gateway-connect/tests/headers-helper.test.mjs
+test("LIVE (opt-in, GATEWAY_LIVE_PROBE=1): probeToken returns true for a freshly minted lane token and false for a bogus or empty bearer against the real gateway", { skip: !process.env.GATEWAY_LIVE_PROBE }, async () => {
+  const mod = await import(new URL("../headers-helper.mjs", import.meta.url).href);
+  const { mintToken } = await import(new URL("../connect.mjs", import.meta.url).href);
+  const lane = process.env.GATEWAY_LIVE_PROBE_LANE || "cto";
+  const { token } = await mintToken(lane);
+  assert.equal(await mod.probeToken(token), true, "a real, fresh token must be accepted");
+  assert.equal(await mod.probeToken("not-a-token"), false, "a bogus bearer must be rejected as 401/403, never inconclusive");
+  assert.equal(await mod.probeToken(""), false, "an empty bearer must be rejected as 401/403, never inconclusive");
+});

@@ -6,7 +6,7 @@ description: One-and-done connect (+ auto-refresh) of an agent's Claude Code Des
 # gateway-connect — put an agent's Desktop session on its gateway lane, durably
 
 ## The problem it solves
-The MCP gateway (`mcp.otchealth.app`) issues **1-hour** access tokens via the `client_credentials` grant, and each lane's token carries its agent identity so the gateway ring-gates privileged RAG (`kb_search_privileged` returns only that lane's rooms). A static bearer header expires hourly, so an agent that pasted a token drops off after an hour. This skill mints the lane token, wires the gateway into Claude Code, verifies, and (`--watch`) auto-refreshes.
+The MCP gateway (`mcp.otchealth.app`) issues **24-hour** access tokens via the `client_credentials` grant (`OAUTH_CC_TTL_SECONDS`, 86400 since 2026-07-16; they were 1-hour before that), and each lane's token carries its agent identity so the gateway ring-gates privileged RAG (`kb_search_privileged` returns only that lane's rooms). A static bearer header expires when that TTL runs out, so an agent that pasted a token drops off after a day. This skill mints the lane token, wires the gateway into Claude Code, verifies, and (`--watch`) auto-refreshes.
 
 ## Use (run on the agent's own Desktop — where `claude` + the claude-driver SA live)
 ```

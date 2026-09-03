@@ -4,7 +4,7 @@
 //
 // WHY: the gateway (mcp.otchealth.app) issues short-lived (24h since 2026-07-16, OAUTH_CC_TTL_SECONDS; was 1h) access tokens via the client_credentials
 // grant, and each lane's token carries its agent identity so the gateway ring-gates privileged RAG. A
-// static bearer header therefore expires hourly. This mints the lane token, registers the gateway as a
+// static bearer header therefore expires when that TTL runs out. This mints the lane token, registers the gateway as a
 // Claude Code MCP server, verifies the lane sees its tools, and (in --watch) re-mints just before expiry.
 //
 // CRED SOURCE (Azure-first, off GCP): lane client_id/secret are read from AZURE KEY VAULT via an Azure
