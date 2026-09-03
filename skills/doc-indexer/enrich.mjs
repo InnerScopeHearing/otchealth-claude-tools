@@ -124,7 +124,7 @@
 // SEARCH_BACKEND (2026-08-16, closes a real gap: 0% entity-field coverage across all 66,668 documents
 // on the live OpenSearch brain, because this file only ever resolved AZURE_SEARCH_ENDPOINT /
 // azure-search-admin-key and hard-exited without them -- verified live before this was added):
-//   --search-backend azure       (default, byte-for-byte the pre-existing behavior above: blob custom
+//   --search-backend azure       (RETIRED, no longer the default -- see FND-20260903-bf43: blob custom
 //                                 metadata + the Azure native pull-indexer/skillset projection chain)
 //   --search-backend opensearch  (run ONLY: a DIRECT partial-update of every existing chunk document
 //                                 for a parent, via the bulk API's "update" action -- NEVER index/PUT
@@ -209,7 +209,14 @@ const BEDROCK_REGION = takeVal("--bedrock-region", process.env.BEDROCK_REGION ||
 const MODEL = takeVal("--model", process.env.ENRICH_MODEL || defaultModelFor(LLM_PROVIDER, process.env.ENRICH_BEDROCK_MODEL));
 const VERIFY_PATH = takeVal("--path");
 const WAIT_MIN = parseInt(takeVal("--wait-minutes", "0"), 10) || 0;
-const BACKEND = (takeVal("--search-backend", process.env.SEARCH_BACKEND || "azure") || "azure").toLowerCase();
+// DEFAULT CORRECTED 2026-09-03 (FND-20260903-bf43): this defaulted to "azure", a PERMANENTLY
+// DELETED service (subscription 55c84f6b, 2026-08-13), so any caller that did not set
+// SEARCH_BACKEND silently targeted a dead backend instead of failing loud. It was masked only
+// because session-start.sh and every ECS task def set the variable explicitly. Note the
+// ASYMMETRY this fixes: STORAGE_BACKEND below already defaulted to the live "s3" -- the AWS
+// default-flip (claude-tools#466) moved storage and missed search. "azure" remains an accepted
+// VALUE (the branch still exists and older receipts reference it); only the default moved.
+const BACKEND = (takeVal("--search-backend", process.env.SEARCH_BACKEND || "opensearch") || "opensearch").toLowerCase();
 if (BACKEND !== "azure" && BACKEND !== "opensearch") {
   console.error(`--search-backend must be "azure" or "opensearch" (got "${BACKEND}").`);
   process.exit(2);
@@ -1542,7 +1549,7 @@ flags: --profile finance|legal|commerce|commons --domain-pack <name> --azure-acc
        --llm-provider openai|azure|bedrock (default openai; also ENRICH_PROVIDER/ENRICH_LLM_PROVIDER)
        --bedrock-region r (default us-east-1; also BEDROCK_REGION) -- see PILOT-bedrock-enrich.md before using bedrock on a real backfill
        --bedrock-batch (also ENRICH_BEDROCK_BATCH/BEDROCK_BATCH=1) -- Bedrock batch inference (~half price, 24h+ turnaround), 'run' only, requires --llm-provider bedrock; --dry-run shows what would be submitted + an estimated cost without submitting; see SKILL.md's "Bedrock BATCH lane" section
-       --search-backend azure|opensearch (default azure; opensearch supported by 'run' and 'verify' only)`);
+       --search-backend opensearch|azure (default opensearch; azure is the retired backend, kept as an accepted value only)`);
     process.exit(2);
   }
 } catch (e) {
