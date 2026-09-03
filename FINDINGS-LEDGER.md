@@ -992,3 +992,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T05:23:29.657Z
 - **Closed:** (open)
+
+### finding:FND-20260903-9cd5 severity:medium status:open | gateway llm_azure task=classify (and summarize/synthesize/complete) with jsonMode=true fails on every tier with OpenAI 400 "'messages' must contain the word 'json'" because those task prompts never mention JSON; the tool returns {output:'',error} in-band; the tool description itself recommends jsonMode for classify pipelines
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-03-wave3-landing-and-gpt56-cutover.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T05:36:18.111Z
+- **Closed:** (open)
