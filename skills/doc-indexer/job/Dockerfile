@@ -104,6 +104,12 @@ COPY skills/datadog/ /app/skills/datadog/
 # schedule targets contradiction-scan (it is deliberately disarmed pending Matt's arming decision).
 # Copying a pure library arms nothing -- it only removes the trap that would fire on the day it is armed.
 COPY skills/semantic-trust/ /app/skills/semantic-trust/
+# ocr-sweep: the Textract OCR sweep behind the docintel-ocr-sweep job. claude-tools#540 (2026-09-03)
+# ported it off the dead Azure Document Intelligence but did not add it to this image, so a task def
+# that points doc-indexer:latest at /app/skills/ocr-sweep/sweep.mjs would fail at exec with
+# MODULE_NOT_FOUND before the first log line (the silent-success class again). Its only cross-skill
+# imports, setup/aws-sigv4.mjs and kb-memory/s3-blob.mjs, are already copied above.
+COPY skills/ocr-sweep/ /app/skills/ocr-sweep/
 # Bake the one dependency (xlsx) so a scheduled run never npm-installs mid-job. innd-stock.mjs keeps
 # its lazy-install fallback for a fresh checkout, but production should never need it.
 RUN cd /app/skills/innd-stock && npm install --omit=dev --no-audit --no-fund
