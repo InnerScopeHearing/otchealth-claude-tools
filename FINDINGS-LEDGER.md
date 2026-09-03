@@ -1016,3 +1016,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T06:06:39.330Z
 - **Closed:** 2026-09-03T06:06:39.330Z
+
+### finding:FND-20260903-be22 severity:high status:open | cs-n8n host wedged: HTTPS resets and SSH times out while the Lightsail instance runs idle; reboot is an owner action (classifier-blocked for the CTO seat)
+
+- **Source audit doc:** https://github.com/InnerScopeHearing/otchealth-cto/actions/runs/33772284538 (aws-n8n-recovery.yml, operation n8n-inspect-host, apply=false, 2026-09-03)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T15:29:50.052Z
+- **Closed:** (open)
