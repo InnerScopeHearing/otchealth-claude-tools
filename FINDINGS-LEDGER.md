@@ -976,3 +976,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** node --check clean; claude-tools CI 8/8 green on #535; squash-merged eff8055; two ledger entries written (20260902-122-a304 fact, 20260902-123-e761 pitfall)
 - **Opened:** 2026-09-02T22:19:51.254Z
 - **Closed:** 2026-09-02T22:19:51.254Z
+
+### finding:FND-20260903-8b12 severity:high status:open | gateway-connect register() leaked a live lane bearer into SessionStart hook output: execFileSync Error.message carries the full argv (Authorization header) and the catch printed it raw; also non-idempotent remove-then-add (local scope is per-cwd; scope-less remove can refuse) with stdio ignored so the real CLI reason was invisible
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-03-wave3-landing-and-gpt56-cutover.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-03T05:23:27.279Z
+- **Closed:** (open)
