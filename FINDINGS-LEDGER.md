@@ -1144,3 +1144,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T20:38:45.829Z
 - **Closed:** (open)
+
+### finding:FND-20260904-1732 severity:low status:open | Observability: CloudWatch /ecs/otchealth filter-log-events returned ~1 line for the trailing 15 min while the gateway was actively serving tool calls from this seat; either delivery lag, a second stream, or a query artifact. Unresolved; verify tool_call_start coverage before relying on this view for incident forensics
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T20:38:48.425Z
+- **Closed:** (open)
