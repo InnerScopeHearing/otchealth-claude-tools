@@ -1112,3 +1112,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T18:57:02.469Z
 - **Closed:** (open)
+
+### finding:FND-20260904-d26b severity:high status:open | Gateway consent interstitial: pending-auth TTL 10 min is shorter than the 30 min setup-code TTL, and the 'expired' dead-end page does not tell the user a NEW page is required; users re-submit fresh codes into a spent page. Fix in flight: otchealth-mcp-server branch claude/consent-page-ttl-copy
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T20:38:37.631Z
+- **Closed:** (open)
