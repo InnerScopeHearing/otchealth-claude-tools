@@ -1113,13 +1113,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-04T18:57:02.469Z
 - **Closed:** 2026-09-04T21:21:15.577Z
 
-### finding:FND-20260904-d26b severity:high status:open | Gateway consent interstitial: pending-auth TTL 10 min is shorter than the 30 min setup-code TTL, and the 'expired' dead-end page does not tell the user a NEW page is required; users re-submit fresh codes into a spent page. Fix in flight: otchealth-mcp-server branch claude/consent-page-ttl-copy
+### finding:FND-20260904-d26b severity:high status:fixed | Gateway consent interstitial: pending-auth TTL 10 min is shorter than the 30 min setup-code TTL, and the 'expired' dead-end page does not tell the user a NEW page is required; users re-submit fresh codes into a spent page. Fix in flight: otchealth-mcp-server branch claude/consent-page-ttl-copy
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** ff929c1c8e38a77e16b00fcdd15199f640896d5e
+- **Verified by:** otchealth-mcp-server#288 (b823c14) deployed live as gateway task-def 46 = otchealth-mcp-gateway:ff929c1 on service otchealth-gateway (rev 45->46 real diff = the image line only; ECS_STABLE, rollout COMPLETED, /health ok, 22:42Z 2026-09-04). Proven code-free against mcp.otchealth.app: consent page now renders 'This page is valid for about 29 more minutes, until HH:MM UTC.' (30-min window derived from setup-codes DEFAULT_TTL_MINUTES, was 10); a wrong code re-renders with the validity line intact; a spent/unknown pending id returns the new dead-end copy 'click Authenticate again, and enter your setup code on the new page that opens. A code will not work on this page.' with no form; full elevate path (fresh cto code -> 302 -> auth code -> token -> 202 tools incl. privileged) passes.
 - **Opened:** 2026-09-04T20:38:37.631Z
-- **Closed:** (open)
+- **Closed:** 2026-09-04T22:48:55.376Z
 
 ### finding:FND-20260904-bc7b severity:medium status:open | Catalog honesty: connector_setup_code_create is LISTED on the cfo and clo ChatGPT seats (202-tool ship surface) but CALLER_ALLOWLIST=['cto','exec'] refuses them at call time; listing is not callability. Either hide it from non-allowlisted lanes or document it (personas now document it)
 
