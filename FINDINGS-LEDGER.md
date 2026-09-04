@@ -1136,3 +1136,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T20:38:43.085Z
 - **Closed:** (open)
+
+### finding:FND-20260904-3651 severity:medium status:open | Installed skills under /root/.claude/skills lack setup/aws-sigv4.mjs (imported by kb-memory/aws-secret.mjs), so mem.mjs and regression-ledger ledger.mjs die with ERR_MODULE_NOT_FOUND in-session; SessionStart reported 'kb-memory unavailable'. Workaround: run from the otchealth-claude-tools checkout. Fix: install/sync setup/ alongside skills/
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T20:38:45.829Z
+- **Closed:** (open)
