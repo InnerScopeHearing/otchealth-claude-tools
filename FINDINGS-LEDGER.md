@@ -1152,3 +1152,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T20:38:48.425Z
 - **Closed:** (open)
+
+### finding:FND-20260904-6d4d severity:low status:open | PR otchealth-mcp-server#287 (connector-surface tool annotations, CI green) is deliberately held until Matt confirms his Codex connection; until deployed, Codex 'writes' approval mode cannot see readOnlyHint and prompts on every gateway call
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T20:38:50.788Z
+- **Closed:** (open)
