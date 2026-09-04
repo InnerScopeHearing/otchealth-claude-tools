@@ -1120,3 +1120,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T20:38:37.631Z
 - **Closed:** (open)
+
+### finding:FND-20260904-bc7b severity:medium status:open | Catalog honesty: connector_setup_code_create is LISTED on the cfo and clo ChatGPT seats (202-tool ship surface) but CALLER_ALLOWLIST=['cto','exec'] refuses them at call time; listing is not callability. Either hide it from non-allowlisted lanes or document it (personas now document it)
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T20:38:40.567Z
+- **Closed:** (open)
