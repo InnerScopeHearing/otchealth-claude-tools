@@ -1104,3 +1104,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T18:56:59.906Z
 - **Closed:** (open)
+
+### finding:FND-20260904-2f80 severity:low status:open | A self-referential node_modules SYMLINK was committed into otchealth-mcp-server and broke test runs from the primary checkout. The repo's .gitignore lists 'node_modules/' WITH a trailing slash, which matches a directory but NOT a symlink named node_modules, so the symlink slipped past the ignore rule and was committed on 2026-09-03. It points at its own absolute path, so any resolution fails with ELOOP and every npm/node test invocation from that checkout dies. It was removed from main incidentally by PR #286 (the loopback fix) because that branch's worktree had the stray link deleted before staging. FIX: add a slashless 'node_modules' entry to .gitignore so both forms are ignored, and consider a CI guard rejecting any committed symlink that points inside the repo. Worth noting the near-miss: PR #287's branch predates the removal and still carried the link, so a careless merge could have reinstated it.
+
+- **Source audit doc:** git ls-tree + git log -- node_modules on otchealth-mcp-server, 2026-09-04
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T18:57:02.469Z
+- **Closed:** (open)
