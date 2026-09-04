@@ -1105,13 +1105,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-04T18:56:59.906Z
 - **Closed:** (open)
 
-### finding:FND-20260904-2f80 severity:low status:open | A self-referential node_modules SYMLINK was committed into otchealth-mcp-server and broke test runs from the primary checkout. The repo's .gitignore lists 'node_modules/' WITH a trailing slash, which matches a directory but NOT a symlink named node_modules, so the symlink slipped past the ignore rule and was committed on 2026-09-03. It points at its own absolute path, so any resolution fails with ELOOP and every npm/node test invocation from that checkout dies. It was removed from main incidentally by PR #286 (the loopback fix) because that branch's worktree had the stray link deleted before staging. FIX: add a slashless 'node_modules' entry to .gitignore so both forms are ignored, and consider a CI guard rejecting any committed symlink that points inside the repo. Worth noting the near-miss: PR #287's branch predates the removal and still carried the link, so a careless merge could have reinstated it.
+### finding:FND-20260904-2f80 severity:low status:fixed | A self-referential node_modules SYMLINK was committed into otchealth-mcp-server and broke test runs from the primary checkout. The repo's .gitignore lists 'node_modules/' WITH a trailing slash, which matches a directory but NOT a symlink named node_modules, so the symlink slipped past the ignore rule and was committed on 2026-09-03. It points at its own absolute path, so any resolution fails with ELOOP and every npm/node test invocation from that checkout dies. It was removed from main incidentally by PR #286 (the loopback fix) because that branch's worktree had the stray link deleted before staging. FIX: add a slashless 'node_modules' entry to .gitignore so both forms are ignored, and consider a CI guard rejecting any committed symlink that points inside the repo. Worth noting the near-miss: PR #287's branch predates the removal and still carried the link, so a careless merge could have reinstated it.
 
 - **Source audit doc:** git ls-tree + git log -- node_modules on otchealth-mcp-server, 2026-09-04
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** ff929c1c8e38a77e16b00fcdd15199f640896d5e
+- **Verified by:** otchealth-mcp-server#287 (squash ff929c1) adds the slashless 'node_modules' .gitignore entry alongside the existing 'node_modules/' one, and explicitly git-rm'd the tracked self-referential symlink the branch still carried (blob 6c68b87, commit 3e6a26f on the branch) rather than relying on 3-way merge semantics; verified post-merge that git ls-tree origin/main node_modules is empty. NOT built: the suggested CI guard rejecting committed intra-repo symlinks; the ignore rule closes the slip path, the guard remains an optional hardening.
 - **Opened:** 2026-09-04T18:57:02.469Z
-- **Closed:** (open)
+- **Closed:** 2026-09-04T21:21:15.577Z
 
 ### finding:FND-20260904-d26b severity:high status:open | Gateway consent interstitial: pending-auth TTL 10 min is shorter than the 30 min setup-code TTL, and the 'expired' dead-end page does not tell the user a NEW page is required; users re-submit fresh codes into a spent page. Fix in flight: otchealth-mcp-server branch claude/consent-page-ttl-copy
 
