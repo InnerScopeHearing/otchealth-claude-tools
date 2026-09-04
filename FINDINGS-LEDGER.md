@@ -1088,3 +1088,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-03T18:20:35.216Z
 - **Closed:** (open)
+
+### finding:FND-20260904-4b1e severity:medium status:open | The gateway's /register endpoint logs ONLY on success, so every rejection is invisible. Live cost, 2026-09-04: the operator's ChatGPT desktop app (Codex MCP client) failed to connect and CloudWatch showed no oauth_register line at all, which read as 'the client never reached us' and sent diagnosis down the wrong path. The client HAD reached us and been refused 400 invalid_redirect_uri; that return sits above the logger.info call, so it emits nothing. This is the fleet's recurring silent-failure shape applied to an auth endpoint, and it is worse here because a rejection is exactly the event an operator needs to see. FIX: log every /register rejection at warn with the reason code and the offending field (the redirect_uri is caller-supplied and not a secret), so a failed connect is a log read rather than an investigation. Found while fixing FND-20260904-7c2a.
+
+- **Source audit doc:** live CloudWatch /ecs/otchealth + src/server/oauth.ts read, 2026-09-04
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T18:56:42.867Z
+- **Closed:** (open)
