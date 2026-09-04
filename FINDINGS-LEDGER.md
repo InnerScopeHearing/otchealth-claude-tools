@@ -1161,10 +1161,10 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-04T20:38:50.788Z
 - **Closed:** (open)
 
-### finding:FND-20260904-151b severity:medium status:open | otchealth-cto main branch protection requires status check 'check' (strict) but the only workflow emitting it, recovery-workflow-guard.yml, is path-filtered to 3 files; every PR that touches anything else (all docs/runbook PRs, incl. #176) can never report the required check and is mergeable only by admin bypass (enforce_admins=false). Fix: always run the 'check' job on pull_request and gate the guard logic on a changed-paths step, or drop the required context
+### finding:FND-20260904-151b severity:medium status:fixed | otchealth-cto main branch protection requires status check 'check' (strict) but the only workflow emitting it, recovery-workflow-guard.yml, is path-filtered to 3 files; every PR that touches anything else (all docs/runbook PRs, incl. #176) can never report the required check and is mergeable only by admin bypass (enforce_admins=false). Fix: always run the 'check' job on pull_request and gate the guard logic on a changed-paths step, or drop the required context
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** c2b485556d9c005d6bd0e45cbf1df721f5f3d4bc
+- **Verified by:** otchealth-cto #177 merged (c2b4855): recovery-workflow-guard.yml pull_request trigger unfiltered + scope step. Proof on a docs-only PR: #176 branch updated from main, guard run 33918291918 (pull_request event) = scope step ran, Install PyYAML SKIPPED, checker SKIPPED, job SUCCESS; #176 then squash-merged a282947 through branch protection with 'check' green, no admin bypass. Guarded path also proven: #177 runs 33918109535/33918145028 and main run 33918266833 all success with the checker executed.
 - **Opened:** 2026-09-04T20:47:16.476Z
-- **Closed:** (open)
+- **Closed:** 2026-09-04T20:52:38.887Z
