@@ -1096,3 +1096,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T18:56:42.867Z
 - **Closed:** (open)
+
+### finding:FND-20260904-9d33 severity:low status:open | The gateway's unauthenticated 401 body names an internal environment variable. Any anonymous caller to POST /mcp gets a message telling them to provide a bearer token and naming the specific env var the gateway reads it from. No secret VALUE leaks, but the name of an internal credential binding should not be in a public error string: it tells an unauthenticated stranger which integration exists and what the credential is called. FIX: return a generic 'missing or invalid bearer token' with the WWW-Authenticate challenge (which is correct and must stay) and drop the variable name. Observed live 2026-09-04 while diagnosing FND-20260904-7c2a.
+
+- **Source audit doc:** live curl POST /mcp against mcp.otchealth.app, 2026-09-04
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T18:56:59.906Z
+- **Closed:** (open)
