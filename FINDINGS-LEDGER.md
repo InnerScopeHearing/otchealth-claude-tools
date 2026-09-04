@@ -1128,3 +1128,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T20:38:40.567Z
 - **Closed:** (open)
+
+### finding:FND-20260904-ccef severity:medium status:open | DECISION (Matt): the four privileged ChatGPT seats (cto, cfo, clo, developer) are tool-identical at 202 tools (registry.ts:372 cto||developer||EXEC_RING); separation among them is persona-only, ring checks still apply at call time. Keep the shared ship surface (simplicity) or curate per role like coo/cro (blast radius)
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T20:38:43.085Z
+- **Closed:** (open)
