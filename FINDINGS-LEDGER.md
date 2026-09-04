@@ -1160,3 +1160,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-04T20:38:50.788Z
 - **Closed:** (open)
+
+### finding:FND-20260904-151b severity:medium status:open | otchealth-cto main branch protection requires status check 'check' (strict) but the only workflow emitting it, recovery-workflow-guard.yml, is path-filtered to 3 files; every PR that touches anything else (all docs/runbook PRs, incl. #176) can never report the required check and is mergeable only by admin bypass (enforce_admins=false). Fix: always run the 'check' job on pull_request and gate the guard logic on a changed-paths step, or drop the required context
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-04T20:47:16.476Z
+- **Closed:** (open)
