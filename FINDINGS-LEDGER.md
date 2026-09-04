@@ -1153,13 +1153,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-04T20:38:48.425Z
 - **Closed:** (open)
 
-### finding:FND-20260904-6d4d severity:low status:open | PR otchealth-mcp-server#287 (connector-surface tool annotations, CI green) is deliberately held until Matt confirms his Codex connection; until deployed, Codex 'writes' approval mode cannot see readOnlyHint and prompts on every gateway call
+### finding:FND-20260904-6d4d severity:low status:fixed | PR otchealth-mcp-server#287 (connector-surface tool annotations, CI green) is deliberately held until Matt confirms his Codex connection; until deployed, Codex 'writes' approval mode cannot see readOnlyHint and prompts on every gateway call
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-04-codex-fleet-review.md
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** ff929c1c8e38a77e16b00fcdd15199f640896d5e
+- **Verified by:** PR #287 merged (ff929c1) and DEPLOYED as gateway rev 46 (22:42Z 2026-09-04). Live-verified on mcp.otchealth.app: bare DCR external-read surface = 13 tools, 13/13 carrying readOnlyHint; elevated cto ship surface = 202 tools, 202/202 carrying annotations; brain_search carries {readOnlyHint:true,...} and omits outputSchema/title. Codex writes-mode can now pass read-only gateway tools silently. Rollback if a client regresses = CONNECTOR_ANNOTATIONS_MODE=off on the task def (env change + rollout, no image rebuild).
 - **Opened:** 2026-09-04T20:38:50.788Z
-- **Closed:** (open)
+- **Closed:** 2026-09-04T22:48:57.741Z
 
 ### finding:FND-20260904-151b severity:medium status:fixed | otchealth-cto main branch protection requires status check 'check' (strict) but the only workflow emitting it, recovery-workflow-guard.yml, is path-filtered to 3 files; every PR that touches anything else (all docs/runbook PRs, incl. #176) can never report the required check and is mergeable only by admin bypass (enforce_admins=false). Fix: always run the 'check' job on pull_request and gate the guard logic on a changed-paths step, or drop the required context
 
