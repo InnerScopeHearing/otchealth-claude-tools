@@ -1089,13 +1089,13 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-03T18:20:35.216Z
 - **Closed:** (open)
 
-### finding:FND-20260904-4b1e severity:medium status:open | The gateway's /register endpoint logs ONLY on success, so every rejection is invisible. Live cost, 2026-09-04: the operator's ChatGPT desktop app (Codex MCP client) failed to connect and CloudWatch showed no oauth_register line at all, which read as 'the client never reached us' and sent diagnosis down the wrong path. The client HAD reached us and been refused 400 invalid_redirect_uri; that return sits above the logger.info call, so it emits nothing. This is the fleet's recurring silent-failure shape applied to an auth endpoint, and it is worse here because a rejection is exactly the event an operator needs to see. FIX: log every /register rejection at warn with the reason code and the offending field (the redirect_uri is caller-supplied and not a secret), so a failed connect is a log read rather than an investigation. Found while fixing FND-20260904-7c2a.
+### finding:FND-20260904-4b1e severity:medium status:fixed | The gateway's /register endpoint logs ONLY on success, so every rejection is invisible. Live cost, 2026-09-04: the operator's ChatGPT desktop app (Codex MCP client) failed to connect and CloudWatch showed no oauth_register line at all, which read as 'the client never reached us' and sent diagnosis down the wrong path. The client HAD reached us and been refused 400 invalid_redirect_uri; that return sits above the logger.info call, so it emits nothing. This is the fleet's recurring silent-failure shape applied to an auth endpoint, and it is worse here because a rejection is exactly the event an operator needs to see. FIX: log every /register rejection at warn with the reason code and the offending field (the redirect_uri is caller-supplied and not a secret), so a failed connect is a log read rather than an investigation. Found while fixing FND-20260904-7c2a.
 
 - **Source audit doc:** live CloudWatch /ecs/otchealth + src/server/oauth.ts read, 2026-09-04
-- **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Fix commit:** 80a4f5c1c43f5f506df1885644d27cff1bf969c1
+- **Verified by:** otchealth-mcp-server #303 squash 80a4f5c, deployed as gateway task def 52 (image 80a4f5c). Live before/after on mcp.otchealth.app: rev 51 refused https://chatgpt.com/connector/oauth/<id> with 400 and wrote nothing to /ecs/otchealth; rev 52 accepts it (201, external-read) and each refusal (look-alike host, query smuggle) now writes a warn line type=oauth_register_rejected with reason, redirect_uris (max 5) and client_name (max 80). Both rejection branches log. 8-test suite locks predicate, route, logging and ordering.
 - **Opened:** 2026-09-04T18:56:42.867Z
-- **Closed:** (open)
+- **Closed:** 2026-09-05T18:25:32.561Z
 
 ### finding:FND-20260904-9d33 severity:low status:open | The gateway's unauthenticated 401 body names an internal environment variable. Any anonymous caller to POST /mcp gets a message telling them to provide a bearer token and naming the specific env var the gateway reads it from. No secret VALUE leaks, but the name of an internal credential binding should not be in a public error string: it tells an unauthenticated stranger which integration exists and what the credential is called. FIX: return a generic 'missing or invalid bearer token' with the WWW-Authenticate challenge (which is correct and must stay) and drop the variable name. Observed live 2026-09-04 while diagnosing FND-20260904-7c2a.
 
