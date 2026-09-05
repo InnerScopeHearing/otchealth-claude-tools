@@ -1177,10 +1177,10 @@ finding with `node ledger.mjs finding add`, close one with
 - **Opened:** 2026-09-05T03:57:31.917Z
 - **Closed:** 2026-09-05T03:57:31.917Z
 
-### finding:FND-20260905-2ba3 severity:high status:open | Gateway CIO Track secrets (/otchealth/gw/CIO_SITE_ID, CIO_TRACK_KEY) were the same 7-char placeholder since 2026-08-14; all gateway cio_* Track writes 401. Fixed 2026-09-05 (SSM v2 from /otchealth/cio-site-id + cio-track-key); follow-up: deep-health probe for Track auth
+### finding:FND-20260905-2ba3 severity:high status:fixed | Gateway CIO Track secrets (/otchealth/gw/CIO_SITE_ID, CIO_TRACK_KEY) were the same 7-char placeholder since 2026-08-14; all gateway cio_* Track writes 401. Fixed 2026-09-05 (SSM v2 from /otchealth/cio-site-id + cio-track-key); follow-up: deep-health probe for Track auth
 
 - **Source audit doc:** otchealth-cto/runbooks/2026-09-05-owner-gates-cto-pass.md
 - **Fix commit:** (none yet)
-- **Verified by:** (not verified)
+- **Verified by:** live gateway probe after forced rollout: cio_delete_customer on a nonexistent id returns no error 3/3 (was upstream 401); SSM v2 for both params
 - **Opened:** 2026-09-05T04:04:15.676Z
-- **Closed:** (open)
+- **Closed:** 2026-09-05T04:12:53.513Z
