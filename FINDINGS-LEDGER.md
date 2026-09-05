@@ -1192,3 +1192,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-05T20:35:23.810Z
 - **Closed:** (open)
+
+### finding:FND-20260905-de44 severity:high status:open | iHEARtest ios-depot: Device Farm 30-minute poll budget is shorter than a 20-minute fuzz run plus device acquisition, and a TIMEOUT blocks the TestFlight upload identically to a real device failure
+
+- **Source audit doc:** iheartest ios-depot run 33992060768
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-05T21:46:18.200Z
+- **Closed:** (open)
