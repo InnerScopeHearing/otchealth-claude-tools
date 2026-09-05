@@ -1184,3 +1184,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** live gateway probe after forced rollout: cio_delete_customer on a nonexistent id returns no error 3/3 (was upstream 401); SSM v2 for both params
 - **Opened:** 2026-09-05T04:04:15.676Z
 - **Closed:** 2026-09-05T04:12:53.513Z
+
+### finding:FND-20260905-d5a7 severity:high status:open | iHEARtest Build 58: Customer.io relay ignores pref_analytics_consent, so install+usage telemetry flows while Settings shows analytics Off (PostHog honors the same pref); separately, the Call-a-Pro lead form was removed in Build 55 so the lead path the relay was built for is unreachable
+
+- **Source audit doc:** iheartest Build 58 packet prep, 2026-09-05
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-05T20:35:23.810Z
+- **Closed:** (open)
