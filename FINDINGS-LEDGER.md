@@ -1168,3 +1168,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** otchealth-cto #177 merged (c2b4855): recovery-workflow-guard.yml pull_request trigger unfiltered + scope step. Proof on a docs-only PR: #176 branch updated from main, guard run 33918291918 (pull_request event) = scope step ran, Install PyYAML SKIPPED, checker SKIPPED, job SUCCESS; #176 then squash-merged a282947 through branch protection with 'check' green, no admin bypass. Guarded path also proven: #177 runs 33918109535/33918145028 and main run 33918266833 all success with the checker executed.
 - **Opened:** 2026-09-04T20:47:16.476Z
 - **Closed:** 2026-09-04T20:52:38.887Z
+
+### finding:FND-20260905-d24b severity:high status:fixed | Gateway tools-only MCP returned -32601 on resources/list; OpenAI Codex uses it as an availability probe and hid ALL gateway tools (Matt saw 512 tools, zero gateway) despite an authenticated+elevated session
+
+- **Source audit doc:** otchealth-cto Codex connect saga 2026-09-05
+- **Fix commit:** f01bb3c7fa525649a60e2aee83cfd854d74c6c66
+- **Verified by:** mcp-server #295 (empty resources/prompts capabilities + list handlers, MCP_STUB_RESOURCES_MODE default on) merged f01bb3c, image built, deployed gateway task-def rev 48; LIVE PROBE post-deploy: server capabilities now include resources+prompts, resources/list and prompts/list and resources/templates/list return [] not -32601, tools/list still returns 13 external-read tools
+- **Opened:** 2026-09-05T03:57:31.917Z
+- **Closed:** 2026-09-05T03:57:31.917Z
