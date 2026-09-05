@@ -1176,3 +1176,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** mcp-server #295 (empty resources/prompts capabilities + list handlers, MCP_STUB_RESOURCES_MODE default on) merged f01bb3c, image built, deployed gateway task-def rev 48; LIVE PROBE post-deploy: server capabilities now include resources+prompts, resources/list and prompts/list and resources/templates/list return [] not -32601, tools/list still returns 13 external-read tools
 - **Opened:** 2026-09-05T03:57:31.917Z
 - **Closed:** 2026-09-05T03:57:31.917Z
+
+### finding:FND-20260905-2ba3 severity:high status:open | Gateway CIO Track secrets (/otchealth/gw/CIO_SITE_ID, CIO_TRACK_KEY) were the same 7-char placeholder since 2026-08-14; all gateway cio_* Track writes 401. Fixed 2026-09-05 (SSM v2 from /otchealth/cio-site-id + cio-track-key); follow-up: deep-health probe for Track auth
+
+- **Source audit doc:** otchealth-cto/runbooks/2026-09-05-owner-gates-cto-pass.md
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-05T04:04:15.676Z
+- **Closed:** (open)
