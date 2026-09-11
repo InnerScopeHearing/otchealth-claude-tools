@@ -32,14 +32,20 @@ test("every ordinary job name is still watched (the filter is not over-broad)", 
   }
 });
 
-test("docintel-ocr-sweep is retired, not merely deleted: the reason survives in the registry", () => {
-  // Its backend (Azure Document Intelligence) died with subscription 55c84f6b on 2026-08-13 and the
-  // EventBridge schedule otchealth-docintel-ocr-sweep was DISABLED on 2026-09-01, so it cannot beat.
-  assert.ok(!("docintel-ocr-sweep" in REG), "the live row must be gone or check() pages on it forever");
-  const retired = REG["_retired_docintel-ocr-sweep"];
-  assert.ok(retired, "the retirement must stay documented in the registry, not just vanish");
-  assert.match(String(retired.note), /Document Intelligence/i);
-  assert.ok(retired.retired, "a retired row carries the date it was retired");
+test("docintel-ocr-sweep is REVIVED (2026-09-03, Textract): live row present, retirement history retained", () => {
+  // Retired 2026-09-01 (Azure Document Intelligence died with subscription 55c84f6b); revived 2026-09-03
+  // on Amazon Textract (claude-tools#540/#542, task def otchealth-job-docintel-ocr-sweep:3). The live row
+  // must be back in the watch set, and the reason it was ever retired must survive as documentation.
+  assert.ok("docintel-ocr-sweep" in REG, "the live row must be back so check() watches the Textract sweep");
+  assert.equal(isWatchedJobKey("docintel-ocr-sweep"), true);
+  assert.equal(REG["docintel-ocr-sweep"].interval_min, 120);
+  assert.ok(!("_retired_docintel-ocr-sweep" in REG), "a job is watched or retired, never both");
+  const hist = REG["_history_docintel-ocr-sweep"];
+  assert.ok(hist, "the retirement history must survive in the registry, not just vanish");
+  assert.match(String(hist.note), /Document Intelligence/i);
+  assert.match(String(hist.note), /Textract/);
+  assert.ok(hist.retired && hist.revived, "history carries both the retired and the revived dates");
+  assert.equal(isWatchedJobKey("_history_docintel-ocr-sweep"), false);
 });
 
 test("no retired key can shadow a live one (a job is watched or retired, never both)", () => {
