@@ -252,6 +252,24 @@ export function candidateNamesFromManifest(text) {
   return new Set(names);
 }
 
+/** Strict v2 entries bind the owner-approved name to its immutable S3 version,
+ * private source SHA-256, and exact preflight page count. */
+export function boundCandidatesFromManifest(text) {
+  let parsed; try { parsed = JSON.parse(text); } catch { throw new Error("CFO candidate manifest is not valid JSON"); }
+  const rows = parsed && (parsed.candidates || parsed.entries);
+  if (!Array.isArray(rows) || rows.length < 1 || rows.length > 10) throw new Error("CFO candidate manifest requires one to ten bound candidates");
+  const seen = new Set();
+  for (const row of rows) {
+    // Strict repair batches are PDF-only.  That makes the manifest's page_count independently
+    // verifiable with pdfinfo before the paid Textract request, rather than treating an image's
+    // implicit one page as an unverified assertion.
+    if (!row || typeof row.name !== "string" || !/\.pdf$/i.test(row.name) || !isEligibleDocName(row.name) || seen.has(row.name) || typeof row.version_id !== "string" || !row.version_id || !/^[0-9a-f]{64}$/.test(row.sha256 || "") || !Number.isSafeInteger(row.page_count) || row.page_count < 1 || row.page_count > 10) throw new Error("CFO candidate manifest contains an invalid bound candidate");
+    seen.add(row.name);
+  }
+  if (rows.reduce((sum, row) => sum + row.page_count, 0) > 10) throw new Error("CFO candidate manifest exceeds the aggregate page cap");
+  return new Map(rows.map(row => [row.name, row]));
+}
+
 /** Reassemble a plain-text sidecar body from Textract's Blocks array: every LINE block's Text,
  *  grouped by page (the `Page` field Textract attaches to multi-page async results; absent/undefined
  *  defaults to page 1, correct for every synchronous response), pages in ascending order, LINEs within
@@ -548,20 +566,28 @@ async function ocrOneDocument(bucket, key, sizeBytes, idempotencyVersion, source
   return ocrAsync(bucket, key, idempotencyVersion, sourceVersionId);
 }
 
-/** Count a PDF before Textract against the exact S3 version recorded by HeadObject. The bytes exist
- * only in a private temporary directory for `pdfinfo`, are never printed, and are removed before
- * OCR. Images are one page by definition. */
-async function preflightPageCount(account, container, candidate, sourceVersionId) {
-  if (!/\.pdf$/i.test(candidate.name)) return 1;
-  const bytes = await getBufferFromS3(account, container, candidate.name, { versionId: sourceVersionId });
+/** Read and verify the exact source version authorized by a strict repair manifest before Textract.
+ * Source bytes are held only in a private temporary file for pdfinfo, are never logged, and are
+ * removed before OCR begins.  The hash is deliberately calculated from the version-qualified GET,
+ * never from a listing ETag or an unversioned read. */
+async function preflightBoundSource(account, container, candidate, binding, maxBytes) {
+  const sourceMeta = await headObjectMetaFromS3(account, container, candidate.name);
+  if (!sourceMeta || !sourceMeta.versionId) throw taggedError("source object has no immutable S3 VersionId", { systemic: true });
+  if (sourceMeta.versionId !== binding.version_id) throw taggedError("source version no longer matches the approved manifest", { systemic: true });
+  if (!Number.isFinite(sourceMeta.size) || sourceMeta.size < 1 || sourceMeta.size > maxBytes) throw taggedError("source size is outside the bounded repair limit", { systemic: true });
+  const bytes = await getBufferFromS3(account, container, candidate.name, { versionId: sourceMeta.versionId });
   if (!bytes) throw taggedError("source object disappeared before PDF page preflight", { systemic: false });
+  if (bytes.length !== sourceMeta.size) throw taggedError("version-qualified source length did not match HeadObject", { systemic: true });
+  const actualSha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (actualSha256 !== binding.sha256) throw taggedError("version-qualified source digest did not match the approved manifest", { systemic: true });
   const dir = await mkdtemp(join(tmpdir(), "ocr-page-preflight-"));
   const file = join(dir, "source.pdf");
   try {
     await writeFile(file, bytes, { mode: 0o600 });
     const pages = pageCountFromPdfinfo(pdfinfoForTests(file));
     if (!pages) throw taggedError("pdfinfo did not return a positive page count", { systemic: false });
-    return pages;
+    if (pages !== binding.page_count) throw taggedError("pdfinfo page count did not match the approved manifest", { systemic: true });
+    return { sourceMeta, pages, sha256: actualSha256 };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -580,17 +606,109 @@ function intOpt(v, envName, def) {
   return Number.isFinite(n) ? n : def;
 }
 
+function boundEntryMatches(entry, name, binding) {
+  return !!entry && entry.source_name === name && entry.source_version_id === binding.version_id && entry.source_sha256 === binding.sha256 && entry.page_count === binding.page_count && entry.sidecar_name === sideFor(name) && typeof entry.sidecar_version_id === "string" && !!entry.sidecar_version_id;
+}
+
+/** A deterministic private child object for a single sidecar binding.  It contains no source bytes
+ * and survives a process crash between one successful sidecar write and the final batch receipt. */
+function boundEntryPath(receiptPath, name, binding) {
+  const id = crypto.createHash("sha256").update(`${name}\u0000${binding.version_id}\u0000${binding.sha256}`).digest("hex");
+  return `${receiptPath}.entries/${id}.json`;
+}
+
+function completedReceiptEntries(text, manifestSha256, bindings) {
+  let receipt;
+  try { receipt = JSON.parse(text); } catch { return null; }
+  if (!receipt || receipt.schema_version !== 1 || receipt.kind !== "cfo-ocr-source-version-receipt" || receipt.candidate_manifest_sha256 !== manifestSha256 || !Array.isArray(receipt.entries) || receipt.entries.length !== bindings.size) return null;
+  const entries = new Map(receipt.entries.map((entry) => [entry && entry.source_name, entry]));
+  if (entries.size !== bindings.size) return null;
+  for (const [name, binding] of bindings) if (!boundEntryMatches(entries.get(name), name, binding)) return null;
+  return entries;
+}
+
+async function persistBoundEntry(receiptPath, name, entry) {
+  const binding = { version_id: entry.source_version_id, sha256: entry.source_sha256 };
+  const path = boundEntryPath(receiptPath, name, binding);
+  const body = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-binding", entry });
+  const sha256 = crypto.createHash("sha256").update(body).digest("hex");
+  try {
+    await putObjectToS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], path, body, "application/json", { "If-None-Match": "*" });
+  } catch (e) {
+    if (!e || e.status !== 412) throw e;
+    const existing = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], path);
+    if (existing === null || crypto.createHash("sha256").update(existing).digest("hex") !== sha256) throw taggedError("per-document source binding conflicts with an immutable provenance record", { systemic: true });
+  }
+  return entry;
+}
+
+/** Reconcile every manifest row, including rows skipped in this invocation because their sidecar
+ * already exists.  No Textract request is made here. */
+async function reconcileBoundEntries(receiptPath, bindings) {
+  const entries = [];
+  for (const [name, binding] of bindings) {
+    const path = boundEntryPath(receiptPath, name, binding);
+    let sourceMeta, sidecarMeta, storedText;
+    try {
+      sourceMeta = await headObjectMetaFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], name);
+      sidecarMeta = await headObjectMetaFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], sideFor(name));
+      storedText = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], path);
+    } catch (e) {
+      if (isSystemicS3Error(e)) throw e;
+      return { ok: false, message: "could not read a source-bound provenance record" };
+    }
+    if (!sourceMeta || sourceMeta.versionId !== binding.version_id || !sidecarMeta || !sidecarMeta.versionId || storedText === null) return { ok: false, message: "current source, sidecar, or provenance binding is missing or changed" };
+    let stored;
+    try { stored = JSON.parse(storedText); } catch { return { ok: false, message: "per-document source binding is not valid JSON" }; }
+    const entry = stored && stored.entry;
+    if (!stored || stored.schema_version !== 1 || stored.kind !== "cfo-ocr-source-version-binding" || !boundEntryMatches(entry, name, binding) || entry.sidecar_version_id !== sidecarMeta.versionId) return { ok: false, message: "current source, sidecar, or provenance binding does not match the approved manifest" };
+    entries.push(entry);
+  }
+  return { ok: true, entries };
+}
+
+/** Conditionally create the immutable batch receipt.  This is shared by the normal completion
+ * path and the recovery path where a process ended after every per-document provenance record was
+ * durable but before this final write. */
+async function persistCompletionReceipt(receiptPath, manifestSha256, limits, entries) {
+  const body = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-receipt", candidate_manifest_sha256: manifestSha256 || null, max_docs_per_run: limits.maxDocs, max_pages: limits.maxPages, max_mb: limits.maxMb, concurrency: limits.concurrency, entries });
+  const sha256 = crypto.createHash("sha256").update(body).digest("hex");
+  try {
+    const stored = await putObjectToS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], receiptPath, body, "application/json", { "If-None-Match": "*" });
+    return { ok: true, receipt: { sha256, versionId: stored.versionId || null, entryCount: entries.length } };
+  } catch (e) {
+    // A conditional collision is success only when the immutable receipt body is byte-for-byte
+    // identical.  Any other object at the deterministic path is a provenance conflict.
+    if (!e || e.status !== 412) return { ok: false, message: `CFO OCR source-version receipt could not be stored: ${e.message}` };
+    try {
+      const existing = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], receiptPath);
+      if (existing !== null && crypto.createHash("sha256").update(existing).digest("hex") === sha256) {
+        return { ok: true, receipt: { sha256, versionId: null, entryCount: entries.length, existing: true } };
+      }
+      return { ok: false, message: "CFO OCR source-version receipt conflicts with a different immutable receipt" };
+    } catch (readErr) {
+      return { ok: false, message: `CFO OCR source-version receipt could not be verified after a conditional-write collision: ${readErr.message}` };
+    }
+  }
+}
+
 /** Run one sweep. Never calls process.exit() -- every outcome (including a systemic failure) comes
  *  back as a plain result object so this is directly unit-testable; the CLI wrapper at the bottom of
  *  this file is the only place that turns `result` into an exit code. `opts` overrides the matching
  *  env var (see this file's header for the full list); every field is optional. */
 export async function runSweep(opts = {}) {
   const DRY = opts.dryRun ?? process.env.DRYRUN === "1";
-  const MAX_DOCS = intOpt(opts.maxDocsPerRun, "MAX_DOCS_PER_RUN", intOpt(undefined, "LIMIT", 500));
-  const MAX_PAGES = intOpt(opts.maxPages, "MAX_PAGES", 500);
-  const MAX_MB = intOpt(opts.maxMb, "MAX_MB", 200);
-  const CONC = Math.max(1, intOpt(opts.concurrency, "CONC", 3));
   const VERSION_BOUND = opts.versionBound ?? process.env.CFO_OCR_VERSION_BOUND === "1";
+  const configuredMaxDocs = intOpt(opts.maxDocsPerRun, "MAX_DOCS_PER_RUN", intOpt(undefined, "LIMIT", 500));
+  const configuredMaxPages = intOpt(opts.maxPages, "MAX_PAGES", 500);
+  const configuredMaxMb = intOpt(opts.maxMb, "MAX_MB", 200);
+  const configuredConc = Math.max(1, intOpt(opts.concurrency, "CONC", 3));
+  // A source-bound repair is intentionally a small, serial operation.  These limits are applied
+  // even when the ambient standing-sweep environment has much larger defaults.
+  const MAX_DOCS = VERSION_BOUND ? Math.min(configuredMaxDocs || 10, 10) : configuredMaxDocs;
+  const MAX_PAGES = VERSION_BOUND ? Math.min(configuredMaxPages || 10, 10) : configuredMaxPages;
+  const MAX_MB = VERSION_BOUND ? Math.min(configuredMaxMb || 10, 10) : configuredMaxMb;
+  const CONC = VERSION_BOUND ? 1 : configuredConc;
   const wantRaw = opts.stores ?? process.env.STORES ?? "legal,cfo";
   const want = (Array.isArray(wantRaw) ? wantRaw : String(wantRaw).split(",")).map((s) => String(s).trim()).filter(Boolean);
 
@@ -612,19 +730,27 @@ export async function runSweep(opts = {}) {
   }
 
   // An owner-published CFO manifest turns this from a whole-prefix sweep into a source-authorized
-  // batch without exposing object names in task-definition environment values or task logs.
+  // batch without exposing object names in task-definition environment values or task logs.  The
+  // ordinary manifest mode intentionally remains name-only for existing standing-sweep users.  The
+  // version-bound repair mode requires immutable version, digest, and page bindings for every row.
   const manifestPath = opts.cfoCandidateManifestPath ?? process.env.CFO_OCR_CANDIDATE_MANIFEST_PATH ?? "";
   const manifestSha256 = opts.cfoCandidateManifestSha256 ?? process.env.CFO_OCR_CANDIDATE_MANIFEST_SHA256 ?? "";
   let manifestNames = null;
+  let boundManifest = null;
+  let manifestText = null;
+  const receiptPath = opts.cfoReceiptPath ?? process.env.CFO_OCR_RECEIPT_PATH ?? "";
+  if (VERSION_BOUND && (!manifestPath || !receiptPath)) return { ok: false, systemic: true, message: "source-bound CFO repair requires both a candidate manifest and an idempotent receipt path", ...emptyCounts() };
   if (manifestPath) {
     if (rooms.length !== 1 || rooms[0].name !== "cfo") return { ok: false, systemic: true, message: "CFO candidate manifests require STORES=cfo only", ...emptyCounts() };
-    let manifestText;
     try { manifestText = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], manifestPath); }
     catch (e) { return { ok: false, systemic: true, message: `CFO candidate manifest could not be read: ${e.message}`, ...emptyCounts() }; }
     if (manifestText === null) return { ok: false, systemic: true, message: "CFO candidate manifest is missing", ...emptyCounts() };
     const actualManifestSha256 = crypto.createHash("sha256").update(manifestText).digest("hex");
     if (!/^[0-9a-f]{64}$/.test(manifestSha256) || actualManifestSha256 !== manifestSha256) return { ok: false, systemic: true, message: "CFO candidate manifest digest did not match the supplied immutable authorization", ...emptyCounts() };
-    try { manifestNames = candidateNamesFromManifest(manifestText); }
+    try {
+      if (VERSION_BOUND) boundManifest = boundCandidatesFromManifest(manifestText);
+      manifestNames = VERSION_BOUND ? new Set(boundManifest.keys()) : candidateNamesFromManifest(manifestText);
+    }
     catch (e) { return { ok: false, systemic: true, message: e.message, ...emptyCounts() }; }
   }
 
@@ -647,15 +773,42 @@ export async function runSweep(opts = {}) {
       stats[`${room.name}/${container}`] = { docs: docs.length, todo: todo.length };
       for (const n of todo) {
         if (manifestNames && !manifestNames.has(n)) continue;
-        candidates.push({ room: room.name, account: room.account, container, name: n, size: sizeByName.get(n) || 0, lastModified: lmByName.get(n) || "" });
+        candidates.push({ room: room.name, account: room.account, container, name: n, size: sizeByName.get(n) || 0, lastModified: lmByName.get(n) || "", binding: boundManifest && boundManifest.get(n) });
+      }
+      if (boundManifest) {
+        for (const [name] of boundManifest) {
+          if (!docs.includes(name)) return { ok: false, systemic: true, message: "CFO candidate manifest does not exactly match current eligible source objects", ...emptyCounts(), stats };
+        }
       }
     }
   }
-  if (manifestNames && candidates.length !== manifestNames.size) {
+  if (manifestNames && !VERSION_BOUND && candidates.length !== manifestNames.size) {
     return { ok: false, systemic: true, message: "CFO candidate manifest does not exactly match current eligible sidecar-missing objects", ...emptyCounts(), stats };
   }
   console.log("[ocr-sweep] scope:", JSON.stringify(stats));
   console.log("[ocr-sweep] total docs needing OCR:", candidates.length);
+
+  // A receipt is the durable idempotency marker for a completed bounded repair.  If every selected
+  // source already has its sidecar, a valid receipt proves completion.  If it is absent because a
+  // process ended after all durable per-document provenance writes, reconstruct it only from those
+  // records after revalidating the current source and sidecar versions.  Neither route calls Textract.
+  if (VERSION_BOUND && !candidates.length) {
+    let existingReceipt;
+    try { existingReceipt = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], receiptPath); }
+    catch (e) { return { ok: false, systemic: true, message: `CFO OCR source-version receipt could not be read: ${e.message}`, ...emptyCounts(), stats }; }
+    let reconciled;
+    try { reconciled = await reconcileBoundEntries(receiptPath, boundManifest); }
+    catch (e) { return { ok: false, systemic: true, message: `CFO OCR source-version receipt could not be reconciled: ${e.message}`, ...emptyCounts(), stats }; }
+    if (!reconciled.ok) return { ok: false, systemic: true, message: "all bound sources have sidecars but their current source, sidecar, or provenance binding does not match the approved manifest", ...emptyCounts(), stats };
+    if (existingReceipt !== null) {
+      const receiptEntries = completedReceiptEntries(existingReceipt, manifestSha256, boundManifest);
+      if (!receiptEntries || reconciled.entries.some((entry) => receiptEntries.get(entry.source_name).sidecar_version_id !== entry.sidecar_version_id)) return { ok: false, systemic: true, message: "all bound sources have sidecars but their current source or sidecar versions do not match the receipt", ...emptyCounts(), stats };
+      return { ok: true, systemic: false, message: "Source-bound CFO repair already completed; matching sidecars and receipt were retained.", ...emptyCounts(), stats, receipt: { sha256: crypto.createHash("sha256").update(existingReceipt).digest("hex"), existing: true, entryCount: boundManifest.size } };
+    }
+    const recovered = await persistCompletionReceipt(receiptPath, manifestSha256, { maxDocs: MAX_DOCS, maxPages: MAX_PAGES, maxMb: MAX_MB, concurrency: CONC }, reconciled.entries);
+    if (!recovered.ok) return { ok: false, systemic: true, message: recovered.message, ...emptyCounts(), stats };
+    return { ok: true, systemic: false, message: "Source-bound CFO repair completion receipt was reconstructed from matching durable per-document provenance.", ...emptyCounts(), stats, receipt: recovered.receipt };
+  }
 
   if (!candidates.length) {
     return {
@@ -684,17 +837,23 @@ export async function runSweep(opts = {}) {
       if (!withinBudget(state, { maxDocs: MAX_DOCS, maxPages: MAX_PAGES })) return;
       const it = candidates[state.idx++];
       if (it.size > maxBytes) {
+        if (VERSION_BOUND) {
+          state.systemic = taggedError("source listing size exceeds the bounded repair limit", { systemic: true });
+          return;
+        }
         state.over++;
         continue;
       }
       const loc = s3LocationFor(it.account, it.container);
       let sourceMeta = { versionId: null };
       let knownPages = reservedPageEstimate(it);
+      let sourceSha256 = null;
       if (VERSION_BOUND) {
         try {
-          sourceMeta = await headObjectMetaFromS3(it.account, it.container, it.name);
-          if (!sourceMeta || !sourceMeta.versionId) throw taggedError("source object has no immutable S3 VersionId", { systemic: true });
-          knownPages = await preflightPageCount(it.account, it.container, it, sourceMeta.versionId);
+          const verified = await preflightBoundSource(it.account, it.container, it, it.binding, maxBytes);
+          sourceMeta = verified.sourceMeta;
+          knownPages = verified.pages;
+          sourceSha256 = verified.sha256;
         } catch (e) {
           if ((e && e.systemic) || isSystemicS3Error(e)) { state.systemic = e; return; }
           state.fail++;
@@ -739,9 +898,12 @@ export async function runSweep(opts = {}) {
         }
         try {
           const sidecar = await putObjectToS3(it.account, it.container, sideFor(it.name), Buffer.from(result.text, "utf8"), "text/plain; charset=utf-8");
-          // Kept only in the CFO S3 receipt, never emitted to stdout. This is the exact binding
-          // from source name and immutable version to the sidecar version written for it.
-          sourceVersionReceipt.push({ source_name: it.name, source_version_id: sourceMeta.versionId, page_count: result.pages, sidecar_name: sideFor(it.name), sidecar_version_id: sidecar.versionId || null });
+          // Persist each completed source-to-sidecar binding before moving to the next document.
+          // This makes a crash or a later document failure resumable without re-OCR-ing this one.
+          if (VERSION_BOUND && !sidecar.versionId) throw taggedError("sidecar write did not return an immutable S3 VersionId", { systemic: true, pagesBilled: result.pages || 1 });
+          const entry = { source_name: it.name, source_version_id: sourceMeta.versionId, source_sha256: sourceSha256, page_count: result.pages, sidecar_name: sideFor(it.name), sidecar_version_id: sidecar.versionId || null };
+          if (VERSION_BOUND) await persistBoundEntry(receiptPath, it.name, entry);
+          sourceVersionReceipt.push(entry);
         } catch (putErr) {
           // The OCR already happened and was billed: carry its real page count on the error so the
           // budget accounting in the catch below charges what Textract actually processed.
@@ -782,18 +944,25 @@ export async function runSweep(opts = {}) {
   if (state.systemic) {
     return { ok: false, systemic: true, message: state.systemic.message, ...counts };
   }
-  const receiptPath = opts.cfoReceiptPath ?? process.env.CFO_OCR_RECEIPT_PATH ?? "";
+  // A bounded repair receipt is evidence of a complete authorized batch, never a marker for a
+  // partial, skipped, or failed attempt.  Leaving it absent lets a corrected retry resume safely.
+  if (VERSION_BOUND && (state.ok !== candidates.length || state.fail || state.over)) {
+    return { ok: false, systemic: true, message: "source-bound CFO repair is incomplete; idempotent receipt was withheld", ...counts };
+  }
+  let completedEntries = sourceVersionReceipt;
+  if (VERSION_BOUND) {
+    let reconciled;
+    try { reconciled = await reconcileBoundEntries(receiptPath, boundManifest); }
+    catch (e) { return { ok: false, systemic: true, message: `source-bound CFO repair could not reconcile durable provenance: ${e.message}`, ...counts }; }
+    if (!reconciled.ok || reconciled.entries.length !== boundManifest.size) return { ok: false, systemic: true, message: "source-bound CFO repair did not establish complete manifest provenance; idempotent receipt was withheld", ...counts };
+    completedEntries = reconciled.entries;
+  }
   let receipt = null;
   if (receiptPath) {
     if (rooms.length !== 1 || rooms[0].name !== "cfo") return { ok: false, systemic: true, message: "CFO OCR receipts require STORES=cfo only", ...counts };
-    const body = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-receipt", candidate_manifest_sha256: manifestSha256 || null, max_docs_per_run: MAX_DOCS, max_pages: MAX_PAGES, max_mb: MAX_MB, concurrency: CONC, entries: sourceVersionReceipt });
-    const sha256 = crypto.createHash("sha256").update(body).digest("hex");
-    try {
-      const stored = await putObjectToS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], receiptPath, body, "application/json", { "If-None-Match": "*" });
-      receipt = { sha256, versionId: stored.versionId || null, entryCount: sourceVersionReceipt.length };
-    } catch (e) {
-      return { ok: false, systemic: true, message: `CFO OCR source-version receipt could not be stored: ${e.message}`, ...counts };
-    }
+    const persisted = await persistCompletionReceipt(receiptPath, manifestSha256, { maxDocs: MAX_DOCS, maxPages: MAX_PAGES, maxMb: MAX_MB, concurrency: CONC }, completedEntries);
+    if (!persisted.ok) return { ok: false, systemic: true, message: persisted.message, ...counts };
+    receipt = persisted.receipt;
   }
   const message =
     `DONE this run: ${state.ok} sidecars written, ${state.fail} failed, ${state.over} oversize-skipped (>${MAX_MB}MB), ` +

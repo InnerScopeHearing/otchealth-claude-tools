@@ -123,6 +123,41 @@ The old sweep only ever fail-opened -- any per-document error was logged and the
 `node skills/ocr-sweep/sweep.mjs` runs with these defaults. No Secret Manager / Key Vault credential
 is read by this file.
 
+## Source-bound CFO repair
+
+The ordinary sweep remains unchanged. A one-off CFO repair can opt into strict source binding with
+`CFO_OCR_VERSION_BOUND=1`, `STORES=cfo`, `CFO_OCR_CANDIDATE_MANIFEST_PATH`,
+`CFO_OCR_CANDIDATE_MANIFEST_SHA256`, and `CFO_OCR_RECEIPT_PATH`. The manifest digest must be the
+SHA-256 of the manifest text. The receipt path is conditionally created and acts as the durable
+idempotency marker.
+
+Each manifest row is a PDF binding with exactly these required fields:
+
+```json
+{
+  "name": "relative/source.pdf",
+  "version_id": "immutable-s3-version",
+  "sha256": "64-lowercase-hex-characters",
+  "page_count": 1
+}
+```
+
+This mode accepts at most 10 rows with at most 10 total pages. It caps every source at 10 MB and
+forces one worker, regardless of broader standing-sweep defaults. Before Textract, it HEADs the
+source, requires the approved S3 VersionId, GETs that exact version, verifies its SHA-256, and runs
+`pdfinfo` against private temporary bytes to verify the declared page count. Textract receives that
+same S3 VersionId. A second HEAD after Textract must still return it before the sidecar is written.
+The receipt records only the source name, version, digest, page count, and sidecar version. A retry
+with matching sidecars and receipt returns success without another Textract request; a mismatched
+manifest, source, sidecar, or receipt fails closed. A partial, skipped, or failed strict batch writes
+no completion receipt, so a corrected retry can safely resume. Each successful sidecar also writes a
+private immutable per-document provenance record before the next source starts. Resume reconciles
+those records against every manifest row and the current HEAD versions of both source and sidecar;
+only complete coverage produces the final receipt. If a process ended after every per-document record
+was durable but before that final write, the retry reconstructs the receipt from the reconciled records
+without another Textract request. A sidecar without matching provenance is never treated as a completed
+repair.
+
 ## Region
 
 Textract only reads an `S3Object` from a bucket in the SAME region as the Textract endpoint it is
