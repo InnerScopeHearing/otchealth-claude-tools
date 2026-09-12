@@ -122,8 +122,12 @@
 // STORES). No Secret Manager / Key Vault credential is read by this file.
 // -----------------------------------------------------------------------------------------------
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { awsFetch } from "../../setup/aws-sigv4.mjs";
-import { listBlobsMetaFromS3, putObjectToS3, s3LocationFor, s3Configured } from "../kb-memory/s3-blob.mjs";
+import { getBufferFromS3, getTextFromS3, headObjectMetaFromS3, listBlobsMetaFromS3, putObjectToS3, s3LocationFor, s3Configured } from "../kb-memory/s3-blob.mjs";
 
 const REGION = process.env.AWS_REGION || "us-east-1";
 
@@ -218,6 +222,28 @@ export function pageCountOf(json) {
     if (n > 0) return n;
   }
   return 1;
+}
+
+/** Parse `pdfinfo`'s metadata-only page count. The source bytes are held in an ECS-private temporary
+ * file solely for this preflight and are deleted before Textract starts; neither bytes nor output are
+ * logged. Null means the parser did not produce a trustworthy positive integer. */
+export function pageCountFromPdfinfo(stdout) {
+  const match = String(stdout || "").match(/^Pages:\s+(\d+)\s*$/m);
+  const pages = match ? Number(match[1]) : NaN;
+  return Number.isSafeInteger(pages) && pages > 0 ? pages : null;
+}
+
+/** Parse only the schema needed for an owner-prepared CFO candidate manifest. The caller never logs
+ * the manifest or keys. Supporting both `candidates` and `entries` keeps the worker decoupled from
+ * the reviewed source-owner publisher while rejecting every non-document entry. */
+export function candidateNamesFromManifest(text) {
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Error("CFO candidate manifest is not valid JSON"); }
+  const rows = Array.isArray(parsed) ? parsed : (parsed.candidates || parsed.entries || []);
+  if (!Array.isArray(rows)) throw new Error("CFO candidate manifest has no candidate array");
+  const names = rows.map((row) => typeof row === "string" ? row : row && row.name).filter((name) => typeof name === "string");
+  if (names.length !== rows.length || names.some((name) => !isEligibleDocName(name))) throw new Error("CFO candidate manifest contains an ineligible name");
+  return new Set(names);
 }
 
 /** Reassemble a plain-text sidecar body from Textract's Blocks array: every LINE block's Text,
@@ -487,10 +513,10 @@ async function pollJob(jobId) {
   throw taggedError(`Textract async job ${jobId} did not finish within ${MAX_POLL_ATTEMPTS} polls`, { textractType: "PollTimeout" });
 }
 
-async function ocrAsync(bucket, key, version) {
+async function ocrAsync(bucket, key, idempotencyVersion, sourceVersionId) {
   const start = await callTextract("StartDocumentTextDetection", {
-    DocumentLocation: { S3Object: { Bucket: bucket, Name: key } },
-    ClientRequestToken: clientRequestToken(bucket, key, version),
+    DocumentLocation: { S3Object: { Bucket: bucket, Name: key, ...(sourceVersionId ? { Version: sourceVersionId } : {}) } },
+    ClientRequestToken: clientRequestToken(bucket, key, idempotencyVersion),
   });
   if (!start.ok) {
     if (start.cls.kind === "systemic") throw taggedError(start.cls.message, { systemic: true, textractType: start.cls.type });
@@ -505,15 +531,34 @@ async function ocrAsync(bucket, key, version) {
  *  itself reports as sync-ineligible (ROUTE_ASYNC_TYPES) is retried once via the async job API. Any
  *  OTHER sync failure is a genuine per-document failure and is NOT retried via async (a truly corrupt
  *  or unsupported file fails the same way either path). */
-async function ocrOneDocument(bucket, key, sizeBytes, version) {
+async function ocrOneDocument(bucket, key, sizeBytes, idempotencyVersion, sourceVersionId) {
   if (preferSync(sizeBytes)) {
-    const sync = await callTextract("DetectDocumentText", { Document: { S3Object: { Bucket: bucket, Name: key } } });
+    const sync = await callTextract("DetectDocumentText", { Document: { S3Object: { Bucket: bucket, Name: key, ...(sourceVersionId ? { Version: sourceVersionId } : {}) } } });
     if (sync.ok) return { via: "sync", pages: pageCountOf(sync.json), text: blocksToText(sync.json.Blocks) };
     if (sync.cls.kind === "systemic") throw taggedError(sync.cls.message, { systemic: true, textractType: sync.cls.type });
     if (sync.cls.kind !== "route-async") throw taggedError(`Textract DetectDocumentText failed (${sync.cls.type}): ${sync.cls.message}`, { textractType: sync.cls.type });
     // fall through: Textract itself says this document needs the async path (e.g. multi-page).
   }
-  return ocrAsync(bucket, key, version);
+  return ocrAsync(bucket, key, idempotencyVersion, sourceVersionId);
+}
+
+/** Count a PDF before Textract against the exact S3 version recorded by HeadObject. The bytes exist
+ * only in a private temporary directory for `pdfinfo`, are never printed, and are removed before
+ * OCR. Images are one page by definition. */
+async function preflightPageCount(account, container, candidate, sourceVersionId) {
+  if (!/\.pdf$/i.test(candidate.name)) return 1;
+  const bytes = await getBufferFromS3(account, container, candidate.name, { versionId: sourceVersionId });
+  if (!bytes) throw taggedError("source object disappeared before PDF page preflight", { systemic: false });
+  const dir = await mkdtemp(join(tmpdir(), "ocr-page-preflight-"));
+  const file = join(dir, "source.pdf");
+  try {
+    await writeFile(file, bytes, { mode: 0o600 });
+    const pages = pageCountFromPdfinfo(execFileSync("pdfinfo", [file], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+    if (!pages) throw taggedError("pdfinfo did not return a positive page count", { systemic: false });
+    return pages;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 // ============================ orchestration ============================
@@ -539,6 +584,7 @@ export async function runSweep(opts = {}) {
   const MAX_PAGES = intOpt(opts.maxPages, "MAX_PAGES", 500);
   const MAX_MB = intOpt(opts.maxMb, "MAX_MB", 200);
   const CONC = Math.max(1, intOpt(opts.concurrency, "CONC", 3));
+  const VERSION_BOUND = opts.versionBound ?? process.env.CFO_OCR_VERSION_BOUND === "1";
   const wantRaw = opts.stores ?? process.env.STORES ?? "legal,cfo";
   const want = (Array.isArray(wantRaw) ? wantRaw : String(wantRaw).split(",")).map((s) => String(s).trim()).filter(Boolean);
 
@@ -559,6 +605,23 @@ export async function runSweep(opts = {}) {
     };
   }
 
+  // An owner-published CFO manifest turns this from a whole-prefix sweep into a source-authorized
+  // batch without exposing object names in task-definition environment values or task logs.
+  const manifestPath = opts.cfoCandidateManifestPath ?? process.env.CFO_OCR_CANDIDATE_MANIFEST_PATH ?? "";
+  const manifestSha256 = opts.cfoCandidateManifestSha256 ?? process.env.CFO_OCR_CANDIDATE_MANIFEST_SHA256 ?? "";
+  let manifestNames = null;
+  if (manifestPath) {
+    if (rooms.length !== 1 || rooms[0].name !== "cfo") return { ok: false, systemic: true, message: "CFO candidate manifests require STORES=cfo only", ...emptyCounts() };
+    let manifestText;
+    try { manifestText = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], manifestPath); }
+    catch (e) { return { ok: false, systemic: true, message: `CFO candidate manifest could not be read: ${e.message}`, ...emptyCounts() }; }
+    if (manifestText === null) return { ok: false, systemic: true, message: "CFO candidate manifest is missing", ...emptyCounts() };
+    const actualManifestSha256 = crypto.createHash("sha256").update(manifestText).digest("hex");
+    if (!/^[0-9a-f]{64}$/.test(manifestSha256) || actualManifestSha256 !== manifestSha256) return { ok: false, systemic: true, message: "CFO candidate manifest digest did not match the supplied immutable authorization", ...emptyCounts() };
+    try { manifestNames = candidateNamesFromManifest(manifestText); }
+    catch (e) { return { ok: false, systemic: true, message: e.message, ...emptyCounts() }; }
+  }
+
   // ---- list every room/container, select what needs OCR ----
   const stats = {};
   const candidates = [];
@@ -576,8 +639,14 @@ export async function runSweep(opts = {}) {
       const docs = names.filter(isEligibleDocName);
       const todo = selectCandidates(names);
       stats[`${room.name}/${container}`] = { docs: docs.length, todo: todo.length };
-      for (const n of todo) candidates.push({ room: room.name, account: room.account, container, name: n, size: sizeByName.get(n) || 0, lastModified: lmByName.get(n) || "" });
+      for (const n of todo) {
+        if (manifestNames && !manifestNames.has(n)) continue;
+        candidates.push({ room: room.name, account: room.account, container, name: n, size: sizeByName.get(n) || 0, lastModified: lmByName.get(n) || "" });
+      }
     }
+  }
+  if (manifestNames && candidates.length !== manifestNames.size) {
+    return { ok: false, systemic: true, message: "CFO candidate manifest does not exactly match current eligible sidecar-missing objects", ...emptyCounts(), stats };
   }
   console.log("[ocr-sweep] scope:", JSON.stringify(stats));
   console.log("[ocr-sweep] total docs needing OCR:", candidates.length);
@@ -599,6 +668,7 @@ export async function runSweep(opts = {}) {
   // ---- process, with a shared budget + a shared systemic-abort flag every worker checks ----
   const maxBytes = MAX_MB * 1024 * 1024;
   const state = { idx: 0, docsUsed: 0, pagesUsed: 0, ok: 0, fail: 0, over: 0, systemic: null };
+  const sourceVersionReceipt = [];
 
   async function worker(startDelayMs) {
     if (startDelayMs) await sleep(startDelayMs); // stagger so CONC workers don't all submit in the same instant (the 2026-08-01 throttle-storm fix, carried forward)
@@ -608,6 +678,26 @@ export async function runSweep(opts = {}) {
       if (!withinBudget(state, { maxDocs: MAX_DOCS, maxPages: MAX_PAGES })) return;
       const it = candidates[state.idx++];
       if (it.size > maxBytes) {
+        state.over++;
+        continue;
+      }
+      const loc = s3LocationFor(it.account, it.container);
+      let sourceMeta = { versionId: null };
+      let knownPages = reservedPageEstimate(it);
+      if (VERSION_BOUND) {
+        try {
+          sourceMeta = await headObjectMetaFromS3(it.account, it.container, it.name);
+          if (!sourceMeta || !sourceMeta.versionId) throw taggedError("source object has no immutable S3 VersionId", { systemic: true });
+          knownPages = await preflightPageCount(it.account, it.container, it, sourceMeta.versionId);
+        } catch (e) {
+          if ((e && e.systemic) || isSystemicS3Error(e)) { state.systemic = e; return; }
+          state.fail++;
+          continue;
+        }
+      }
+      // Do not start an async Textract job unless this document's exact, locally verified page
+      // count fits the remaining aggregate budget. This is the hard page gate, not a reservation.
+      if (VERSION_BOUND && MAX_PAGES > 0 && state.pagesUsed + knownPages > MAX_PAGES) {
         state.over++;
         continue;
       }
@@ -623,17 +713,27 @@ export async function runSweep(opts = {}) {
       // real count. True-up/release below corrects both counters to the REAL outcome once it is
       // known, so the FINAL accounting (state.ok/state.fail/state.pagesUsed) is byte-identical to
       // before this fix -- only the TIMING of the reservation moved earlier, not what gets counted.
-      const reservedPages = reservedPageEstimate(it);
+      // In version-bound mode `knownPages` came from the exact source version before this point,
+      // so reserve that number rather than the legacy one-page estimate.  The preflight gate above
+      // and this synchronous reservation together keep aggregate paid pages at or below MAX_PAGES.
+      const reservedPages = VERSION_BOUND ? knownPages : reservedPageEstimate(it);
       state.docsUsed++;
       state.pagesUsed += reservedPages;
-      const loc = s3LocationFor(it.account, it.container);
       const key = `${loc.keyPrefix}${it.name}`;
       try {
         // The object version (size + LastModified from the listing) rides into the async idempotency
         // token, so an overwritten file never inherits the previous bytes' Textract job.
-        const result = await ocrOneDocument(loc.bucket, key, it.size, `${it.size}:${it.lastModified}`);
+        const result = await ocrOneDocument(loc.bucket, key, it.size, sourceMeta.versionId || `${it.size}:${it.lastModified}`, sourceMeta.versionId);
+        if (VERSION_BOUND && result.pages !== knownPages) throw taggedError("Textract page count disagreed with private preflight", { pagesBilled: result.pages || 1 });
+        if (VERSION_BOUND) {
+          const postOcrMeta = await headObjectMetaFromS3(it.account, it.container, it.name);
+          if (!postOcrMeta || postOcrMeta.versionId !== sourceMeta.versionId) throw taggedError("source version changed during OCR; sidecar withheld", { pagesBilled: result.pages || 1 });
+        }
         try {
-          await putObjectToS3(it.account, it.container, sideFor(it.name), Buffer.from(result.text, "utf8"), "text/plain; charset=utf-8");
+          const sidecar = await putObjectToS3(it.account, it.container, sideFor(it.name), Buffer.from(result.text, "utf8"), "text/plain; charset=utf-8");
+          // Kept only in the CFO S3 receipt, never emitted to stdout. This is the exact binding
+          // from source name and immutable version to the sidecar version written for it.
+          sourceVersionReceipt.push({ source_name: it.name, source_version_id: sourceMeta.versionId, page_count: result.pages, sidecar_name: sideFor(it.name), sidecar_version_id: sidecar.versionId || null });
         } catch (putErr) {
           // The OCR already happened and was billed: carry its real page count on the error so the
           // budget accounting in the catch below charges what Textract actually processed.
@@ -674,11 +774,24 @@ export async function runSweep(opts = {}) {
   if (state.systemic) {
     return { ok: false, systemic: true, message: state.systemic.message, ...counts };
   }
+  const receiptPath = opts.cfoReceiptPath ?? process.env.CFO_OCR_RECEIPT_PATH ?? "";
+  let receipt = null;
+  if (receiptPath) {
+    if (rooms.length !== 1 || rooms[0].name !== "cfo") return { ok: false, systemic: true, message: "CFO OCR receipts require STORES=cfo only", ...counts };
+    const body = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-receipt", candidate_manifest_sha256: manifestSha256 || null, max_docs_per_run: MAX_DOCS, max_pages: MAX_PAGES, max_mb: MAX_MB, concurrency: CONC, entries: sourceVersionReceipt });
+    const sha256 = crypto.createHash("sha256").update(body).digest("hex");
+    try {
+      const stored = await putObjectToS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], receiptPath, body, "application/json", { "If-None-Match": "*" });
+      receipt = { sha256, versionId: stored.versionId || null, entryCount: sourceVersionReceipt.length };
+    } catch (e) {
+      return { ok: false, systemic: true, message: `CFO OCR source-version receipt could not be stored: ${e.message}`, ...counts };
+    }
+  }
   const message =
     `DONE this run: ${state.ok} sidecars written, ${state.fail} failed, ${state.over} oversize-skipped (>${MAX_MB}MB), ` +
     `of ${state.docsUsed} processed (~${state.pagesUsed} Textract page(s) used, budget ${MAX_PAGES || "unlimited"}). ` +
     `Backlog remaining: ${counts.backlogRemaining}.`;
-  return { ok: true, systemic: false, message, ...counts };
+  return { ok: true, systemic: false, message, receipt, ...counts };
 }
 
 // ============================ CLI wrapper (thin, not itself unit-tested) ============================

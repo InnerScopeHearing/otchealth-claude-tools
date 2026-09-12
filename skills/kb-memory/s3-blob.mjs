@@ -221,6 +221,29 @@ export async function getTextFromS3(account, container, path) {
   return (await getTextMetaFromS3(account, container, path)).text;
 }
 
+/** Read metadata for one object without reading its body. Returns null only on a genuine 404.
+ * `versionId` is the immutable S3 version when bucket versioning is enabled; callers that need a
+ * source-bound receipt must refuse a missing version instead of inventing one from list metadata.
+ * A 403 or every other failure throws loudly, preserving the same no-failed-read-is-empty contract
+ * as getTextMetaFromS3. */
+export async function headObjectMetaFromS3(account, container, path) {
+  const loc = locOrThrow(account, container);
+  const r = await s3Request({ method: "HEAD", loc, path });
+  if (r.status === 404) return null;
+  if (!r.ok) {
+    const err = new Error(`s3 head ${r.status} (refusing to report a failed head as missing metadata)`);
+    err.status = r.status;
+    throw err;
+  }
+  const size = Number(r.headers.get("content-length"));
+  return {
+    versionId: r.headers.get("x-amz-version-id"),
+    etag: r.headers.get("etag"),
+    size: Number.isFinite(size) ? size : null,
+    lastModified: r.headers.get("last-modified"),
+  };
+}
+
 /** PUT one object. `extraHeaders` carries S3 conditional-write headers (`If-Match`/`If-None-Match`,
  *  the SAME names blobwrite.mjs's condHeaders() already produces for Azure — S3 supports both
  *  natively since AWS's August-2024 conditional-writes release). Returns {etag}. Throws on every
@@ -237,7 +260,7 @@ export async function putObjectToS3(account, container, path, body, contentType,
     err.status = status;
     throw err;
   }
-  return { etag: r.headers.get("etag") };
+  return { etag: r.headers.get("etag"), versionId: r.headers.get("x-amz-version-id") };
 }
 
 /** Atomic "create if absent" using S3's native conditional-write support (`If-None-Match: '*'` — the
@@ -315,9 +338,10 @@ export async function listBlobsFromS3(account, container, prefix) {
  *  JSONL/Markdown ledger content those exist for, but silently corrupting for a PDF/xlsx/sqlite
  *  catalog), this reads the raw ArrayBuffer, so it is the one to use for any object that is not known
  *  to be text. */
-export async function getBufferFromS3(account, container, path) {
+export async function getBufferFromS3(account, container, path, options = {}) {
   const loc = locOrThrow(account, container);
-  const r = await s3Request({ method: "GET", loc, path });
+  const query = options.versionId ? { versionId: options.versionId } : undefined;
+  const r = await s3Request({ method: "GET", loc, path, query });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`s3 get ${r.status} (refusing to report a missing object as empty): ${(await r.text()).slice(0, 200)}`);
   return Buffer.from(await r.arrayBuffer());
