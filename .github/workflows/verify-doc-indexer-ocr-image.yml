@@ -14,6 +14,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with: { fetch-depth: 0, persist-credentials: false }
@@ -30,6 +31,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SOURCE" =~ ^[a-f0-9]{40}$ ]] && [[ "$INDEX" =~ ^sha256:[a-f0-9]{64}$ ]]
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$SOURCE" origin/main
           aws ecr batch-get-image --repository-name doc-indexer --image-ids imageDigest="$INDEX" --query 'images[0].imageManifest' --output text > /tmp/index.json
           for platform in amd64 arm64; do
             digest=$(jq -er --arg platform "$platform" '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $platform)] | if length == 1 then .[0].digest else error("missing platform") end' /tmp/index.json)

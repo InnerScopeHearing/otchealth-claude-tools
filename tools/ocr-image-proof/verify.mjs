@@ -9,7 +9,7 @@ const paths = [
   "skills/ocr-sweep/sweep.mjs",
   "skills/kb-memory/s3-blob.mjs",
   "setup/aws-sigv4.mjs",
-  "setup/aws-secret.mjs",
+  "skills/kb-memory/aws-secret.mjs",
 ];
 const imageRepo = "900915535335.dkr.ecr.us-east-1.amazonaws.com/doc-indexer";
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -20,13 +20,27 @@ function run(command, args) {
   return result.stdout;
 }
 
+function nativeGit(repo, args) {
+  const result = spawnSync("git", ["-C", repo, ...args], { maxBuffer: 1024 * 1024, timeout: 30_000 });
+  if (result.status !== 0) throw new Error("Required source-tree validation failed");
+  return result.stdout;
+}
+
+// These checks deliberately do not use the injectable command runner. The test double
+// must not be able to claim that a misspelled source path is present in the merged tree.
+export function assertEligibleMergedSource(repo, source) {
+  if (nativeGit(repo, ["cat-file", "-t", source]).toString().trim() !== "commit") throw new Error("Source object must be a commit");
+  nativeGit(repo, ["merge-base", "--is-ancestor", source, "origin/main"]);
+  for (const file of paths) nativeGit(repo, ["cat-file", "-e", `${source}:${file}`]);
+}
+
 /** Verify that an immutable platform manifest contains exact tracked OCR runtime bytes.
  * The container is never started. All output is hashes and immutable identities only. */
 export function verifyOcrImage({ repo, source, digest, platform }, execute = run) {
   if (!/^[a-f0-9]{40}$/.test(source || "") || !/^sha256:[a-f0-9]{64}$/.test(digest || "") || !/^linux\/(amd64|arm64)$/.test(platform || "")) {
     throw new Error("Immutable source, platform digest, and supported platform are required");
   }
-  if (execute("git", ["-C", repo, "cat-file", "-t", source]).toString().trim() !== "commit") throw new Error("Source object must be a commit");
+  assertEligibleMergedSource(repo, source);
   const image = `${imageRepo}@${digest}`;
   const dir = mkdtempSync(join(tmpdir(), "ocr-image-proof-"));
   let container;
