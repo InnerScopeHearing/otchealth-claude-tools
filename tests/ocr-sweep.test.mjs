@@ -10,6 +10,7 @@
 //      here rather than silently phoning out. No test in this file ever contacts a real AWS endpoint.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   ROOMS,
   SYNC_MAX_BYTES,
@@ -19,6 +20,8 @@ import {
   selectCandidates,
   preferSync,
   pageCountOf,
+  pageCountFromPdfinfo,
+  candidateNamesFromManifest,
   blocksToText,
   extractExceptionType,
   classifyTextractFailure,
@@ -31,8 +34,9 @@ import {
   runSweep,
   _setSleepForTests,
   _setPollTimingForTests,
+  _setPdfinfoForTests,
 } from "../skills/ocr-sweep/sweep.mjs";
-import { _resetCredsCacheForTests } from "../skills/kb-memory/s3-blob.mjs";
+import { _resetCredsCacheForTests, getBufferFromS3 } from "../skills/kb-memory/s3-blob.mjs";
 
 // =====================================================================================
 // 1. pure functions -- no network, no credentials
@@ -102,6 +106,18 @@ test("pageCountOf: prefers DocumentMetadata.Pages, falls back to counting PAGE b
   assert.equal(pageCountOf({ Blocks: [{ BlockType: "PAGE" }, { BlockType: "LINE" }, { BlockType: "PAGE" }] }), 2);
   assert.equal(pageCountOf({}), 1);
   assert.equal(pageCountOf({ Blocks: [] }), 1);
+});
+
+test("pageCountFromPdfinfo: accepts only a positive integer Pages field", () => {
+  assert.equal(pageCountFromPdfinfo("Title: test\nPages:          12\n"), 12);
+  assert.equal(pageCountFromPdfinfo("Pages: 0\n"), null);
+  assert.equal(pageCountFromPdfinfo("Pages: many\n"), null);
+});
+
+test("candidateNamesFromManifest: accepts only an explicit eligible candidate set", () => {
+  assert.deepEqual([...candidateNamesFromManifest(JSON.stringify({ candidates: [{ name: "a.pdf" }, { name: "b.PNG" }] }))].sort(), ["a.pdf", "b.PNG"]);
+  assert.throws(() => candidateNamesFromManifest(JSON.stringify({ candidates: [{ name: "_TEXT/a.pdf.txt" }] })), /ineligible/);
+  assert.throws(() => candidateNamesFromManifest("not-json"), /not valid JSON/);
 });
 
 test("blocksToText: groups LINE blocks by Page ascending, joins lines within a page in emitted order, blank line between pages, ignores non-LINE blocks", () => {
@@ -298,15 +314,26 @@ function makeWorld({ bucket = CFO_BUCKET, s3Objects = {}, textract = {} } = {}) 
     const { hostname, pathname, searchParams } = new URL(u);
     const method = (opts.method || "GET").toUpperCase();
     if (hostname === host) {
-      calls.push({ method, host: hostname, path: pathname });
+      calls.push({ method, host: hostname, path: pathname, query: searchParams.toString() });
       if (method === "GET" && searchParams.get("list-type") === "2") {
         const prefix = searchParams.get("prefix") || "";
         return { ok: true, status: 200, text: async () => xmlListing(objects, prefix) };
       }
+      if (method === "HEAD") {
+        const object = objects[pathname];
+        return object
+          ? { ok: true, status: 200, headers: { get: (n) => ({ "x-amz-version-id": object.versionId || "source-version", etag: '"source-etag"', "content-length": String(object.size || 0) })[n.toLowerCase()] || null } }
+          : { ok: false, status: 404, headers: { get: () => null }, text: async () => "" };
+      }
+      if (method === "GET") {
+        const object = objects[pathname];
+        if (!object) return { ok: false, status: 404, text: async () => "" };
+        return { ok: true, status: 200, headers: { get: (n) => (n.toLowerCase() === "etag" ? '"source-etag"' : null) }, text: async () => object.text || "", arrayBuffer: async () => Buffer.from(object.bytes || object.text || "").buffer };
+      }
       if (method === "PUT") {
         const bodyText = Buffer.isBuffer(opts.body) ? opts.body.toString("utf8") : String(opts.body || "");
         puts.push({ path: pathname, bodyText });
-        return { ok: true, status: 200, headers: { get: (n) => (n.toLowerCase() === "etag" ? '"fake-etag"' : null) }, text: async () => "" };
+        return { ok: true, status: 200, headers: { get: (n) => ({ etag: '"fake-etag"', "x-amz-version-id": "sidecar-version" })[n.toLowerCase()] || null }, text: async () => "" };
       }
       throw new Error(`TEST SAFETY: unexpected S3 call ${method} ${pathname}`);
     }
@@ -356,6 +383,93 @@ test("runSweep: DRYRUN finds candidates but writes nothing and calls Textract ze
   assert.equal(r.candidates, 1);
   assert.equal(world.puts.length, 0);
   assert.equal(world.calls.some((c) => c.host === TEXTRACT_HOST), false);
+});
+
+test("runSweep: version-bound CFO repair requires the checked manifest, passes the exact S3 version to Textract, and stores a source-version receipt", async () => {
+  const manifest = JSON.stringify({ candidates: [{ name: "scan.png" }] });
+  const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
+  const world = makeWorld({
+    s3Objects: {
+      [`/${CFO_PREFIX}_CONTROL/manifest.json`]: { size: manifest.length, text: manifest, versionId: "manifest-version" },
+      [`/${CFO_PREFIX}scan.png`]: { size: 1000, versionId: "source-version" },
+    },
+    textract: { DetectDocumentText: [{ status: 200, json: { DocumentMetadata: { Pages: 1 }, Blocks: [{ BlockType: "LINE", Text: "synthetic" }] } }] },
+  });
+  const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({
+    stores: "cfo", versionBound: true, maxPages: 1, concurrency: 1,
+    cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256,
+    cfoReceiptPath: "_RECEIPTS/test-receipt.json",
+  })));
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.pagesUsed, 1);
+  assert.equal(world.calls.filter((c) => c.method === "HEAD").length, 2, "must bind both before and after Textract to the same source version");
+  assert.equal(world.calls.find((c) => c.action === "DetectDocumentText").body.Document.S3Object.Version, "source-version");
+  const receipt = JSON.parse(world.puts.find((put) => put.path === `/${CFO_PREFIX}_RECEIPTS/test-receipt.json`).bodyText);
+  assert.deepEqual(receipt.entries, [{ source_name: "scan.png", source_version_id: "source-version", page_count: 1, sidecar_name: "_TEXT/scan.png.txt", sidecar_version_id: "sidecar-version" }]);
+});
+
+test("getBufferFromS3: a version-bound GET carries VersionId as the S3 query parameter", async () => {
+  let requestedVersion = null;
+  await withEnv(FAKE_ENV, () => withStubbedFetch(async (url, opts = {}) => {
+    const parsed = new URL(String(url));
+    requestedVersion = parsed.searchParams.get("versionId");
+    assert.equal(opts.method, "GET");
+    return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+  }, async () => {
+    assert.deepEqual(await getBufferFromS3("otchealthcfodata", "cfo-source-docs", "synthetic.pdf", { versionId: "source-version" }), Buffer.from([1, 2, 3]));
+  }));
+  assert.equal(requestedVersion, "source-version");
+});
+
+test("runSweep: a version-bound PDF whose private preflight exceeds MAX_PAGES never reaches Textract", async () => {
+  const manifest = JSON.stringify({ candidates: [{ name: "synthetic.pdf" }] });
+  const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
+  const world = makeWorld({
+    s3Objects: {
+      [`/${CFO_PREFIX}_CONTROL/manifest.json`]: { size: manifest.length, text: manifest, versionId: "manifest-version" },
+      [`/${CFO_PREFIX}synthetic.pdf`]: { size: 3, bytes: "pdf", versionId: "source-version" },
+    },
+  });
+  _setPdfinfoForTests(() => "Pages: 4\n");
+  try {
+    const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({
+      stores: "cfo", versionBound: true, maxPages: 3, concurrency: 1,
+      cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256,
+    })));
+    assert.equal(r.ok, true);
+    assert.equal(r.overCount, 1);
+    assert.equal(r.processed, 0);
+    assert.equal(world.calls.some((call) => call.host === TEXTRACT_HOST), false);
+    assert.equal(world.calls.find((call) => call.method === "GET" && call.path.endsWith("synthetic.pdf")).query, "versionId=source-version");
+  } finally {
+    _setPdfinfoForTests();
+  }
+});
+
+test("runSweep: a Textract/preflight PDF page disagreement withholds the sidecar and charges the actual reported count", async () => {
+  const manifest = JSON.stringify({ candidates: [{ name: "synthetic.pdf" }] });
+  const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
+  const world = makeWorld({
+    s3Objects: {
+      [`/${CFO_PREFIX}_CONTROL/manifest.json`]: { size: manifest.length, text: manifest, versionId: "manifest-version" },
+      [`/${CFO_PREFIX}synthetic.pdf`]: { size: 3, bytes: "pdf", versionId: "source-version" },
+    },
+    textract: { DetectDocumentText: [{ status: 200, json: { DocumentMetadata: { Pages: 2 }, Blocks: [{ BlockType: "LINE", Text: "synthetic" }] } }] },
+  });
+  _setPdfinfoForTests(() => "Pages: 1\n");
+  try {
+    const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({
+      stores: "cfo", versionBound: true, maxPages: 1, concurrency: 1,
+      cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256,
+    })));
+    assert.equal(r.ok, true);
+    assert.equal(r.failCount, 1);
+    assert.equal(r.okCount, 0);
+    assert.equal(r.pagesUsed, 2);
+    assert.equal(world.puts.length, 0, "a page-count disagreement must withhold the sidecar");
+  } finally {
+    _setPdfinfoForTests();
+  }
 });
 
 test("runSweep: sync success -- a single small PDF is OCR'd via DetectDocumentText and the sidecar lands at the exact _TEXT/<name>.txt S3 key", async () => {
@@ -542,7 +656,7 @@ test("runSweep: MAX_DOCS_PER_RUN is a HARD cap under concurrency -- closes FND-2
   assert.equal(releases.length, 5, "the 6th candidate must never even reach Textract once the doc-count cap is exactly hit -- dispatch-time reservation, not a post-completion count, is what stops it");
 });
 
-test("runSweep: MAX_PAGES is a HARD cap under concurrency too -- the identical race pattern (the finding's 'pages budget has the same shape'), closed by the SAME dispatch-time reservation", async () => {
+test("runSweep: MAX_PAGES prevents concurrent over-dispatch when each Textract result matches its one-page reservation", async () => {
   const NAMES = ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf", "f.pdf"]; // 6 candidates, each exactly 1 real page, cap = 5 pages
   const s3Objects = {};
   for (const n of NAMES) s3Objects[`/${CFO_PREFIX}${n}`] = { size: 1000 };
