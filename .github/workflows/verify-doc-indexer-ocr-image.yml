@@ -18,10 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with: { fetch-depth: 0, persist-credentials: false }
-      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+      - name: Configure AWS credentials (OIDC role when configured, static ECR key fallback otherwise)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
         with:
           role-to-assume: ${{ vars.AWS_OIDC_ROLE_ARN }}
           role-session-name: verify-doc-indexer-ocr-${{ github.run_id }}
+          aws-access-key-id: ${{ vars.AWS_OIDC_ROLE_ARN == '' && secrets.ECR_AWS_ACCESS_KEY_ID || '' }}
+          aws-secret-access-key: ${{ vars.AWS_OIDC_ROLE_ARN == '' && secrets.ECR_AWS_SECRET_ACCESS_KEY || '' }}
           aws-region: us-east-1
       - uses: aws-actions/amazon-ecr-login@aded0d722166a37980e030aa969dda0bfe6b6947
       - name: Verify immutable OCR bytes on both platforms
