@@ -414,7 +414,7 @@ test("getBufferFromS3: a version-bound GET carries VersionId as the S3 query par
     const parsed = new URL(String(url));
     requestedVersion = parsed.searchParams.get("versionId");
     assert.equal(opts.method, "GET");
-    return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+    return { ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
   }, async () => {
     assert.deepEqual(await getBufferFromS3("otchealthcfodata", "cfo-source-docs", "synthetic.pdf", { versionId: "source-version" }), Buffer.from([1, 2, 3]));
   }));

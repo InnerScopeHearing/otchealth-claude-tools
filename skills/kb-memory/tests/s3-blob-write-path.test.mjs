@@ -9,6 +9,7 @@ import {
   s3LocationFor,
   getTextFromS3,
   getTextMetaFromS3,
+  getBufferMetaFromS3,
   putObjectToS3,
   listBlobsFromS3,
   s3Configured,
@@ -100,6 +101,19 @@ test("getTextMetaFromS3 surfaces the ETag from the same GET response (no second 
   assert.equal(text, "line1\n");
   assert.equal(etag, '"xyz"');
   assert.equal(calls, 1, "must be exactly one HTTP call, not a GET plus a separate HEAD");
+});
+
+test("getBufferMetaFromS3 returns unchanged bytes with the ETag from one GET", async () => {
+  let calls = 0;
+  const result = await withEnv(FAKE_CREDS, () =>
+    withStubbedFetch(async () => {
+      calls++;
+      return { ok: true, status: 200, headers: new Map([["etag", '"binary-etag"'], ["x-amz-version-id", "v1"]]), arrayBuffer: async () => Uint8Array.from([0, 255, 1]).buffer };
+    }, () => getBufferMetaFromS3("otchealthcommons", "company-journal", "_MEMORY/blob.bin")));
+  assert.deepEqual([...result.body], [0, 255, 1]);
+  assert.equal(result.etag, '"binary-etag"');
+  assert.equal(result.versionId, "v1");
+  assert.equal(calls, 1);
 });
 
 // ---- putObjectToS3: throws on every non-2xx, including a conflict (the caller decides what to do) --

@@ -25,7 +25,7 @@ import { promisify } from "node:util";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const execFileP = promisify(execFile);
 const HERE = fileURLToPath(new URL(".", import.meta.url));
@@ -129,7 +129,7 @@ function s3ListXml(prefix, keys) {
  * still works unmodified.
  */
 function preloadSource(logPath, catalogFlushPath, opts) {
-  const { catalogRows, marker = null, jobStatusSequence = ["Completed"], outputLines = [], manifest = null, createJobShouldFail = false } = opts;
+  const { catalogRows, marker = null, jobStatusSequence = ["Completed"], outputLines = [], manifest = null, createJobShouldFail = false, catalogPutStatuses = [200] } = opts;
   return `
 import { appendFileSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 function isHost(u, host) { try { return new URL(u).host === host; } catch { return false; } }
@@ -140,20 +140,22 @@ const MARKER_SEED = ${JSON.stringify(marker)};
 const JOB_STATUS_SEQUENCE = ${JSON.stringify(jobStatusSequence)};
 const OUTPUT_LINES = ${JSON.stringify(outputLines)};
 const MANIFEST = ${JSON.stringify(manifest)};
+const CATALOG_PUT_STATUSES = ${JSON.stringify(catalogPutStatuses)};
 let pollCount = 0;
+let catalogPutCount = 0;
 let markerState = MARKER_SEED ? JSON.stringify(MARKER_SEED) : null;
 
 globalThis.fetch = async (url, opts2) => {
   const u = String(typeof url === "string" ? url : url?.url || url);
   const method = (opts2 && opts2.method) || "GET";
   const bodyStr = opts2 && opts2.body ? String(opts2.body) : null;
-  appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ method, url: u, body: bodyStr ? bodyStr.slice(0, 6000) : null }) + "\\n");
+  appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ method, url: u, body: bodyStr ? bodyStr.slice(0, 6000) : null, ifMatch: opts2?.headers?.["if-match"] || opts2?.headers?.["If-Match"] || null }) + "\\n");
 
   // ---- document-room S3 ----
   if (isHost(u, ${JSON.stringify(S3_HOST)})) {
     const p = pathOf(u);
     if (method === "GET" && p === ${JSON.stringify("/" + S3_KEY_PREFIX + "_CATALOG/catalog.jsonl")}) {
-      return new Response(CATALOG_ROWS.map((r) => JSON.stringify(r)).join("\\n") + "\\n", { status: 200 });
+      return new Response(CATALOG_ROWS.map((r) => JSON.stringify(r)).join("\\n") + "\\n", { status: 200, headers: { etag: '"catalog-v1"', "x-amz-version-id": "catalog-v1" } });
     }
     for (const r of CATALOG_ROWS) {
       if (method === "GET" && p === ${JSON.stringify("/" + S3_KEY_PREFIX + "_TEXT/")} + r.path + ".txt") {
@@ -171,8 +173,10 @@ globalThis.fetch = async (url, opts2) => {
       if (method === "DELETE") { markerState = null; return new Response("", { status: 200 }); }
     }
     if (method === "PUT" && p === ${JSON.stringify("/" + S3_KEY_PREFIX + "_CATALOG/catalog.jsonl")}) {
+      const status = CATALOG_PUT_STATUSES[Math.min(catalogPutCount++, CATALOG_PUT_STATUSES.length - 1)];
+      if (status !== 200) return new Response("conditional conflict", { status });
       writeFileSync(${JSON.stringify(catalogFlushPath)}, String(bodyStr));
-      return new Response("", { status: 200 });
+      return new Response("", { status: 200, headers: { etag: '"catalog-v2"', "x-amz-version-id": "catalog-v2" } });
     }
     if (method === "PUT" || method === "DELETE") return new Response("", { status: 200 }); // lock/review-queue writes
     return new Response("not found", { status: 404 });
@@ -233,7 +237,7 @@ function runEnrichBedrockBatch(args, opts = {}) {
     ENRICH_BEDROCK_BATCH_ROLE_ARN: "arn:aws:iam::900915535335:role/TestBedrockBatchRole",
     ...(opts.envExtra || {}),
   };
-  return execFileP(process.execPath, ["--import", preload, ENRICH_MJS, "run", "--profile", "finance", "--s3", "--llm-provider", "bedrock", "--bedrock-batch", ...args], { env, timeout: 30000 })
+  return execFileP(process.execPath, ["--import", pathToFileURL(preload).href, ENRICH_MJS, "run", "--profile", "finance", "--s3", "--llm-provider", "bedrock", "--bedrock-batch", ...args], { env, timeout: 30000 })
     .then((r) => ({ status: 0, stdout: r.stdout, stderr: r.stderr, calls: readCalls(logPath), catalogFlush: readCatalogFlush(catalogFlushPath) }))
     .catch((e) => ({ status: e.code ?? 1, stdout: e.stdout || "", stderr: e.stderr || "", calls: readCalls(logPath), catalogFlush: readCatalogFlush(catalogFlushPath) }));
 }
@@ -365,6 +369,29 @@ test("fresh submission, job Completes cleanly: the input JSONL is Converse-shape
 
   const markerDelete = r.calls.find((c) => isHost(c.url, S3_HOST) && c.method === "DELETE" && pathOf(c.url).endsWith("enrich-bedrock-batch.json"));
   assert.ok(markerDelete, "a fully-reconciled Completed job must have its marker deleted");
+});
+
+test("a stale catalog conditional write preserves the paid batch marker, and retry resumes it without another submission", async () => {
+  const outputLines = [{ recordId: ROW_A.path, modelInput: {}, modelOutput: { output: { message: { content: [{ text: '{"doc_title":"Conflict Retry Fixture","confidence":"high"}' }] } }, usage: { inputTokens: 300, outputTokens: 20 } } }];
+  const first = await runEnrichBedrockBatch([], { catalogRows: [ROW_A], jobStatusSequence: ["Completed"], outputLines, catalogPutStatuses: [412] });
+  assert.notEqual(first.status, 0, "a stale ETag must fail the catalog write rather than overwrite another writer");
+  const catalogPut = first.calls.find((c) => isHost(c.url, S3_HOST) && c.method === "PUT" && pathOf(c.url).endsWith("_CATALOG/catalog.jsonl"));
+  assert.equal(catalogPut.ifMatch, '"catalog-v1"', "the conflicting PUT must carry the GET ETag");
+  assert.equal(first.catalogFlush, null, "the stale writer must not persist its in-memory catalog over the concurrent update");
+  const markerPut = first.calls.find((c) => isHost(c.url, S3_HOST) && c.method === "PUT" && pathOf(c.url).endsWith("enrich-bedrock-batch.json"));
+  assert.ok(markerPut, "the paid job must remain resumable until its catalog reconciliation is durable");
+  assert.equal(first.calls.find((c) => isHost(c.url, S3_HOST) && c.method === "DELETE" && pathOf(c.url).endsWith("enrich-bedrock-batch.json")), undefined,
+    "a catalog conflict must not delete the paid batch marker");
+
+  const retry = await runEnrichBedrockBatch([], {
+    catalogRows: [ROW_A], marker: JSON.parse(markerPut.body), jobStatusSequence: ["Completed"], outputLines, createJobShouldFail: true,
+  });
+  assert.equal(retry.status, 0, `retry must resume the completed job: ${retry.stderr}`);
+  assert.deepEqual(retry.calls.filter((c) => isHost(c.url, BEDROCK_CONTROL_HOST) && c.method === "POST"), [], "retry must never submit another paid batch job");
+  assert.deepEqual(retry.calls.filter((c) => isHost(c.url, STAGING_HOST) && c.method === "PUT"), [], "retry must never upload another batch input");
+  assert.equal(retry.catalogFlush.find((row) => row.path === ROW_A.path).doc_title, "Conflict Retry Fixture");
+  assert.ok(retry.calls.find((c) => isHost(c.url, S3_HOST) && c.method === "DELETE" && pathOf(c.url).endsWith("enrich-bedrock-batch.json")),
+    "the marker is deleted only after the resumed catalog write succeeds");
 });
 
 // ---- PartiallyCompleted / a missing record: the core "fail loud on a short result set" contract ----

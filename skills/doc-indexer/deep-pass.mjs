@@ -84,7 +84,8 @@ import { join, basename, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { kvSecret, requireSecrets } from "../kb-memory/azure-secret.mjs";
 import { fleetSecret } from "./fleet-secret.mjs";
-import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { getBufferFromS3, getBufferMetaFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { writeCatalogIfChanged } from "./catalog-conditional-write.mjs";
 import { converseJson } from "./bedrock-client.mjs";
 // isPipelineInternal (FND-20260828-fe09): the SAME predicate enrich.mjs's #463 fix uses, imported
 // rather than re-derived so the two scripts can never silently disagree on what counts as pipeline
@@ -516,9 +517,30 @@ async function analyze(r) {
 
 // ---------- catalog I/O ----------
 const CATALOG = '_CATALOG/catalog.jsonl';
-async function loadCatalog() { const b = await getBuf(CATALOG); if (!b) throw new Error('no catalog at ' + CONTAINER + '/' + CATALOG); return b.toString('utf8').trim().split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
+let catalogSnapshot = null;
+async function loadCatalog() {
+  const b = STORAGE === 's3'
+    ? (catalogSnapshot = await getBufferMetaFromS3(ACCT, CONTAINER, CATALOG)).body
+    : await getBuf(CATALOG);
+  if (!b) throw new Error('no catalog at ' + CONTAINER + '/' + CATALOG);
+  return b.toString('utf8').trim().split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+}
 let flushing = false;
-async function flush(rows) { if (flushing) return; flushing = true; try { await putBuf(CATALOG, Buffer.from(rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8'), 'application/x-ndjson'); } finally { flushing = false; } }
+async function flush(rows) {
+  if (flushing) return;
+  flushing = true;
+  try {
+    const next = Buffer.from(rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8');
+    if (STORAGE === 's3') {
+      const result = await writeCatalogIfChanged({ snapshot: catalogSnapshot ?? { body: null, etag: null }, next,
+        write: (body, headers) => putObjectToS3(ACCT, CONTAINER, CATALOG, body, 'application/x-ndjson', headers) });
+      catalogSnapshot = result.snapshot;
+      return result;
+    }
+    await putBuf(CATALOG, next, 'application/x-ndjson');
+    return { written: true, snapshot: null };
+  } finally { flushing = false; }
+}
 
 // ---------- selection logic (pure, exported for regression testing -- see tests/deep-pass-loop.test.mjs) ----------
 // FND-20260828-fe09, CLOSED: this filter now uses the SAME isPipelineInternal() explicit prefix list
