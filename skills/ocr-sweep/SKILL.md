@@ -150,7 +150,11 @@ same S3 VersionId. A second HEAD after Textract must still return it before the 
 The receipt records only the source name, version, digest, page count, and sidecar version. A retry
 with matching sidecars and receipt returns success without another Textract request; a mismatched
 manifest, source, sidecar, or receipt fails closed. A partial, skipped, or failed strict batch writes
-no completion receipt, so a corrected retry can safely resume.
+no completion receipt, so a corrected retry can safely resume. Each successful sidecar also writes a
+private immutable per-document provenance record before the next source starts. Resume reconciles
+those records against every manifest row and the current HEAD versions of both source and sidecar;
+only complete coverage produces the final receipt. A sidecar without matching provenance is never
+treated as a completed repair.
 
 ## Region
 

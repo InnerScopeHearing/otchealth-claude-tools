@@ -606,19 +606,65 @@ function intOpt(v, envName, def) {
   return Number.isFinite(n) ? n : def;
 }
 
-/** A completed strict-repair receipt must cover every approved binding.  This deliberately checks
- * only compact identifiers and hashes, never source text. */
-function boundReceiptMatches(text, manifestSha256, bindings) {
+function boundEntryMatches(entry, name, binding) {
+  return !!entry && entry.source_name === name && entry.source_version_id === binding.version_id && entry.source_sha256 === binding.sha256 && entry.page_count === binding.page_count && entry.sidecar_name === sideFor(name) && typeof entry.sidecar_version_id === "string" && !!entry.sidecar_version_id;
+}
+
+/** A deterministic private child object for a single sidecar binding.  It contains no source bytes
+ * and survives a process crash between one successful sidecar write and the final batch receipt. */
+function boundEntryPath(receiptPath, name, binding) {
+  const id = crypto.createHash("sha256").update(`${name}\u0000${binding.version_id}\u0000${binding.sha256}`).digest("hex");
+  return `${receiptPath}.entries/${id}.json`;
+}
+
+function completedReceiptEntries(text, manifestSha256, bindings) {
   let receipt;
-  try { receipt = JSON.parse(text); } catch { return false; }
-  if (!receipt || receipt.schema_version !== 1 || receipt.kind !== "cfo-ocr-source-version-receipt" || receipt.candidate_manifest_sha256 !== manifestSha256 || !Array.isArray(receipt.entries) || receipt.entries.length !== bindings.size) return false;
+  try { receipt = JSON.parse(text); } catch { return null; }
+  if (!receipt || receipt.schema_version !== 1 || receipt.kind !== "cfo-ocr-source-version-receipt" || receipt.candidate_manifest_sha256 !== manifestSha256 || !Array.isArray(receipt.entries) || receipt.entries.length !== bindings.size) return null;
   const entries = new Map(receipt.entries.map((entry) => [entry && entry.source_name, entry]));
-  if (entries.size !== bindings.size) return false;
-  for (const [name, binding] of bindings) {
-    const entry = entries.get(name);
-    if (!entry || entry.source_version_id !== binding.version_id || entry.source_sha256 !== binding.sha256 || entry.page_count !== binding.page_count || entry.sidecar_name !== sideFor(name) || typeof entry.sidecar_version_id !== "string" || !entry.sidecar_version_id) return false;
+  if (entries.size !== bindings.size) return null;
+  for (const [name, binding] of bindings) if (!boundEntryMatches(entries.get(name), name, binding)) return null;
+  return entries;
+}
+
+async function persistBoundEntry(receiptPath, name, entry) {
+  const binding = { version_id: entry.source_version_id, sha256: entry.source_sha256 };
+  const path = boundEntryPath(receiptPath, name, binding);
+  const body = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-binding", entry });
+  const sha256 = crypto.createHash("sha256").update(body).digest("hex");
+  try {
+    await putObjectToS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], path, body, "application/json", { "If-None-Match": "*" });
+  } catch (e) {
+    if (!e || e.status !== 412) throw e;
+    const existing = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], path);
+    if (existing === null || crypto.createHash("sha256").update(existing).digest("hex") !== sha256) throw taggedError("per-document source binding conflicts with an immutable provenance record", { systemic: true });
   }
-  return true;
+  return entry;
+}
+
+/** Reconcile every manifest row, including rows skipped in this invocation because their sidecar
+ * already exists.  No Textract request is made here. */
+async function reconcileBoundEntries(receiptPath, bindings) {
+  const entries = [];
+  for (const [name, binding] of bindings) {
+    const path = boundEntryPath(receiptPath, name, binding);
+    let sourceMeta, sidecarMeta, storedText;
+    try {
+      sourceMeta = await headObjectMetaFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], name);
+      sidecarMeta = await headObjectMetaFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], sideFor(name));
+      storedText = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], path);
+    } catch (e) {
+      if (isSystemicS3Error(e)) throw e;
+      return { ok: false, message: "could not read a source-bound provenance record" };
+    }
+    if (!sourceMeta || sourceMeta.versionId !== binding.version_id || !sidecarMeta || !sidecarMeta.versionId || storedText === null) return { ok: false, message: "current source, sidecar, or provenance binding is missing or changed" };
+    let stored;
+    try { stored = JSON.parse(storedText); } catch { return { ok: false, message: "per-document source binding is not valid JSON" }; }
+    const entry = stored && stored.entry;
+    if (!stored || stored.schema_version !== 1 || stored.kind !== "cfo-ocr-source-version-binding" || !boundEntryMatches(entry, name, binding) || entry.sidecar_version_id !== sidecarMeta.versionId) return { ok: false, message: "current source, sidecar, or provenance binding does not match the approved manifest" };
+    entries.push(entry);
+  }
+  return { ok: true, entries };
 }
 
 /** Run one sweep. Never calls process.exit() -- every outcome (including a systemic failure) comes
@@ -724,7 +770,12 @@ export async function runSweep(opts = {}) {
     let existingReceipt;
     try { existingReceipt = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], receiptPath); }
     catch (e) { return { ok: false, systemic: true, message: `CFO OCR source-version receipt could not be read: ${e.message}`, ...emptyCounts(), stats }; }
-    if (!boundReceiptMatches(existingReceipt, manifestSha256, boundManifest)) return { ok: false, systemic: true, message: "all bound sources already have sidecars but no matching idempotent receipt", ...emptyCounts(), stats };
+    const receiptEntries = completedReceiptEntries(existingReceipt, manifestSha256, boundManifest);
+    if (!receiptEntries) return { ok: false, systemic: true, message: "all bound sources already have sidecars but no matching idempotent receipt", ...emptyCounts(), stats };
+    let reconciled;
+    try { reconciled = await reconcileBoundEntries(receiptPath, boundManifest); }
+    catch (e) { return { ok: false, systemic: true, message: `CFO OCR source-version receipt could not be reconciled: ${e.message}`, ...emptyCounts(), stats }; }
+    if (!reconciled.ok || reconciled.entries.some((entry) => receiptEntries.get(entry.source_name).sidecar_version_id !== entry.sidecar_version_id)) return { ok: false, systemic: true, message: "all bound sources have sidecars but their current source or sidecar versions do not match the receipt", ...emptyCounts(), stats };
     return { ok: true, systemic: false, message: "Source-bound CFO repair already completed; matching sidecars and receipt were retained.", ...emptyCounts(), stats, receipt: { sha256: crypto.createHash("sha256").update(existingReceipt).digest("hex"), existing: true, entryCount: boundManifest.size } };
   }
 
@@ -816,9 +867,12 @@ export async function runSweep(opts = {}) {
         }
         try {
           const sidecar = await putObjectToS3(it.account, it.container, sideFor(it.name), Buffer.from(result.text, "utf8"), "text/plain; charset=utf-8");
-          // Kept only in the CFO S3 receipt, never emitted to stdout. This is the exact binding
-          // from source name and immutable version to the sidecar version written for it.
-          sourceVersionReceipt.push({ source_name: it.name, source_version_id: sourceMeta.versionId, source_sha256: sourceSha256, page_count: result.pages, sidecar_name: sideFor(it.name), sidecar_version_id: sidecar.versionId || null });
+          // Persist each completed source-to-sidecar binding before moving to the next document.
+          // This makes a crash or a later document failure resumable without re-OCR-ing this one.
+          if (VERSION_BOUND && !sidecar.versionId) throw taggedError("sidecar write did not return an immutable S3 VersionId", { systemic: true, pagesBilled: result.pages || 1 });
+          const entry = { source_name: it.name, source_version_id: sourceMeta.versionId, source_sha256: sourceSha256, page_count: result.pages, sidecar_name: sideFor(it.name), sidecar_version_id: sidecar.versionId || null };
+          if (VERSION_BOUND) await persistBoundEntry(receiptPath, it.name, entry);
+          sourceVersionReceipt.push(entry);
         } catch (putErr) {
           // The OCR already happened and was billed: carry its real page count on the error so the
           // budget accounting in the catch below charges what Textract actually processed.
@@ -864,14 +918,22 @@ export async function runSweep(opts = {}) {
   if (VERSION_BOUND && (state.ok !== candidates.length || state.fail || state.over)) {
     return { ok: false, systemic: true, message: "source-bound CFO repair is incomplete; idempotent receipt was withheld", ...counts };
   }
+  let completedEntries = sourceVersionReceipt;
+  if (VERSION_BOUND) {
+    let reconciled;
+    try { reconciled = await reconcileBoundEntries(receiptPath, boundManifest); }
+    catch (e) { return { ok: false, systemic: true, message: `source-bound CFO repair could not reconcile durable provenance: ${e.message}`, ...counts }; }
+    if (!reconciled.ok || reconciled.entries.length !== boundManifest.size) return { ok: false, systemic: true, message: "source-bound CFO repair did not establish complete manifest provenance; idempotent receipt was withheld", ...counts };
+    completedEntries = reconciled.entries;
+  }
   let receipt = null;
   if (receiptPath) {
     if (rooms.length !== 1 || rooms[0].name !== "cfo") return { ok: false, systemic: true, message: "CFO OCR receipts require STORES=cfo only", ...counts };
-    const body = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-receipt", candidate_manifest_sha256: manifestSha256 || null, max_docs_per_run: MAX_DOCS, max_pages: MAX_PAGES, max_mb: MAX_MB, concurrency: CONC, entries: sourceVersionReceipt });
+    const body = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-receipt", candidate_manifest_sha256: manifestSha256 || null, max_docs_per_run: MAX_DOCS, max_pages: MAX_PAGES, max_mb: MAX_MB, concurrency: CONC, entries: completedEntries });
     const sha256 = crypto.createHash("sha256").update(body).digest("hex");
     try {
       const stored = await putObjectToS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], receiptPath, body, "application/json", { "If-None-Match": "*" });
-      receipt = { sha256, versionId: stored.versionId || null, entryCount: sourceVersionReceipt.length };
+      receipt = { sha256, versionId: stored.versionId || null, entryCount: completedEntries.length };
     } catch (e) {
       // Conditional creation makes a crash/retry safe.  A collision is success only when the
       // immutable receipt body is byte-for-byte identical; any other object at this path is a
@@ -880,7 +942,7 @@ export async function runSweep(opts = {}) {
         try {
           const existing = await getTextFromS3(ROOMS.cfo.account, ROOMS.cfo.containers[0], receiptPath);
           if (existing !== null && crypto.createHash("sha256").update(existing).digest("hex") === sha) {
-            receipt = { sha256, versionId: null, entryCount: sourceVersionReceipt.length, existing: true };
+            receipt = { sha256, versionId: null, entryCount: completedEntries.length, existing: true };
           } else {
             return { ok: false, systemic: true, message: "CFO OCR source-version receipt conflicts with a different immutable receipt", ...counts };
           }
