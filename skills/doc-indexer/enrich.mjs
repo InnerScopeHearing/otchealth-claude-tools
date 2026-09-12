@@ -152,7 +152,8 @@ import * as MS from "./metadata-schema.mjs";
 import { osSearch, osBulkUpdate, osRefresh } from "./opensearch-client.mjs";
 // STORAGE_BACKEND (2026-08-19): the same S3 mirror layer indexer.mjs already uses. See the
 // STORAGE_BACKEND note in this file's header for why this exists and why the default flipped.
-import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { getBufferFromS3, getBufferMetaFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { writeCatalogIfChanged } from "./catalog-conditional-write.mjs";
 // LLM_PROVIDER=bedrock (2026-08-29): provider/model/rate selection + the Bedrock Converse adapter +
 // the shared JSON-extraction fallback all live in enrich-llm.mjs, a pure/injectable module so they
 // are unit-testable without importing this whole argv-parsing CLI script (see that file's own
@@ -400,13 +401,30 @@ async function setBlobMetadata(n, metaObj) {
 }
 
 // ============================ catalog io + cron-safe lock (mirrors deep-pass.mjs's own lock) ============================
+let catalogSnapshot = null;
 async function loadCatalog() {
-  const b = await getBuf(CATALOG);
+  const b = STORAGE === "s3"
+    ? (catalogSnapshot = await getBufferMetaFromS3(ACCT, CONTAINER, CATALOG)).body
+    : await getBuf(CATALOG);
   if (!b) throw new Error(`no catalog at ${CONTAINER}/${CATALOG} -- run indexer.mjs index (and ideally understand) first`);
   return b.toString("utf8").trim().split("\n").map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 }
 let flushing = false;
-async function flushCatalog(rows) { if (flushing) return; flushing = true; try { await putBuf(CATALOG, Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8"), "application/x-ndjson"); } finally { flushing = false; } }
+async function flushCatalog(rows) {
+  if (flushing) return;
+  flushing = true;
+  try {
+    const next = Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+    if (STORAGE === "s3") {
+      const result = await writeCatalogIfChanged({ snapshot: catalogSnapshot ?? { body: null, etag: null }, next,
+        write: (body, headers) => putObjectToS3(ACCT, CONTAINER, CATALOG, body, "application/x-ndjson", headers) });
+      catalogSnapshot = result.snapshot;
+      return result;
+    }
+    await putBuf(CATALOG, next, "application/x-ndjson");
+    return { written: true, snapshot: null };
+  } finally { flushing = false; }
+}
 
 const LOCK = "_CATALOG/.enrich.lock";
 const LOCK_TTL = 15 * 60 * 1000;
@@ -1252,12 +1270,10 @@ async function buildAndSubmitBedrockBatch(todo) {
   if (errored > 0) console.error(`[enrich] BEDROCK_BATCH: ${errored} record(s) returned a per-line error from Bedrock -- NOT marked enriched, will be retried on the next run.`);
   console.error(`[enrich] BEDROCK_BATCH: job ${marker.jobId} reconciled -- ${ok} ok, ${errored} errored, ${missing} missing, of ${toReconcile.length} requested (job status=${job.status}${manifest ? `; AWS manifest: ${manifest.successRecordCount}/${manifest.totalRecordCount} succeeded` : ""}).`);
 
-  // Every named row has now been reconciled one way or another (ok/errored/missing) -- nothing
-  // left to resume, so the marker is cleared. A row that is STILL pending (should not happen once
-  // job.status is terminal, but defensively: if it somehow were, leaving the marker around would
-  // be actively wrong here since AWS itself says the job is done) never occurs by construction of
-  // the loop above (every id in toReconcile gets exactly one outcome).
-  await deleteBedrockBatchMarker();
+  // The caller clears this marker only AFTER it conditionally persists these reconciled catalog
+  // rows. If a concurrent catalog writer won first, keeping the paid batch marker lets the next
+  // run reattach to these already-produced results instead of submitting another batch job.
+  return { reconciled: true };
 }
 
 // ============================ run command ============================
@@ -1293,12 +1309,13 @@ async function cmdRun() {
     // OPENAI_BATCH (2026-09-02): both unset (the state of every job today) means this is skipped
     // entirely and the worker pool below takes the EXACT pre-existing live-call path, byte-identical
     // to before this lever existed. See buildAndSubmitEnrichBatch()'s own header for the full contract.
+    let completedBedrockBatch = false;
     if (LLM_PROVIDER === "openai" && isBatchEnabled("doc-indexer-enrich")) {
       await buildAndSubmitEnrichBatch(todo);
     } else if (LLM_PROVIDER === "bedrock" && BEDROCK_BATCH) {
       // BEDROCK_BATCH (2026-09-03): off by default (the state of every job today). See
       // buildAndSubmitBedrockBatch()'s own header for the full contract, including --dry-run.
-      await buildAndSubmitBedrockBatch(todo);
+      const batch = await buildAndSubmitBedrockBatch(todo);
       // --dry-run's WHOLE point is "make no network call, submit nothing, enrich nothing" -- but
       // BATCH_PREFETCH is deliberately left untouched by the dry-run branch above (there is
       // nothing to prefetch when nothing was submitted), so without this early return the worker
@@ -1309,6 +1326,7 @@ async function cmdRun() {
       // other time but not this one). Scoped to this branch specifically: --dry-run has no
       // documented effect outside the Bedrock batch lane, so it changes nothing else here.
       if (DRY_RUN) { console.log("[enrich] --dry-run: stopping here (see the BEDROCK_BATCH DRY RUN lines above) -- no document was processed, called, or enriched."); return; }
+      completedBedrockBatch = batch?.reconciled === true;
     }
     let next = 0, since = 0;
     const start = Date.now();
@@ -1373,6 +1391,7 @@ async function cmdRun() {
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, todo.length || 1) }, worker));
     await flushCatalog(rows);
+    if (completedBedrockBatch) await deleteBedrockBatchMarker();
     // Force visibility of everything just written rather than waiting for the default ~1s refresh
     // interval -- called ONCE at the end (not per-write, which would add real latency at scale for no
     // benefit once the caller is done batching; see osRefresh's own doc comment).
