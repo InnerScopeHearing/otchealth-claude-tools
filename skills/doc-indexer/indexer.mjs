@@ -57,7 +57,8 @@ import { tmpdir } from "node:os";
 import { join, basename, extname } from "node:path";
 import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
-import { getBufferFromS3, putObjectToS3, listBlobsMetaFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { getBufferFromS3, getBufferMetaFromS3, putObjectToS3, listBlobsMetaFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { writeCatalogIfChanged } from "./catalog-conditional-write.mjs";
 import { osFetch, osGetMapping, osSearch } from "./opensearch-client.mjs";
 // The proven Amazon OpenSearch writer (Wave-2b port): SigV4 signing, credential resolution
 // (ECS task role -> env -> Key Vault), the OpenAI-direct embedding call, and the bulk
@@ -433,8 +434,25 @@ function indexUpsert(row, body) { if (!_db) return; try { _dbDelete.run(row.path
 async function uploadIndex() { if (!_db) return; try { _db.close(); } catch {} try { await putBuf(INDEX_KEY, readFileSync(_dbPath), "application/x-sqlite3"); } catch (e) { console.error("  index upload failed: " + e.message); } }
 
 // ---------------- catalog io ----------------
-async function loadCatalog() { const buf = await getBuf(CATALOG_KEY); if (!buf) return []; const rows = []; for (const ln of buf.toString("utf8").split("\n")) { const s = ln.trim(); if (!s) continue; try { rows.push(JSON.parse(s)); } catch {} } return rows; }
-async function flushCatalog(rows) { await putBuf(CATALOG_KEY, Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8"), "application/x-ndjson"); }
+let catalogSnapshot = null;
+async function loadCatalog() {
+  const buf = BACKEND === "s3"
+    ? (catalogSnapshot = await getBufferMetaFromS3(S3ACCT, S3CONTAINER, CATALOG_KEY)).body
+    : await getBuf(CATALOG_KEY);
+  if (!buf) return [];
+  const rows = []; for (const ln of buf.toString("utf8").split("\n")) { const s = ln.trim(); if (!s) continue; try { rows.push(JSON.parse(s)); } catch {} } return rows;
+}
+async function flushCatalog(rows) {
+  const next = Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+  if (BACKEND === "s3") {
+    const result = await writeCatalogIfChanged({ snapshot: catalogSnapshot ?? { body: null, etag: null }, next,
+      write: (body, headers) => putObjectToS3(S3ACCT, S3CONTAINER, CATALOG_KEY, body, "application/x-ndjson", headers) });
+    catalogSnapshot = result.snapshot;
+    return result;
+  }
+  await putBuf(CATALOG_KEY, next, "application/x-ndjson");
+  return { written: true, snapshot: null };
+}
 
 // ---------------- commands ----------------
 async function runIndex() {

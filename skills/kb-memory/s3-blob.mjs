@@ -338,13 +338,17 @@ export async function listBlobsFromS3(account, container, prefix) {
  *  JSONL/Markdown ledger content those exist for, but silently corrupting for a PDF/xlsx/sqlite
  *  catalog), this reads the raw ArrayBuffer, so it is the one to use for any object that is not known
  *  to be text. */
-export async function getBufferFromS3(account, container, path, options = {}) {
+export async function getBufferMetaFromS3(account, container, path, options = {}) {
   const loc = locOrThrow(account, container);
   const query = options.versionId ? { versionId: options.versionId } : undefined;
   const r = await s3Request({ method: "GET", loc, path, query });
-  if (r.status === 404) return null;
+  if (r.status === 404) return { body: null, etag: null, versionId: null };
   if (!r.ok) throw new Error(`s3 get ${r.status} (refusing to report a missing object as empty): ${(await r.text()).slice(0, 200)}`);
-  return Buffer.from(await r.arrayBuffer());
+  return { body: Buffer.from(await r.arrayBuffer()), etag: r.headers.get("etag"), versionId: r.headers.get("x-amz-version-id") };
+}
+
+export async function getBufferFromS3(account, container, path, options = {}) {
+  return (await getBufferMetaFromS3(account, container, path, options)).body;
 }
 
 /** DELETE one object, unconditionally (no ETag precondition — matches the simplicity of the Azure

@@ -152,7 +152,8 @@ import * as MS from "./metadata-schema.mjs";
 import { osSearch, osBulkUpdate, osRefresh } from "./opensearch-client.mjs";
 // STORAGE_BACKEND (2026-08-19): the same S3 mirror layer indexer.mjs already uses. See the
 // STORAGE_BACKEND note in this file's header for why this exists and why the default flipped.
-import { getBufferFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { getBufferFromS3, getBufferMetaFromS3, putObjectToS3, deleteObjectFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { writeCatalogIfChanged } from "./catalog-conditional-write.mjs";
 // LLM_PROVIDER=bedrock (2026-08-29): provider/model/rate selection + the Bedrock Converse adapter +
 // the shared JSON-extraction fallback all live in enrich-llm.mjs, a pure/injectable module so they
 // are unit-testable without importing this whole argv-parsing CLI script (see that file's own
@@ -400,13 +401,30 @@ async function setBlobMetadata(n, metaObj) {
 }
 
 // ============================ catalog io + cron-safe lock (mirrors deep-pass.mjs's own lock) ============================
+let catalogSnapshot = null;
 async function loadCatalog() {
-  const b = await getBuf(CATALOG);
+  const b = STORAGE === "s3"
+    ? (catalogSnapshot = await getBufferMetaFromS3(ACCT, CONTAINER, CATALOG)).body
+    : await getBuf(CATALOG);
   if (!b) throw new Error(`no catalog at ${CONTAINER}/${CATALOG} -- run indexer.mjs index (and ideally understand) first`);
   return b.toString("utf8").trim().split("\n").map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 }
 let flushing = false;
-async function flushCatalog(rows) { if (flushing) return; flushing = true; try { await putBuf(CATALOG, Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8"), "application/x-ndjson"); } finally { flushing = false; } }
+async function flushCatalog(rows) {
+  if (flushing) return;
+  flushing = true;
+  try {
+    const next = Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+    if (STORAGE === "s3") {
+      const result = await writeCatalogIfChanged({ snapshot: catalogSnapshot ?? { body: null, etag: null }, next,
+        write: (body, headers) => putObjectToS3(ACCT, CONTAINER, CATALOG, body, "application/x-ndjson", headers) });
+      catalogSnapshot = result.snapshot;
+      return result;
+    }
+    await putBuf(CATALOG, next, "application/x-ndjson");
+    return { written: true, snapshot: null };
+  } finally { flushing = false; }
+}
 
 const LOCK = "_CATALOG/.enrich.lock";
 const LOCK_TTL = 15 * 60 * 1000;
