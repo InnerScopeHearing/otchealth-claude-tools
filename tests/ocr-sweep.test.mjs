@@ -22,6 +22,7 @@ import {
   pageCountOf,
   pageCountFromPdfinfo,
   candidateNamesFromManifest,
+  boundCandidatesFromManifest,
   blocksToText,
   extractExceptionType,
   classifyTextractFailure,
@@ -118,6 +119,15 @@ test("candidateNamesFromManifest: accepts only an explicit eligible candidate se
   assert.deepEqual([...candidateNamesFromManifest(JSON.stringify({ candidates: [{ name: "a.pdf" }, { name: "b.PNG" }] }))].sort(), ["a.pdf", "b.PNG"]);
   assert.throws(() => candidateNamesFromManifest(JSON.stringify({ candidates: [{ name: "_TEXT/a.pdf.txt" }] })), /ineligible/);
   assert.throws(() => candidateNamesFromManifest("not-json"), /not valid JSON/);
+});
+
+test("boundCandidatesFromManifest: requires the exact source version, digest, and bounded PDF page count", () => {
+  const sha = "a".repeat(64);
+  const rows = boundCandidatesFromManifest(JSON.stringify({ candidates: [{ name: "a.pdf", version_id: "v-1", sha256: sha, page_count: 2 }] }));
+  assert.deepEqual(rows.get("a.pdf"), { name: "a.pdf", version_id: "v-1", sha256: sha, page_count: 2 });
+  assert.throws(() => boundCandidatesFromManifest(JSON.stringify({ candidates: [{ name: "a.png", version_id: "v-1", sha256: sha, page_count: 1 }] })), /invalid/);
+  assert.throws(() => boundCandidatesFromManifest(JSON.stringify({ candidates: [{ name: "a.pdf", version_id: "v-1", sha256: "not-a-digest", page_count: 1 }] })), /invalid/);
+  assert.throws(() => boundCandidatesFromManifest(JSON.stringify({ candidates: Array.from({ length: 2 }, (_, n) => ({ name: `p${n}.pdf`, version_id: `v-${n}`, sha256: sha, page_count: 6 })) })), /aggregate page cap/);
 });
 
 test("blocksToText: groups LINE blocks by Page ascending, joins lines within a page in emitted order, blank line between pages, ignores non-LINE blocks", () => {
@@ -328,7 +338,7 @@ function makeWorld({ bucket = CFO_BUCKET, s3Objects = {}, textract = {} } = {}) 
       if (method === "GET") {
         const object = objects[pathname];
         if (!object) return { ok: false, status: 404, text: async () => "" };
-        return { ok: true, status: 200, headers: { get: (n) => (n.toLowerCase() === "etag" ? '"source-etag"' : null) }, text: async () => object.text || "", arrayBuffer: async () => Buffer.from(object.bytes || object.text || "").buffer };
+        return { ok: true, status: 200, headers: { get: (n) => (n.toLowerCase() === "etag" ? '"source-etag"' : null) }, text: async () => object.text || "", arrayBuffer: async () => Uint8Array.from(Buffer.from(object.bytes || object.text || "")).buffer };
       }
       if (method === "PUT") {
         const bodyText = Buffer.isBuffer(opts.body) ? opts.body.toString("utf8") : String(opts.body || "");
@@ -385,27 +395,59 @@ test("runSweep: DRYRUN finds candidates but writes nothing and calls Textract ze
   assert.equal(world.calls.some((c) => c.host === TEXTRACT_HOST), false);
 });
 
-test("runSweep: version-bound CFO repair requires the checked manifest, passes the exact S3 version to Textract, and stores a source-version receipt", async () => {
-  const manifest = JSON.stringify({ candidates: [{ name: "scan.png" }] });
+test("runSweep: source-bound CFO repair verifies the manifest digest, exact source version and bytes, pdfinfo page count, then sends the exact version to Textract and stores the binding receipt", async () => {
+  const sourceBytes = "pdf";
+  const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+  const manifest = JSON.stringify({ candidates: [{ name: "scan.pdf", version_id: "source-version", sha256: sourceSha256, page_count: 1 }] });
   const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
   const world = makeWorld({
     s3Objects: {
       [`/${CFO_PREFIX}_CONTROL/manifest.json`]: { size: manifest.length, text: manifest, versionId: "manifest-version" },
-      [`/${CFO_PREFIX}scan.png`]: { size: 1000, versionId: "source-version" },
+      [`/${CFO_PREFIX}scan.pdf`]: { size: sourceBytes.length, bytes: sourceBytes, versionId: "source-version" },
     },
     textract: { DetectDocumentText: [{ status: 200, json: { DocumentMetadata: { Pages: 1 }, Blocks: [{ BlockType: "LINE", Text: "synthetic" }] } }] },
   });
+  _setPdfinfoForTests(() => "Pages: 1\n");
+  try {
+    const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({
+      stores: "cfo", versionBound: true, maxPages: 1, concurrency: 9,
+      cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256,
+      cfoReceiptPath: "_RECEIPTS/test-receipt.json",
+    })));
+    assert.equal(r.ok, true, r.message);
+    assert.equal(r.pagesUsed, 1);
+    assert.equal(r.receipt.entryCount, 1);
+    assert.equal(world.calls.filter((c) => c.method === "HEAD").length, 2, "must bind both before and after Textract to the same source version");
+    assert.equal(world.calls.find((c) => c.action === "DetectDocumentText").body.Document.S3Object.Version, "source-version");
+    const receipt = JSON.parse(world.puts.find((put) => put.path === `/${CFO_PREFIX}_RECEIPTS/test-receipt.json`).bodyText);
+    assert.deepEqual(receipt.entries, [{ source_name: "scan.pdf", source_version_id: "source-version", source_sha256: sourceSha256, page_count: 1, sidecar_name: "_TEXT/scan.pdf.txt", sidecar_version_id: "sidecar-version" }]);
+    assert.equal(receipt.concurrency, 1, "a bounded repair is serial even if ambient CONC is higher");
+  } finally {
+    _setPdfinfoForTests();
+  }
+});
+
+test("runSweep: a matching source-bound receipt makes a completed repair idempotent without another Textract request", async () => {
+  const sourceBytes = "pdf";
+  const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+  const manifest = JSON.stringify({ candidates: [{ name: "scan.pdf", version_id: "source-version", sha256: sourceSha256, page_count: 1 }] });
+  const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
+  const receipt = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-receipt", candidate_manifest_sha256: manifestSha256, entries: [{ source_name: "scan.pdf", source_version_id: "source-version", source_sha256: sourceSha256, page_count: 1, sidecar_name: "_TEXT/scan.pdf.txt", sidecar_version_id: "sidecar-version" }] });
+  const world = makeWorld({
+    s3Objects: {
+      [`/${CFO_PREFIX}_CONTROL/manifest.json`]: { size: manifest.length, text: manifest },
+      [`/${CFO_PREFIX}scan.pdf`]: { size: sourceBytes.length, bytes: sourceBytes, versionId: "source-version" },
+      [`/${CFO_PREFIX}_TEXT/scan.pdf.txt`]: { size: 9, text: "synthetic" },
+      [`/${CFO_PREFIX}_RECEIPTS/test-receipt.json`]: { size: receipt.length, text: receipt },
+    },
+  });
   const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({
-    stores: "cfo", versionBound: true, maxPages: 1, concurrency: 1,
-    cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256,
+    stores: "cfo", versionBound: true, cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256,
     cfoReceiptPath: "_RECEIPTS/test-receipt.json",
   })));
   assert.equal(r.ok, true, r.message);
-  assert.equal(r.pagesUsed, 1);
-  assert.equal(world.calls.filter((c) => c.method === "HEAD").length, 2, "must bind both before and after Textract to the same source version");
-  assert.equal(world.calls.find((c) => c.action === "DetectDocumentText").body.Document.S3Object.Version, "source-version");
-  const receipt = JSON.parse(world.puts.find((put) => put.path === `/${CFO_PREFIX}_RECEIPTS/test-receipt.json`).bodyText);
-  assert.deepEqual(receipt.entries, [{ source_name: "scan.png", source_version_id: "source-version", page_count: 1, sidecar_name: "_TEXT/scan.png.txt", sidecar_version_id: "sidecar-version" }]);
+  assert.equal(r.receipt.existing, true);
+  assert.equal(world.calls.some((call) => call.host === TEXTRACT_HOST), false, "a matching receipt must suppress a duplicate paid OCR request");
 });
 
 test("getBufferFromS3: a version-bound GET carries VersionId as the S3 query parameter", async () => {
@@ -422,12 +464,13 @@ test("getBufferFromS3: a version-bound GET carries VersionId as the S3 query par
 });
 
 test("runSweep: a version-bound PDF whose private preflight exceeds MAX_PAGES never reaches Textract", async () => {
-  const manifest = JSON.stringify({ candidates: [{ name: "synthetic.pdf" }] });
+  const sourceBytes = "pdf";
+  const manifest = JSON.stringify({ candidates: [{ name: "synthetic.pdf", version_id: "source-version", sha256: createHash("sha256").update(sourceBytes).digest("hex"), page_count: 4 }] });
   const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
   const world = makeWorld({
     s3Objects: {
       [`/${CFO_PREFIX}_CONTROL/manifest.json`]: { size: manifest.length, text: manifest, versionId: "manifest-version" },
-      [`/${CFO_PREFIX}synthetic.pdf`]: { size: 3, bytes: "pdf", versionId: "source-version" },
+      [`/${CFO_PREFIX}synthetic.pdf`]: { size: sourceBytes.length, bytes: sourceBytes, versionId: "source-version" },
     },
   });
   _setPdfinfoForTests(() => "Pages: 4\n");
@@ -435,11 +478,13 @@ test("runSweep: a version-bound PDF whose private preflight exceeds MAX_PAGES ne
     const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({
       stores: "cfo", versionBound: true, maxPages: 3, concurrency: 1,
       cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256,
+      cfoReceiptPath: "_RECEIPTS/budget-receipt.json",
     })));
-    assert.equal(r.ok, true);
+    assert.equal(r.ok, false, "a bounded repair that cannot admit every approved page must withhold its completion receipt");
     assert.equal(r.overCount, 1);
     assert.equal(r.processed, 0);
     assert.equal(world.calls.some((call) => call.host === TEXTRACT_HOST), false);
+    assert.equal(world.puts.length, 0, "an incomplete repair must not leave an idempotency receipt behind");
     assert.equal(world.calls.find((call) => call.method === "GET" && call.path.endsWith("synthetic.pdf")).query, "versionId=source-version");
   } finally {
     _setPdfinfoForTests();
@@ -447,12 +492,13 @@ test("runSweep: a version-bound PDF whose private preflight exceeds MAX_PAGES ne
 });
 
 test("runSweep: a Textract/preflight PDF page disagreement withholds the sidecar and charges the actual reported count", async () => {
-  const manifest = JSON.stringify({ candidates: [{ name: "synthetic.pdf" }] });
+  const sourceBytes = "pdf";
+  const manifest = JSON.stringify({ candidates: [{ name: "synthetic.pdf", version_id: "source-version", sha256: createHash("sha256").update(sourceBytes).digest("hex"), page_count: 1 }] });
   const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
   const world = makeWorld({
     s3Objects: {
       [`/${CFO_PREFIX}_CONTROL/manifest.json`]: { size: manifest.length, text: manifest, versionId: "manifest-version" },
-      [`/${CFO_PREFIX}synthetic.pdf`]: { size: 3, bytes: "pdf", versionId: "source-version" },
+      [`/${CFO_PREFIX}synthetic.pdf`]: { size: sourceBytes.length, bytes: sourceBytes, versionId: "source-version" },
     },
     textract: { DetectDocumentText: [{ status: 200, json: { DocumentMetadata: { Pages: 2 }, Blocks: [{ BlockType: "LINE", Text: "synthetic" }] } }] },
   });
@@ -461,12 +507,13 @@ test("runSweep: a Textract/preflight PDF page disagreement withholds the sidecar
     const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({
       stores: "cfo", versionBound: true, maxPages: 1, concurrency: 1,
       cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256,
+      cfoReceiptPath: "_RECEIPTS/mismatch-receipt.json",
     })));
-    assert.equal(r.ok, true);
+    assert.equal(r.ok, false, "a page disagreement makes the bounded repair incomplete");
     assert.equal(r.failCount, 1);
     assert.equal(r.okCount, 0);
     assert.equal(r.pagesUsed, 2);
-    assert.equal(world.puts.length, 0, "a page-count disagreement must withhold the sidecar");
+    assert.equal(world.puts.length, 0, "a page-count disagreement must withhold both the sidecar and completion receipt");
   } finally {
     _setPdfinfoForTests();
   }
