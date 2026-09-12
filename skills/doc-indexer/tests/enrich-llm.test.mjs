@@ -22,7 +22,7 @@ import { promisify } from "node:util";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   VALID_PROVIDERS, DEFAULT_PROVIDER, BEDROCK_DEFAULT_MODEL,
   defaultModelFor, ratesFor, estCostFor, extractJsonObject,
@@ -391,7 +391,7 @@ globalThis.fetch = async (url, opts) => {
   if (isHost(u, ${JSON.stringify(S3_HOST)})) {
     const p = pathOf(u);
     if (method === "GET" && p === ${JSON.stringify("/" + S3_KEY_PREFIX + "_CATALOG/catalog.jsonl")}) {
-      return new Response(JSON.stringify(CATALOG_ROW) + "\\n", { status: 200 });
+      return new Response(JSON.stringify(CATALOG_ROW) + "\\n", { status: 200, headers: { etag: '"catalog-v1"', "x-amz-version-id": "catalog-v1" } });
     }
     if (method === "GET" && p === ${JSON.stringify("/" + S3_KEY_PREFIX + "_TEXT/test/bedrock-fixture.md.txt")}) {
       return new Response(${JSON.stringify(DOC_TEXT)}, { status: 200 });
@@ -404,7 +404,7 @@ globalThis.fetch = async (url, opts) => {
       // ended up enriched:true/false. Written to a separate file (not just the call log) so the test
       // can read the LAST flush cleanly regardless of how many intermediate flushes happen.
       writeFileSync(${JSON.stringify(catalogFlushPath)}, String(opts.body));
-      return new Response("", { status: 200 });
+      return new Response("", { status: 200, headers: { etag: '"catalog-v2"', "x-amz-version-id": "catalog-v2" } });
     }
     // Lock PUT/DELETE, review-queue PUT, and anything else S3-shaped: accept generically.
     if (method === "PUT" || method === "DELETE") return new Response("", { status: 200 });
@@ -448,7 +448,7 @@ function runEnrichBedrock(args, { bedrockBehavior = "success", envExtra = {} } =
     AWS_SECRET_ACCESS_KEY: "unit-test-fake-secret-access-key-not-real",
     ...envExtra,
   };
-  return execFileP(process.execPath, ["--import", preload, ENRICH_MJS, "run", "--profile", "finance", "--s3", "--llm-provider", "bedrock", ...args], { env, timeout: 30000 })
+  return execFileP(process.execPath, ["--import", pathToFileURL(preload).href, ENRICH_MJS, "run", "--profile", "finance", "--s3", "--llm-provider", "bedrock", ...args], { env, timeout: 30000 })
     .then((r) => ({ status: 0, stdout: r.stdout, stderr: r.stderr, calls: readCalls(logPath), catalogFlush: readCatalogFlush(catalogFlushPath) }))
     .catch((e) => ({ status: e.code ?? 1, stdout: e.stdout || "", stderr: e.stderr || "", calls: readCalls(logPath), catalogFlush: readCatalogFlush(catalogFlushPath) }));
 }

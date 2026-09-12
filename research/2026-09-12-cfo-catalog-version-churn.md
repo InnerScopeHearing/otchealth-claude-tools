@@ -24,11 +24,16 @@ catalog, they issue `If-Match` with that ETag. A concurrent catalog update there
 causes a visible conditional-write failure instead of a stale overwrite. Initial
 creation uses `If-None-Match: *`.
 
+For completed Bedrock batch enrichment, the paid-job resume marker is retained until
+that conditional catalog write succeeds. A conflict therefore resumes reconciliation
+of the existing batch result on the next run and cannot submit a second paid job.
+
 ## Validation
 
 Synthetic tests prove the no-write result for identical bytes, `If-Match` for changed
 bytes, conditional creation for an absent object, and fail-closed behavior if a changed
-object lacks an ETag. The S3 helper test confirms one GET returns binary bytes, ETag,
-and VersionId together.
+object lacks an ETag. The batch fixture forces a 412 stale-write conflict, verifies the
+marker persists, then verifies a retry resumes without a new submission. The S3 helper
+test confirms one GET returns binary bytes, ETag, and VersionId together.
 
 No catalog content, credentials, production reads, or production writes were used.

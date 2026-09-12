@@ -1270,12 +1270,10 @@ async function buildAndSubmitBedrockBatch(todo) {
   if (errored > 0) console.error(`[enrich] BEDROCK_BATCH: ${errored} record(s) returned a per-line error from Bedrock -- NOT marked enriched, will be retried on the next run.`);
   console.error(`[enrich] BEDROCK_BATCH: job ${marker.jobId} reconciled -- ${ok} ok, ${errored} errored, ${missing} missing, of ${toReconcile.length} requested (job status=${job.status}${manifest ? `; AWS manifest: ${manifest.successRecordCount}/${manifest.totalRecordCount} succeeded` : ""}).`);
 
-  // Every named row has now been reconciled one way or another (ok/errored/missing) -- nothing
-  // left to resume, so the marker is cleared. A row that is STILL pending (should not happen once
-  // job.status is terminal, but defensively: if it somehow were, leaving the marker around would
-  // be actively wrong here since AWS itself says the job is done) never occurs by construction of
-  // the loop above (every id in toReconcile gets exactly one outcome).
-  await deleteBedrockBatchMarker();
+  // The caller clears this marker only AFTER it conditionally persists these reconciled catalog
+  // rows. If a concurrent catalog writer won first, keeping the paid batch marker lets the next
+  // run reattach to these already-produced results instead of submitting another batch job.
+  return { reconciled: true };
 }
 
 // ============================ run command ============================
@@ -1311,12 +1309,13 @@ async function cmdRun() {
     // OPENAI_BATCH (2026-09-02): both unset (the state of every job today) means this is skipped
     // entirely and the worker pool below takes the EXACT pre-existing live-call path, byte-identical
     // to before this lever existed. See buildAndSubmitEnrichBatch()'s own header for the full contract.
+    let completedBedrockBatch = false;
     if (LLM_PROVIDER === "openai" && isBatchEnabled("doc-indexer-enrich")) {
       await buildAndSubmitEnrichBatch(todo);
     } else if (LLM_PROVIDER === "bedrock" && BEDROCK_BATCH) {
       // BEDROCK_BATCH (2026-09-03): off by default (the state of every job today). See
       // buildAndSubmitBedrockBatch()'s own header for the full contract, including --dry-run.
-      await buildAndSubmitBedrockBatch(todo);
+      const batch = await buildAndSubmitBedrockBatch(todo);
       // --dry-run's WHOLE point is "make no network call, submit nothing, enrich nothing" -- but
       // BATCH_PREFETCH is deliberately left untouched by the dry-run branch above (there is
       // nothing to prefetch when nothing was submitted), so without this early return the worker
@@ -1327,6 +1326,7 @@ async function cmdRun() {
       // other time but not this one). Scoped to this branch specifically: --dry-run has no
       // documented effect outside the Bedrock batch lane, so it changes nothing else here.
       if (DRY_RUN) { console.log("[enrich] --dry-run: stopping here (see the BEDROCK_BATCH DRY RUN lines above) -- no document was processed, called, or enriched."); return; }
+      completedBedrockBatch = batch?.reconciled === true;
     }
     let next = 0, since = 0;
     const start = Date.now();
@@ -1391,6 +1391,7 @@ async function cmdRun() {
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, todo.length || 1) }, worker));
     await flushCatalog(rows);
+    if (completedBedrockBatch) await deleteBedrockBatchMarker();
     // Force visibility of everything just written rather than waiting for the default ~1s refresh
     // interval -- called ONCE at the end (not per-write, which would add real latency at scale for no
     // benefit once the caller is done batching; see osRefresh's own doc comment).
