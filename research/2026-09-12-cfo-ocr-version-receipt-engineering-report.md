@@ -21,7 +21,9 @@ The pending OCR worker change now supplies an opt-in version-bound CFO path.
   paid OCR request. Images have a fixed one-page preflight.
 * The exact preflight count is synchronously reserved against the aggregate page
   budget. This corrected an earlier pending implementation that performed the
-  preflight gate but then reserved the legacy one-page estimate.
+  preflight gate but then reserved the legacy one-page estimate. This is a
+  dispatch cap, not a billing guarantee: a later Textract count disagreement is
+  detected after the paid call, counted accurately, and withholds the sidecar.
 * The Textract S3 object reference uses the actual S3 VersionId only in version-bound
   mode. A separate idempotency value preserves legacy listing-based token behavior;
   it is never sent as an invalid S3 Version field.
@@ -39,7 +41,7 @@ Command executed from `C:\wt\claude-tools-cfo-ocr-version-receipt`:
 node --test tests/ocr-sweep.test.mjs
 ```
 
-Result: 44 passed, 0 failed, 0 skipped. The tests use only synthetic S3/Textract
+Result: 46 passed, 0 failed, 0 skipped. The tests use only synthetic S3/Textract
 responses. Added coverage verifies manifest SHA validation, VersionId on Textract
 input, receipt binding, `GetObject` VersionId query construction, and strict
 `pdfinfo` page parsing. `git diff --check` also passed.
@@ -52,5 +54,7 @@ gate. Its currently generated task environment does not set the version-bound wo
 switch, candidate-manifest path/SHA, or receipt path. It therefore cannot claim this
 source-version receipt behavior until a separate reviewed workflow change supplies
 those immutable inputs and the corresponding narrow IAM authorization is verified.
+Its execution artifact must describe the maximum as a preflight dispatch cap, not a
+hard Textract billing cap.
 
 No AWS, ECS, S3, or Textract operation was invoked for this report.

@@ -130,6 +130,12 @@ import { awsFetch } from "../../setup/aws-sigv4.mjs";
 import { getBufferFromS3, getTextFromS3, headObjectMetaFromS3, listBlobsMetaFromS3, putObjectToS3, s3LocationFor, s3Configured } from "../kb-memory/s3-blob.mjs";
 
 const REGION = process.env.AWS_REGION || "us-east-1";
+let pdfinfoForTests = (file) => execFileSync("pdfinfo", [file], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+
+/** Test-only seam for synthetic PDF preflight tests. Production never emits parser output or bytes. */
+export function _setPdfinfoForTests(fn) {
+  pdfinfoForTests = fn || ((file) => execFileSync("pdfinfo", [file], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+}
 
 // ---- rooms this sweep is allowed to touch (PHI wall: legal + cfo ONLY) --------------------------
 // Account/container strings match skills/doc-indexer/indexer.mjs's own `finance`/`legal` PROFILES
@@ -553,7 +559,7 @@ async function preflightPageCount(account, container, candidate, sourceVersionId
   const file = join(dir, "source.pdf");
   try {
     await writeFile(file, bytes, { mode: 0o600 });
-    const pages = pageCountFromPdfinfo(execFileSync("pdfinfo", [file], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+    const pages = pageCountFromPdfinfo(pdfinfoForTests(file));
     if (!pages) throw taggedError("pdfinfo did not return a positive page count", { systemic: false });
     return pages;
   } finally {
@@ -695,8 +701,9 @@ export async function runSweep(opts = {}) {
           continue;
         }
       }
-      // Do not start an async Textract job unless this document's exact, locally verified page
-      // count fits the remaining aggregate budget. This is the hard page gate, not a reservation.
+      // Do not start Textract unless this document's exact preflight page count fits the remaining
+      // aggregate budget. A later Textract/parser disagreement is fail-closed for sidecar
+      // publication, but it is only observable after the paid call, so this is not a billing cap.
       if (VERSION_BOUND && MAX_PAGES > 0 && state.pagesUsed + knownPages > MAX_PAGES) {
         state.over++;
         continue;
@@ -704,7 +711,8 @@ export async function runSweep(opts = {}) {
       // RESERVE this document against the budget IMMEDIATELY -- synchronously, before the (possibly
       // slow) Textract call even starts, and with NO `await` between the withinBudget() check above,
       // the `state.idx++` claim, and this reservation. That is what makes MAX_DOCS_PER_RUN/MAX_PAGES
-      // actual HARD caps under concurrency (CONC>1): previously withinBudget() was checked against
+      // exact document cap and a race-free page-dispatch reservation under concurrency (CONC>1):
+      // previously withinBudget() was checked against
       // ONLY completed work, so up to CONC-1 other documents already claimed by sibling workers but
       // not yet finished were invisible to it -- a live run with MAX_DOCS_PER_RUN=5/CONC=2 processed
       // 6 documents this way (FND-20260903-43c9). Because this reservation happens in the same
@@ -714,8 +722,8 @@ export async function runSweep(opts = {}) {
       // known, so the FINAL accounting (state.ok/state.fail/state.pagesUsed) is byte-identical to
       // before this fix -- only the TIMING of the reservation moved earlier, not what gets counted.
       // In version-bound mode `knownPages` came from the exact source version before this point,
-      // so reserve that number rather than the legacy one-page estimate.  The preflight gate above
-      // and this synchronous reservation together keep aggregate paid pages at or below MAX_PAGES.
+      // so reserve that number rather than the legacy one-page estimate. The synchronous
+      // reservation prevents concurrent dispatch from exceeding the verified preflight budget.
       const reservedPages = VERSION_BOUND ? knownPages : reservedPageEstimate(it);
       state.docsUsed++;
       state.pagesUsed += reservedPages;
