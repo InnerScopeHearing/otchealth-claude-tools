@@ -22,13 +22,13 @@ node --test tests/ocr-sweep.test.mjs
 52 passed, 0 failed, 0 skipped
 ```
 
-Exact reviewed paths and SHA-256 before the commit containing this report:
+Exact reviewed paths and SHA-256 after the current `main` merge:
 
 ```text
 skills/ocr-sweep/sweep.mjs
 45f56834713aa47b4c44f8987a09ef86b5a8ef4319b748732a42fa493a66f6f7
 tests/ocr-sweep.test.mjs
-680b73df4e68b95d85d84ee628b21f17765822e60ff6d364950d19548da01bd6
+1345f1624a6a29f170fcd7a053cd3a5b4b80569199e741cfe191e083a3264672
 ```
 
 No production OCR, source object, document body, AWS mutation, or secret access occurred in this
