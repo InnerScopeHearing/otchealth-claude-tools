@@ -456,6 +456,34 @@ test("runSweep: a matching source-bound receipt makes a completed repair idempot
   assert.equal(world.calls.some((call) => call.host === TEXTRACT_HOST), false, "a matching receipt must suppress a duplicate paid OCR request");
 });
 
+test("runSweep: a crash after every durable per-document binding but before the final receipt reconstructs completion without Textract", async () => {
+  const candidates = [
+    { name: "a.pdf", version_id: "version-a", bytes: "pdf-a" },
+    { name: "b.pdf", version_id: "version-b", bytes: "pdf-b" },
+  ].map(({ name, version_id, bytes }) => ({ name, version_id, sha256: createHash("sha256").update(bytes).digest("hex"), page_count: 1, bytes }));
+  const manifest = JSON.stringify({ candidates: candidates.map(({ bytes, ...candidate }) => candidate) });
+  const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
+  const receiptPath = "_RECEIPTS/crash-before-final.json";
+  const s3Objects = { [`/${CFO_PREFIX}_CONTROL/manifest.json`]: { size: manifest.length, text: manifest } };
+  for (const candidate of candidates) {
+    const entry = { source_name: candidate.name, source_version_id: candidate.version_id, source_sha256: candidate.sha256, page_count: 1, sidecar_name: `_TEXT/${candidate.name}.txt`, sidecar_version_id: `sidecar-${candidate.name}` };
+    const entryId = createHash("sha256").update(`${candidate.name}\0${candidate.version_id}\0${candidate.sha256}`).digest("hex");
+    const provenance = JSON.stringify({ schema_version: 1, kind: "cfo-ocr-source-version-binding", entry });
+    s3Objects[`/${CFO_PREFIX}${candidate.name}`] = { size: candidate.bytes.length, bytes: candidate.bytes, versionId: candidate.version_id };
+    s3Objects[`/${CFO_PREFIX}_TEXT/${candidate.name}.txt`] = { size: 9, text: "synthetic", versionId: `sidecar-${candidate.name}` };
+    s3Objects[`/${CFO_PREFIX}${receiptPath}.entries/${entryId}.json`] = { size: provenance.length, text: provenance };
+  }
+  const world = makeWorld({ s3Objects });
+  const r = await withEnv(FAKE_ENV, () => withStubbedFetch(world.stub, () => runSweep({
+    stores: "cfo", versionBound: true, cfoCandidateManifestPath: "_CONTROL/manifest.json", cfoCandidateManifestSha256: manifestSha256, cfoReceiptPath: receiptPath,
+  })));
+  assert.equal(r.ok, true, r.message);
+  assert.match(r.message, /reconstructed/);
+  const receipt = JSON.parse(world.objects[`/${CFO_PREFIX}${receiptPath}`].text);
+  assert.deepEqual(receipt.entries.map((entry) => entry.source_name), ["a.pdf", "b.pdf"]);
+  assert.equal(world.calls.some((call) => call.host === TEXTRACT_HOST), false, "receipt recovery must never re-bill a completed document");
+});
+
 test("runSweep: a crash or later-document failure resumes from durable per-document provenance and emits a receipt covering the whole manifest", async () => {
   const aBytes = "pdf-a";
   const bBytes = "pdf-b";

@@ -153,8 +153,10 @@ manifest, source, sidecar, or receipt fails closed. A partial, skipped, or faile
 no completion receipt, so a corrected retry can safely resume. Each successful sidecar also writes a
 private immutable per-document provenance record before the next source starts. Resume reconciles
 those records against every manifest row and the current HEAD versions of both source and sidecar;
-only complete coverage produces the final receipt. A sidecar without matching provenance is never
-treated as a completed repair.
+only complete coverage produces the final receipt. If a process ended after every per-document record
+was durable but before that final write, the retry reconstructs the receipt from the reconciled records
+without another Textract request. A sidecar without matching provenance is never treated as a completed
+repair.
 
 ## Region
 
