@@ -1208,3 +1208,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** codex-authmode-exec.mjs A/B plus e2e-verify-installer-output.mjs against the config the packaged installer wrote under pwsh
 - **Opened:** 2026-09-07T03:41:59.723Z
 - **Closed:** 2026-09-07T03:41:59.723Z
+
+### finding:FND-20260914-4487 severity:medium status:open | PocketPal GitHub OIDC deploy roles would grant the repo admin over the shared master account 900915535335 (cdk bootstrap deploy role: cloudformation on Resource * plus PassRole on an AdministratorAccess exec role). PocketPal is the only fleet app without its own AWS account. Owner decision, nothing created.
+
+- **Source audit doc:** InnerScopeHearing/pocketpal HANDOFF.md (2026-09-14 CTO entry)
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-14T18:15:46.994Z
+- **Closed:** (open)
