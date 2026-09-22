@@ -10,6 +10,8 @@ They do not draw from the ChatGPT or Codex subscription allowance.
 - Default model: `gpt-5.6-terra`
 - Default reasoning effort: `medium`
 - One task per run, 5 to 60 minute hard cap
+- The ephemeral GitHub-hosted VM is the external execution sandbox
+- The API key is removed from the worker environment immediately after Codex login
 - Repository-local write access only
 - Any changes are pushed to a `claude/*` branch and opened as a draft pull request
 - No automatic credit purchase or fallback provider
