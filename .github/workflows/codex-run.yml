@@ -72,7 +72,7 @@ jobs:
           set -euo pipefail
           npm install -g @openai/codex
           printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key
-          codex login status | tee /tmp/codex-auth-status.txt
+          codex login status 2>&1 | tee /tmp/codex-auth-status.txt
           grep -qi 'api' /tmp/codex-auth-status.txt
 
       - name: Run bounded API-backed Codex worker
