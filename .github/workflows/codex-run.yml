@@ -107,7 +107,7 @@ jobs:
           CODEX_EXIT=${PIPESTATUS[0]}
           set -e
           if grep -qiE 'turn.completed|tokens used|total tokens|"type":"assistant"|"type": "assistant"' /tmp/codex-run.jsonl \
-             && ! grep -qiE 'credit_balance_exhausted|insufficient_quota|failed to connect.*5/5' /tmp/codex-run.jsonl; then
+             && ! grep -qiE 'credit_balance_exhausted|insufficient_quota|failed to connect.*5/5|unable to verify|shell is unavailable|bwrap:|operation not permitted' /tmp/codex-run.jsonl; then
             echo "Completed model turn confirmed."
           else
             echo "::error::No completed API-backed model turn was confirmed."
