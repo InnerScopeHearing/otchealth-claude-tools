@@ -93,11 +93,15 @@ jobs:
           PROMPT="GOAL: ${TASK}
 
           $(cat /tmp/rails.txt)"
+          # The GitHub-hosted VM is the external sandbox. Remove the API key from the
+          # worker environment after Codex has cached the login, then disable Codex's
+          # nested Linux sandbox because bubblewrap cannot create a network namespace here.
+          unset OPENAI_API_KEY
           set +e
           timeout "${MINUTES_NORMALIZED}m" codex exec \
             --model "$MODEL_NORMALIZED" \
             -c "model_reasoning_effort=\"${REASONING_NORMALIZED}\"" \
-            --sandbox workspace-write \
+            --dangerously-bypass-approvals-and-sandbox \
             --json \
             "$PROMPT" 2>&1 | tee /tmp/codex-run.jsonl
           CODEX_EXIT=${PIPESTATUS[0]}
