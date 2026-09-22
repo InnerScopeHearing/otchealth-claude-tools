@@ -106,13 +106,52 @@ jobs:
             "$PROMPT" 2>&1 | tee /tmp/codex-run.jsonl
           CODEX_EXIT=${PIPESTATUS[0]}
           set -e
-          if grep -qiE 'turn.completed|tokens used|total tokens|"type":"assistant"|"type": "assistant"' /tmp/codex-run.jsonl \
-             && ! grep -qiE 'credit_balance_exhausted|insufficient_quota|failed to connect.*5/5|unable to verify|shell is unavailable|bwrap:|operation not permitted' /tmp/codex-run.jsonl; then
-            echo "Completed model turn confirmed."
-          else
-            echo "::error::No completed API-backed model turn was confirmed."
-            exit 1
-          fi
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          completed = False
+          failures = []
+          markers = (
+              "credit_balance_exhausted",
+              "insufficient_quota",
+              "failed to connect",
+              "unable to verify",
+              "shell is unavailable",
+              "bwrap:",
+              "operation not permitted",
+          )
+          for raw in pathlib.Path("/tmp/codex-run.jsonl").read_text(
+              encoding="utf-8", errors="replace"
+          ).splitlines():
+              try:
+                  event = json.loads(raw)
+              except json.JSONDecodeError:
+                  continue
+              event_type = event.get("type", "")
+              if event_type == "turn.completed":
+                  completed = True
+              if event_type in {"error", "turn.failed"}:
+                  failures.append(event_type)
+              item = event.get("item") or {}
+              item_type = item.get("type")
+              text = str(item.get("text", "")).lower()
+              if item_type == "agent_message" and any(marker in text for marker in markers):
+                  failures.append("agent reported an execution failure")
+              if item_type == "command_execution" and item.get("exit_code") not in (None, 0):
+                  output = str(item.get("aggregated_output", "")).lower()
+                  if any(marker in output for marker in markers):
+                      failures.append("command execution failed")
+          if not completed or failures:
+              print(
+                  "::error::No clean completed API-backed model turn was confirmed. "
+                  + ",".join(failures),
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          print("Completed model turn confirmed.")
+          PY
           if [ "$CODEX_EXIT" -ne 0 ]; then
             echo "::error::Codex exited with status $CODEX_EXIT after producing output."
             exit "$CODEX_EXIT"
