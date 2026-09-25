@@ -80,6 +80,21 @@ export function versionFolderName(version, build) {
 
 /** {app, version, build, kind, filename} -> {oneDrivePath, s3Key, versionFolder}. Throws if kind is
  *  invalid or any required field is missing/empty, same fail-loud contract as validateKind. */
+/** OneDrive rejects < > : " / \\ | ? * # % in item names (HTTP 400 "potentially
+ *  dangerous Request.Path"), and a leading/trailing space or dot. Replace each
+ *  with "-" (and " > " path separators with " - "), collapse runs of spaces.
+ *  The same safe name is used for S3 so both copies match. */
+export function safeMediaFilename(name) {
+  const cleaned = String(name)
+    .replace(/\s+>\s+/g, " - ")
+    .replace(/[<>:"\/\\|?*#%\u0000-\u001f]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+|\.+$/g, "");
+  if (!cleaned) throw new Error("safeMediaFilename: name is empty after cleaning");
+  return cleaned;
+}
+
 export function buildDestinations({ app, version, build, kind, filename }) {
   validateKind(kind);
   for (const [name, value] of [["app", app], ["version", version], ["build", build], ["filename", filename]]) {
@@ -88,8 +103,9 @@ export function buildDestinations({ app, version, build, kind, filename }) {
     }
   }
   const versionFolder = versionFolderName(version, build);
-  const oneDrivePath = `${ONEDRIVE_MEDIA_ROOT}/${app}/${versionFolder}/${kind}/${filename}`;
-  const s3Key = `${S3_MEDIA_PREFIX}/${app}/${versionFolder}/${kind}/${filename}`;
+  const safe = safeMediaFilename(filename);
+  const oneDrivePath = `${ONEDRIVE_MEDIA_ROOT}/${app}/${versionFolder}/${kind}/${safe}`;
+  const s3Key = `${S3_MEDIA_PREFIX}/${app}/${versionFolder}/${kind}/${safe}`;
   return { oneDrivePath, s3Key, versionFolder };
 }
 

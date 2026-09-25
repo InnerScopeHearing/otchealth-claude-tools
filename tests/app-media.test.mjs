@@ -29,6 +29,7 @@ import {
   parseXcresultManifest,
   sanitizeHumanName,
   buildRenamePlan,
+  safeMediaFilename,
 } from "../skills/app-media/lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -378,4 +379,21 @@ test("rename-from-manifest errors cleanly with no manifest.json present", () => 
   const r = runCli(["rename-from-manifest", dir]);
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /no manifest\.json/);
+});
+
+test("safeMediaFilename: removes characters OneDrive rejects and keeps the rest", () => {
+  // Real failure: OneDrive answered 400 "potentially dangerous Request.Path" for a
+  // crawl screenshot named with " > " path separators.
+  assert.equal(safeMediaFilename("006 crawl Today > AWARE, go to Today.png"), "006 crawl Today - AWARE, go to Today.png");
+  assert.equal(safeMediaFilename('a<b>c:d"e|f?g*h#i%j.png'), "a-b-c-d-e-f-g-h-i-j.png");
+  assert.equal(safeMediaFilename("  Sound Contrast Lab · 5 of 6 correct.png  "), "Sound Contrast Lab · 5 of 6 correct.png");
+  assert.equal(safeMediaFilename("x/y\\z.png"), "x-y-z.png");
+  assert.throws(() => safeMediaFilename(" . "));
+});
+
+test("buildDestinations uses the safe name for both OneDrive and S3", () => {
+  const d = buildDestinations({ app: "AWARE", version: "1.4.0", build: "1779565789", kind: "coverage-report", filename: "007 crawl Today > Start exercise.png" });
+  assert.ok(d.oneDrivePath.endsWith("/coverage-report/007 crawl Today - Start exercise.png"));
+  assert.ok(d.s3Key.endsWith("/coverage-report/007 crawl Today - Start exercise.png"));
+  assert.ok(!/[<>]/.test(d.oneDrivePath));
 });

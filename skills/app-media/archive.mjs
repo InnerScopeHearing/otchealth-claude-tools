@@ -37,6 +37,7 @@ import {
   summarizeCatalog,
   parseXcresultManifest,
   buildRenamePlan,
+  safeMediaFilename,
 } from "./lib.mjs";
 import { cGet, cPut, commonsConfigured } from "../kb-memory/commons-store.mjs";
 import { getBufferFromS3 } from "../kb-memory/s3-blob.mjs";
@@ -128,7 +129,7 @@ async function cmdAdd(opts) {
   const seenNames = new Map();
   const plan = [];
   for (const abs of eligible) {
-    const filename = basename(abs);
+    const filename = safeMediaFilename(basename(abs));
     if (seenNames.has(filename)) {
       console.log(`  skip: ${abs} (destination filename "${filename}" collides with ${seenNames.get(filename)} in this run)`);
       continue;
@@ -168,6 +169,7 @@ async function cmdAdd(opts) {
   let skippedIdempotent = 0;
   let skippedEmpty = 0;
   let verifiedOne = false;
+  let failed = 0;
   let catalogChanged = false;
 
   for (const f of plan) {
@@ -184,8 +186,17 @@ async function cmdAdd(opts) {
       continue;
     }
 
-    const odItem = await uploadFileToOneDrive(f.oneDrivePath, buf, f.contentType);
-    await cPut(f.s3Key, buf, f.contentType);
+    let odItem;
+    try {
+      odItem = await uploadFileToOneDrive(f.oneDrivePath, buf, f.contentType);
+      await cPut(f.s3Key, buf, f.contentType);
+    } catch (e) {
+      // One bad file must not abandon the rest of a 200-file run; it is
+      // reported, left out of the catalog, and the run exits non-zero.
+      console.error(`  FAILED: ${f.abs}: ${String(e.message).slice(0, 240)}`);
+      failed++;
+      continue;
+    }
 
     // Verify at least one file per run round-trips byte-identically. Every S3 PUT succeeding (2xx)
     // is already strong evidence, but a real GET-and-compare against the live object catches a
@@ -235,8 +246,9 @@ async function cmdAdd(opts) {
   }
 
   console.log(
-    `\nsummary: ${uploaded} uploaded, ${skippedIdempotent} already-archived (skipped), ${skippedEmpty} empty (skipped), ${skipped.length} not-media (skipped)`
+    `\nsummary: ${uploaded} uploaded, ${skippedIdempotent} already-archived (skipped), ${skippedEmpty} empty (skipped), ${skipped.length} not-media (skipped), ${failed} failed`
   );
+  if (failed > 0) process.exitCode = 1;
 }
 
 async function cmdList(opts) {
