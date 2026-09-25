@@ -30,6 +30,7 @@ import {
   sanitizeHumanName,
   buildRenamePlan,
   safeMediaFilename,
+  isSafePathSegment,
 } from "../skills/app-media/lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -396,4 +397,37 @@ test("buildDestinations uses the safe name for both OneDrive and S3", () => {
   assert.ok(d.oneDrivePath.endsWith("/coverage-report/007 crawl Today - Start exercise.png"));
   assert.ok(d.s3Key.endsWith("/coverage-report/007 crawl Today - Start exercise.png"));
   assert.ok(!/[<>]/.test(d.oneDrivePath));
+});
+
+// ---- path safety: nothing may land outside <app>/<version (build)>/<kind>/ ------------------------------
+
+test("isSafePathSegment accepts plain names and rejects separators, dot segments and control characters", () => {
+  for (const ok of ["AWARE", "1.4.0", "1779565789", "iHEARtest", "a b"]) assert.equal(isSafePathSegment(ok), true, ok);
+  for (const bad of ["", " ", ".", "..", "a/b", "a\\b", "../x", "a\nb", "a\u0000b"]) assert.equal(isSafePathSegment(bad), false, JSON.stringify(bad));
+});
+
+test("buildDestinations refuses an app/version/build that would escape the library layout", () => {
+  const base = { app: "AWARE", version: "1.4.0", build: "1779565789", kind: "iphone-screenshots", filename: "001 Today.png" };
+  assert.doesNotThrow(() => buildDestinations(base));
+  assert.throws(() => buildDestinations({ ...base, app: "../other" }), /single folder name/);
+  assert.throws(() => buildDestinations({ ...base, version: "1.4/../../x" }), /single folder name/);
+  assert.throws(() => buildDestinations({ ...base, build: ".." }), /single folder name/);
+});
+
+test("parseXcresultManifest rejects an exportedFileName that is a path", () => {
+  const r = parseXcresultManifest([{ attachments: [{ exportedFileName: "../outside.png", suggestedHumanReadableName: "001 x" }] }]);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /not a plain file name/);
+});
+
+test("rename-from-manifest never overwrites an existing file with the target name", () => {
+  const dir = tmpDir("app-media-rename-conflict-");
+  writeFileSync(join(dir, "1_abc.png"), Buffer.from([1]));
+  writeFileSync(join(dir, "001 Today.png"), Buffer.from([9, 9]));
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify([{ attachments: [{ exportedFileName: "1_abc.png", suggestedHumanReadableName: "001 Today" }] }]));
+  const r = runCli(["rename-from-manifest", dir]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /CONFLICT/);
+  assert.equal(readFileSync(join(dir, "001 Today.png")).equals(Buffer.from([9, 9])), true);
+  assert.equal(existsSync(join(dir, "1_abc.png")), true);
 });
