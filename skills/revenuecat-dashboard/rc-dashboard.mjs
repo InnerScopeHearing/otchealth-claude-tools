@@ -25,7 +25,7 @@ import { existsSync, mkdirSync, readFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ssmSecret, ssmSecretSet } from "../kb-memory/aws-secret.mjs";
-import { extractSecretKey, redactKey, dashboardProjectId, validateActions } from "./lib.mjs";
+import { extractSecretKey, redactKey, redactText, dashboardProjectId, validateActions } from "./lib.mjs";
 
 const BASE = "https://app.revenuecat.com";
 const STATE_DIR = join(homedir(), ".cache", "revenuecat-dashboard");
@@ -115,8 +115,8 @@ async function runActions(page, actions) {
     if (a.label) await page.getByLabel(a.label).first().fill(a.value, { timeout: 15000 });
     if (a.xy) await page.mouse.click(a.xy[0], a.xy[1]);
     if (a.press) await page.keyboard.press(a.press);
-    if (a.dump) console.log((await page.innerText("body")).slice(0, a.dump));
-    if (a.inputs) console.log(await page.$$eval("input,button", (els) => els.map((e) => `${e.tagName}|${e.type}|${e.name}|${e.placeholder || ""}|${(e.innerText || "").slice(0, 40)}`).join("\n")));
+    if (a.dump) console.log(redactText((await page.innerText("body")).slice(0, a.dump)));
+    if (a.inputs) console.log(redactText(await page.$$eval("input,button", (els) => els.map((e) => `${e.tagName}|${e.type}|${e.name}|${e.placeholder || ""}|${(e.innerText || "").slice(0, 40)}`).join("\n"))));
     await page.waitForTimeout(a.wait ?? 2500);
   }
 }
@@ -182,9 +182,12 @@ async function cmdNewSecretKey(page, projectId) {
   await page.waitForTimeout(2500);
   const key = extractSecretKey(await row.innerText());
   if (!key) throw new Error("generated, but the secret key was not visible in its row; reveal it in the dashboard");
-  await ssmSecretSet(ssmName, key);
+  // Verify BEFORE storing: only a key the v2 API actually accepts may replace what SSM holds.
   const check = await fetch("https://api.revenuecat.com/v2/projects", { headers: { Authorization: `Bearer ${key}` } });
-  console.log(`secret key ${redactKey(key)} stored in SSM /otchealth/${ssmName}; GET /v2/projects -> ${check.status}`);
+  if (!check.ok) throw new Error(`new key ${redactKey(key)} was rejected by GET /v2/projects (${check.status}); NOT stored in SSM`);
+  await ssmSecretSet(ssmName, key);
+  if ((await ssmSecret(ssmName)) !== key) throw new Error(`SSM read-back of /otchealth/${ssmName} does not match the new key`);
+  console.log(`secret key ${redactKey(key)} verified (GET /v2/projects ${check.status}) and stored in SSM /otchealth/${ssmName}`);
 }
 
 async function main() {
