@@ -23,6 +23,7 @@ import {
   pickWalkthroughRunnerArtifact,
   pickIosIpaArtifact,
   pickDispatchedRun,
+  videoFilenameForJob,
 } from "../lib.mjs";
 
 // ---- registry -----------------------------------------------------------------------------------
@@ -305,4 +306,12 @@ test("pickDispatchedRun: earliest run at/after the dispatch timestamp, ignoring 
   ];
   assert.equal(pickDispatchedRun(runs, dispatchIso).id, 2);
   assert.equal(pickDispatchedRun([{ id: 9, created_at: "2026-09-24T21:00:00Z" }], dispatchIso), null);
+});
+
+test("videoFilenameForJob: each run keeps its own recording (no shared Video.mp4)", () => {
+  const a = videoFilenameForJob("arn:aws:devicefarm:us-west-2:900915535335:job:58bbc541-f082/452dd779-70db-431e/00000");
+  const b = videoFilenameForJob("arn:aws:devicefarm:us-west-2:900915535335:job:58bbc541-f082/d198e60f-1111-2222/00000");
+  assert.equal(a, "iPhone walkthrough run 452dd779.mp4");
+  assert.notEqual(a, b);
+  assert.equal(videoFilenameForJob(""), "iPhone walkthrough.mp4");
 });

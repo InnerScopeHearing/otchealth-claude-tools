@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { resolveApp, APP_REGISTRY, artifactFilename, uniqueFilename, classifyAttachment, coverageDigest, parseTestSpecOutput, buildScheduleRunBody, pickWalkthroughRunnerArtifact, pickIosIpaArtifact, pickDispatchedRun } from "./lib.mjs";
+import { resolveApp, APP_REGISTRY, artifactFilename, uniqueFilename, classifyAttachment, coverageDigest, parseTestSpecOutput, buildScheduleRunBody, pickWalkthroughRunnerArtifact, pickIosIpaArtifact, pickDispatchedRun, videoFilenameForJob } from "./lib.mjs";
 import { uploadAndWait, scheduleRun, stopRun, waitForRunCompletion, listJobs, listSuites, listArtifacts } from "./df-client.mjs";
 import { dispatchWorkflow, findDispatchedRun, waitForRunCompletion as waitForGhRunCompletion, listRunArtifacts, downloadArtifactZip } from "./gh-client.mjs";
 import { readInfoPlist } from "./plist.mjs";
@@ -242,7 +242,7 @@ async function fetchOneJob(job, jobOut) {
   console.error(`[fetch]   classified: tour=${classifiedCounts.tour} crawl=${classifiedCounts.crawl} other=${classifiedCounts.other}`);
 
   const videoArtifact = downloaded.find((a) => a.type === "VIDEO");
-  if (videoArtifact) copyInto(videoArtifact.localPath, videoDir, "Video.mp4");
+  if (videoArtifact) copyInto(videoArtifact.localPath, videoDir, videoFilenameForJob(job.arn));
 
   const testSpecOutput = downloaded.find((a) => a.type === "TESTSPEC_OUTPUT");
   let specSummary = null;

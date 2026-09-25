@@ -302,3 +302,13 @@ export function pickDispatchedRun(runs, dispatchIso, bufferMs = 15000) {
   candidates.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   return candidates[0];
 }
+
+/** Library file name for a job's screen recording. Each run keeps its own video: a fixed
+ *  "Video.mp4" would make a second walkthrough of the same build overwrite the first one's
+ *  recording in the media library (same destination path, different sha256). The run id is the
+ *  second-to-last ARN segment (arn:...:job:<project>/<run>/<job>). */
+export function videoFilenameForJob(jobArn) {
+  const parts = String(jobArn || "").split("/");
+  const runId = parts.length >= 3 ? parts[parts.length - 2] : "";
+  return runId ? `iPhone walkthrough run ${runId.slice(0, 8)}.mp4` : "iPhone walkthrough.mp4";
+}
