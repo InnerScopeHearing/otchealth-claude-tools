@@ -282,6 +282,7 @@ function cmdRenameFromManifest(dir) {
   const plan = buildRenamePlan(parsed.items);
   let renamed = 0;
   let missing = 0;
+  let conflicts = 0;
   for (const { from, to } of plan) {
     const src = join(dir, from);
     if (!existsSync(src)) {
@@ -289,12 +290,19 @@ function cmdRenameFromManifest(dir) {
       missing++;
       continue;
     }
-    renameSync(src, join(dir, to));
+    const dest = join(dir, to);
+    if (from !== to && existsSync(dest)) {
+      // renameSync would silently replace an existing file; keep both and report it.
+      console.error(`  CONFLICT (skipped, ${to} already exists): ${from}`);
+      conflicts++;
+      continue;
+    }
+    renameSync(src, dest);
     console.log(`  ${from} -> ${to}`);
     renamed++;
   }
-  console.log(`renamed ${renamed}/${plan.length} file(s)${missing ? `, ${missing} referenced in manifest.json but missing on disk` : ""}`);
-  process.exit(missing > 0 ? 1 : 0);
+  console.log(`renamed ${renamed}/${plan.length} file(s)${missing ? `, ${missing} referenced in manifest.json but missing on disk` : ""}${conflicts ? `, ${conflicts} skipped because the target name already exists` : ""}`);
+  process.exit(missing > 0 || conflicts > 0 ? 1 : 0);
 }
 
 function usage() {

@@ -95,11 +95,25 @@ export function safeMediaFilename(name) {
   return cleaned;
 }
 
+/** True when `value` is usable as exactly one path segment: no separators, no control
+ *  characters, and not "." or "..". */
+export function isSafePathSegment(value) {
+  const v = String(value);
+  return v.trim() !== "" && v !== "." && v !== ".." && !/[\/\\\u0000-\u001f\u007f]/.test(v);
+}
+
 export function buildDestinations({ app, version, build, kind, filename }) {
   validateKind(kind);
   for (const [name, value] of [["app", app], ["version", version], ["build", build], ["filename", filename]]) {
     if (!value || typeof value !== "string" || !value.trim()) {
       throw new Error(`buildDestinations: missing/empty "${name}"`);
+    }
+  }
+  // app/version/build become folder names in the library layout. A separator or a dot segment
+  // would move the file outside <app>/<version (build)>/<kind>/, so refuse rather than write there.
+  for (const [name, value] of [["app", app], ["version", version], ["build", build]]) {
+    if (!isSafePathSegment(value)) {
+      throw new Error(`buildDestinations: "${name}" must be a single folder name (no "/", "\\", control characters, "." or ".."): ${JSON.stringify(value)}`);
     }
   }
   const versionFolder = versionFolderName(version, build);
@@ -256,6 +270,11 @@ export function parseXcresultManifest(data) {
           reason: `entry ${i} attachment ${j} is missing a non-empty "exportedFileName"/"suggestedHumanReadableName"`,
           found: JSON.stringify(a).slice(0, 120),
         };
+      }
+      if (!isSafePathSegment(a.exportedFileName)) {
+        // exportedFileName is joined onto the export directory; a path in it could rename a
+        // file that lives somewhere else.
+        return { ok: false, reason: `entry ${i} attachment ${j} has an "exportedFileName" that is not a plain file name`, found: a.exportedFileName.slice(0, 120) };
       }
       items.push({ exportedFileName: a.exportedFileName, humanReadableName: a.suggestedHumanReadableName });
     }
