@@ -315,3 +315,11 @@ test("videoFilenameForJob: each run keeps its own recording (no shared Video.mp4
   assert.notEqual(a, b);
   assert.equal(videoFilenameForJob(""), "iPhone walkthrough.mp4");
 });
+
+test("buildScheduleRunBody: rejects a non-numeric or out-of-range job timeout", () => {
+  const base = { projectArn: "p", appArn: "a", testPackageArn: "t", testSpecArn: "s", devicePoolArn: "d" };
+  assert.throws(() => buildScheduleRunBody({ ...base, jobTimeoutMinutes: Number("abc") }), /whole number from 5 to 150/);
+  assert.throws(() => buildScheduleRunBody({ ...base, jobTimeoutMinutes: 151 }), /whole number from 5 to 150/);
+  assert.equal(buildScheduleRunBody({ ...base, jobTimeoutMinutes: 145 }).executionConfiguration.jobTimeoutMinutes, 145);
+  assert.equal(buildScheduleRunBody(base).executionConfiguration.jobTimeoutMinutes, 145);
+});

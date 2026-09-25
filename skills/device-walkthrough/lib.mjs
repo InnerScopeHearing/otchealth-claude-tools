@@ -261,6 +261,11 @@ export function buildScheduleRunBody({ projectArn, appArn, devicePoolArn, device
   if (!devicePoolArn && !deviceArn) {
     throw new Error("buildScheduleRunBody: one of devicePoolArn or deviceArn is required");
   }
+  // Device Farm accepts a whole-minute job timeout of 5..150; reject anything else here rather
+  // than sending NaN or an out-of-range value in the ScheduleRun body.
+  if (jobTimeoutMinutes !== undefined && (!Number.isInteger(jobTimeoutMinutes) || jobTimeoutMinutes < 5 || jobTimeoutMinutes > 150)) {
+    throw new Error(`buildScheduleRunBody: jobTimeoutMinutes must be a whole number from 5 to 150 (got ${jobTimeoutMinutes})`);
+  }
   const body = {
     projectArn,
     appArn,
