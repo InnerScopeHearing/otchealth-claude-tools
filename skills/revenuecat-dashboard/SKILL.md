@@ -45,12 +45,13 @@ node skills/revenuecat-dashboard/rc-dashboard.mjs shot <url> <out.png>
   - Customer information: Read & write
   - Charts metrics: Read only
 
-  It then reveals only that key's row, writes the key to SSM, and checks it with `GET /v2/projects`. Its output shows only the key's prefix and length.
+  It then reveals only that key's row, checks it with `GET /v2/projects`, only then writes it to SSM, and reads it back. Its output shows only the key's prefix and length.
 - `run` takes an action list, validated before any live click:
   - `click` (text, optional `exact`), `role` + `name`, `css`
   - `fill` + `value`, `label` + `value`
   - `xy` `[x, y]`, `press`
   - `dump` (print page text), `inputs` (list form fields), `wait` (ms)
+- Screenshots (`shot`, `run --shot`) are written as local files and are NOT redacted; never screenshot an API-keys page after revealing a key, and never archive such an image.
 - The session cookie is cached at `~/.cache/revenuecat-dashboard/state.json` (mode 0600).
 
 ## Full new-app recipe (what was done for AWARE)

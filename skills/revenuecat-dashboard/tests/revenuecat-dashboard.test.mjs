@@ -34,3 +34,33 @@ test("validateActions rejects typos and malformed steps before touching the live
   assert.throws(() => validateActions([{ role: "button" }]), /needs a name/);
   assert.throws(() => validateActions([{ xy: [1] }]), /xy must be/);
 });
+
+import { redactText } from "../lib.mjs";
+import { readFileSync } from "node:fs";
+
+test("redactText masks every secret and public key in printed page text", () => {
+  const page = "fleet sk_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 2\nTest Store test_ABCDEFGHIJKLMNOPQRST\nappl_ABCDEFGHIJKLMNOPQRST ok";
+  const out = redactText(page);
+  assert.ok(!/ABCDEFGHIJ/.test(out), out);
+  assert.match(out, /sk_\*\*\* \(len 35\)/);
+  assert.match(out, /appl_\*\*\*/);
+  assert.equal(redactText("no keys here"), "no keys here");
+});
+
+test("new-secret-key verifies the key with the v2 API before writing SSM, and run output is redacted", () => {
+  const src = readFileSync(new URL("../rc-dashboard.mjs", import.meta.url), "utf8");
+  const verify = src.indexOf("if (!check.ok) throw");
+  const store = src.indexOf("await ssmSecretSet(ssmName, key)");
+  assert.ok(verify > 0 && store > 0 && verify < store, "the GET /v2/projects check must gate the SSM write");
+  assert.match(src, /a\.dump\) console\.log\(redactText\(await page\.innerText\("body"\)\)\.slice\(/, "dump must redact the whole text before truncating");
+  assert.match(src, /a\.inputs\) console\.log\(redactText\(/);
+});
+
+test("redactText masks key types that were never enumerated, and truncation after redaction leaks nothing", () => {
+  const roku = "roku_ABCDEFGHIJKLMNOPQRSTUV";
+  assert.ok(!redactText(`key ${roku}`).includes("ABCDEFGHIJ"));
+  const page = "label sk_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 end";
+  // Cutting 10 chars into the key: redacting first means no raw fragment survives the slice.
+  const cut = redactText(page).slice(0, "label sk_ABCDEFGH".length);
+  assert.ok(!/ABCDEFGH/.test(cut), cut);
+});
