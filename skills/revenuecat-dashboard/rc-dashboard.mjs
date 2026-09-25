@@ -115,7 +115,7 @@ async function runActions(page, actions) {
     if (a.label) await page.getByLabel(a.label).first().fill(a.value, { timeout: 15000 });
     if (a.xy) await page.mouse.click(a.xy[0], a.xy[1]);
     if (a.press) await page.keyboard.press(a.press);
-    if (a.dump) console.log(redactText((await page.innerText("body")).slice(0, a.dump)));
+    if (a.dump) console.log(redactText(await page.innerText("body")).slice(0, a.dump)); // redact THEN truncate
     if (a.inputs) console.log(redactText(await page.$$eval("input,button", (els) => els.map((e) => `${e.tagName}|${e.type}|${e.name}|${e.placeholder || ""}|${(e.innerText || "").slice(0, 40)}`).join("\n"))));
     await page.waitForTimeout(a.wait ?? 2500);
   }

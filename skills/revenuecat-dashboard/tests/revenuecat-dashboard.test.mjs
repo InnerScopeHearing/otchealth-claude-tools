@@ -52,6 +52,15 @@ test("new-secret-key verifies the key with the v2 API before writing SSM, and ru
   const verify = src.indexOf("if (!check.ok) throw");
   const store = src.indexOf("await ssmSecretSet(ssmName, key)");
   assert.ok(verify > 0 && store > 0 && verify < store, "the GET /v2/projects check must gate the SSM write");
-  assert.match(src, /a\.dump\) console\.log\(redactText\(/);
+  assert.match(src, /a\.dump\) console\.log\(redactText\(await page\.innerText\("body"\)\)\.slice\(/, "dump must redact the whole text before truncating");
   assert.match(src, /a\.inputs\) console\.log\(redactText\(/);
+});
+
+test("redactText masks key types that were never enumerated, and truncation after redaction leaks nothing", () => {
+  const roku = "roku_ABCDEFGHIJKLMNOPQRSTUV";
+  assert.ok(!redactText(`key ${roku}`).includes("ABCDEFGHIJ"));
+  const page = "label sk_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 end";
+  // Cutting 10 chars into the key: redacting first means no raw fragment survives the slice.
+  const cut = redactText(page).slice(0, "label sk_ABCDEFGH".length);
+  assert.ok(!/ABCDEFGH/.test(cut), cut);
 });

@@ -21,12 +21,14 @@ export function redactKey(key) {
   return i > 0 ? `${s.slice(0, i + 1)}*** (len ${s.length})` : `*** (len ${s.length})`;
 }
 
-// Mask every secret (sk_) and public SDK key in text before it is printed. Used on all page-text
-// output (`run` dump/inputs) so a revealed key on an authenticated page can never reach stdout.
+// Mask every key-shaped token in text before it is printed. Deliberately generic: ANY lowercase
+// prefix + underscore + 16+ key characters (sk_, appl_, goog_, roku_, a future store...) is masked,
+// because an enumerated prefix list silently leaks the first key type nobody listed. Over-masking an
+// ordinary long snake_case token is harmless; under-masking a key is not. Callers must redact the
+// WHOLE text and only then truncate, so a key cut at the edge can never leak as a fragment.
+const KEYISH_RE = /\b[a-z]{2,8}_[A-Za-z0-9]{16,}\b/g;
 export function redactText(text) {
-  return String(text ?? "")
-    .replace(/\bsk_[A-Za-z0-9]{20,}\b/g, (m) => redactKey(m))
-    .replace(/\b(appl|goog|amzn|strp|rcb|test)_[A-Za-z0-9]{16,}\b/g, (m) => redactKey(m));
+  return String(text ?? "").replace(KEYISH_RE, (m) => redactKey(m));
 }
 
 // Dashboard project ids appear in URLs without the "proj" prefix the v2 API uses.
