@@ -26,22 +26,31 @@ const INGEST = "https://us.i.posthog.com/capture/";
 // Unknown and protected/service lanes fail closed so the user-scope hook cannot export their metadata.
 export const COMPANY_TELEMETRY_AGENTS = Object.freeze(["cto", "cfo", "clo", "coo", "cpo", "cro", "cco", "developer"]);
 const COMPANY_TELEMETRY_AGENT_SET = new Set(COMPANY_TELEMETRY_AGENTS);
+const PROTECTED_TELEMETRY_AGENTS = new Set(["clo-personal", "medreview", "companion"]);
+const PROTECTED_IDENTITY_CONFLICT = "protected_identity_conflict";
 function isCompanyTelemetryAgent(agent) {
   return COMPANY_TELEMETRY_AGENT_SET.has(String(agent || "").trim().toLowerCase());
 }
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
-const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
+const takeVal = (f, d, args = argv) => { const i = args.indexOf(f); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
 function readStdin() { try { return readFileSync(0, "utf8"); } catch { return ""; } }
 function read1(p) { try { return readFileSync(p, "utf8").split("\n")[0].trim(); } catch { return ""; } }
-/** Resolve the agent role from the per-session pin, then its durable marker. Do not accept a CLI
- *  role override: the Stop hook must not relabel a protected session as a company seat. */
+/** Follow setup/session-start.sh's per-session KB_AGENT pin and marker fallback. If a company pin
+ *  conflicts with a durable protected-lane marker, fail closed. A marker conflict is abnormal after
+ *  session-start, which persists the per-session pin to ~/.claude/.kb-agent. Do not accept a CLI role
+ *  override: the Stop hook must not relabel a protected session as a company seat. */
 export function resolveAgent() {
   const explicit = String(process.env.KB_AGENT || "").trim();
+  const sessionMarker = read1(`${homedir()}/.claude/.kb-agent`).toLowerCase();
+  const projectMarker = read1(`${process.env.CLAUDE_PROJECT_DIR || "."}/.kb-agent`).toLowerCase();
+  const markers = [sessionMarker, projectMarker].filter(Boolean);
+  if (explicit && isCompanyTelemetryAgent(explicit) && markers.some((marker) => PROTECTED_TELEMETRY_AGENTS.has(marker))) {
+    return PROTECTED_IDENTITY_CONFLICT;
+  }
   if (explicit) return explicit.toLowerCase();
-  const mark = read1(`${homedir()}/.claude/.kb-agent`) || read1(`${process.env.CLAUDE_PROJECT_DIR || "."}/.kb-agent`);
-  return (mark || "unknown").toLowerCase();
+  return sessionMarker || projectMarker || "unknown";
 }
 
 const CALLSITE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
@@ -156,33 +165,45 @@ async function capture(key, events) {
   }
 }
 
-async function sessionEnd() {
-  let stdin = {}; try { stdin = JSON.parse(readStdin() || "{}"); } catch {}
-  const path = takeVal("--transcript", "") || stdin.transcript_path;
+export async function sessionEnd({
+  inputText = readStdin(),
+  args = argv,
+  transcriptReader = parseTranscript,
+  secretResolver = sm,
+  eventSender = capture,
+  logger = console,
+} = {}) {
+  let stdin = {}; try { stdin = JSON.parse(inputText || "{}"); } catch {}
+  const path = takeVal("--transcript", "", args) || stdin.transcript_path;
   const sid = safeSessionId(stdin.session_id);
   const agent = resolveAgent();
-  if (!isCompanyTelemetryAgent(agent)) {
-    console.error("[fleet-telemetry] skipped non-company or segregated lane; no transcript read, SSM lookup, or PostHog event.");
-    return;
+  if (agent === PROTECTED_IDENTITY_CONFLICT) {
+    logger.error("[fleet-telemetry] skipped conflicting company seat pin and protected marker; no transcript read, SSM lookup, or PostHog event.");
+    return { status: "skipped", reason: "protected-marker-conflict" };
   }
-  if (!path) { console.error("no transcript_path"); process.exit(0); } // never block session end
-  let m; try { m = parseTranscript(path); } catch (e) { console.error("parse: " + e.message); process.exit(0); }
-  const key = await sm("posthog-fleet-ingest-key");
+  if (!isCompanyTelemetryAgent(agent)) {
+    logger.error("[fleet-telemetry] skipped non-company or segregated lane; no transcript read, SSM lookup, or PostHog event.");
+    return { status: "skipped", reason: "non-company-lane" };
+  }
+  if (!path) { logger.error("no transcript_path"); return { status: "skipped", reason: "no-transcript" }; } // never block session end
+  let m; try { m = transcriptReader(path); } catch (e) { logger.error("parse: " + e.message); return { status: "skipped", reason: "transcript-error" }; }
+  const key = await secretResolver("posthog-fleet-ingest-key");
   if (!key) {
     // A Stop hook must never block the session from ending, but missing telemetry auth stays loud.
     // The current secret adapter defaults to AWS SSM Parameter Store; avoid directing operators to
     // the retired Azure vault when a secret is absent or the caller lacks the SSM/KMS grant.
-    console.error(`[fleet-telemetry][BLACKOUT-RISK] posthog-fleet-ingest-key did not resolve from secret backend "${process.env.SECRET_BACKEND || "ssm"}" (normally AWS SSM Parameter Store /otchealth/*). Telemetry NOT sent this session. Check the parameter name and the caller's ssm:GetParameter/KMS decrypt access.`);
-    process.exit(0);
+    logger.error(`[fleet-telemetry][BLACKOUT-RISK] posthog-fleet-ingest-key did not resolve from secret backend "${process.env.SECRET_BACKEND || "ssm"}" (normally AWS SSM Parameter Store /otchealth/*). Telemetry NOT sent this session. Check the parameter name and the caller's ssm:GetParameter/KMS decrypt access.`);
+    return { status: "skipped", reason: "missing-secret" };
   }
   const now = new Date().toISOString();
   // callsite_id: the prompt-surface identifier for this session (defaults to the agent role, matching
   // agent-evals' eval_result.callsite_id default). Join this to quality signals by callsite, but do
   // not infer provider spend from subscription transcript token counts.
-  const callsiteId = (takeVal("--callsite", "") || agent);
+  const callsiteId = (takeVal("--callsite", "", args) || agent);
   const event = buildSessionEvent(m, { agent, callsiteId, sessionId: sid, timestamp: now });
-  await capture(key, [event]);
-  console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} usage_entries=${m.modelUsageEntries} tools=${m.toolCalls} tok=${m.totalTok} -> PostHog Fleet Agents`);
+  await eventSender(key, [event]);
+  logger.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} usage_entries=${m.modelUsageEntries} tools=${m.toolCalls} tok=${m.totalTok} -> PostHog Fleet Agents`);
+  return { status: "sent", event };
 }
 
 // Only run the CLI dispatch when executed directly (node telemetry.mjs ...), NOT when imported by a
@@ -192,6 +213,6 @@ const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv
 if (isMain) {
   try {
     if (cmd === "session-end") await sessionEnd();
-    else { console.error("usage: telemetry.mjs session-end [--transcript <path>] [--agent <a>]"); process.exit(2); }
+    else { console.error("usage: telemetry.mjs session-end [--transcript <path>] [--callsite <id>]"); process.exit(2); }
   } catch (e) { console.error("ERROR: " + e.message); process.exit(0); }
 }

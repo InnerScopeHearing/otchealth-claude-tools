@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { COMPANY_TELEMETRY_AGENTS, buildSessionEvent, parseTranscriptText } from "../skills/fleet-telemetry/telemetry.mjs";
+import { COMPANY_TELEMETRY_AGENTS, buildSessionEvent, parseTranscriptText, sessionEnd } from "../skills/fleet-telemetry/telemetry.mjs";
 
 const QUERY_CONTRACT = JSON.parse(readFileSync(new URL("../skills/fleet-telemetry/query-contract-v1.json", import.meta.url), "utf8"));
 const EXPECTED_COMPANY_TELEMETRY_AGENTS = ["cto", "cfo", "clo", "coo", "cpo", "cro", "cco", "developer"];
@@ -158,6 +158,44 @@ test("session-end skips a protected lane before reading its transcript or resolv
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /skipped non-company or segregated lane/);
   assert.doesNotMatch(result.stderr, /parse:|BLACKOUT-RISK|secret store/);
+});
+
+test("session-end fails closed when KB_AGENT conflicts with a protected marker before transcript, SSM, or PostHog access", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tele-conflict-home-"));
+  const project = join(home, "project");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(home, ".claude", ".kb-agent"), "clo-personal\n");
+
+  const keys = ["KB_AGENT", "HOME", "USERPROFILE", "CLAUDE_PROJECT_DIR"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const calls = [];
+  const logs = [];
+  try {
+    process.env.KB_AGENT = "cto";
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.CLAUDE_PROJECT_DIR = project;
+
+    const result = await sessionEnd({
+      inputText: JSON.stringify({ transcript_path: join(project, "synthetic-transcript.jsonl"), session_id: "123e4567-e89b-12d3-a456-426614174000" }),
+      args: [],
+      transcriptReader: () => { calls.push("transcript"); return parseTranscriptText(""); },
+      secretResolver: async () => { calls.push("ssm"); return null; },
+      eventSender: async () => { calls.push("posthog"); },
+      logger: { error: (message) => logs.push(message), log: () => {} },
+    });
+
+    assert.deepEqual(result, { status: "skipped", reason: "protected-marker-conflict" });
+    assert.deepEqual(calls, []);
+    assert.match(logs.join("\n"), /skipped conflicting company seat pin and protected marker/);
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("parseTranscriptText clamps malformed token counts and timestamps to safe zeroes", () => {

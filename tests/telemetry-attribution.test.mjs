@@ -31,6 +31,19 @@ test("resolveAgent: per-session KB_AGENT wins and is lowercased", () => {
   withEnv({ KB_AGENT: "CFO" }, () => assert.equal(resolveAgent(), "cfo"));
 });
 
+test("resolveAgent: a per-session company pin overrides a stale company marker", () => {
+  const home = mkdtempSync(join(tmpdir(), "tele-stale-company-home-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", ".kb-agent"), "cfo\n");
+  try {
+    withEnv({ KB_AGENT: "CTO", HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: home }, () =>
+      assert.equal(resolveAgent(), "cto", "a stale ordinary company marker does not disable the session pin"),
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("resolveAgent: falls back to ~/.claude/.kb-agent marker (THE blackout attribution fix)", () => {
   const home = mkdtempSync(join(tmpdir(), "tele-home-"));
   mkdirSync(join(home, ".claude"), { recursive: true });

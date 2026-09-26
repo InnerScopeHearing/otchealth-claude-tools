@@ -12,6 +12,13 @@ access. Keep the allowlist aligned with `setup/session-start.sh`; new lanes are 
 A transcript is a session aggregate, not a provider generation. One event per session avoids duplicate
 event volume and false generation counts.
 
+Seat attribution follows the trusted `setup/session-start.sh` contract: a per-session `KB_AGENT` pin
+wins over stale company markers; without a pin, the session marker is checked before the project
+marker. If a company pin conflicts with a durable marker for `clo-personal`, `medreview`, or
+`companion`, telemetry fails closed before reading the transcript, resolving the SSM key, or posting
+to PostHog. The hook ignores CLI seat overrides. A normal company pin and company marker continue to
+use the configured per-session lane.
+
 ## What it sends (metadata only — no prompts, outputs, file contents, PHI or MNPI)
 - `agent_session` (custom analytics): agent, callsite_id, assistant turns, tool calls, tools used,
   tool errors, per-model call counts, input/output tokens, cache read/write tokens, total tokens,
