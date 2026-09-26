@@ -1,6 +1,6 @@
 ---
 name: device-walkthrough
-description: Runs a fleet app's real-iPhone XCUITest walkthrough end to end, from building the test runner on Depot macOS through scheduling it on AWS Device Farm, fetching and classifying the results, and archiving them to app-media. AWARE and iHEARtest each ship a qa/device-walkthrough/ XCUITest runner (a scripted "tour" through every screen plus a breadth-first crawl that presses every reachable control) and a device-walkthrough.yml GitHub Actions workflow that builds it on Depot macOS. This skill is the one command that drives the rest, the piece that has so far been done with throwaway scratch scripts. Use it whenever a session needs to build the runner, schedule it against a real device, pull the screenshots/video/coverage report back, or archive a completed run. Wielded by the CTO / App Lead agents. Non-PHI ring (screenshots of consumer-app UI only, no PHI/PII involved).
+description: Runs a fleet app's real-iPhone XCUITest walkthrough end to end, from building the test runner on Depot macOS through scheduling it on AWS Device Farm, fetching and classifying the results, and archiving them to app-media. AWARE, iHEARtest, and Hey Millie (otchealth-companion) each ship a qa/device-walkthrough/ XCUITest runner (a scripted "tour" through every screen plus a breadth-first crawl that presses every reachable control) and a device-walkthrough.yml GitHub Actions workflow that builds it on Depot macOS. This skill is the one command that drives the rest, the piece that has so far been done with throwaway scratch scripts. Use it whenever a session needs to build the runner, schedule it against a real device, pull the screenshots/video/coverage report back, or archive a completed run. Wielded by the CTO / App Lead agents. Non-PHI ring (screenshots of consumer-app UI only, no PHI/PII involved).
 ---
 
 # device-walkthrough
@@ -36,9 +36,9 @@ device-walkthrough credential to provision. GitHub calls use the org GitHub App 
 ### `apps`
 
 Prints the built-in app registry (repo, bundle id, Device Farm project/pool ARN, ios-depot IPA
-artifact-name prefix) for every app this skill knows about. Currently `AWARE` and `iHEARtest`.
+artifact-name prefix) for every app this skill knows about. Currently `AWARE`, `iHEARtest`, and `HeyMillie`.
 
-### `build-runner --app <AWARE|iHEARtest> [--ref main] [--out <dir>]`
+### `build-runner --app <AWARE|iHEARtest|HeyMillie> [--ref main] [--out <dir>]`
 
 Dispatches that app's `device-walkthrough.yml` (`workflow_dispatch`, no other inputs) on `--ref`,
 waits for it to complete on Depot macOS (the build job has its own 40-minute timeout), downloads the
@@ -50,7 +50,7 @@ XCTest UI test package: the compiled runner `.ipa` plus `devicefarm-post-test.sh
 If the app's `device-walkthrough.yml` is not yet merged to `main`, pass `--ref <branch>` (the
 workflow file only needs to exist on the ref being dispatched).
 
-### `fetch-ipa --app <AWARE|iHEARtest> --run <ios-depot GitHub Actions run id> [--out <dir>]`
+### `fetch-ipa --app <AWARE|iHEARtest|HeyMillie> --run <ios-depot GitHub Actions run id> [--out <dir>]`
 
 Downloads that `ios-depot.yml` run's shipped-IPA artifact (`<slug>-ios-ipa-<sha>`), unzips it, unzips
 the `.ipa` inside (an IPA is itself a zip), reads `Payload/*.app/Info.plist` (a binary plist -- shelled
@@ -58,7 +58,7 @@ out to python3's `plistlib`, the only bplist00 reader available in this toolchai
 macOS-only), and **refuses** (throws) if the IPA's `CFBundleIdentifier` does not match the app's
 registered bundle id. Prints/returns `{ ipaPath, bundleId, marketingVersion, buildNumber }`.
 
-### `run --app <AWARE|iHEARtest> --ipa <path> --runner <WalkthroughUITests.zip> --spec <devicefarm-testspec.yml> [--label L] [--timeout 145] [--device-arn A] [--no-wait]`
+### `run --app <AWARE|iHEARtest|HeyMillie> --ipa <path> --runner <WalkthroughUITests.zip> --spec <devicefarm-testspec.yml> [--label L] [--timeout 145] [--device-arn A] [--no-wait]`
 
 Uploads all three (`IOS_APP` / `XCTEST_UI_TEST_PACKAGE` / `XCTEST_UI_TEST_SPEC`, each polled to
 `SUCCEEDED`), schedules an `XCTEST_UI` run against the app's device pool (or, with `--device-arn`, a
@@ -98,10 +98,10 @@ report's timestamp), not a verdict.
 
 Final structured summary prints to stdout as JSON; progress/log lines print to stderr.
 
-### `archive --app <AWARE|iHEARtest> --version <V> --build <B> --dir <dir from fetch> [--run-label L]`
+### `archive --app <AWARE|iHEARtest|HeyMillie> --version <V> --build <B> --dir <dir from fetch> [--run-label L]`
 
 Calls `skills/app-media/archive.mjs add` three times against the app's display name (`AWARE` /
-`iHEARtest`, matching that skill's own existing catalog naming):
+`iHEARtest` / `Hey Millie`, matching that skill's own existing catalog naming):
 
 | source dir | app-media `--kind` |
 |---|---|
@@ -117,7 +117,7 @@ and the fleet S3 commons store, deduped by sha256).
 
 `StopRun`. Prints the resulting run object.
 
-### `all --app <AWARE|iHEARtest> --ios-run <ios-depot run id> [--ref main] [--out <dir>] [--label L] [--timeout 145] [--device-arn A]`
+### `all --app <AWARE|iHEARtest|HeyMillie> --ios-run <ios-depot run id> [--ref main] [--out <dir>] [--label L] [--timeout 145] [--device-arn A]`
 
 `build-runner` -> `fetch-ipa` -> `run` -> `fetch` -> `archive`, in order, using the fetched IPA's own
 `marketingVersion`/`buildNumber` for the archive step (so the version/build in the media catalog

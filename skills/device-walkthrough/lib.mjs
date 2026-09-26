@@ -6,11 +6,17 @@
 
 // ---- app registry -------------------------------------------------------------------------------
 //
-// The two apps that currently ship a qa/device-walkthrough/ XCUITest runner + a
-// .github/workflows/device-walkthrough.yml (dispatch-only, builds the runner on Depot macOS). Both
-// workflows upload their test package as an artifact literally named `walkthrough-runner-<sha>`
-// (verified against both repos' workflow YAML), and both apps' ios-depot.yml uploads the shipped
-// IPA as `<slug>-ios-ipa-<sha>` (verified: aware-ios-ipa-<sha>, iheartest-ios-ipa-<sha>).
+// The three apps that currently ship a qa/device-walkthrough/ XCUITest runner + a
+// .github/workflows/device-walkthrough.yml (dispatch-only, builds the runner on Depot macOS). All
+// three workflows upload their test package as an artifact literally named `walkthrough-runner-<sha>`
+// (verified against every repo's workflow YAML). NOTE the ios-depot IPA artifact prefix is NOT a
+// fleet-wide fixed convention: iHEARtest and Hey Millie (otchealth-companion) both upload a fixed
+// `<slug>-ios-ipa-<sha>` name, but AWARE's own ios-depot.yml does not (it uploads
+// `aware-<marketing_version>-<build_number>-<source_sha>` for a PUBLIC build or
+// `aware-internal-qa-<build_number>-<source_sha>` for an internal-QA build -- verified against
+// AWARE's current ios-depot.yml; its `iosIpaArtifactPrefix` below predates that shape and is stale,
+// left as-is here since fixing it is outside this entry's scope). Verify the real artifact name in
+// each app's own ios-depot.yml before trusting a registry prefix.
 
 export const APP_REGISTRY = Object.freeze({
   AWARE: Object.freeze({
@@ -28,6 +34,22 @@ export const APP_REGISTRY = Object.freeze({
     projectArn: "arn:aws:devicefarm:us-west-2:900915535335:project:784477b0-1a27-43bd-a4d2-00385bf223b2",
     poolArn: "arn:aws:devicefarm:us-west-2:900915535335:devicepool:784477b0-1a27-43bd-a4d2-00385bf223b2/5ca02852-d232-49a4-b56f-ab43f6ac5c8b",
     iosIpaArtifactPrefix: "iheartest-ios-ipa-",
+  }),
+  // Hey Millie == OTCHealth Companion (bundle id unchanged from the pre-rebrand app; the App Store
+  // display name is "Hey Millie: Talk It Through", see docs/research/hey-millie/DECISIONS.md in that
+  // repo). Project + pool created 2026-09-26, mirroring AWARE's/iHEARtest's own pools exactly: the
+  // SAME single physical device ARN (Apple iPhone 16, iOS 18.0, "arn:...:device:
+  // C3481B68E9EA4202BBF6F9D215E9AE5F") in a PRIVATE, one-rule pool (verified by reading AWARE's own
+  // pool via GetDevicePool before creating this one). `companion-ios-ipa-<sha>` verified against
+  // otchealth-companion's own ios-depot.yml ("Upload IPA artifact" step) -- a real fixed prefix, not
+  // the version/build-embedding shape AWARE uses.
+  HeyMillie: Object.freeze({
+    displayName: "Hey Millie",
+    repo: "InnerScopeHearing/otchealth-companion",
+    bundleId: "com.otchealth.companion",
+    projectArn: "arn:aws:devicefarm:us-west-2:900915535335:project:2cc15086-23a7-4ef2-865e-128e964a030e",
+    poolArn: "arn:aws:devicefarm:us-west-2:900915535335:devicepool:2cc15086-23a7-4ef2-865e-128e964a030e/90b31cc3-89c1-46f0-ab7e-d294dd5f375c",
+    iosIpaArtifactPrefix: "companion-ios-ipa-",
   }),
 });
 
