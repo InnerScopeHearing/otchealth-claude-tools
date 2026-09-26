@@ -74,8 +74,219 @@ const GPT_IMAGE_RECEIPT_PATHS = [
   "skills/designer/scripts/gen-icon-batch.mjs",
 ];
 
+// This small lexer finds the helper's ASCII identifier in executable JavaScript. It skips comments and
+// literals, rejects declarations and method definitions, and is intentionally not an AST or call-graph scan.
+const REGEX_PREFIX_KEYWORDS = new Set([
+  "await", "case", "delete", "do", "else", "in", "instanceof", "new", "of", "return",
+  "throw", "typeof", "void", "yield",
+]);
+const CONTROL_PAREN_KEYWORDS = new Set(["catch", "for", "if", "switch", "while", "with"]);
+const REGEX_PREFIX_PUNCTUATORS = new Set([
+  "(", "[", "{", ",", ":", ";", "=", "!", "?", "&", "|", "+", "-", "*", "%", "^", "~", "<", ">",
+]);
+const METHOD_PREFIXES = new Set(["{", ",", "}", ";", "async", "static", "get", "set", "*", "#"]);
+
+function isIdentifierStart(char) {
+  return char !== undefined && /[A-Za-z_$]/.test(char);
+}
+
+function isIdentifierPart(char) {
+  return char !== undefined && /[A-Za-z0-9_$]/.test(char);
+}
+
+function skipQuotedLiteral(source, start, quote) {
+  let index = start + 1;
+  while (index < source.length) {
+    if (source[index] === "\\") {
+      index += 2;
+      continue;
+    }
+    if (source[index] === quote) return index + 1;
+    index += 1;
+  }
+  return index;
+}
+
+function skipRegexLiteral(source, start) {
+  let index = start + 1;
+  let inCharacterClass = false;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === "\n" || char === "\r" || char === "\u2028" || char === "\u2029") return start + 1;
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === "[" && !inCharacterClass) inCharacterClass = true;
+    else if (char === "]" && inCharacterClass) inCharacterClass = false;
+    else if (char === "/" && !inCharacterClass) {
+      index += 1;
+      while (isIdentifierPart(source[index])) index += 1;
+      return index;
+    }
+    index += 1;
+  }
+  return start + 1;
+}
+
+function canStartRegexAfter(tokens) {
+  if (tokens.length === 0) return true;
+  const last = tokens[tokens.length - 1];
+  if (last.type === "identifier") return REGEX_PREFIX_KEYWORDS.has(last.value);
+  if (last.type !== "punctuator") return false;
+  if (REGEX_PREFIX_PUNCTUATORS.has(last.value)) return true;
+  if (last.value !== ")") return false;
+
+  let depth = 0;
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (tokens[index].value === ")") depth += 1;
+    else if (tokens[index].value === "(") {
+      depth -= 1;
+      if (depth === 0) return CONTROL_PAREN_KEYWORDS.has(tokens[index - 1]?.value);
+    }
+  }
+  return false;
+}
+
+function tokenizeTemplateLiteral(source, start) {
+  const tokens = [];
+  let index = start + 1;
+  while (index < source.length) {
+    if (source[index] === "\\") {
+      index += 2;
+      continue;
+    }
+    if (source.charCodeAt(index) === 96) {
+      tokens.push({ type: "literal", value: "template" });
+      return { tokens, nextIndex: index + 1 };
+    }
+    if (source[index] === "$" && source[index + 1] === "{") {
+      const expression = tokenizeJavaScript(source, index + 2, true);
+      tokens.push(...expression.tokens);
+      index = expression.nextIndex;
+      continue;
+    }
+    index += 1;
+  }
+  tokens.push({ type: "literal", value: "template" });
+  return { tokens, nextIndex: index };
+}
+
+function tokenizeJavaScript(source, start = 0, stopAtTemplateBrace = false) {
+  const tokens = [];
+  let index = start;
+  let templateBraceDepth = 0;
+  const push = (type, value) => tokens.push({ type, value });
+
+  while (index < source.length) {
+    const char = source[index];
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+
+    if (stopAtTemplateBrace && char === "}") {
+      if (templateBraceDepth === 0) return { tokens, nextIndex: index + 1 };
+      templateBraceDepth -= 1;
+      push("punctuator", char);
+      index += 1;
+      continue;
+    }
+    if (stopAtTemplateBrace && char === "{") {
+      templateBraceDepth += 1;
+      push("punctuator", char);
+      index += 1;
+      continue;
+    }
+
+    if (char === "/" && source[index + 1] === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n" && source[index] !== "\r") index += 1;
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "*") {
+      const end = source.indexOf("*/", index + 2);
+      index = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      index = skipQuotedLiteral(source, index, char);
+      push("literal", "string");
+      continue;
+    }
+    if (source.charCodeAt(index) === 96) {
+      const template = tokenizeTemplateLiteral(source, index);
+      tokens.push(...template.tokens);
+      index = template.nextIndex;
+      continue;
+    }
+    if (char === "/" && canStartRegexAfter(tokens)) {
+      const end = skipRegexLiteral(source, index);
+      if (end > index + 1) {
+        index = end;
+        push("literal", "regex");
+        continue;
+      }
+    }
+    if (isIdentifierStart(char)) {
+      let end = index + 1;
+      while (isIdentifierPart(source[end])) end += 1;
+      push("identifier", source.slice(index, end));
+      index = end;
+      continue;
+    }
+    if (/[0-9]/.test(char)) {
+      let end = index + 1;
+      while (/[0-9_]/.test(source[end] ?? "")) end += 1;
+      push("literal", source.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    push("punctuator", char);
+    index += 1;
+  }
+  return { tokens, nextIndex: index };
+}
+
+function matchingParen(tokens, openParenIndex) {
+  let depth = 0;
+  for (let index = openParenIndex; index < tokens.length; index += 1) {
+    if (tokens[index].value === "(") depth += 1;
+    else if (tokens[index].value === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function isFunctionDeclaration(tokens, nameIndex) {
+  const previous = tokens[nameIndex - 1]?.value;
+  return previous === "function" || (previous === "*" && tokens[nameIndex - 2]?.value === "function");
+}
+
+function isMethodDefinition(tokens, nameIndex, openParenIndex) {
+  if (!METHOD_PREFIXES.has(tokens[nameIndex - 1]?.value)) return false;
+  const closeParenIndex = matchingParen(tokens, openParenIndex);
+  return closeParenIndex !== -1 && tokens[closeParenIndex + 1]?.value === "{";
+}
+
 function hasUsageRecorderInvocation(source) {
-  return /\brecordOpenAIUsage\s*\(/.test(source);
+  const tokens = tokenizeJavaScript(source).tokens;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].type !== "identifier" || tokens[index].value !== "recordOpenAIUsage") continue;
+    let openParenIndex = index + 1;
+    if (tokens[openParenIndex]?.value === "?" && tokens[openParenIndex + 1]?.value === ".") {
+      openParenIndex += 2;
+    }
+    if (tokens[openParenIndex]?.value !== "(") continue;
+    if (tokens[index - 1]?.value === "new") continue;
+    if (isFunctionDeclaration(tokens, index)) continue;
+    if (isMethodDefinition(tokens, index, openParenIndex)) continue;
+    return true;
+  }
+  return false;
 }
 
 function hasUsageReceiptCoverage(rel, source) {
@@ -95,6 +306,67 @@ test("an import-only recorder reference does not satisfy the usage coverage guar
   assert.ok(importOnlySource.includes("recordOpenAIUsage"), "fixture retains the recorder import");
   assert.match(importOnlySource, /\bapi\.openai\.com\b/, "fixture has a direct OpenAI call path");
   assert.equal(hasUsageReceiptCoverage("fixture.mjs", importOnlySource), false);
+});
+
+test("comments and literals do not satisfy the usage coverage guard", () => {
+  const falsePositiveSources = [
+    [
+      "// recordOpenAIUsage();",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
+    [
+      "/* recordOpenAIUsage(); */",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
+    [
+      'const callText = "recordOpenAIUsage()";',
+      "const callPattern = /recordOpenAIUsage\\\\s*\\\\(/;",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
+  ];
+
+  for (const source of falsePositiveSources) {
+    assert.match(source, /\bapi\.openai\.com\b/, "fixture has a direct OpenAI call path");
+    assert.equal(hasUsageReceiptCoverage("fixture.mjs", source), false);
+  }
+});
+
+test("function and method declarations do not satisfy the usage coverage guard", () => {
+  const declarations = [
+    [
+      "function recordOpenAIUsage() {}",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
+    [
+      "const unused = function recordOpenAIUsage() {};",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
+    [
+      "function* recordOpenAIUsage() {}",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
+    [
+      "const helper = { recordOpenAIUsage() {} };",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
+  ];
+
+  for (const source of declarations) {
+    assert.equal(hasUsageReceiptCoverage("fixture.mjs", source), false);
+  }
+});
+
+test("a real recorder call satisfies the usage coverage guard", () => {
+  const invocationSource = [
+    'import { recordOpenAIUsage } from "../setup/openai-usage.mjs";',
+    'await fetch("https://api.openai.com/v1/images/generations");',
+    "await recordOpenAIUsage /* comments do not break token recognition */ ({ kind: 'image' });",
+  ].join("\n");
+  const templateInvocationSource =
+    "const result = " + String.fromCharCode(96) + "usage $" + "{recordOpenAIUsage()}" + String.fromCharCode(96) + ";";
+
+  assert.equal(hasUsageReceiptCoverage("fixture.mjs", invocationSource), true);
+  assert.equal(hasUsageRecorderInvocation(templateInvocationSource), true);
 });
 
 test("direct GPT Image scripts are scanned and require usage receipt instrumentation", () => {
