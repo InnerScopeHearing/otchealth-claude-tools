@@ -176,7 +176,7 @@ function tokenizeJavaScript(source, start = 0, stopAtTemplateBrace = false) {
   const tokens = [];
   let index = start;
   let templateBraceDepth = 0;
-  const push = (type, value) => tokens.push({ type, value });
+  const push = (type, value, tokenStart = index, tokenEnd = index + 1) => tokens.push({ type, value, start: tokenStart, end: tokenEnd });
 
   while (index < source.length) {
     const char = source[index];
@@ -210,8 +210,9 @@ function tokenizeJavaScript(source, start = 0, stopAtTemplateBrace = false) {
       continue;
     }
     if (char === "'" || char === '"') {
+      const literalStart = index;
       index = skipQuotedLiteral(source, index, char);
-      push("literal", "string");
+      push("literal", "string", literalStart, index);
       continue;
     }
     if (source.charCodeAt(index) === 96) {
@@ -223,27 +224,30 @@ function tokenizeJavaScript(source, start = 0, stopAtTemplateBrace = false) {
     if (char === "/" && canStartRegexAfter(tokens)) {
       const end = skipRegexLiteral(source, index);
       if (end > index + 1) {
+        const literalStart = index;
         index = end;
-        push("literal", "regex");
+        push("literal", "regex", literalStart, index);
         continue;
       }
     }
     if (isIdentifierStart(char)) {
+      const tokenStart = index;
       let end = index + 1;
       while (isIdentifierPart(source[end])) end += 1;
-      push("identifier", source.slice(index, end));
+      push("identifier", source.slice(index, end), tokenStart, end);
       index = end;
       continue;
     }
     if (/[0-9]/.test(char)) {
+      const tokenStart = index;
       let end = index + 1;
       while (/[0-9_]/.test(source[end] ?? "")) end += 1;
-      push("literal", source.slice(index, end));
+      push("literal", source.slice(index, end), tokenStart, end);
       index = end;
       continue;
     }
 
-    push("punctuator", char);
+    push("punctuator", char, index, index + 1);
     index += 1;
   }
   return { tokens, nextIndex: index };
@@ -266,10 +270,12 @@ function isFunctionDeclaration(tokens, nameIndex) {
   return previous === "function" || (previous === "*" && tokens[nameIndex - 2]?.value === "function");
 }
 
-function isMethodDefinition(tokens, nameIndex, openParenIndex) {
+function isMethodDefinition(tokens, nameIndex, openParenIndex, source) {
   if (!METHOD_PREFIXES.has(tokens[nameIndex - 1]?.value)) return false;
   const closeParenIndex = matchingParen(tokens, openParenIndex);
-  return closeParenIndex !== -1 && tokens[closeParenIndex + 1]?.value === "{";
+  if (closeParenIndex === -1 || tokens[closeParenIndex + 1]?.value !== "{") return false;
+  const gap = source.slice(tokens[closeParenIndex].end, tokens[closeParenIndex + 1].start);
+  return !/[\r\n\u2028\u2029]/.test(gap);
 }
 
 function hasUsageRecorderInvocation(source) {
@@ -283,7 +289,7 @@ function hasUsageRecorderInvocation(source) {
     if (tokens[openParenIndex]?.value !== "(") continue;
     if (tokens[index - 1]?.value === "new") continue;
     if (isFunctionDeclaration(tokens, index)) continue;
-    if (isMethodDefinition(tokens, index, openParenIndex)) continue;
+    if (isMethodDefinition(tokens, index, openParenIndex, source)) continue;
     return true;
   }
   return false;
@@ -364,9 +370,18 @@ test("a real recorder call satisfies the usage coverage guard", () => {
   ].join("\n");
   const templateInvocationSource =
     "const result = " + String.fromCharCode(96) + "usage $" + "{recordOpenAIUsage()}" + String.fromCharCode(96) + ";";
+  const callBeforeBlockSource = [
+    "function caller() {",
+    "  if (true) {",
+    "    recordOpenAIUsage()",
+    "    {}",
+    "  }",
+    "}",
+  ].join("\n");
 
   assert.equal(hasUsageReceiptCoverage("fixture.mjs", invocationSource), true);
   assert.equal(hasUsageRecorderInvocation(templateInvocationSource), true);
+  assert.equal(hasUsageRecorderInvocation(callBeforeBlockSource), true);
 });
 
 test("direct GPT Image scripts are scanned and require usage receipt instrumentation", () => {
