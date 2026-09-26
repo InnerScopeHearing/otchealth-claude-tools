@@ -23,6 +23,10 @@ Missing values remain omitted. A numeric zero returned by the provider remains z
 - Each output line from a completed Batch response, when its response body contains usage. Batch line content and custom IDs are not recorded. The Batch response structure is described in the [OpenAI Batch API reference](https://platform.openai.com/docs/api-reference/batch/object?api-mode=responses).
 - Direct OpenAI GPT Image generation responses, when the raw response includes usage. The model is recorded only if the provider returns it. Azure image responses are not attributed to OpenAI. See the [OpenAI Image API reference](https://developers.openai.com/api/reference/cli/resources/images/methods/generate).
 
+## Coverage limitation
+
+The regression test (`tests/openai-usage-coverage.test.mjs`) is a file-level source scan. It checks files under `setup/` and `skills/` for a literal `api.openai.com` reference and requires an actual `recordOpenAIUsage()` call somewhere in the same file, unless the file has a named reason in the test's `ALLOWLIST`. It does not prove that every individual OpenAI request in a file is instrumented. The direct GPT Image checks apply to their three files, but they also confirm file-level presence, not per-request coverage.
+
 The ledger path defaults to `~/.otchealth/openai-usage/usage-<YYYY-MM-DD>.jsonl`. `OPENAI_USAGE_LEDGER_DIR` can point it to another directory.
 
 ## Datadog
