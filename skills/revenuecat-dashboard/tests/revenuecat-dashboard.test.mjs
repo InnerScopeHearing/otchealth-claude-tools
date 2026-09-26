@@ -56,6 +56,16 @@ test("new-secret-key verifies the key with the v2 API before writing SSM, and ru
   assert.match(src, /a\.inputs\) console\.log\(redactText\(/);
 });
 
+test("new-secret-key reveals the row via role=row + the accessible 'Show key' button, not a bare <tr> + first-button guess", () => {
+  const src = readFileSync(new URL("../rc-dashboard.mjs", import.meta.url), "utf8");
+  // Fails on the old code: the dashboard renders key rows as div[role=row], not <tr>, and the
+  // reveal control is the accessible "Show key" button, not merely "the first button in the row"
+  // (other row buttons, e.g. copy/delete, can sit ahead of it in DOM order).
+  assert.match(src, /page\.locator\(\s*"\[role=row\]"\s*,\s*\{\s*hasText:\s*label\s*\}\s*\)\.first\(\)/, "must locate the key row via role=row, not a bare <tr>");
+  assert.match(src, /row\.getByRole\(\s*"button"\s*,\s*\{\s*name:\s*"Show key"\s*\}\s*\)/, "must click the accessible 'Show key' button, not row.locator('button').first()");
+  assert.ok(!/row\.locator\("button"\)\.first\(\)/.test(src), "must not fall back to a positional 'first button in the row' guess");
+});
+
 test("redactText masks key types that were never enumerated, and truncation after redaction leaks nothing", () => {
   const roku = "roku_ABCDEFGHIJKLMNOPQRSTUV";
   assert.ok(!redactText(`key ${roku}`).includes("ABCDEFGHIJ"));
