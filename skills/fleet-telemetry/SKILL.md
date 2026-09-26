@@ -63,9 +63,12 @@ calls. Each subscription, API, AWS gross, Make, GitHub Actions, Depot, Copilot, 
 observability lane stays separate. AWS credit offsets are reported separately and are excluded from
 gross cost. Only a dated USD `actual_charge` receipt can become a dollar cost. Token counts, platform
 usage units, credits, estimates, missing receipts, duplicate receipts, and unmatched periods remain
-unknown. Before/after deltas require the same holdout ID and equal-length windows; missing lanes keep
-the overall cost per quality-passing task unknown. Synthetic fixtures test these rules. This report
-does not claim a live vendor delta until accepted account receipts and quality results are supplied.
+unknown. Before/after deltas require the same holdout ID, evaluator identity and version, completed
+task denominator, holdout task count, and equal-length windows. The normalized input rejects fields
+outside its evidence contract, and report output omits run, holdout, evaluator, receipt, and source
+identifiers. Missing lanes keep the overall cost per quality-passing task unknown. Synthetic fixtures
+test these rules. This report does not claim a live vendor delta until accepted account receipts and
+quality results are supplied.
 
 `callsite_id` is the join key against `agent-evals`' `eval_result.callsite_id` (same default: the agent
 role). It supports quality-versus-token analysis by callsite. Actual dollar cost must come from the

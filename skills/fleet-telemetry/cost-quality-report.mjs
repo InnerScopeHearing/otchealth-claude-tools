@@ -27,8 +27,17 @@ function requireId(value, field) {
   return value;
 }
 
+function requireExactFields(value, allowedFields, field) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  if (Object.keys(value).some((key) => !allowedFields.has(key))) {
+    throw new TypeError(`${field} contains unsupported fields`);
+  }
+}
+
 function requirePeriod(period, field) {
-  if (!period || typeof period !== "object") throw new TypeError(`${field} is required`);
+  requireExactFields(period, new Set(["start", "end"]), field);
   const { start, end } = period;
   const utcTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
   if (typeof start !== "string" || typeof end !== "string" || !utcTimestamp.test(start) || !utcTimestamp.test(end)) {
@@ -56,11 +65,18 @@ function requireUsd(value, field) {
 
 function normalizeReceipt(receipt, index) {
   const field = `receipts[${index}]`;
-  if (!receipt || typeof receipt !== "object") throw new TypeError(`${field} must be an object`);
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new TypeError(`${field} must be an object`);
   const lane = requireId(receipt.lane, `${field}.lane`);
   const receiptId = requireId(receipt.receipt_id, `${field}.receipt_id`);
   const evidenceKind = receipt.evidence_kind;
   if (!VALID_EVIDENCE.has(evidenceKind)) throw new TypeError(`${field}.evidence_kind is unsupported`);
+  const fieldsByEvidence = {
+    actual_charge: new Set(["lane", "evidence_kind", "amount_usd", "currency", "period", "receipt_id", "source_id"]),
+    credit_offset: new Set(["lane", "evidence_kind", "amount_usd", "currency", "period", "receipt_id", "source_id"]),
+    usage_only: new Set(["lane", "evidence_kind", "period", "receipt_id", "usage_value", "usage_unit"]),
+    estimate: new Set(["lane", "evidence_kind", "period", "receipt_id", "estimated_usd"]),
+  };
+  requireExactFields(receipt, fieldsByEvidence[evidenceKind], field);
   const period = requirePeriod(receipt.period, `${field}.period`);
 
   const normalized = { lane, receiptId, evidenceKind, period };
@@ -74,8 +90,12 @@ function normalizeReceipt(receipt, index) {
 }
 
 function normalizeRun(run, name) {
-  if (!run || typeof run !== "object") throw new TypeError(`${name} is required`);
+  requireExactFields(run, new Set([
+    "run_id", "holdout_id", "holdout_task_count", "quality_source_id", "quality_source_version",
+    "period", "completed_tasks", "quality_passing_tasks", "receipts",
+  ]), name);
   const completedTasks = requireCount(run.completed_tasks, `${name}.completed_tasks`);
+  const holdoutTaskCount = requireCount(run.holdout_task_count, `${name}.holdout_task_count`);
   const qualityPassingTasks = requireCount(run.quality_passing_tasks, `${name}.quality_passing_tasks`);
   if (qualityPassingTasks > completedTasks) throw new TypeError(`${name}.quality_passing_tasks exceeds completed_tasks`);
   if (!Array.isArray(run.receipts)) throw new TypeError(`${name}.receipts must be an array`);
@@ -83,7 +103,9 @@ function normalizeRun(run, name) {
   return {
     runId: requireId(run.run_id, `${name}.run_id`),
     holdoutId: requireId(run.holdout_id, `${name}.holdout_id`),
+    holdoutTaskCount,
     qualitySourceId: requireId(run.quality_source_id, `${name}.quality_source_id`),
+    qualitySourceVersion: requireId(run.quality_source_version, `${name}.quality_source_version`),
     period: requirePeriod(run.period, `${name}.period`),
     completedTasks,
     qualityPassingTasks,
@@ -122,8 +144,6 @@ function actualLane(run, lane) {
       ? round(receipt.amountUsd / run.qualityPassingTasks)
       : null,
     quality_pass_denominator_status: run.qualityPassingTasks > 0 ? "measured" : "unknown_no_quality_passes",
-    receipt_id: receipt.receiptId,
-    source_id: receipt.sourceId,
   };
 }
 
@@ -137,8 +157,6 @@ function creditOffset(run) {
   return {
     status: "reported_separately",
     offset_usd: round(receipt.amountUsd),
-    receipt_id: receipt.receiptId,
-    source_id: receipt.sourceId,
   };
 }
 
@@ -147,12 +165,10 @@ function summarizeRun(run) {
   const knownLanes = new Set([...BILLABLE_LANES, CREDIT_LANE]);
   const unclassifiedReceiptCount = run.receipts.filter((item) => !knownLanes.has(item.lane)).length;
   return {
-    run_id: run.runId,
-    holdout_id: run.holdoutId,
     period: { start: run.period.start, end: run.period.end },
     quality: {
-      source_id: run.qualitySourceId,
       completed_tasks: run.completedTasks,
+      holdout_task_count: run.holdoutTaskCount,
       quality_passing_tasks: run.qualityPassingTasks,
       pass_rate: run.completedTasks > 0 ? round(run.qualityPassingTasks / run.completedTasks) : null,
     },
@@ -162,10 +178,10 @@ function summarizeRun(run) {
   };
 }
 
-function laneDelta(before, after, comparable) {
+function laneDelta(before, after, comparable, comparisonReason) {
   const baseline = before.cost_per_quality_passing_task_usd;
   const candidate = after.cost_per_quality_passing_task_usd;
-  if (!comparable) return { status: "unknown", reason: "holdout_or_window_not_comparable" };
+  if (!comparable) return { status: "unknown", reason: comparisonReason };
   if (before.status !== "measured" || after.status !== "measured") {
     return { status: "unknown", reason: "actual_cost_receipt_missing_or_invalid" };
   }
@@ -187,22 +203,31 @@ function laneDelta(before, after, comparable) {
  * credits, and missing lanes never become costs or zeroes.
  */
 export function buildCostQualityDelta(input) {
-  if (!input || typeof input !== "object") throw new TypeError("input is required");
+  requireExactFields(input, new Set(["baseline", "candidate"]), "input");
   const baseline = normalizeRun(input.baseline, "baseline");
   const candidate = normalizeRun(input.candidate, "candidate");
   const baselineSummary = summarizeRun(baseline);
   const candidateSummary = summarizeRun(candidate);
   const equalWindowDuration = baseline.period.endMs - baseline.period.startMs === candidate.period.endMs - candidate.period.startMs;
   const sameHoldout = baseline.holdoutId === candidate.holdoutId;
-  const comparable = equalWindowDuration && sameHoldout;
-  const comparisonReason = comparable
-    ? null
-    : !sameHoldout ? "holdout_id_mismatch" : "window_duration_mismatch";
+  const sameQualitySource = baseline.qualitySourceId === candidate.qualitySourceId;
+  const sameQualitySourceVersion = baseline.qualitySourceVersion === candidate.qualitySourceVersion;
+  const sameSampleDenominator = baseline.completedTasks === candidate.completedTasks;
+  const sameHoldoutTaskCount = baseline.holdoutTaskCount === candidate.holdoutTaskCount;
+  const comparable = equalWindowDuration && sameHoldout && sameQualitySource && sameQualitySourceVersion &&
+    sameSampleDenominator && sameHoldoutTaskCount && baseline.holdoutTaskCount > 0;
+  const comparisonReason = comparable ? null :
+    !sameHoldout ? "holdout_id_mismatch" :
+    !sameQualitySource ? "quality_source_mismatch" :
+    !sameQualitySourceVersion ? "quality_source_version_mismatch" :
+    !sameSampleDenominator ? "sample_denominator_mismatch" :
+    !sameHoldoutTaskCount || baseline.holdoutTaskCount === 0 ? "holdout_task_count_mismatch_or_empty" :
+    "window_duration_mismatch";
 
   const lanes = Object.fromEntries(BILLABLE_LANES.map((lane) => {
     const before = baselineSummary.billable_lanes[lane];
     const after = candidateSummary.billable_lanes[lane];
-    return [lane, { baseline: before, candidate: after, delta: laneDelta(before, after, comparable) }];
+    return [lane, { baseline: before, candidate: after, delta: laneDelta(before, after, comparable, comparisonReason) }];
   }));
 
   const incompleteLanes = BILLABLE_LANES.filter((lane) =>
@@ -237,11 +262,19 @@ export function buildCostQualityDelta(input) {
 
   return {
     schema_version: 1,
-    comparison: { status: comparable ? "comparable" : "unknown", same_holdout: sameHoldout, equal_window_duration: equalWindowDuration, reason: comparisonReason },
+    comparison: {
+      status: comparable ? "comparable" : "unknown",
+      same_holdout: sameHoldout,
+      same_quality_source: sameQualitySource,
+      same_quality_source_version: sameQualitySourceVersion,
+      same_sample_denominator: sameSampleDenominator,
+      same_holdout_task_count: sameHoldoutTaskCount,
+      equal_window_duration: equalWindowDuration,
+      reason: comparisonReason,
+    },
     baseline: baselineSummary,
     candidate: candidateSummary,
     lanes,
     overall,
   };
 }
-

@@ -20,11 +20,14 @@ function actual(lane, amountUsd, periodStart, periodEnd, receiptId = `${lane}-fi
   };
 }
 
-function run({ id, periodStart, periodEnd, passes, receipts, completed = 10, holdoutId = holdout }) {
+function run({ id, periodStart, periodEnd, passes, receipts, completed = 10, holdoutId = holdout,
+  holdoutTasks = 10, qualitySourceId = "synthetic-evaluator", qualitySourceVersion = "v1" }) {
   return {
     run_id: id,
     holdout_id: holdoutId,
-    quality_source_id: `${id}-quality-fixture`,
+    holdout_task_count: holdoutTasks,
+    quality_source_id: qualitySourceId,
+    quality_source_version: qualitySourceVersion,
     period: { start: periodStart, end: periodEnd },
     completed_tasks: completed,
     quality_passing_tasks: passes,
@@ -146,3 +149,75 @@ test("unclassified vendor receipts prevent a complete overall total", () => {
   assert.equal(report.overall.reason, "unclassified_receipts_present");
 });
 
+test("evaluator identity, evaluator version, sample denominator, and holdout size must match", () => {
+  const base = {
+    id: "before", periodStart: start, periodEnd: end, passes: 2,
+    receipts: completeReceipts(1, start, end),
+  };
+  const candidate = {
+    id: "after", periodStart: nextStart, periodEnd: nextEnd, passes: 2,
+    receipts: completeReceipts(1, nextStart, nextEnd),
+  };
+
+  for (const [change, reason] of [
+    [{ qualitySourceId: "different-evaluator" }, "quality_source_mismatch"],
+    [{ qualitySourceVersion: "v2" }, "quality_source_version_mismatch"],
+    [{ completed: 11 }, "sample_denominator_mismatch"],
+    [{ holdoutTasks: 11 }, "holdout_task_count_mismatch_or_empty"],
+  ]) {
+    const report = buildCostQualityDelta({ baseline: run(base), candidate: run({ ...candidate, ...change }) });
+    assert.equal(report.comparison.status, "unknown");
+    assert.equal(report.comparison.reason, reason);
+    assert.equal(report.lanes.openai_api.delta.status, "unknown");
+  }
+});
+
+test("zero holdout task count is not comparable", () => {
+  const report = buildCostQualityDelta({
+    baseline: run({ id: "before", periodStart: start, periodEnd: end, passes: 2, holdoutTasks: 0, receipts: completeReceipts(1, start, end) }),
+    candidate: run({ id: "after", periodStart: nextStart, periodEnd: nextEnd, passes: 2, holdoutTasks: 0, receipts: completeReceipts(1, nextStart, nextEnd) }),
+  });
+
+  assert.equal(report.comparison.status, "unknown");
+  assert.equal(report.comparison.reason, "holdout_task_count_mismatch_or_empty");
+});
+
+test("output omits all supplied run, holdout, evaluator, receipt, and source identifiers", () => {
+  const baselineReceipts = completeReceipts(1, start, end);
+  baselineReceipts[0].receipt_id = "synthetic-customer-name-1";
+  baselineReceipts[0].source_id = "synthetic-account-label-1";
+  const candidateReceipts = completeReceipts(1, nextStart, nextEnd);
+  const report = buildCostQualityDelta({
+    baseline: run({
+      id: "synthetic-run-label-1", holdoutId: "synthetic-customer-holdout-1", qualitySourceId: "synthetic-evaluator-label-1",
+      periodStart: start, periodEnd: end, passes: 2, receipts: baselineReceipts,
+    }),
+    candidate: run({
+      id: "synthetic-run-label-2", holdoutId: "synthetic-customer-holdout-1", qualitySourceId: "synthetic-evaluator-label-1",
+      periodStart: nextStart, periodEnd: nextEnd, passes: 2, receipts: candidateReceipts,
+    }),
+  });
+  const serialized = JSON.stringify(report);
+
+  for (const value of [
+    "synthetic-run-label-1", "synthetic-run-label-2", "synthetic-customer-holdout-1",
+    "synthetic-evaluator-label-1", "synthetic-customer-name-1", "synthetic-account-label-1",
+  ]) assert.equal(serialized.includes(value), false);
+  assert.equal(serialized.includes("\"run_id\""), false);
+  assert.equal(serialized.includes("\"holdout_id\""), false);
+  assert.equal(serialized.includes("\"source_id\""), false);
+  assert.equal(serialized.includes("\"receipt_id\""), false);
+});
+
+test("rejects fields outside the normalized input contract", () => {
+  const validBaseline = run({ id: "before", periodStart: start, periodEnd: end, passes: 2, receipts: completeReceipts(1, start, end) });
+  const validCandidate = run({ id: "after", periodStart: nextStart, periodEnd: nextEnd, passes: 2, receipts: completeReceipts(1, nextStart, nextEnd) });
+
+  assert.throws(() => buildCostQualityDelta({ baseline: validBaseline, candidate: validCandidate, customer: "fixture-only" }), /unsupported fields/);
+  assert.throws(() => buildCostQualityDelta({ baseline: { ...validBaseline, extra: true }, candidate: validCandidate }), /unsupported fields/);
+  assert.throws(() => buildCostQualityDelta({ baseline: { ...validBaseline, period: { ...validBaseline.period, customer: "fixture-only" } }, candidate: validCandidate }), /unsupported fields/);
+  assert.throws(() => buildCostQualityDelta({
+    baseline: { ...validBaseline, receipts: [{ ...validBaseline.receipts[0], account_name: "fixture-only" }, ...validBaseline.receipts.slice(1)] },
+    candidate: validCandidate,
+  }), /unsupported fields/);
+});
