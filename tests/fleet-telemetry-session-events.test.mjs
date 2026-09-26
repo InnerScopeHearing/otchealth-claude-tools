@@ -75,3 +75,33 @@ test("parseTranscriptText clamps malformed token counts and timestamps to safe z
   assert.equal(metrics.totalTok, 4);
   assert.equal(metrics.durMs, 0);
 });
+
+test("parseTranscriptText preserves model mix when an assistant entry has no usage object", () => {
+  const transcript = [
+    line("assistant", "2026-09-25T10:00:01.000Z", {
+      role: "assistant", model: "claude-sonnet-4-5", usage: { input_tokens: 10, output_tokens: 2 }, content: [],
+    }),
+    line("assistant", "2026-09-25T10:00:02.000Z", {
+      role: "assistant", model: "claude-haiku-4-5", content: [],
+    }),
+  ].join("\n");
+
+  const metrics = parseTranscriptText(transcript);
+  assert.equal(metrics.model, "mixed");
+  assert.deepEqual(metrics.modelCounts, { "claude-sonnet-4-5": 1, "claude-haiku-4-5": 1 });
+  assert.equal(metrics.modelCalls, 1);
+  assert.equal(metrics.inTok, 10);
+  assert.equal(metrics.outTok, 2);
+});
+
+test("parseTranscriptText uses valid timestamps when malformed timestamps are also present", () => {
+  const transcript = [
+    line("assistant", "not-a-timestamp", { role: "assistant", model: "claude-sonnet-4-5", content: [] }),
+    line("user", "2026-09-25T10:00:00.000Z", { role: "user", content: "synthetic" }),
+    line("assistant", "2026-09-25T10:00:05.000Z", { role: "assistant", model: "claude-sonnet-4-5", content: [] }),
+    line("user", "also-not-a-timestamp", { role: "user", content: "synthetic" }),
+  ].join("\n");
+
+  const metrics = parseTranscriptText(transcript);
+  assert.equal(metrics.durMs, 5000);
+});

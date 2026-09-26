@@ -36,14 +36,11 @@ export function resolveAgent() {
   return (mark || "unknown").toLowerCase();
 }
 
-// Secret resolution: Azure Key Vault ONLY. The GCP Secret Manager fallback that used to live here
-// was removed after the 2026-07 GCP retirement -- GCP_CLAUDE_DRIVER_SA_JSON is unset fleet-wide, so
-// the fallback could only ever return null, and its presence made a genuine "key unresolvable"
-// failure look like there was still a backup. That silent-null path is exactly what let the
-// 2026-07-02 telemetry blackout hide for 15 days: the old code fetched the ingest key via the GCP
-// SA; when the SA left session hydration the fetch went dark and every session exited 0 unnoticed.
-// kvSecret() is itself fail-open (returns null, never throws), so callers must treat null as
-// "not resolved" and surface it loudly rather than swallow it.
+// Secret resolution uses the shared adapter at ../kb-memory/azure-secret.mjs (a legacy filename).
+// Its default backend is AWS SSM Parameter Store. Azure Key Vault was permanently deleted and is
+// not a valid fallback; do not set SECRET_BACKEND=keyvault for this service. GCP Secret Manager is
+// retired too. kvSecret() is fail-open (returns null, never throws), so surface a missing key loudly
+// rather than hiding a telemetry blackout.
 async function sm(id) { return await kvSecret(id); }
 
 function tokenCount(value) {
@@ -57,19 +54,23 @@ export function parseTranscriptText(text) {
   const tools = Object.create(null); const models = Object.create(null); let firstTs = null, lastTs = null;
   for (const ln of lines) {
     let o; try { o = JSON.parse(ln); } catch { continue; }
-    const ts = o.timestamp || o.ts; if (ts) { firstTs = firstTs || ts; lastTs = ts; }
+    const ts = Date.parse(o.timestamp || o.ts);
+    if (Number.isFinite(ts)) {
+      firstTs = firstTs === null ? ts : Math.min(firstTs, ts);
+      lastTs = lastTs === null ? ts : Math.max(lastTs, ts);
+    }
     const msg = o.message || o;
     if (o.type === "assistant" || msg?.role === "assistant") {
       turns++;
       const u = msg?.usage || o.usage;
       const model = msg?.model || o.model;
+      if (model) models[model] = (models[model] || 0) + 1;
       if (u) {
         modelCalls++;
         inTok += tokenCount(u.input_tokens);
         outTok += tokenCount(u.output_tokens);
         cacheW += tokenCount(u.cache_creation_input_tokens);
         cacheR += tokenCount(u.cache_read_input_tokens);
-        if (model) models[model] = (models[model] || 0) + 1;
       }
       const content = msg?.content; if (Array.isArray(content)) for (const c of content) if (c.type === "tool_use") { toolCalls++; tools[c.name] = (tools[c.name] || 0) + 1; }
     }
@@ -77,7 +78,7 @@ export function parseTranscriptText(text) {
   }
   const modelNames = Object.keys(models);
   const model = modelNames.length === 1 ? modelNames[0] : modelNames.length > 1 ? "mixed" : "unknown";
-  const elapsed = firstTs && lastTs ? new Date(lastTs).getTime() - new Date(firstTs).getTime() : 0;
+  const elapsed = firstTs !== null && lastTs !== null ? lastTs - firstTs : 0;
   const durMs = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
   return {
     inTok, outTok, cacheW, cacheR, totalTok: inTok + outTok + cacheW + cacheR,
