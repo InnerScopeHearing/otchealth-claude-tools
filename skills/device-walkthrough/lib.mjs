@@ -6,9 +6,13 @@
 
 // ---- app registry -------------------------------------------------------------------------------
 //
-// The three apps that currently ship a qa/device-walkthrough/ XCUITest runner + a
-// .github/workflows/device-walkthrough.yml (dispatch-only, builds the runner on Depot macOS). All
-// three workflows upload their test package as an artifact literally named `walkthrough-runner-<sha>`
+// AWARE and iHEARtest currently ship a qa/device-walkthrough/ XCUITest runner + a
+// .github/workflows/device-walkthrough.yml (dispatch-only, builds the runner on Depot macOS) on
+// their own `main`. Hey Millie (otchealth-companion) has the identical runner + workflow on branch
+// `claude/millie-w7-device-walkthrough` (otchealth-companion PR #73), not yet merged to main as of
+// this entry; pass `--ref claude/millie-w7-device-walkthrough` to `build-runner --app HeyMillie`
+// until it lands, after which the default `main` ref works like the other two apps. All three
+// workflows upload their test package as an artifact literally named `walkthrough-runner-<sha>`
 // (verified against every repo's workflow YAML). NOTE the ios-depot IPA artifact prefix is NOT a
 // fleet-wide fixed convention: iHEARtest and Hey Millie (otchealth-companion) both upload a fixed
 // `<slug>-ios-ipa-<sha>` name, but AWARE's own ios-depot.yml does not (it uploads
