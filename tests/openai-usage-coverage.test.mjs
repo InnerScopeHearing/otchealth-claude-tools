@@ -1,6 +1,6 @@
-// Regression guard for OpenAI cost visibility: FAILS if any file under setup/ or skills/ mentions
+// Regression guard for OpenAI usage receipts: FAILS if any file under setup/ or skills/ mentions
 // "api.openai.com" (a direct OpenAI network call) without also importing/calling recordOpenAIUsage()
-// (setup/openai-usage.mjs) -- UNLESS the file is explicitly named in ALLOWLIST below, with a reason.
+// (setup/openai-usage.mjs) unless the file is explicitly named in ALLOWLIST below, with a reason.
 //
 // This is a FILE-LEVEL text scan, not a call-site-level AST analysis: it proves "this file, which
 // talks to api.openai.com somewhere, ALSO talks to recordOpenAIUsage somewhere," not "every individual
@@ -11,9 +11,9 @@
 // URL string per file, no shared HTTP client to instrument once -- and a full AST-based call-graph
 // analysis is a much larger investment for a marginal gain here.
 //
-// A file is skipped by ALLOWLIST only when its OWN literal "api.openai.com" occurrence is NOT itself a
-// billable call site that needs (or can safely receive) its own recordOpenAIUsage() call -- see each
-// entry's `reason` for why. Every allowlist entry is a name-and-reason pair, not a wildcard glob, so
+// A file is skipped by ALLOWLIST only when its direct OpenAI call has no numeric provider `usage`
+// values this receipt path can capture; see each entry's `reason` for the precise case. Every allowlist
+// entry is a name-and-reason pair, not a wildcard glob, so
 // adding a new file that legitimately needs an exception is a deliberate, reviewable, one-line change.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -33,18 +33,8 @@ const ALLOWLIST = {
     "same reasoning as mine-cases.mjs: its OpenAI chat call routes through the shared, instrumented " +
     "setup/model-routing.mjs fetchOpenAIWithFlexRetry(); the literal string here is a doc comment.",
   "skills/designer/scripts/_openai.mjs":
-    "Sora video HTTP calls (create/poll/download) have no per-request `usage` object (billing is " +
-    "per-second-of-video, not token-based); the caller (gen-video.mjs) already computes the exact " +
-    "dollar figure and records it via reportCost() -> skills/designer/scripts/_lib.mjs -> " +
-    "recordOpenAIUsage(). Instrumenting here too would double-count the same spend.",
-  "skills/designer/scripts/gen-image.mjs":
-    "image-generation cost is recorded via the shared reportCost() hook in _lib.mjs (called with this " +
-    "file's own exact, quality/size-aware cost figure), not inline at the raw fetch() call -- avoids " +
-    "double-counting and avoids a second, potentially-divergent price estimate.",
-  "skills/designer/scripts/gen-app-icon-family.mjs":
-    "same reasoning as gen-image.mjs: cost is recorded via the shared reportCost() hook in _lib.mjs.",
-  "skills/designer/scripts/gen-icon-batch.mjs":
-    "same reasoning as gen-image.mjs: cost is recorded via the shared reportCost() hook in _lib.mjs.",
+    "Sora video HTTP responses do not include numeric values in a provider `usage` object, so this " +
+    "usage receipt path intentionally does not record them. It does not estimate or record per-second dollars.",
   "skills/designer/scripts/healthcheck.mjs":
     "its only 'api.openai.com' call is `GET /v1/models` (a credential health probe) -- no `usage` " +
     "object, not a billable request.",
@@ -77,9 +67,25 @@ function listMjsFiles(absDir) {
 }
 
 const candidateFiles = SCAN_DIRS.flatMap((d) => listMjsFiles(join(ROOT, d)));
+const scannedPaths = new Set(candidateFiles.map((abs) => relative(ROOT, abs).split(sep).join("/")));
+const GPT_IMAGE_RECEIPT_PATHS = [
+  "skills/designer/scripts/gen-image.mjs",
+  "skills/designer/scripts/gen-app-icon-family.mjs",
+  "skills/designer/scripts/gen-icon-batch.mjs",
+];
 
 test("there are candidate .mjs files to scan under setup/ and skills/", () => {
   assert.ok(candidateFiles.length > 0, "expected at least one non-test .mjs file under setup/ or skills/");
+});
+
+test("direct GPT Image scripts are scanned and require usage receipt instrumentation", () => {
+  for (const rel of GPT_IMAGE_RECEIPT_PATHS) {
+    assert.ok(scannedPaths.has(rel), `${rel} must remain in the source coverage scan`);
+    assert.equal(Object.prototype.hasOwnProperty.call(ALLOWLIST, rel), false, `${rel} must not be exempted`);
+    const content = readFileSync(join(ROOT, rel), "utf8");
+    assert.match(content, /\bapi\.openai\.com\b/, `${rel} must remain an explicit direct OpenAI call path`);
+    assert.ok(content.includes("recordOpenAIUsage"), `${rel} must record provider-returned usage`);
+  }
 });
 
 test("openai-usage.mjs itself is NOT in the allowlist (it doesn't need to be -- it never calls api.openai.com)", () => {
@@ -119,7 +125,7 @@ for (const abs of candidateFiles) {
       `${rel} references api.openai.com but never calls recordOpenAIUsage() (setup/openai-usage.mjs) and ` +
         `is not in this test's ALLOWLIST. Either instrument it (see the fleet's existing call sites for the ` +
         `pattern) or add a named, reasoned ALLOWLIST entry explaining why this specific file's OpenAI call ` +
-        `does not need its own cost-visibility instrumentation.`
+        `does not need its own usage-receipt instrumentation.`
     );
   });
 }
