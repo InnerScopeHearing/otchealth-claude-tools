@@ -320,7 +320,7 @@ test("comments and literals do not satisfy the usage coverage guard", () => {
     ].join("\n"),
     [
       'const callText = "recordOpenAIUsage()";',
-      "const callPattern = /recordOpenAIUsage\\\\s*\\\\(/;",
+      "const callPattern = /recordOpenAIUsage\\s*\\(/;",
       'await fetch("https://api.openai.com/v1/images/generations");',
     ].join("\n"),
   ];
