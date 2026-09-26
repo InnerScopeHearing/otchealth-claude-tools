@@ -72,6 +72,53 @@ test("buildSessionEvent emits one metadata-only session aggregate, without infer
   assert.equal(JSON.stringify(event).includes("synthetic request"), false);
 });
 
+test("session-end quarantines transcript aggregates from the provider-generation event contract", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tele-generation-contract-home-"));
+  const project = join(home, "project");
+  mkdirSync(project, { recursive: true });
+  const keys = ["KB_AGENT", "HOME", "USERPROFILE", "CLAUDE_PROJECT_DIR"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const sentBatches = [];
+  const transcript = line("assistant", "2026-09-25T10:00:01.000Z", {
+    role: "assistant", model: "claude-sonnet-4-5", usage: { input_tokens: 120, output_tokens: 18 },
+    content: [{ type: "text", text: "synthetic response must not be exported" }],
+  });
+
+  try {
+    process.env.KB_AGENT = "cto";
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.CLAUDE_PROJECT_DIR = project;
+
+    const result = await sessionEnd({
+      inputText: JSON.stringify({
+        transcript_path: join(project, "synthetic-transcript.jsonl"),
+        session_id: "123e4567-e89b-12d3-a456-426614174000",
+      }),
+      args: [],
+      transcriptReader: () => parseTranscriptText(transcript),
+      secretResolver: async () => "synthetic-ingest-key",
+      eventSender: async (_key, events) => { sentBatches.push(events); },
+      logger: { error: () => {}, log: () => {} },
+    });
+
+    assert.equal(result.status, "sent");
+    assert.equal(sentBatches.length, 1);
+    assert.deepEqual(sentBatches[0].map((event) => event.event), ["agent_session"]);
+    assert.equal(sentBatches[0][0].properties.input_tokens, 120);
+    assert.equal(sentBatches[0][0].properties.output_tokens, 18);
+    assert.equal(sentBatches[0][0].properties.cost_basis, "not_observed");
+    assert.deepEqual(Object.keys(sentBatches[0][0].properties).filter((key) => key.startsWith("$ai_")), []);
+    assert.equal(JSON.stringify(sentBatches).includes("synthetic response"), false);
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("buildSessionEvent allows only company seats and excludes personal, PHI/service, and unknown lanes", () => {
   const metrics = parseTranscriptText(line("assistant", "2026-09-25T10:00:01.000Z", {
     role: "assistant", model: "claude-sonnet-4-5", usage: { input_tokens: 2, output_tokens: 1 }, content: [],
