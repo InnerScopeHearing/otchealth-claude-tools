@@ -74,8 +74,8 @@ const GPT_IMAGE_RECEIPT_PATHS = [
   "skills/designer/scripts/gen-icon-batch.mjs",
 ];
 
-// This small lexer finds the helper's ASCII identifier in executable JavaScript. It skips comments and
-// literals, rejects declarations and method definitions, and is intentionally not an AST or call-graph scan.
+// This small source lexer skips comments and literals and excludes named function declarations.
+// It is intentionally narrower than a full JavaScript parser or call-graph analysis.
 const REGEX_PREFIX_KEYWORDS = new Set([
   "await", "case", "delete", "do", "else", "in", "instanceof", "new", "of", "return",
   "throw", "typeof", "void", "yield",
@@ -129,22 +129,42 @@ function skipRegexLiteral(source, start) {
   return start + 1;
 }
 
-function canStartRegexAfter(tokens) {
-  if (tokens.length === 0) return true;
-  const last = tokens[tokens.length - 1];
-  if (last.type === "identifier") return REGEX_PREFIX_KEYWORDS.has(last.value);
-  if (last.type !== "punctuator") return false;
-  if (REGEX_PREFIX_PUNCTUATORS.has(last.value)) return true;
-  if (last.value !== ")") return false;
-
+function isControlParenClose(tokens, closeParenIndex) {
   let depth = 0;
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+  for (let index = closeParenIndex; index >= 0; index -= 1) {
     if (tokens[index].value === ")") depth += 1;
     else if (tokens[index].value === "(") {
       depth -= 1;
       if (depth === 0) return CONTROL_PAREN_KEYWORDS.has(tokens[index - 1]?.value);
     }
   }
+  return false;
+}
+
+function isRegexAfterStatementBlock(tokens) {
+  let braceDepth = 0;
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (tokens[index].value === "}") braceDepth += 1;
+    else if (tokens[index].value === "{") {
+      braceDepth -= 1;
+      if (braceDepth === 0) {
+        const beforeBrace = tokens[index - 1]?.value;
+        if (beforeBrace === ")") return isControlParenClose(tokens, index - 1);
+        return ["do", "else", "finally", "try"].includes(beforeBrace);
+      }
+    }
+  }
+  return false;
+}
+
+function canStartRegexAfter(tokens) {
+  if (tokens.length === 0) return true;
+  const last = tokens[tokens.length - 1];
+  if (last.type === "identifier") return REGEX_PREFIX_KEYWORDS.has(last.value);
+  if (last.type !== "punctuator") return false;
+  if (REGEX_PREFIX_PUNCTUATORS.has(last.value)) return true;
+  if (last.value === ")") return isControlParenClose(tokens, tokens.length - 1);
+  if (last.value === "}") return isRegexAfterStatementBlock(tokens);
   return false;
 }
 
@@ -314,7 +334,7 @@ test("an import-only recorder reference does not satisfy the usage coverage guar
   assert.equal(hasUsageReceiptCoverage("fixture.mjs", importOnlySource), false);
 });
 
-test("comments and literals do not satisfy the usage coverage guard", () => {
+test("comments, literals, and regexes do not satisfy the usage coverage guard", () => {
   const falsePositiveSources = [
     [
       "// recordOpenAIUsage();",
@@ -328,6 +348,10 @@ test("comments and literals do not satisfy the usage coverage guard", () => {
       'const callText = "recordOpenAIUsage()";',
       "const callPattern = /recordOpenAIUsage\\s*\\(/;",
       'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
+    [
+      "if (ready) {}",
+      "/recordOpenAIUsage(value)/.test(source);",
     ].join("\n"),
   ];
 
