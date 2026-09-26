@@ -37,16 +37,18 @@ const cmd = argv[0];
 const takeVal = (f, d, args = argv) => { const i = args.indexOf(f); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
 function readStdin() { try { return readFileSync(0, "utf8"); } catch { return ""; } }
 function read1(p) { try { return readFileSync(p, "utf8").split("\n")[0].trim(); } catch { return ""; } }
-/** Follow setup/session-start.sh's per-session KB_AGENT pin and marker fallback. If a company pin
- *  conflicts with a durable protected-lane marker, fail closed. A marker conflict is abnormal after
- *  session-start, which persists the per-session pin to ~/.claude/.kb-agent. Do not accept a CLI role
- *  override: the Stop hook must not relabel a protected session as a company seat. */
+/** Follow setup/session-start.sh's per-session KB_AGENT pin and marker fallback. If a company
+ *  identity conflicts with a durable protected-lane marker, fail closed. A marker conflict is
+ *  abnormal after session-start, which persists the per-session pin to ~/.claude/.kb-agent. Do not
+ *  accept a CLI role override: the Stop hook must not relabel a protected session as a company seat. */
 export function resolveAgent() {
   const explicit = String(process.env.KB_AGENT || "").trim();
   const sessionMarker = read1(`${homedir()}/.claude/.kb-agent`).toLowerCase();
   const projectMarker = read1(`${process.env.CLAUDE_PROJECT_DIR || "."}/.kb-agent`).toLowerCase();
   const markers = [sessionMarker, projectMarker].filter(Boolean);
-  if (explicit && isCompanyTelemetryAgent(explicit) && markers.some((marker) => PROTECTED_TELEMETRY_AGENTS.has(marker))) {
+  const hasProtectedMarker = markers.some((marker) => PROTECTED_TELEMETRY_AGENTS.has(marker));
+  const hasCompanyIdentity = isCompanyTelemetryAgent(explicit) || markers.some(isCompanyTelemetryAgent);
+  if (hasProtectedMarker && hasCompanyIdentity) {
     return PROTECTED_IDENTITY_CONFLICT;
   }
   if (explicit) return explicit.toLowerCase();
@@ -178,7 +180,7 @@ export async function sessionEnd({
   const sid = safeSessionId(stdin.session_id);
   const agent = resolveAgent();
   if (agent === PROTECTED_IDENTITY_CONFLICT) {
-    logger.error("[fleet-telemetry] skipped conflicting company seat pin and protected marker; no transcript read, SSM lookup, or PostHog event.");
+    logger.error("[fleet-telemetry] skipped conflicting company identity and protected marker; no transcript read, SSM lookup, or PostHog event.");
     return { status: "skipped", reason: "protected-marker-conflict" };
   }
   if (!isCompanyTelemetryAgent(agent)) {

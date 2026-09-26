@@ -188,7 +188,46 @@ test("session-end fails closed when KB_AGENT conflicts with a protected marker b
 
     assert.deepEqual(result, { status: "skipped", reason: "protected-marker-conflict" });
     assert.deepEqual(calls, []);
-    assert.match(logs.join("\n"), /skipped conflicting company seat pin and protected marker/);
+    assert.match(logs.join("\n"), /skipped conflicting company identity and protected marker/);
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("session-end skips mixed company and protected markers with unset KB_AGENT before transcript, SSM, or PostHog access", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tele-unset-conflict-home-"));
+  const project = join(home, "project");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(home, ".claude", ".kb-agent"), "cto\n");
+  writeFileSync(join(project, ".kb-agent"), "clo-personal\n");
+
+  const keys = ["KB_AGENT", "HOME", "USERPROFILE", "CLAUDE_PROJECT_DIR"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const calls = [];
+  const logs = [];
+  try {
+    delete process.env.KB_AGENT;
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.CLAUDE_PROJECT_DIR = project;
+
+    const result = await sessionEnd({
+      inputText: JSON.stringify({ transcript_path: join(project, "synthetic-transcript.jsonl"), session_id: "123e4567-e89b-12d3-a456-426614174000" }),
+      args: [],
+      transcriptReader: () => { calls.push("transcript"); return parseTranscriptText(""); },
+      secretResolver: async () => { calls.push("ssm"); return "test-only-ingest-key"; },
+      eventSender: async () => { calls.push("posthog"); },
+      logger: { error: (message) => logs.push(message), log: () => {} },
+    });
+
+    assert.deepEqual(calls, [], "conflicting markers must skip before transcript, SSM, or PostHog access");
+    assert.deepEqual(result, { status: "skipped", reason: "protected-marker-conflict" });
+    assert.match(logs.join("\n"), /skipped conflicting company identity and protected marker/);
   } finally {
     for (const key of keys) {
       if (previous[key] === undefined) delete process.env[key];
