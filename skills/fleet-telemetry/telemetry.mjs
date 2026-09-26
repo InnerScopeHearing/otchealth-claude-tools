@@ -12,8 +12,8 @@
 // personal-legal, PHI/service, and unknown lanes are skipped before transcript or secret access.
 //
 // Usage (Stop hook passes {session_id, transcript_path} as JSON on stdin):
-//   echo '{"transcript_path":"/path/x.jsonl","session_id":"..."}' | KB_AGENT=cto node telemetry.mjs session-end
-//   node telemetry.mjs session-end --transcript <path> [--agent cto]
+//   echo '{"transcript_path":"/path/x.jsonl","session_id":"<uuid>"}' | KB_AGENT=cto node telemetry.mjs session-end
+//   node telemetry.mjs session-end --transcript <path>
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -24,9 +24,10 @@ const INGEST = "https://us.i.posthog.com/capture/";
 // Only ordinary company Claude Code lanes may send metadata to the shared Fleet Agents project.
 // Keep this aligned with setup/session-start.sh's KB_VALID list, deliberately excluding clo-personal.
 // Unknown and protected/service lanes fail closed so the user-scope hook cannot export their metadata.
-const COMPANY_TELEMETRY_AGENTS = new Set(["cto", "cfo", "clo", "coo", "cpo", "cro", "cco", "developer"]);
+export const COMPANY_TELEMETRY_AGENTS = Object.freeze(["cto", "cfo", "clo", "coo", "cpo", "cro", "cco", "developer"]);
+const COMPANY_TELEMETRY_AGENT_SET = new Set(COMPANY_TELEMETRY_AGENTS);
 function isCompanyTelemetryAgent(agent) {
-  return COMPANY_TELEMETRY_AGENTS.has(String(agent || "").trim().toLowerCase());
+  return COMPANY_TELEMETRY_AGENT_SET.has(String(agent || "").trim().toLowerCase());
 }
 
 const argv = process.argv.slice(2);
@@ -34,15 +35,26 @@ const cmd = argv[0];
 const takeVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 function readStdin() { try { return readFileSync(0, "utf8"); } catch { return ""; } }
 function read1(p) { try { return readFileSync(p, "utf8").split("\n")[0].trim(); } catch { return ""; } }
-/** Resolve the agent role for attribution. process.env.KB_AGENT is often ABSENT in the Stop-hook env
- *  (that is why every pre-blackout event was attributed to "unknown": 38/38). Fall back to the durable
- *  on-disk session marker written by `mem.mjs use <role>` (~/.claude/.kb-agent), then the per-repo
- *  marker, mirroring mem.mjs's own resolution, before giving up to "unknown". */
+/** Resolve the agent role from the per-session pin, then its durable marker. Do not accept a CLI
+ *  role override: the Stop hook must not relabel a protected session as a company seat. */
 export function resolveAgent() {
-  const explicit = (process.env.KB_AGENT || takeVal("--agent", "")).trim();
+  const explicit = String(process.env.KB_AGENT || "").trim();
   if (explicit) return explicit.toLowerCase();
   const mark = read1(`${homedir()}/.claude/.kb-agent`) || read1(`${process.env.CLAUDE_PROJECT_DIR || "."}/.kb-agent`);
   return (mark || "unknown").toLowerCase();
+}
+
+const CALLSITE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function safeCallsiteId(value, fallback) {
+  const candidate = String(value || "").trim().toLowerCase();
+  return CALLSITE_ID_PATTERN.test(candidate) ? candidate : fallback;
+}
+
+function safeSessionId(value) {
+  const candidate = String(value || "").trim();
+  return SESSION_ID_PATTERN.test(candidate) ? candidate.toLowerCase() : crypto.randomUUID();
 }
 
 // Secret resolution uses the shared adapter at ../kb-memory/azure-secret.mjs (a legacy filename).
@@ -59,7 +71,7 @@ function tokenCount(value) {
 
 export function parseTranscriptText(text) {
   const lines = String(text || "").split("\n").filter(Boolean);
-  let inTok = 0, outTok = 0, cacheW = 0, cacheR = 0, turns = 0, modelCalls = 0, toolCalls = 0, errors = 0;
+  let inTok = 0, outTok = 0, cacheW = 0, cacheR = 0, turns = 0, modelUsageEntries = 0, toolCalls = 0, errors = 0;
   const tools = Object.create(null); const models = Object.create(null); let firstTs = null, lastTs = null;
   for (const ln of lines) {
     let o; try { o = JSON.parse(ln); } catch { continue; }
@@ -75,7 +87,7 @@ export function parseTranscriptText(text) {
       const model = msg?.model || o.model;
       if (model) models[model] = (models[model] || 0) + 1;
       if (u) {
-        modelCalls++;
+        modelUsageEntries++;
         inTok += tokenCount(u.input_tokens);
         outTok += tokenCount(u.output_tokens);
         cacheW += tokenCount(u.cache_creation_input_tokens);
@@ -89,9 +101,11 @@ export function parseTranscriptText(text) {
   const model = modelNames.length === 1 ? modelNames[0] : modelNames.length > 1 ? "mixed" : "unknown";
   const elapsed = firstTs !== null && lastTs !== null ? lastTs - firstTs : 0;
   const durMs = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+  // These counters have different denominators. Model counts include assistant entries with a model
+  // label, while usage entries include assistant entries with a usage object. Neither proves provider calls.
   return {
     inTok, outTok, cacheW, cacheR, totalTok: inTok + outTok + cacheW + cacheR,
-    turns, modelCalls,
+    turns, modelUsageEntries,
     toolCalls, tools, model, models: modelNames, modelCounts: Object.fromEntries(Object.entries(models)),
     errors, durMs,
   };
@@ -104,7 +118,7 @@ function parseTranscript(path) {
 export function buildSessionEvent(metrics, { agent, callsiteId, sessionId, timestamp }) {
   const resolvedAgent = String(agent || "").trim().toLowerCase();
   if (!isCompanyTelemetryAgent(resolvedAgent)) return null;
-  const resolvedCallsite = callsiteId || resolvedAgent;
+  const resolvedCallsite = safeCallsiteId(callsiteId, resolvedAgent);
   return {
     event: "agent_session",
     distinct_id: resolvedAgent,
@@ -112,13 +126,13 @@ export function buildSessionEvent(metrics, { agent, callsiteId, sessionId, times
     properties: {
       agent: resolvedAgent,
       callsite_id: resolvedCallsite,
-      session_id: sessionId,
+      session_id: safeSessionId(sessionId),
       telemetry_schema_version: 2,
       cost_basis: "not_observed",
       model: metrics.model,
       models: metrics.models,
-      model_counts: metrics.modelCounts,
-      model_call_count: metrics.modelCalls,
+      model_counts: metrics.modelCounts, // assistant transcript entries with a model label, grouped by model
+      model_call_count: metrics.modelUsageEntries, // schema-v2 name; usage-bearing entries, not verified provider calls
       turns: metrics.turns,
       tool_calls: metrics.toolCalls,
       tools_used: Object.keys(metrics.tools),
@@ -145,7 +159,7 @@ async function capture(key, events) {
 async function sessionEnd() {
   let stdin = {}; try { stdin = JSON.parse(readStdin() || "{}"); } catch {}
   const path = takeVal("--transcript", "") || stdin.transcript_path;
-  const sid = (stdin.session_id || takeVal("--session", "") || crypto.randomUUID()).slice(0, 64);
+  const sid = safeSessionId(stdin.session_id);
   const agent = resolveAgent();
   if (!isCompanyTelemetryAgent(agent)) {
     console.error("[fleet-telemetry] skipped non-company or segregated lane; no transcript read, SSM lookup, or PostHog event.");
@@ -168,7 +182,7 @@ async function sessionEnd() {
   const callsiteId = (takeVal("--callsite", "") || agent);
   const event = buildSessionEvent(m, { agent, callsiteId, sessionId: sid, timestamp: now });
   await capture(key, [event]);
-  console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} calls=${m.modelCalls} tools=${m.toolCalls} tok=${m.totalTok} -> PostHog Fleet Agents`);
+  console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} usage_entries=${m.modelUsageEntries} tools=${m.toolCalls} tok=${m.totalTok} -> PostHog Fleet Agents`);
 }
 
 // Only run the CLI dispatch when executed directly (node telemetry.mjs ...), NOT when imported by a

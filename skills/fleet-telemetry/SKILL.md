@@ -22,6 +22,32 @@ event volume and false generation counts.
   API price estimates are not invoices. Join session tokens/outcomes to provider billing artifacts
   for actual spend and keep subscription usage limits as a separate measure.
 
+## Query/filter contract v1 (event schema v2)
+For current session, routing-context, and cache analyses, use the exact HogQL `WHERE` expression in
+`query-contract-v1.json`: `event = 'agent_session' AND properties.telemetry_schema_version = 2 AND
+properties.cost_basis = 'not_observed' AND properties.agent IN ('cto', 'cfo', 'clo', 'coo', 'cpo',
+'cro', 'cco', 'developer')`. This positive event/version/seat filter excludes historical
+`$ai_generation` rows that represented the same whole-session transcript as a pseudo-generation.
+Do not add that legacy event with an `OR` condition.
+
+`model_counts` counts assistant transcript entries with a model label, grouped by model, including
+entries without a usage object. `model_call_count` counts assistant transcript entries with a usage
+object. The latter is a schema-v2 field name, not a verified provider API-call count. The measures
+have different denominators and must not be substituted for each other.
+
+`callsite_id` accepts a lowercase identifier of up to 64 letters, digits, dots, underscores, or
+hyphens; an invalid value falls back to the company-seat role. `session_id` accepts only a UUID;
+missing or invalid values are replaced with a generated UUID. Free-form values are not exported as
+identifiers.
+
+This event is not a cost source. `cost_basis` is `not_observed`, which does not mean zero cost.
+Ignore historical `est_cost_usd`, `$ai_total_cost_usd`, and similar estimates. Actual cost must come
+from provider billing artifacts. Routing analysis may use schema-v2 session tokens, model labels,
+outcome, and `callsite_id` as descriptive signals, with quality results joined by `callsite_id`.
+Cache analysis may sum only `cache_read_tokens` and `cache_write_tokens` from the filtered
+`agent_session` cohort. Do not use legacy pseudo-generation rows or transcript-derived dollar
+estimates for current routing, cache, or cost decisions.
+
 `callsite_id` is the join key against `agent-evals`' `eval_result.callsite_id` (same default: the agent
 role). It supports quality-versus-token analysis by callsite. Actual dollar cost must come from the
 provider's billing artifact, not be inferred from subscription transcript tokens.

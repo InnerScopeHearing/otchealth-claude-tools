@@ -1,0 +1,58 @@
+{
+  "contract": "fleet-telemetry-session-analytics",
+  "contract_version": 1,
+  "telemetry_event": "agent_session",
+  "telemetry_schema_version": 2,
+  "hogql_where": "event = 'agent_session' AND properties.telemetry_schema_version = 2 AND properties.cost_basis = 'not_observed' AND properties.agent IN ('cto', 'cfo', 'clo', 'coo', 'cpo', 'cro', 'cco', 'developer')",
+  "company_agent_allowlist": [
+    "cto",
+    "cfo",
+    "clo",
+    "coo",
+    "cpo",
+    "cro",
+    "cco",
+    "developer"
+  ],
+  "excluded_agent_examples": [
+    "clo-personal",
+    "medreview",
+    "companion",
+    "unknown",
+    ""
+  ],
+  "excluded_legacy_session_event_names": [
+    "$ai_generation"
+  ],
+  "model_counts_semantics": "Count assistant transcript entries by model label, including entries without a usage object.",
+  "model_call_count_semantics": "Count assistant transcript entries that contain a usage object. This schema-v2 field name does not prove provider API calls.",
+  "identifier_constraints": {
+    "callsite_id": "Lowercase identifier of up to 64 letters, digits, dots, underscores, or hyphens; invalid values fall back to the company-seat role.",
+    "session_id": "UUID only; missing or invalid values are replaced with a generated UUID."
+  },
+  "current_cost_analysis": {
+    "session_event_supported": false,
+    "cost_basis": "not_observed",
+    "actual_cost_source": "provider billing artifacts only",
+    "forbidden_properties": [
+      "$ai_total_cost_usd",
+      "est_cost_usd",
+      "estimated_cost_usd",
+      "cost_usd"
+    ]
+  },
+  "routing_analysis": {
+    "use": "descriptive session signals only",
+    "provider_call_count_supported": false,
+    "cost_per_token_supported": false,
+    "quality_join_key": "callsite_id"
+  },
+  "cache_analysis": {
+    "source_event": "agent_session",
+    "telemetry_schema_version": 2,
+    "allowed_properties": [
+      "cache_read_tokens",
+      "cache_write_tokens"
+    ]
+  }
+}
