@@ -344,3 +344,21 @@ test("buildScheduleRunBody: rejects a non-numeric or out-of-range job timeout", 
   assert.equal(buildScheduleRunBody({ ...base, jobTimeoutMinutes: 145 }).executionConfiguration.jobTimeoutMinutes, 145);
   assert.equal(buildScheduleRunBody(base).executionConfiguration.jobTimeoutMinutes, 145);
 });
+
+// Regression: Hey Millie build 2's IPA nests Alamofire's SPM resource bundle (with its own
+// Info.plist) inside App.app; a recursive "first Info.plist" search returned that one and
+// fetch-ipa refused the real app with a bogus bundle-id mismatch.
+test("appInfoPlistPath returns the top-level app Info.plist, never a nested bundle's", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const { appInfoPlistPath } = await import("../fsio.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "dw-plist-"));
+  const app = join(dir, "Payload", "App.app");
+  const nested = join(app, "Alamofire_Alamofire.bundle");
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, "Info.plist"), "nested");
+  writeFileSync(join(app, "Info.plist"), "app");
+  assert.equal(appInfoPlistPath(dir), join(app, "Info.plist"));
+  assert.equal(appInfoPlistPath(join(dir, "missing")), null);
+});
