@@ -290,12 +290,57 @@ function isFunctionDeclaration(tokens, nameIndex) {
   return previous === "function" || (previous === "*" && tokens[nameIndex - 2]?.value === "function");
 }
 
+function enclosingOpenBrace(tokens, beforeIndex) {
+  let nestedBraceDepth = 0;
+  for (let index = beforeIndex; index >= 0; index -= 1) {
+    if (tokens[index].value === "}") nestedBraceDepth += 1;
+    else if (tokens[index].value === "{") {
+      if (nestedBraceDepth === 0) return index;
+      nestedBraceDepth -= 1;
+    }
+  }
+  return -1;
+}
+
+function isClassBody(tokens, openBraceIndex) {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  for (let index = openBraceIndex - 1; index >= 0; index -= 1) {
+    const value = tokens[index].value;
+    if (value === ")") parenDepth += 1;
+    else if (value === "(") parenDepth = Math.max(0, parenDepth - 1);
+    else if (value === "]") bracketDepth += 1;
+    else if (value === "[") bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (value === "}") braceDepth += 1;
+    else if (value === "{") {
+      if (braceDepth > 0) braceDepth -= 1;
+      else if (parenDepth === 0 && bracketDepth === 0) return false;
+    } else if (parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+      if (tokens[index].type === "identifier" && value === "class" && tokens[index - 1]?.value !== ".") {
+        return true;
+      }
+      if (value === ";") return false;
+    }
+  }
+  return false;
+}
+
+function isObjectLiteralOrClassBody(tokens, openBraceIndex) {
+  if (isClassBody(tokens, openBraceIndex)) return true;
+  const previous = tokens[openBraceIndex - 1]?.value;
+  if (previous === ">" && tokens[openBraceIndex - 2]?.value === "=") return false;
+  return ["=", "(", "[", ":", ",", "return", "yield", "?"].includes(previous);
+}
+
 function isMethodDefinition(tokens, nameIndex, openParenIndex, source) {
   if (!METHOD_PREFIXES.has(tokens[nameIndex - 1]?.value)) return false;
   const closeParenIndex = matchingParen(tokens, openParenIndex);
   if (closeParenIndex === -1 || tokens[closeParenIndex + 1]?.value !== "{") return false;
   const gap = source.slice(tokens[closeParenIndex].end, tokens[closeParenIndex + 1].start);
-  return !/[\r\n\u2028\u2029]/.test(gap);
+  if (!/[\r\n\u2028\u2029]/.test(gap)) return true;
+  const containerBraceIndex = enclosingOpenBrace(tokens, nameIndex - 1);
+  return containerBraceIndex !== -1 && isObjectLiteralOrClassBody(tokens, containerBraceIndex);
 }
 
 function hasUsageRecorderInvocation(source) {
