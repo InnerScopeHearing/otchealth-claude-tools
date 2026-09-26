@@ -214,14 +214,21 @@ export function buildCostQualityDelta(input) {
   const sameQualitySourceVersion = baseline.qualitySourceVersion === candidate.qualitySourceVersion;
   const sameSampleDenominator = baseline.completedTasks === candidate.completedTasks;
   const sameHoldoutTaskCount = baseline.holdoutTaskCount === candidate.holdoutTaskCount;
+  const baselineSampleComplete = baseline.completedTasks > 0 && baseline.completedTasks === baseline.holdoutTaskCount;
+  const candidateSampleComplete = candidate.completedTasks > 0 && candidate.completedTasks === candidate.holdoutTaskCount;
+  const qualityNonInferiority = baselineSampleComplete && candidateSampleComplete
+    ? BigInt(candidate.qualityPassingTasks) * BigInt(baseline.completedTasks) >=
+      BigInt(baseline.qualityPassingTasks) * BigInt(candidate.completedTasks)
+    : null;
   const comparable = equalWindowDuration && sameHoldout && sameQualitySource && sameQualitySourceVersion &&
-    sameSampleDenominator && sameHoldoutTaskCount && baseline.holdoutTaskCount > 0;
+    sameSampleDenominator && sameHoldoutTaskCount && baselineSampleComplete && candidateSampleComplete;
   const comparisonReason = comparable ? null :
     !sameHoldout ? "holdout_id_mismatch" :
     !sameQualitySource ? "quality_source_mismatch" :
     !sameQualitySourceVersion ? "quality_source_version_mismatch" :
+    !baselineSampleComplete || !candidateSampleComplete ? "sample_incomplete" :
     !sameSampleDenominator ? "sample_denominator_mismatch" :
-    !sameHoldoutTaskCount || baseline.holdoutTaskCount === 0 ? "holdout_task_count_mismatch_or_empty" :
+    !sameHoldoutTaskCount ? "holdout_task_count_mismatch" :
     "window_duration_mismatch";
 
   const lanes = Object.fromEntries(BILLABLE_LANES.map((lane) => {
@@ -241,6 +248,7 @@ export function buildCostQualityDelta(input) {
 
   let overall = { status: "unknown", reason: "one_or_more_billable_lanes_are_incomplete", unknown_lanes: incompleteLanes };
   if (!comparable) overall = { status: "unknown", reason: comparisonReason, unknown_lanes: incompleteLanes };
+  else if (!qualityNonInferiority) overall = { status: "unknown", reason: "quality_regression", unknown_lanes: incompleteLanes };
   else if (hasUnclassifiedReceipts) overall = { status: "unknown", reason: "unclassified_receipts_present", unknown_lanes: incompleteLanes };
   else if (canMeasureOverall) {
     const baselineTotal = BILLABLE_LANES.reduce((sum, lane) => sum + baselineSummary.billable_lanes[lane].actual_cost_usd, 0);
@@ -269,6 +277,7 @@ export function buildCostQualityDelta(input) {
       same_quality_source_version: sameQualitySourceVersion,
       same_sample_denominator: sameSampleDenominator,
       same_holdout_task_count: sameHoldoutTaskCount,
+      quality_non_inferiority: qualityNonInferiority === null ? "unknown" : qualityNonInferiority ? "passed" : "failed",
       equal_window_duration: equalWindowDuration,
       reason: comparisonReason,
     },

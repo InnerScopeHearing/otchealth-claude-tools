@@ -67,8 +67,9 @@ unknown. Before/after deltas require the same holdout ID, evaluator identity and
 task denominator, holdout task count, and equal-length windows. The normalized input rejects fields
 outside its evidence contract, and report output omits run, holdout, evaluator, receipt, and source
 identifiers. Missing lanes keep the overall cost per quality-passing task unknown. Synthetic fixtures
-test these rules. This report does not claim a live vendor delta until accepted account receipts and
-quality results are supplied.
+test these rules. Each completed-task count must equal its run's holdout task count. Overall savings
+are withheld when candidate quality pass rate falls below baseline. This report does not claim a live
+vendor delta until accepted account receipts and quality results are supplied.
 
 `callsite_id` is the join key against `agent-evals`' `eval_result.callsite_id` (same default: the agent
 role). It supports quality-versus-token analysis by callsite. Actual dollar cost must come from the

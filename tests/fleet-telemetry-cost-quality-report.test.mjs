@@ -162,8 +162,7 @@ test("evaluator identity, evaluator version, sample denominator, and holdout siz
   for (const [change, reason] of [
     [{ qualitySourceId: "different-evaluator" }, "quality_source_mismatch"],
     [{ qualitySourceVersion: "v2" }, "quality_source_version_mismatch"],
-    [{ completed: 11 }, "sample_denominator_mismatch"],
-    [{ holdoutTasks: 11 }, "holdout_task_count_mismatch_or_empty"],
+    [{ completed: 11, holdoutTasks: 11 }, "sample_denominator_mismatch"],
   ]) {
     const report = buildCostQualityDelta({ baseline: run(base), candidate: run({ ...candidate, ...change }) });
     assert.equal(report.comparison.status, "unknown");
@@ -172,14 +171,30 @@ test("evaluator identity, evaluator version, sample denominator, and holdout siz
   }
 });
 
-test("zero holdout task count is not comparable", () => {
+test("incomplete or zero holdout samples are not comparable", () => {
   const report = buildCostQualityDelta({
-    baseline: run({ id: "before", periodStart: start, periodEnd: end, passes: 2, holdoutTasks: 0, receipts: completeReceipts(1, start, end) }),
+    baseline: run({ id: "before", periodStart: start, periodEnd: end, passes: 2, holdoutTasks: 9, receipts: completeReceipts(1, start, end) }),
     candidate: run({ id: "after", periodStart: nextStart, periodEnd: nextEnd, passes: 2, holdoutTasks: 0, receipts: completeReceipts(1, nextStart, nextEnd) }),
   });
 
   assert.equal(report.comparison.status, "unknown");
-  assert.equal(report.comparison.reason, "holdout_task_count_mismatch_or_empty");
+  assert.equal(report.comparison.reason, "sample_incomplete");
+});
+
+test("overall savings delta is withheld when quality regresses despite lower cost", () => {
+  const report = buildCostQualityDelta({
+    baseline: run({ id: "before", periodStart: start, periodEnd: end, passes: 8, receipts: completeReceipts(100, start, end) }),
+    candidate: run({ id: "after", periodStart: nextStart, periodEnd: nextEnd, passes: 6, receipts: completeReceipts(50, nextStart, nextEnd) }),
+  });
+
+  assert.equal(report.comparison.quality_non_inferiority, "failed");
+  assert.equal(report.baseline.quality.pass_rate, 0.8);
+  assert.equal(report.candidate.quality.pass_rate, 0.6);
+  assert.equal(report.lanes.openai_api.candidate.actual_cost_usd < report.lanes.openai_api.baseline.actual_cost_usd, true);
+  assert.equal(report.overall.status, "unknown");
+  assert.equal(report.overall.reason, "quality_regression");
+  assert.equal(Object.hasOwn(report.overall, "delta_usd"), false);
+  assert.equal(Object.hasOwn(report.overall, "delta_percent"), false);
 });
 
 test("output omits all supplied run, holdout, evaluator, receipt, and source identifiers", () => {
