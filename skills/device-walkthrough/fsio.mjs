@@ -2,7 +2,7 @@
 // zip extraction shells out to the `unzip` CLI (present in every environment this skill runs in --
 // the Depot macOS build workflows already depend on it, and it ships on the Linux agent sandbox),
 // which is far less risk than hand-rolling a zip central-directory parser for a one-shot need.
-import { createWriteStream, mkdirSync, readdirSync, copyFileSync, statSync } from "node:fs";
+import { createWriteStream, mkdirSync, readdirSync, copyFileSync, statSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, basename } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -52,6 +52,21 @@ export function findFirst(dir, re) {
     if (re.test(basename(p))) return p;
   }
   return null;
+}
+
+/**
+ * The app's OWN Info.plist inside an unzipped IPA: exactly Payload/<Name>.app/Info.plist. A
+ * recursive search is wrong here because an app bundle nests other bundles with their own
+ * Info.plist (frameworks, SPM resource bundles such as Alamofire's), and one of those can sort
+ * first. Returns null when the layout is not a single top-level .app with an Info.plist.
+ */
+export function appInfoPlistPath(payloadDir) {
+  const root = join(payloadDir, "Payload");
+  if (!existsSync(root)) return null;
+  const apps = readdirSync(root).filter((n) => n.endsWith(".app"));
+  if (apps.length !== 1) return null;
+  const p = join(root, apps[0], "Info.plist");
+  return existsSync(p) ? p : null;
 }
 
 export function copyInto(srcPath, destDir, destName) {

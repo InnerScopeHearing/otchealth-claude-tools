@@ -20,7 +20,7 @@ import { uploadAndWait, scheduleRun, stopRun, waitForRunCompletion, listJobs, li
 import { dispatchWorkflow, findDispatchedRun, waitForRunCompletion as waitForGhRunCompletion, listRunArtifacts, downloadArtifactZip } from "./gh-client.mjs";
 import { readInfoPlist } from "./plist.mjs";
 import { scanSyslogFiles } from "./syslog-scan.mjs";
-import { ensureDir, downloadTo, unzip, walkFiles, findFirst, copyInto } from "./fsio.mjs";
+import { ensureDir, downloadTo, unzip, walkFiles, findFirst, copyInto, appInfoPlistPath } from "./fsio.mjs";
 
 const SKILL_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -129,7 +129,7 @@ async function cmdFetchIpa(opts) {
 
   const payloadDir = ensureDir(join(out, "payload"));
   unzip(ipaPath, payloadDir);
-  const plistPath = findFirst(payloadDir, /^Info\.plist$/);
+  const plistPath = appInfoPlistPath(payloadDir);
   if (!plistPath) throw new Error(`no Payload/*.app/Info.plist found inside ${ipaPath}`);
 
   const info = readInfoPlist(plistPath);
