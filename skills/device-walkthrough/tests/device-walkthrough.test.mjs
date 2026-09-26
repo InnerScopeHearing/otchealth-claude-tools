@@ -28,12 +28,23 @@ import {
 
 // ---- registry -----------------------------------------------------------------------------------
 
-test("resolveApp: exact and case-insensitive lookup for both registered apps", () => {
+test("resolveApp: exact and case-insensitive lookup for all registered apps", () => {
   assert.equal(resolveApp("AWARE").bundleId, "com.innerscope.aware");
   assert.equal(resolveApp("aware").repo, "InnerScopeHearing/aware-aural-rehab");
   assert.equal(resolveApp("iHEARtest").bundleId, "com.innerscope.iheartest");
   assert.equal(resolveApp("IHEARTEST").repo, "InnerScopeHearing/iheartest");
-  assert.equal(Object.keys(APP_REGISTRY).length, 2);
+  assert.equal(resolveApp("HeyMillie").bundleId, "com.otchealth.companion");
+  assert.equal(resolveApp("heymillie").repo, "InnerScopeHearing/otchealth-companion");
+  assert.equal(Object.keys(APP_REGISTRY).length, 3);
+});
+
+test("HeyMillie registry entry: distinct Device Farm project/pool from AWARE and iHEARtest", () => {
+  const millie = APP_REGISTRY.HeyMillie;
+  assert.equal(millie.iosIpaArtifactPrefix, "companion-ios-ipa-");
+  assert.match(millie.projectArn, /^arn:aws:devicefarm:us-west-2:900915535335:project:/);
+  assert.match(millie.poolArn, /^arn:aws:devicefarm:us-west-2:900915535335:devicepool:/);
+  const arns = Object.values(APP_REGISTRY).map((a) => `${a.projectArn}|${a.poolArn}`);
+  assert.equal(new Set(arns).size, arns.length, "every app must have its own project+pool ARN pair");
 });
 
 test("resolveApp: throws a helpful, exact error on missing/unknown app", () => {
@@ -284,6 +295,16 @@ test("buildScheduleRunBody: throws on missing required fields, and when neither 
 });
 
 // ---- GitHub artifact / run selection --------------------------------------------------------------
+
+test("pickIosIpaArtifact: HeyMillie's fixed companion-ios-ipa- prefix", () => {
+  const artifacts = [
+    { id: 1, name: "build-for-testing-logs" },
+    { id: 2, name: "companion-ios-ipa-abc123" },
+    { id: 3, name: "aware-ios-ipa-def456" },
+  ];
+  assert.equal(pickIosIpaArtifact(artifacts, APP_REGISTRY.HeyMillie.iosIpaArtifactPrefix).id, 2);
+  assert.equal(pickIosIpaArtifact(artifacts, "iheartest-ios-ipa-"), null);
+});
 
 test("pickWalkthroughRunnerArtifact / pickIosIpaArtifact match the real fixed artifact-name prefixes", () => {
   const artifacts = [
