@@ -352,6 +352,7 @@ test("comments, literals, and regexes do not satisfy the usage coverage guard", 
     [
       "if (ready) {}",
       "/recordOpenAIUsage(value)/.test(source);",
+      'await fetch("https://api.openai.com/v1/images/generations");',
     ].join("\n"),
   ];
 
