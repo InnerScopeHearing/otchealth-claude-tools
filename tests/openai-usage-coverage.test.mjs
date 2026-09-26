@@ -425,6 +425,13 @@ test("function and method declarations do not satisfy the usage coverage guard",
       "const helper = { recordOpenAIUsage() {} };",
       'await fetch("https://api.openai.com/v1/images/generations");',
     ].join("\n"),
+    [
+      "const unused = {",
+      "  recordOpenAIUsage()",
+      "  {}",
+      "};",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
   ];
 
   for (const source of declarations) {
