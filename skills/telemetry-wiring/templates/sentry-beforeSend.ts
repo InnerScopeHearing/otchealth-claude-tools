@@ -31,6 +31,6 @@ export function beforeSend(event: any): any {
     if (event.user) { delete event.user.email; delete event.user.ip_address; delete event.user.username; }
     return scrub(event);
   } catch {
-    return event; // never drop telemetry due to a scrub bug; fail open on shape, closed on fields above
+    return null; // Drop events that cannot be safely scrubbed.
   }
 }

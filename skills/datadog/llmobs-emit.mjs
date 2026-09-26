@@ -37,7 +37,6 @@
 import { randomBytes } from "node:crypto";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
-const MAX_ERROR_LEN = 500;
 const MAX_CONTENT_LEN = 4000;
 
 function envFlag(name) {
@@ -81,7 +80,7 @@ export function buildLlmObsSpan(input, ids) {
   if (input.provider) meta.model_provider = input.provider;
   if (input.metadata && Object.keys(input.metadata).length > 0) meta.metadata = input.metadata;
   if (!input.ok) {
-    meta.error = { message: String(input.errorMessage || "unknown error").slice(0, MAX_ERROR_LEN) };
+    meta.error = { message: "redacted" };
   }
   if (captureContentEnabled()) {
     if (typeof input.inputText === "string" && input.inputText.length > 0) {
