@@ -152,10 +152,16 @@ test("buildLlmObsSpan: DD_LLMOBS_CAPTURE_CONTENT=1 opts caller-supplied content 
   });
 });
 
-test("buildLlmObsSpan: an error span sets status=error and a truncated meta.error, never a fake ok", () => {
-  const span = buildLlmObsSpan({ name: "x", kind: "llm", startNs: 0, durationNs: 1, ok: false, errorMessage: "z".repeat(1000) }, { spanId: "s", traceId: "t" });
+test("buildLlmObsSpan: provider error text is excluded from serialized payload while error status remains", () => {
+  const errorMessage = "SYNTHETIC_SECRET_MARKER; SYNTHETIC_PHI_MARKER";
+  const span = buildLlmObsSpan({ name: "x", kind: "llm", startNs: 0, durationNs: 1, ok: false, errorMessage }, { spanId: "s", traceId: "t" });
+  const payload = buildLlmObsPayload([span], "otchealth-toolkit", ["env:test"]);
+  const serialized = JSON.stringify(payload);
+
+  assert.equal(serialized.includes("SYNTHETIC_SECRET_MARKER"), false, "secret-like marker must not be serialized");
+  assert.equal(serialized.includes("SYNTHETIC_PHI_MARKER"), false, "PHI-like marker must not be serialized");
   assert.equal(span.status, "error");
-  assert.equal(span.meta.error.message.length, 500, "error message is bounded");
+  assert.equal(span.meta.error.message, "redacted");
 });
 
 test("buildLlmObsSpan: non-finite/absent token counts are dropped; metrics omitted entirely when none finite", () => {
