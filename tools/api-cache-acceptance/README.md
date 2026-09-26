@@ -55,7 +55,9 @@ The checked-in synthetic run reports:
 | Synthetic answer parity | Pass |
 | Live quality, price, and cost evidence | Not measured |
 
-These values come from synthetic receipts and a fake clock. They are not provider usage, production savings, latency, cost, or answer-quality measurements. The offline test replaces `fetch` with a function that throws, then runs the scenario successfully. The production gate remains unmet.
+These values come from synthetic receipts and a fake clock. They are not provider usage, production savings, latency, cost, or answer-quality measurements. The public `runOfflineAcceptance()` entrypoint installs outbound tripwires for `fetch`, `WebSocket` when present, `node:http`, `node:https`, HTTP agent socket creation, `node:net` connect paths, `node:tls`, `node:http2`, `node:dgram`, and DNS lookup and resolver methods. A call through an instrumented path throws before opening a socket, and the guard restores the built-in methods in a `finally` block. The `probeBuiltinTransports: true` test option exercises each installed tripwire through that same entrypoint; the test confirms each target is replaced before invoking it, so the probes cannot fall through to a real connection.
+
+This is process-local JavaScript instrumentation, not an operating-system egress sandbox. It cannot reliably intercept raw `process.binding` or native-addon/FFI calls, networking delegated to child processes, or network activity in worker threads with separate module state. The harness does not use those paths. The production gate remains unmet.
 
 ## Gates before any production proposal
 

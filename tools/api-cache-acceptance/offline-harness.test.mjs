@@ -324,6 +324,8 @@ test("offline runner succeeds when fetch is replaced by a network-denying stub",
     const result = await runOfflineAcceptance();
     assert.equal(result.mode, "offline_synthetic_only");
     assert.equal(result.networkCalls, 0);
+    assert.equal(result.networkGuard.enforced, true);
+    assert.deepEqual(result.networkGuard.blockedTransportProbes, []);
     assert.equal(result.providerPromptCache.providerCallsAvoided, 0);
     assert.equal(result.providerPromptCache.inputTokensAvoided, 0);
     assert.equal(result.exactResponseCache.providerCallsAvoided, 1);
@@ -337,4 +339,27 @@ test("offline runner succeeds when fetch is replaced by a network-denying stub",
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+test("public offline runner rejects outbound Node built-in transports before socket access", async () => {
+  const result = await runOfflineAcceptance({ probeBuiltinTransports: true });
+  const expectedProbes = [
+    "fetch",
+    "http.request", "http.get", "http.Agent.createConnection",
+    "https.request", "https.get", "https.Agent.createConnection",
+    "net.connect", "net.createConnection", "net.Socket.connect",
+    "tls.connect", "http2.connect",
+    "dgram.createSocket", "dgram.Socket.connect", "dgram.Socket.send",
+    "dns.lookup", "dns.resolve4", "dns.promises.lookup",
+    "dns.Resolver.resolve4", "dns.promises.Resolver.resolve4",
+  ];
+  if (typeof globalThis.WebSocket === "function") expectedProbes.push("WebSocket");
+
+  assert.deepEqual(result.networkGuard, {
+    enforced: true,
+    blockedTransportProbes: expectedProbes,
+    networkAccesses: 0,
+  });
+  assert.equal(result.networkCalls, 0);
+  assert.equal(result.mode, "offline_synthetic_only");
 });

@@ -1,9 +1,132 @@
 import { createHash } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
+import tls from "node:tls";
+import http2 from "node:http2";
+import dgram from "node:dgram";
+import dns from "node:dns";
+import { syncBuiltinESMExports } from "node:module";
 import { staticFirst } from "../../setup/prompt-shape.mjs";
 
 export const EXACT_CACHE_KEY_SCHEMA = "offline-exact-response-v1";
 export const DEFAULT_OFFLINE_TTL_MS = 60_000;
 export const MAX_OFFLINE_TTL_MS = 24 * 60 * 60 * 1000;
+
+const DNS_METHODS = Object.keys(dns).filter((name) => /^(lookup|resolve|reverse)/.test(name) && typeof dns[name] === "function");
+const DNS_PROMISE_METHODS = Object.keys(dns.promises).filter((name) => /^(lookup|resolve|reverse)/.test(name) && typeof dns.promises[name] === "function");
+const DNS_RESOLVER_METHODS = Object.getOwnPropertyNames(dns.Resolver.prototype)
+  .filter((name) => name !== "constructor" && typeof dns.Resolver.prototype[name] === "function");
+const DNS_PROMISE_RESOLVER_METHODS = Object.getOwnPropertyNames(dns.promises.Resolver.prototype)
+  .filter((name) => name !== "constructor" && typeof dns.promises.Resolver.prototype[name] === "function");
+
+function installOfflineNetworkGuard() {
+  const blockedTransportProbes = [];
+  const restorers = [];
+  const installed = new Map();
+  let networkAccesses = 0;
+
+  const patch = (target, property, label) => {
+    const descriptor = Object.getOwnPropertyDescriptor(target, property);
+    if (!descriptor || typeof descriptor.value !== "function" || descriptor.configurable === false) {
+      throw new Error(`cannot instrument outbound transport ${label}`);
+    }
+    const deny = function denyOutboundTransport() {
+      blockedTransportProbes.push(label);
+      const error = new Error(`outbound network access is disabled in the synthetic harness (${label})`);
+      error.code = "ERR_OFFLINE_NETWORK_DISABLED";
+      throw error;
+    };
+    Object.defineProperty(target, property, { ...descriptor, value: deny });
+    installed.set(label, deny);
+    restorers.push(() => Object.defineProperty(target, property, descriptor));
+  };
+
+  const patches = [
+    [globalThis, "fetch", "fetch"],
+    [http, "request", "http.request"],
+    [http, "get", "http.get"],
+    [http.Agent.prototype, "createConnection", "http.Agent.createConnection"],
+    [https, "request", "https.request"],
+    [https, "get", "https.get"],
+    [https.Agent.prototype, "createConnection", "https.Agent.createConnection"],
+    [net, "connect", "net.connect"],
+    [net, "createConnection", "net.createConnection"],
+    [net.Socket.prototype, "connect", "net.Socket.connect"],
+    [tls, "connect", "tls.connect"],
+    [http2, "connect", "http2.connect"],
+    [dgram, "createSocket", "dgram.createSocket"],
+    [dgram.Socket.prototype, "connect", "dgram.Socket.connect"],
+    [dgram.Socket.prototype, "send", "dgram.Socket.send"],
+  ];
+  for (const name of DNS_METHODS) patches.push([dns, name, `dns.${name}`]);
+  for (const name of DNS_PROMISE_METHODS) patches.push([dns.promises, name, `dns.promises.${name}`]);
+  for (const name of DNS_RESOLVER_METHODS) patches.push([dns.Resolver.prototype, name, `dns.Resolver.${name}`]);
+  for (const name of DNS_PROMISE_RESOLVER_METHODS) patches.push([dns.promises.Resolver.prototype, name, `dns.promises.Resolver.${name}`]);
+  if (typeof globalThis.WebSocket === "function") patches.push([globalThis, "WebSocket", "WebSocket"]);
+
+  try {
+    for (const [target, property, label] of patches) patch(target, property, label);
+    syncBuiltinESMExports();
+  } catch (error) {
+    for (const restore of restorers.reverse()) restore();
+    syncBuiltinESMExports();
+    throw error;
+  }
+
+  const invokeProbe = (label, target, property, invoke) => {
+    if (target[property] !== installed.get(label)) {
+      throw new Error(`outbound transport guard is missing for ${label}`);
+    }
+    try {
+      invoke(target[property]);
+    } catch (error) {
+      if (error?.code === "ERR_OFFLINE_NETWORK_DISABLED") return;
+      throw error;
+    }
+    throw new Error(`outbound transport was not rejected for ${label}`);
+  };
+
+  const probe = () => {
+    const probes = [
+      ["fetch", globalThis, "fetch", (fn) => fn("http://127.0.0.1:9")],
+      ["http.request", http, "request", (fn) => fn("http://127.0.0.1:9")],
+      ["http.get", http, "get", (fn) => fn("http://127.0.0.1:9")],
+      ["http.Agent.createConnection", http.Agent.prototype, "createConnection", (fn) => fn.call(new http.Agent(), { host: "127.0.0.1", port: 9 })],
+      ["https.request", https, "request", (fn) => fn("https://127.0.0.1:9")],
+      ["https.get", https, "get", (fn) => fn("https://127.0.0.1:9")],
+      ["https.Agent.createConnection", https.Agent.prototype, "createConnection", (fn) => fn.call(new https.Agent(), { host: "127.0.0.1", port: 9 })],
+      ["net.connect", net, "connect", (fn) => fn({ host: "127.0.0.1", port: 9 })],
+      ["net.createConnection", net, "createConnection", (fn) => fn({ host: "127.0.0.1", port: 9 })],
+      ["net.Socket.connect", net.Socket.prototype, "connect", (fn) => fn.call(new net.Socket(), { host: "127.0.0.1", port: 9 })],
+      ["tls.connect", tls, "connect", (fn) => fn({ host: "127.0.0.1", port: 9 })],
+      ["http2.connect", http2, "connect", (fn) => fn("http://127.0.0.1:9")],
+      ["dgram.createSocket", dgram, "createSocket", (fn) => fn("udp4")],
+      ["dgram.Socket.connect", dgram.Socket.prototype, "connect", (fn) => fn.call(null, 9, "127.0.0.1")],
+      ["dgram.Socket.send", dgram.Socket.prototype, "send", (fn) => fn.call(null, Buffer.from("probe"), 9, "127.0.0.1")],
+      ["dns.lookup", dns, "lookup", (fn) => fn("synthetic.invalid")],
+      ["dns.resolve4", dns, "resolve4", (fn) => fn("synthetic.invalid")],
+      ["dns.promises.lookup", dns.promises, "lookup", (fn) => fn("synthetic.invalid")],
+      ["dns.Resolver.resolve4", dns.Resolver.prototype, "resolve4", (fn) => fn.call(new dns.Resolver(), "synthetic.invalid")],
+      ["dns.promises.Resolver.resolve4", dns.promises.Resolver.prototype, "resolve4", (fn) => fn.call(new dns.promises.Resolver(), "synthetic.invalid")],
+    ];
+    if (installed.has("WebSocket")) probes.push(["WebSocket", globalThis, "WebSocket", (fn) => new fn("ws://127.0.0.1:9")]);
+    for (const [label, target, property, invoke] of probes) invokeProbe(label, target, property, invoke);
+  };
+
+  return {
+    probe,
+    receipt: () => Object.freeze({
+      enforced: true,
+      blockedTransportProbes: Object.freeze([...blockedTransportProbes]),
+      networkAccesses,
+    }),
+    restore: () => {
+      for (const restore of restorers.reverse()) restore();
+      syncBuiltinESMExports();
+    },
+  };
+}
 
 const KEY_FIELDS = Object.freeze([
   "tenantId",
@@ -439,8 +562,25 @@ const SYNTHETIC_KEY_PARTS = Object.freeze({
   responseConfig: Object.freeze({ temperature: 0, maxCompletionTokens: 32 }),
 });
 
-/** Execute a deterministic two-request demonstration. It makes no network or provider calls. */
-export async function runOfflineAcceptance() {
+/** Execute a deterministic demonstration under Node built-in outbound-network tripwires. */
+export async function runOfflineAcceptance({ probeBuiltinTransports = false } = {}) {
+  if (typeof probeBuiltinTransports !== "boolean") throw new TypeError("probeBuiltinTransports must be a boolean");
+  const networkGuard = installOfflineNetworkGuard();
+  try {
+    if (probeBuiltinTransports) networkGuard.probe();
+    const receipt = await createOfflineAcceptanceReceipt();
+    const guardReceipt = networkGuard.receipt();
+    return Object.freeze({
+      ...receipt,
+      networkCalls: guardReceipt.networkAccesses,
+      networkGuard: guardReceipt,
+    });
+  } finally {
+    networkGuard.restore();
+  }
+}
+
+async function createOfflineAcceptanceReceipt() {
   const system = "Synthetic stable instructions for provider prompt-cache shaping. ".repeat(100);
   const firstPrompt = buildPromptCacheShape({ model: "synthetic-openai-model", system, variable: "synthetic question one" });
   const secondPrompt = buildPromptCacheShape({ model: "synthetic-openai-model", system, variable: "synthetic question two" });
@@ -479,7 +619,6 @@ export async function runOfflineAcceptance() {
 
   return Object.freeze({
     mode: "offline_synthetic_only",
-    networkCalls: 0,
     providerPromptCache: Object.freeze({
       stablePrefix: sameStablePrefix,
       distinctVariables,
