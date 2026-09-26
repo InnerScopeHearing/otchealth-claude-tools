@@ -176,9 +176,12 @@ async function cmdNewSecretKey(page, projectId) {
   await page.waitForTimeout(8000);
   if (!/api-keys$/.test(page.url())) await page.goto(`${BASE}/projects/${pid}/api-keys`, { waitUntil: "load" });
   await page.waitForTimeout(6000);
-  // Reveal only this key's row (the eye button is the first button in the row).
-  const row = page.locator("tr", { hasText: label }).first();
-  await row.locator("button").first().click({ timeout: 15000 });
+  // Reveal only this key's row. The dashboard renders key rows as div[role=row] (not <tr>),
+  // and the reveal control is a real accessible button labeled "Show key" (not merely "the
+  // first button in the row" -- that row also has copy/delete/etc. buttons ahead of it in DOM
+  // order on some layouts, so "first button" is not reliably the reveal control).
+  const row = page.locator("[role=row]", { hasText: label }).first();
+  await row.getByRole("button", { name: "Show key" }).click({ timeout: 15000 });
   await page.waitForTimeout(2500);
   const key = extractSecretKey(await row.innerText());
   if (!key) throw new Error("generated, but the secret key was not visible in its row; reveal it in the dashboard");
