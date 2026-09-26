@@ -7,8 +7,9 @@
 // API-billed, and a public API price estimate is not an invoice.
 // Resolves the project ingest key through the kb-memory secret adapter, which defaults to AWS SSM.
 //
-// Ring safety: emits ONLY metadata (counts, tokens, model, tool NAMES, durations). It does NOT
-// send prompts, outputs, file contents, or any PHI/MNPI. Safe for every agent including PHI ones.
+// Ring safety: emits ONLY metadata (counts, tokens, model, tool NAMES, durations) for the explicit
+// company-seat allowlist above. It does NOT send prompts, outputs, or file contents. Protected
+// personal-legal, PHI/service, and unknown lanes are skipped before transcript or secret access.
 //
 // Usage (Stop hook passes {session_id, transcript_path} as JSON on stdin):
 //   echo '{"transcript_path":"/path/x.jsonl","session_id":"..."}' | KB_AGENT=cto node telemetry.mjs session-end
@@ -19,6 +20,14 @@ import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const INGEST = "https://us.i.posthog.com/capture/";
+
+// Only ordinary company Claude Code lanes may send metadata to the shared Fleet Agents project.
+// Keep this aligned with setup/session-start.sh's KB_VALID list, deliberately excluding clo-personal.
+// Unknown and protected/service lanes fail closed so the user-scope hook cannot export their metadata.
+const COMPANY_TELEMETRY_AGENTS = new Set(["cto", "cfo", "clo", "coo", "cpo", "cro", "cco", "developer"]);
+function isCompanyTelemetryAgent(agent) {
+  return COMPANY_TELEMETRY_AGENTS.has(String(agent || "").trim().toLowerCase());
+}
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -93,7 +102,8 @@ function parseTranscript(path) {
 }
 
 export function buildSessionEvent(metrics, { agent, callsiteId, sessionId, timestamp }) {
-  const resolvedAgent = agent || "unknown";
+  const resolvedAgent = String(agent || "").trim().toLowerCase();
+  if (!isCompanyTelemetryAgent(resolvedAgent)) return null;
   const resolvedCallsite = callsiteId || resolvedAgent;
   return {
     event: "agent_session",
@@ -137,6 +147,10 @@ async function sessionEnd() {
   const path = takeVal("--transcript", "") || stdin.transcript_path;
   const sid = (stdin.session_id || takeVal("--session", "") || crypto.randomUUID()).slice(0, 64);
   const agent = resolveAgent();
+  if (!isCompanyTelemetryAgent(agent)) {
+    console.error("[fleet-telemetry] skipped non-company or segregated lane; no transcript read, SSM lookup, or PostHog event.");
+    return;
+  }
   if (!path) { console.error("no transcript_path"); process.exit(0); } // never block session end
   let m; try { m = parseTranscript(path); } catch (e) { console.error("parse: " + e.message); process.exit(0); }
   const key = await sm("posthog-fleet-ingest-key");

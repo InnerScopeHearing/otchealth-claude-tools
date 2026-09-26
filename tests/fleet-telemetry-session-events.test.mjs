@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildSessionEvent, parseTranscriptText } from "../skills/fleet-telemetry/telemetry.mjs";
 
 function line(type, timestamp, message) {
@@ -60,6 +64,34 @@ test("buildSessionEvent emits one metadata-only session aggregate, without infer
   assert.equal(event.properties.est_cost_usd, undefined);
   assert.equal(JSON.stringify(event).includes("sensitive response"), false);
   assert.equal(JSON.stringify(event).includes("synthetic request"), false);
+});
+
+test("buildSessionEvent allows only company seats and excludes personal, PHI/service, and unknown lanes", () => {
+  const metrics = parseTranscriptText(line("assistant", "2026-09-25T10:00:01.000Z", {
+    role: "assistant", model: "claude-sonnet-4-5", usage: { input_tokens: 2, output_tokens: 1 }, content: [],
+  }));
+  const options = { callsiteId: "synthetic", sessionId: "synthetic-session", timestamp: "2026-09-25T10:00:02.000Z" };
+
+  for (const agent of ["cto", "cfo", "clo", "coo", "cpo", "cro", "cco", "developer"]) {
+    assert.equal(buildSessionEvent(metrics, { ...options, agent })?.event, "agent_session", `${agent} is a company lane`);
+  }
+  for (const agent of ["clo-personal", "medreview", "companion", "unknown", ""]) {
+    assert.equal(buildSessionEvent(metrics, { ...options, agent }), null, `${agent || "empty"} is excluded`);
+  }
+});
+
+test("session-end skips a protected lane before reading its transcript or resolving telemetry secrets", () => {
+  const script = fileURLToPath(new URL("../skills/fleet-telemetry/telemetry.mjs", import.meta.url));
+  const missingTranscript = join(tmpdir(), `synthetic-missing-${process.pid}-${Date.now()}.jsonl`);
+  const result = spawnSync(process.execPath, [script, "session-end", "--transcript", missingTranscript], {
+    encoding: "utf8",
+    env: { ...process.env, KB_AGENT: "clo-personal" },
+    input: "{}",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /skipped non-company or segregated lane/);
+  assert.doesNotMatch(result.stderr, /parse:|BLACKOUT-RISK|secret store/);
 });
 
 test("parseTranscriptText clamps malformed token counts and timestamps to safe zeroes", () => {

@@ -1,13 +1,16 @@
 ---
 name: fleet-telemetry
-description: Metadata-only Claude Code session usage into PostHog Fleet Agents (project 479484). Emits token/cache totals, model mix, tool usage, errors, duration, and outcome, but no estimated or inferred dollar cost. Wire it as an auto Stop hook. Part of Fleet Intelligence #1. Non-PHI ring; never sends prompt/response contents or PHI/MNPI.
+description: Metadata-only Claude Code session usage for explicitly allowlisted company seats in PostHog Fleet Agents (project 479484). Emits token/cache totals, model mix, tool usage, errors, duration, and outcome, but no estimated or inferred dollar cost. Protected personal-legal, PHI/service, and unknown lanes are skipped before transcript or secret access. Never sends prompt/response contents.
 ---
 
 # fleet-telemetry — agent LLM observability into PostHog
 
-Emits per-session agent telemetry to the **PostHog "Fleet Agents" project (479484)**. A transcript
-is a session aggregate, not a provider generation. The event is kept at one event per session to
-avoid duplicate event volume and false generation counts.
+Emits per-session metadata to the **PostHog "Fleet Agents" project (479484)** only for the explicit
+company-seat allowlist in `telemetry.mjs` (`cto`, `cfo`, `clo`, `coo`, `cpo`, `cro`, `cco`, and
+`developer`). Personal-legal, PHI/service, and unknown lanes are denied before transcript or secret
+access. Keep the allowlist aligned with `setup/session-start.sh`; new lanes are not opted in automatically.
+A transcript is a session aggregate, not a provider generation. One event per session avoids duplicate
+event volume and false generation counts.
 
 ## What it sends (metadata only — no prompts, outputs, file contents, PHI or MNPI)
 - `agent_session` (custom analytics): agent, callsite_id, assistant turns, tool calls, tools used,
