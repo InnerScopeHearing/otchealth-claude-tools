@@ -492,12 +492,9 @@ export async function defaultRewriteLLM(promptText) {
     if (!r.ok) throw new Error("rewrite chat " + r.status + " " + (await r.text()).slice(0, 160));
     const j = await r.json();
     recordOpenAIUsage({
-      model: dep,
       kind: "chat",
-      promptTokens: j.usage?.prompt_tokens || 0,
-      completionTokens: j.usage?.completion_tokens || 0,
-      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-      caller: "agent-evals-selfrepair",
+      response: r,
+      body: j,
     });
     const choice = j.choices[0];
     if (truncatedEmpty(choice)) {

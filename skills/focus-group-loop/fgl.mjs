@@ -92,12 +92,9 @@ async function callChatOpenAI(key, dep, system, content, maxTokens, tries) {
     if (!r.ok) throw new Error("chat " + r.status + " " + (await r.text()).slice(0, 140));
     const j = await r.json();
     recordOpenAIUsage({
-      model: dep,
       kind: "chat",
-      promptTokens: j.usage?.prompt_tokens || 0,
-      completionTokens: j.usage?.completion_tokens || 0,
-      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-      caller: "focus-group-loop",
+      response: r,
+      body: j,
     });
     return j.choices[0].message.content;
   }

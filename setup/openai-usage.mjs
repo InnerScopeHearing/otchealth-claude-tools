@@ -1,18 +1,14 @@
-// openai-usage.mjs — the ONE place that turns a real OpenAI API response into fleet cost visibility.
+// openai-usage.mjs — the ONE place that turns a real OpenAI API response into a usage receipt.
 //
-// WHY THIS EXISTS: the fleet spends real money on OpenAI (chat via the gpt-4o/gpt-4.1/gpt-5.x
-// families, text-embedding-3-large for the brain, gpt-image-* for designer output) and has ZERO
-// provider-side visibility into it. The only credential is a project key (sk-proj-...); the OpenAI
-// Admin/Usage APIs 403 on a project key (no api.usage.read scope) and the legacy GET /v1/usage
-// endpoint returns empty data for project keys (verified live, 6 dates, all empty). There is no
-// admin key anywhere in the vault, and getting one is a Matt-gated account action, not a code fix.
+// WHY THIS EXISTS: retain usage values and response identifiers returned by OpenAI calls already
+// made by this toolkit. The recorder works from the parsed response at the existing call site and
+// does not make provider requests of its own.
 //
-// So this measures at the SOURCE instead of the provider: every OpenAI response carries a `usage`
-// object (prompt/completion/total tokens for chat and embeddings; a costUsdOverride path for
-// per-image/per-second products that bill outside the token model). Call recordOpenAIUsage() once per
-// real network response, from inside the code that already has that response in hand. This module
-// turns that into Datadog metrics (otc.fleet.openai.*) plus a local JSONL ledger, so a session is
-// reconcilable even when Datadog itself is unreachable.
+// Every record is derived from a parsed provider response: returned model and response IDs when
+// present, HTTP status when available, and numeric leaves from its `usage` object. Prompts, outputs,
+// tool arguments, credentials, user identity, and estimated dollars are never recorded. The same
+// receipt goes to the existing local JSONL ledger; only provider usage counts and request totals are
+// sent to Datadog.
 //
 // SAFETY CONTRACT (load-bearing, do not weaken):
 //   1. recordOpenAIUsage() NEVER throws and NEVER blocks the caller. It is synchronous, in-memory,
@@ -30,8 +26,8 @@
 //      exit-flush send real, test-fixture-derived numbers to production Datadog. Do not remove the
 //      OPENAI_USAGE_DISABLE short-circuit below, and do not make flush() reachable synchronously from
 //      recordOpenAIUsage() without going through that same guard.
-//   3. estimateCostUsd() is a DOCUMENTED ESTIMATE, not a provider-reconciled figure -- see
-//      docs/OPENAI-COST-VISIBILITY.md for what this can and cannot prove.
+//   3. estimateCostUsd() remains a standalone compatibility helper. It is never called by this
+//      recorder and its output is never written to the JSONL ledger or sent to Datadog.
 //
 // Uses the existing fleet Datadog emitter (skills/datadog/dd-emit.mjs's ddMetric()) rather than a new
 // one: it already resolves datadog-api-key via the standard kvSecret() chain (AWS SSM by default) and
@@ -44,9 +40,8 @@ import { join } from "node:path";
 import { ddMetric as _realDdMetric } from "../skills/datadog/dd-emit.mjs";
 
 // ============================================================================================
-// Price table (USD per 1,000,000 tokens unless noted). Snapshot as of PRICE_TABLE_VERSION --
-// OpenAI revises pricing without notice, so treat this as a planning estimate and reconcile it
-// against https://openai.com/api/pricing/ periodically (see docs/OPENAI-COST-VISIBILITY.md).
+// Price table (USD per 1,000,000 tokens unless noted). This supports only the standalone
+// estimateCostUsd() compatibility helper below. The response recorder never emits these estimates.
 //
 // Deliberately does NOT try to price every model id the fleet might resolve to. The fleet's own
 // OPENAI_TIERS (setup/model-routing.mjs) moved to the gpt-5.6-luna/-sol/-terra family on 2026-08-29;
@@ -99,12 +94,8 @@ const EMBEDDING_PRICES = [
   { re: /^text-embedding-ada-002$/i, input: 0.1 },
 ];
 
-// gpt-image-1 is genuinely token-billed (text + image input/output tokens), but every current caller
-// in this fleet reports a flat, size/quality-derived per-call dollar figure it already computed itself
-// (skills/designer/scripts/_lib.mjs's reportCost -> costUsdOverride below), so this flat fallback is
-// used ONLY when a kind:'image' record arrives with no override -- a coarse, clearly-labeled guess,
-// not a reconciled price. Matches the designer skill's own long-standing $0.04 "1024x1024 high"
-// estimate (gen-app-icon-family.mjs) so the two numbers do not quietly disagree.
+// The following image estimate is retained only for the standalone estimateCostUsd() compatibility
+// helper. recordOpenAIUsage() never calls the helper or emits this estimate.
 const IMAGE_FLAT_FALLBACK_USD = 0.04;
 const KNOWN_IMAGE_MODEL_RE = /^gpt-image(-1)?(-mini)?$/i;
 
@@ -144,8 +135,8 @@ function matchEmbeddingPrice(model) {
   return { input: MOST_EXPENSIVE_EMBEDDING.input, unknown: true };
 }
 
-/** PURE. Estimate USD cost for one usage record. Never called when the caller already supplies
- *  costUsdOverride (recordOpenAIUsage short-circuits before this). Exported for direct unit testing. */
+/** PURE compatibility helper. Its result is an estimate, not provider usage, and is never included in
+ *  response receipts or Datadog metrics. Exported for direct unit testing. */
 export function estimateCostUsd({ model, kind, promptTokens = 0, completionTokens = 0, cachedTokens = 0, images = 0 } = {}) {
   if (kind === "embedding") {
     const price = matchEmbeddingPrice(model);
@@ -169,7 +160,7 @@ export function estimateCostUsd({ model, kind, promptTokens = 0, completionToken
 }
 
 // ============================================================================================
-// Local JSONL ledger -- so a session's real OpenAI spend is reconstructable even when Datadog is
+// Local JSONL ledger -- so provider-returned usage is retained even when Datadog is
 // unreachable (network blip, a not-yet-resolved datadog-api-key, a disabled test run, ...). No prior
 // "toolkit state directory" convention existed to reuse (checked: the toolkit's other local-state
 // touchpoints are ad hoc credential-cache file paths, not a shared directory) -- this establishes one,
@@ -203,7 +194,7 @@ function appendLedgerLine(record) {
 // ============================================================================================
 // Buffering + Datadog emission
 // ============================================================================================
-const VALID_KINDS = new Set(["chat", "embedding", "image", "other"]);
+const VALID_KINDS = new Set(["chat", "embedding", "batch", "image", "other"]);
 const _buffer = [];
 let _ddMetricImpl = _realDdMetric;
 let _autoFlushInstalled = false;
@@ -213,28 +204,59 @@ function flushThreshold() {
   return Number.isFinite(n) && n > 0 ? n : 200;
 }
 
+function safeIdentifier(value, maxLength = 128) {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (!text || text.length > maxLength || !/^[A-Za-z0-9][A-Za-z0-9._:/_-]*$/.test(text)) return undefined;
+  return text;
+}
+
+function responseHeader(response, name) {
+  try {
+    return response?.headers?.get?.(name) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const USAGE_COUNT_FIELDS = new Set([
+  "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens",
+  "cached_tokens", "cache_write_tokens", "reasoning_tokens", "audio_tokens", "text_tokens", "image_tokens",
+  "accepted_prediction_tokens", "rejected_prediction_tokens",
+]);
+const USAGE_DETAIL_FIELDS = new Set([
+  "prompt_tokens_details", "completion_tokens_details", "input_tokens_details", "output_tokens_details",
+]);
+
+function sanitizeUsage(value, depth = 0) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || depth > 5) return undefined;
+  const safe = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (USAGE_COUNT_FIELDS.has(key) && typeof child === "number" && Number.isFinite(child) && child >= 0) {
+      safe[key] = child;
+    } else if (USAGE_DETAIL_FIELDS.has(key) && child && typeof child === "object" && !Array.isArray(child)) {
+      const nested = sanitizeUsage(child, depth + 1);
+      if (nested && Object.keys(nested).length > 0) safe[key] = nested;
+    }
+  }
+  return Object.keys(safe).length ? safe : undefined;
+}
+
+function responseStatus(response) {
+  const status = response?.status ?? response?.status_code;
+  return Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+}
+
 /**
- * recordOpenAIUsage({ model, kind, promptTokens, completionTokens, cachedTokens, images, caller,
- *                      repo, costUsdOverride })
- * Record ONE real OpenAI API response. Call this once per successful HTTP response, from inside the
- * code that already parsed that response's `usage` object (or, for a per-image/per-second product
- * with no token-shaped usage, pass costUsdOverride with a figure the caller already computed).
+ * recordOpenAIUsage({ kind, response, body })
+ * Keep one allowlisted receipt for a real OpenAI response that contains numeric usage data. For a
+ * synchronous Fetch response, pass its Response plus the parsed JSON body. For a Batch result, pass
+ * the row's `response` object plus its parsed `body`. The recorder projects only response metadata
+ * and numeric `usage` leaves; it never serializes the supplied body.
  *
- * - model:            the model/deployment name actually used (falls back to "unknown").
- * - kind:             'chat' | 'embedding' | 'image' | 'other' (falls back to 'other').
- * - promptTokens:     input/prompt tokens (chat), or total input tokens (embedding). Default 0.
- * - completionTokens: output/completion tokens (chat only). Default 0.
- * - cachedTokens:     prompt tokens served from OpenAI's prompt cache, if usage.prompt_tokens_details
- *                      .cached_tokens was present. Priced at the cheaper cached-input rate when known.
- * - images:           count of images generated (kind:'image'). Default 0 (treated as 1 for pricing).
- * - caller:           the skill/script recording this (falls back to "unknown"). Free text, becomes a
- *                      Datadog tag -- keep it a short, stable slug (e.g. "company-brain", "doc-indexer-
- *                      enrich"), not a full sentence.
- * - repo:             defaults to "otchealth-claude-tools" (this repo). Present for callers that want
- *                      to override it and for parity with the gateway's own separate implementation.
- * - costUsdOverride:  when the caller already knows the exact billed cost (e.g. designer's per-image
- *                      cost table), pass it here instead of letting this module re-derive one. Wins
- *                      outright over the price-table estimate; also implies unknown:false.
+ * If the response contains no numeric usage fields, nothing is recorded. Missing metadata and usage
+ * fields stay absent rather than being fabricated as `unknown` or zero. `kind` is controlled by the
+ * call site and is limited to chat, embedding, batch, image, or other.
  *
  * NEVER throws. Returns undefined always -- this is intentionally not a Promise (see the SAFETY
  * CONTRACT in this file's header for why no network I/O happens synchronously here).
@@ -251,39 +273,26 @@ export function recordOpenAIUsage(opts) {
     // before this function body (and its own try/catch) ever runs. `opts || {}` here covers every
     // falsy input (null, undefined, 0, "", false) the same way, so the "NEVER throws" contract in
     // this file's header holds for a genuinely careless caller too, not just a well-formed one.
-    const { model, kind = "other", promptTokens = 0, completionTokens = 0, cachedTokens = 0, images = 0, caller = "unknown", repo = "otchealth-claude-tools", costUsdOverride } = opts || {};
-    const safeModel = String(model || "unknown").trim() || "unknown";
-    const safeKind = VALID_KINDS.has(kind) ? kind : "other";
-    const safeCaller = String(caller || "unknown").trim() || "unknown";
-    const safeRepo = String(repo || "otchealth-claude-tools").trim() || "otchealth-claude-tools";
-    const pt = Math.max(0, Number(promptTokens) || 0);
-    const ct = Math.max(0, Number(completionTokens) || 0);
-    const cachedT = Math.max(0, Math.min(Number(cachedTokens) || 0, pt));
-    const imgs = Math.max(0, Number(images) || 0);
-
-    let costUsd, unknown;
-    if (typeof costUsdOverride === "number" && Number.isFinite(costUsdOverride)) {
-      costUsd = Math.max(0, costUsdOverride);
-      unknown = false;
-    } else {
-      const est = estimateCostUsd({ model: safeModel, kind: safeKind, promptTokens: pt, completionTokens: ct, cachedTokens: cachedT, images: imgs });
-      costUsd = est.costUsd;
-      unknown = est.unknown;
-    }
+    const { kind, response, body } = opts || {};
+    const safeKind = VALID_KINDS.has(kind) ? kind : undefined;
+    const providerBody = body ?? response?.body;
+    const usage = sanitizeUsage(providerBody?.usage);
+    if (!safeKind || !usage) return;
 
     const record = {
       ts: new Date().toISOString(),
-      model: safeModel,
+      provider: "openai",
       kind: safeKind,
-      caller: safeCaller,
-      repo: safeRepo,
-      promptTokens: pt,
-      completionTokens: ct,
-      cachedTokens: cachedT,
-      images: imgs,
-      costUsd,
-      unknown,
     };
+    const model = safeIdentifier(providerBody?.model);
+    const responseId = safeIdentifier(providerBody?.id);
+    const requestId = safeIdentifier(responseHeader(response, "x-request-id") || response?.request_id);
+    const httpStatus = responseStatus(response);
+    if (model) record.model = model;
+    if (requestId) record.requestId = requestId;
+    if (responseId) record.responseId = responseId;
+    if (httpStatus !== undefined) record.httpStatus = httpStatus;
+    record.usage = usage;
     _buffer.push(record);
     appendLedgerLine(record);
 
@@ -312,33 +321,50 @@ export function recordOpenAIUsage(opts) {
   }
 }
 
+function usageCount(usage, keys) {
+  for (const key of keys) {
+    const value = usage?.[key];
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  }
+  return undefined;
+}
+
 function aggregate(records) {
   const byKey = new Map();
   for (const r of records) {
-    const key = [r.model, r.kind, r.caller, r.repo, r.unknown ? "1" : "0"].join("\u0000"); // NUL-separated: a bare concatenation could alias fields (model "a"+kind "bc" vs "ab"+"c")
+    const key = [r.provider, r.model || "", r.kind].join("\u0000");
     let agg = byKey.get(key);
     if (!agg) {
       agg = {
-        tags: [`model:${r.model}`, `kind:${r.kind}`, `caller:${r.caller}`, `repo:${r.repo}`, `unknown:${r.unknown}`],
+        tags: [`provider:${r.provider}`, `kind:${r.kind}`],
         tokensIn: 0,
         tokensOut: 0,
+        hasTokensIn: false,
+        hasTokensOut: false,
         requests: 0,
-        costUsd: 0,
       };
+      if (r.model) agg.tags.push(`model:${r.model}`);
       byKey.set(key, agg);
     }
-    agg.tokensIn += r.promptTokens;
-    agg.tokensOut += r.completionTokens;
+    const tokensIn = usageCount(r.usage, ["prompt_tokens", "input_tokens"]);
+    const tokensOut = usageCount(r.usage, ["completion_tokens", "output_tokens"]);
+    if (tokensIn !== undefined) {
+      agg.tokensIn += tokensIn;
+      agg.hasTokensIn = true;
+    }
+    if (tokensOut !== undefined) {
+      agg.tokensOut += tokensOut;
+      agg.hasTokensOut = true;
+    }
     agg.requests += 1;
-    agg.costUsd += r.costUsd;
   }
   return [...byKey.values()];
 }
 
 /**
  * flush() -> Promise<{ ok, flushed, failures }>
- * Drain everything currently buffered, aggregate it by (model, kind, caller, repo, unknown), and emit
- * it to Datadog as otc.fleet.openai.{tokens,requests,cost_usd_est}. Never throws (each ddMetric() call
+ * Drain everything currently buffered, aggregate it by provider/model/kind, and emit provider token
+ * counts and response counts to Datadog as otc.fleet.openai.{tokens,requests}. Never throws (each ddMetric() call
  * already returns {ok,error} rather than rejecting; a genuinely unexpected throw is caught here too so
  * a caller that awaits flush() never needs its own try/catch). A failed emit is logged loudly (the
  * dd-emit.mjs convention this module reuses) and counted in the returned `failures`, but the buffered
@@ -353,10 +379,9 @@ export async function flush() {
   let failures = 0;
   for (const p of points) {
     const calls = [];
-    if (p.tokensIn > 0) calls.push(_ddMetricImpl("otc.fleet.openai.tokens", p.tokensIn, { tags: [...p.tags, "direction:input"], type: "count" }));
-    if (p.tokensOut > 0) calls.push(_ddMetricImpl("otc.fleet.openai.tokens", p.tokensOut, { tags: [...p.tags, "direction:output"], type: "count" }));
+    if (p.hasTokensIn) calls.push(_ddMetricImpl("otc.fleet.openai.tokens", p.tokensIn, { tags: [...p.tags, "direction:input"], type: "count" }));
+    if (p.hasTokensOut) calls.push(_ddMetricImpl("otc.fleet.openai.tokens", p.tokensOut, { tags: [...p.tags, "direction:output"], type: "count" }));
     calls.push(_ddMetricImpl("otc.fleet.openai.requests", p.requests, { tags: p.tags, type: "count" }));
-    calls.push(_ddMetricImpl("otc.fleet.openai.cost_usd_est", p.costUsd, { tags: p.tags, type: "count" }));
     let results;
     try {
       results = await Promise.all(calls);

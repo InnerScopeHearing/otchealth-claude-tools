@@ -312,12 +312,9 @@ async function callOpenAI(key, dep, system, user, maxTokens, tries) {
     if (!r.ok) throw new Error("chat " + r.status);
     const j = await r.json();
     recordOpenAIUsage({
-      model: dep,
       kind: "chat",
-      promptTokens: j.usage?.prompt_tokens || 0,
-      completionTokens: j.usage?.completion_tokens || 0,
-      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-      caller: "signal-radar-groundedness",
+      response: r,
+      body: j,
     });
     const choice = j.choices[0];
     if (truncatedEmpty(choice) && a < effTries - 1) { if (!escalated) { escalated = true; curTokens = curTokens * 2; } continue; }
