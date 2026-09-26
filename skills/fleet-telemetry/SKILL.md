@@ -1,23 +1,27 @@
 ---
 name: fleet-telemetry
-description: Agent LLM observability into PostHog. Parses a Claude Code session transcript and emits per-session telemetry (cost, tokens, model, tool usage, errors, duration per agent) plus $ai_generation events to the PostHog Fleet Agents project (479484), the $50k-credit observability lane (not Datadog). Turns the agent fleet from a black box into a measurable system. Wire it as an auto Stop hook. Part of Fleet Intelligence #1. Non-PHI ring; metadata only, never prompt/response contents or PHI/MNPI.
+description: Metadata-only Claude Code session usage into PostHog Fleet Agents (project 479484). Emits token/cache totals, model mix, tool usage, errors, duration, and outcome, but no estimated or inferred dollar cost. Wire it as an auto Stop hook. Part of Fleet Intelligence #1. Non-PHI ring; never sends prompt/response contents or PHI/MNPI.
 ---
 
 # fleet-telemetry — agent LLM observability into PostHog
 
-Emits per-session agent telemetry to the **PostHog "Fleet Agents" project (479484)** , the
-$50k-credit observability lane (not Datadog). Turns the agent fleet from a black box into a
-measurable system: cost, tokens, model, tool usage, errors, and duration per agent per session.
+Emits per-session agent telemetry to the **PostHog "Fleet Agents" project (479484)**. A transcript
+is a session aggregate, not a provider generation. The event is kept at one event per session to
+avoid duplicate event volume and false generation counts.
 
 ## What it sends (metadata only — no prompts, outputs, file contents, PHI or MNPI)
-- `$ai_generation` (PostHog **LLM Observability** product): model, input/output tokens, latency, est cost,
-  `callsite_id` (defaults to the agent role; `--callsite <id>` overrides).
-- `agent_session` (custom analytics): agent, callsite_id, turns, tool_calls, tools_used, tool_errors, tokens, est_cost_usd, duration_s, outcome.
+- `agent_session` (custom analytics): agent, callsite_id, assistant turns, tool calls, tools used,
+  tool errors, per-model call counts, input/output tokens, cache read/write tokens, total tokens,
+  duration, and outcome.
+- No `$ai_generation` is emitted from this session-level source. A per-generation trace requires
+  provider/API instrumentation where each real model response and its usage are available.
+- No dollar-cost field is emitted. Claude Code may use a flat subscription or API billing, and public
+  API price estimates are not invoices. Join session tokens/outcomes to provider billing artifacts
+  for actual spend and keep subscription usage limits as a separate measure.
 
 `callsite_id` is the join key against `agent-evals`' `eval_result.callsite_id` (same default: the agent
-role). It is substrate for a future quality-per-dollar router that would join eval scores to real
-production model/cost by callsite; that full router (a live PostHog query wired into dispatch) is NOT
-built here.
+role). It supports quality-versus-token analysis by callsite. Actual dollar cost must come from the
+provider's billing artifact, not be inferred from subscription transcript tokens.
 
 ## Model routing: `task-router.mjs`
 `classifyTask(text, hints?)` is the pure text-based model/budget classifier (opus/sonnet/haiku) that
@@ -42,6 +46,7 @@ that repo's `.claude/settings.json` Stop hook:
 `echo '{"transcript_path":"<x.jsonl>","session_id":"..."}' | KB_AGENT=cto node telemetry.mjs session-end`
 
 ## Where to look
-PostHog -> Fleet Agents project -> **LLM Observability** (traces + spend) and Insights on the
-`agent_session` event (cost-per-agent, tool-failure rate, sessions over time). Keys in Secret
-Manager: `posthog-fleet-project-id`, `posthog-fleet-ingest-key` (phc_, publishable).
+PostHog -> Fleet Agents project -> Insights on the `agent_session` event (token/cache use, model
+mix, tool-failure rate, duration, and sessions over time). The ingest key name is
+`posthog-fleet-ingest-key`, resolved from AWS SSM Parameter Store `/otchealth/*` by the current
+secret adapter.

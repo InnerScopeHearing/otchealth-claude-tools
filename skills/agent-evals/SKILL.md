@@ -137,9 +137,10 @@ already imported every batch helper unused).
 ## Tasks
 `evals/<agent>.json` = array of `{id, agent, task, rubric:[criteria...], callsite_id?, prompt_file?}`.
 Pass threshold 0.7. `callsite_id` identifies which real prompt surface the task exercises (defaults to
-`agent` when untagged); it is the join key a later quality-per-dollar router would use against
-fleet-telemetry's `$ai_generation`/`agent_session` events (also callsite_id-tagged). Tasks mirror REAL
-fleet decisions (CTO OOM diagnosis + PHI wall; CFO entity scoping; CLO privilege + securities firewall;
+`agent` when untagged); it is the join key for quality-versus-token analysis against
+fleet-telemetry's `agent_session` aggregate (also callsite_id-tagged). That event reports session
+tokens/cache and outcomes, not provider charges. Join to actual provider billing artifacts for
+dollar-cost analysis. Tasks mirror REAL fleet decisions (CTO OOM diagnosis + PHI wall; CFO entity scoping; CLO privilege + securities firewall;
 company-brain citation/abstention; kb-memory reflect distillation; focus-group-loop persona honesty).
 Add a task whenever a new failure mode or rule appears.
 

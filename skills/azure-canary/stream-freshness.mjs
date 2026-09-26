@@ -1,19 +1,19 @@
 // stream-freshness.mjs -- W1-5 FLYWHEEL SELF-MONITORING. Freshness SLOs for the PostHog telemetry
-// streams the fleet's self-improving loop depends on (eval_result, $ai_generation, agent_session,
-// medic_dispatch). Mirrors azure-canary.mjs's own assessFreshness() for Azure AI Search indexes, but
+// streams the fleet's self-improving loop depends on (eval_result, agent_session, medic_dispatch).
+// Mirrors azure-canary.mjs's own assessFreshness() for search indexes, but
 // the sensor here is a PostHog HogQL query (max(timestamp) per event) instead of an AI Search
 // `docs/search` call -- the streams live in PostHog, not in an index.
 //
-// WHY THIS EXISTS: on 2026-07-17 (while wiring this check) we found `$ai_generation` / `agent_session`
-// (fleet-telemetry's Stop-hook emit) had gone SILENT for ~367 HOURS (~15 days) fleet-wide, and
-// `medic_dispatch` for ~331 hours (~14 days) -- exactly the failure this task exists to catch ("a dead
+// WHY THIS EXISTS: on 2026-07-17 (while wiring this check) we found `agent_session` (fleet-telemetry's
+// Stop-hook emit) had gone SILENT for ~367 HOURS (~15 days) fleet-wide, and `medic_dispatch` for
+// ~331 hours (~14 days) -- exactly the failure this task exists to catch ("a dead
 // telemetry/eval/medic stream pages within 24h, not 15 days"). Nothing had been watching those streams'
 // FRESHNESS at all; only their per-event shape was ever asserted (e.g. groundedness-injection.test.mjs),
 // never "is this stream still alive." This is the same blind spot class as the pre-2026-07-13 AI Search
 // doc-count floor: a dead stream just stops, and a floor/shape-only check never notices silence.
 //
-// MEDIC_DISPATCH IS A DIFFERENT SHAPE OF STREAM, ON PURPOSE. eval_result / $ai_generation / agent_session
-// are near-continuous (a daily cron, or every agent session) -- silence past ~2 days is unambiguously bad.
+// MEDIC_DISPATCH IS A DIFFERENT SHAPE OF STREAM, ON PURPOSE. eval_result / agent_session are
+// near-continuous (a daily cron, or every agent session) -- silence past ~2 days is unambiguously bad.
 // medic_dispatch only fires when fleet-medic actually DISPATCHES or ESCALATES (see skills/fleet-medic/
 // medic.mjs classify()); zero dispatches across a healthy fleet is GOOD news, not staleness. Its
 // max_age_h is deliberately set much longer (see setup/expected-streams.json's note) and framed as a
@@ -50,8 +50,8 @@ export function assessStreamFreshness(streamDef, newestIso, nowMs) {
 }
 
 // HogQL string-literal escaping: PostHog's query endpoint takes a raw HogQL string, so an event name
-// containing a single quote (none of ours do, but $ai_generation's `$` is fine unescaped in a string
-// literal) must have its OWN quotes escaped. Defensive, not currently load-bearing.
+// containing a single quote must have its OWN quotes escaped. Dollar signs are valid in string
+// literals and do not need special escaping. Defensive, not currently load-bearing.
 function hogqlLiteral(s) { return `'${String(s).replace(/'/g, "\\'")}'`; }
 
 /**

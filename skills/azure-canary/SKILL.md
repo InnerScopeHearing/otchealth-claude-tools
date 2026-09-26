@@ -43,9 +43,9 @@ description: "SUPERSEDED 2026-08-28 -- do not run or port. Was the fleet's Azure
 >      now on ECS with an OpenSearch brain, but the lane-rot failure mode this guards against is
 >      backend-agnostic and would port cleanly to a new or existing AWS-era canary.
 >    - **The PostHog per-stream freshness checks (W1-5)** (`stream-freshness.mjs`, checking
->      `eval_result` / `$ai_generation` / `agent_session` / `medic_dispatch` against
+>      `eval_result` / `agent_session` / `medic_dispatch` against
 >      `setup/expected-streams.json`) -- the same AGE-not-FLOOR discipline applied to the fleet's OWN
->      telemetry rather than its backups; this caught `$ai_generation`/`agent_session` sitting silent
+>      telemetry rather than its backups; this caught `agent_session` sitting silent
 >      ~367h and `medic_dispatch` ~331h, live, the day it was built. PostHog itself did not move with
 >      the Azure retirement, so this check's *targets* are still live even though its *runner* (this
 >      canary) is not -- a clean, standalone port candidate.

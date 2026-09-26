@@ -1,5 +1,5 @@
-// W1-5: freshness SLOs for the fleet's PostHog telemetry streams (eval_result, $ai_generation,
-// agent_session, medic_dispatch). Mirrors tests/azure-canary-freshness.test.mjs's own assessFreshness
+// W1-5: freshness SLOs for the fleet's PostHog telemetry streams (eval_result, agent_session,
+// medic_dispatch). Mirrors tests/azure-canary-freshness.test.mjs's own assessFreshness
 // guards, for the PostHog-stream sibling check (skills/azure-canary/stream-freshness.mjs).
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,7 +17,7 @@ test("assessStreamFreshness: a recent event is FRESH", () => {
 });
 
 test("assessStreamFreshness: THE REAL 2026-07-17 INCIDENT -- ~368h silence on a 30h SLO is STALE", () => {
-  // $ai_generation / agent_session's actual last-seen timestamp the day this check was built.
+  // eval_result's actual last-seen timestamp the day this check was built.
   const v = assessStreamFreshness(EVAL_RESULT, "2026-07-02T14:08:34.862Z", NOW);
   assert.equal(v.state, "STALE");
   assert.ok(v.ageH > 300, "must reflect the true multi-day gap, not just 'somewhat old'");
@@ -46,12 +46,13 @@ test("assessStreamFreshness: exactly at the SLO boundary is still FRESH (<=)", (
   assert.equal(assessStreamFreshness(EVAL_RESULT, boundary, NOW).state, "FRESH");
 });
 
-test("expected-streams.json registers all four W1-5 streams with a positive max_age_h and medic_dispatch is the loosest", () => {
+test("expected-streams.json registers all three W1-5 streams with a positive max_age_h and medic_dispatch is the loosest", () => {
   const registry = JSON.parse(readFileSync(new URL("../setup/expected-streams.json", import.meta.url), "utf8"));
   const names = registry.streams.map((s) => s.stream);
-  for (const required of ["eval_result", "$ai_generation", "agent_session", "medic_dispatch"]) {
+  for (const required of ["eval_result", "agent_session", "medic_dispatch"]) {
     assert.ok(names.includes(required), `expected-streams.json must register ${required}`);
   }
+  assert.ok(!names.includes("$ai_generation"), "session aggregates must not be monitored as provider-generation events");
   for (const s of registry.streams) {
     assert.ok(Number(s.max_age_h) > 0, `${s.stream} must declare a positive max_age_h`);
     assert.ok(s.note && s.note.length > 20, `${s.stream} must document WHY its SLO is set the way it is`);

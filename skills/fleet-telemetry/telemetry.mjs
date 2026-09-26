@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// fleet-telemetry — agent LLM observability into PostHog (the $50k-credit lane; NOT Datadog).
-// Parses a Claude Code session transcript (.jsonl) and emits, to the "Fleet Agents" PostHog
-// project: (1) a PostHog LLM-Observability `$ai_generation` event (model, tokens, cost, latency)
-// so the LLM Observability product shows traces + spend, and (2) a custom `agent_session` event
-// (agent, turns, tool calls, tools used, outcome) for fleet analytics + funnels.
-// Dependency-free; resolves the project ingest key from Secret Manager via the claude-driver SA.
+// fleet-telemetry — metadata-only Claude Code session usage for PostHog.
+// Parses a Claude Code session transcript (.jsonl) and emits one metadata-only `agent_session`
+// event to the "Fleet Agents" PostHog project. A transcript is a session aggregate, not a single
+// provider generation, so it must not be mislabeled as `$ai_generation`. This also deliberately
+// omits dollar-cost fields: this transcript does not prove whether the session was subscription- or
+// API-billed, and a public API price estimate is not an invoice.
+// Resolves the project ingest key through the kb-memory secret adapter, which defaults to AWS SSM.
 //
 // Ring safety: emits ONLY metadata (counts, tokens, model, tool NAMES, durations). It does NOT
 // send prompts, outputs, file contents, or any PHI/MNPI. Safe for every agent including PHI ones.
@@ -18,11 +19,6 @@ import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 const INGEST = "https://us.i.posthog.com/capture/";
-// approx Claude pricing $/Mtok [input, output, cache-write, cache-read]
-const PRICE = {
-  opus:   [15, 75, 18.75, 1.5], sonnet: [3, 15, 3.75, 0.3], haiku: [0.8, 4, 1.0, 0.08],
-};
-function priceFor(model) { const m = (model || "").toLowerCase(); for (const k of Object.keys(PRICE)) if (m.includes(k)) return PRICE[k]; return PRICE.sonnet; }
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -50,10 +46,15 @@ export function resolveAgent() {
 // "not resolved" and surface it loudly rather than swallow it.
 async function sm(id) { return await kvSecret(id); }
 
-function parseTranscript(path) {
-  const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
-  let inTok = 0, outTok = 0, cacheW = 0, cacheR = 0, turns = 0, toolCalls = 0, errors = 0;
-  const tools = {}; const models = {}; let firstTs = null, lastTs = null;
+function tokenCount(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : 0;
+}
+
+export function parseTranscriptText(text) {
+  const lines = String(text || "").split("\n").filter(Boolean);
+  let inTok = 0, outTok = 0, cacheW = 0, cacheR = 0, turns = 0, modelCalls = 0, toolCalls = 0, errors = 0;
+  const tools = Object.create(null); const models = Object.create(null); let firstTs = null, lastTs = null;
   for (const ln of lines) {
     let o; try { o = JSON.parse(ln); } catch { continue; }
     const ts = o.timestamp || o.ts; if (ts) { firstTs = firstTs || ts; lastTs = ts; }
@@ -61,17 +62,66 @@ function parseTranscript(path) {
     if (o.type === "assistant" || msg?.role === "assistant") {
       turns++;
       const u = msg?.usage || o.usage;
-      if (u) { inTok += u.input_tokens || 0; outTok += u.output_tokens || 0; cacheW += u.cache_creation_input_tokens || 0; cacheR += u.cache_read_input_tokens || 0; }
-      if (msg?.model) models[msg.model] = (models[msg.model] || 0) + 1;
+      const model = msg?.model || o.model;
+      if (u) {
+        modelCalls++;
+        inTok += tokenCount(u.input_tokens);
+        outTok += tokenCount(u.output_tokens);
+        cacheW += tokenCount(u.cache_creation_input_tokens);
+        cacheR += tokenCount(u.cache_read_input_tokens);
+        if (model) models[model] = (models[model] || 0) + 1;
+      }
       const content = msg?.content; if (Array.isArray(content)) for (const c of content) if (c.type === "tool_use") { toolCalls++; tools[c.name] = (tools[c.name] || 0) + 1; }
     }
     if (o.type === "user" || msg?.role === "user") { const content = msg?.content; if (Array.isArray(content)) for (const c of content) if (c.type === "tool_result" && c.is_error) errors++; }
   }
-  const model = Object.entries(models).sort((a, b) => b[1] - a[1])[0]?.[0] || "unknown";
-  const [pi, po, pcw, pcr] = priceFor(model);
-  const cost = (inTok * pi + outTok * po + cacheW * pcw + cacheR * pcr) / 1e6;
-  const durMs = firstTs && lastTs ? (new Date(lastTs) - new Date(firstTs)) : 0;
-  return { inTok, outTok, cacheW, cacheR, totalTok: inTok + outTok + cacheW + cacheR, turns, toolCalls, tools, model, models: Object.keys(models), errors, cost, durMs };
+  const modelNames = Object.keys(models);
+  const model = modelNames.length === 1 ? modelNames[0] : modelNames.length > 1 ? "mixed" : "unknown";
+  const elapsed = firstTs && lastTs ? new Date(lastTs).getTime() - new Date(firstTs).getTime() : 0;
+  const durMs = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+  return {
+    inTok, outTok, cacheW, cacheR, totalTok: inTok + outTok + cacheW + cacheR,
+    turns, modelCalls,
+    toolCalls, tools, model, models: modelNames, modelCounts: Object.fromEntries(Object.entries(models)),
+    errors, durMs,
+  };
+}
+
+function parseTranscript(path) {
+  return parseTranscriptText(readFileSync(path, "utf8"));
+}
+
+export function buildSessionEvent(metrics, { agent, callsiteId, sessionId, timestamp }) {
+  const resolvedAgent = agent || "unknown";
+  const resolvedCallsite = callsiteId || resolvedAgent;
+  return {
+    event: "agent_session",
+    distinct_id: resolvedAgent,
+    timestamp: timestamp || new Date().toISOString(),
+    properties: {
+      agent: resolvedAgent,
+      callsite_id: resolvedCallsite,
+      session_id: sessionId,
+      telemetry_schema_version: 2,
+      cost_basis: "not_observed",
+      model: metrics.model,
+      models: metrics.models,
+      model_counts: metrics.modelCounts,
+      model_call_count: metrics.modelCalls,
+      turns: metrics.turns,
+      tool_calls: metrics.toolCalls,
+      tools_used: Object.keys(metrics.tools),
+      top_tools: Object.entries(metrics.tools).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`),
+      tool_errors: metrics.errors,
+      input_tokens: metrics.inTok,
+      output_tokens: metrics.outTok,
+      cache_write_tokens: metrics.cacheW,
+      cache_read_tokens: metrics.cacheR,
+      total_tokens: metrics.totalTok,
+      duration_s: Math.round(metrics.durMs / 1000),
+      outcome: metrics.errors > 0 ? "had_tool_errors" : "clean",
+    },
+  };
 }
 
 async function capture(key, events) {
@@ -90,23 +140,20 @@ async function sessionEnd() {
   let m; try { m = parseTranscript(path); } catch (e) { console.error("parse: " + e.message); process.exit(0); }
   const key = await sm("posthog-fleet-ingest-key");
   if (!key) {
-    // LOUD + distinctive (not the old terse "no posthog-fleet-ingest-key"): an unresolvable ingest
-    // key is the silent-failure CLASS that caused the 2026-07-02 blackout. We still exit 0 (a Stop
-    // hook must never block a session from ending), but this line is greppable, and the nightly
-    // stream-freshness pager (skills/azure-canary) is the real detector for a sustained outage.
-    console.error("[fleet-telemetry][BLACKOUT-RISK] posthog-fleet-ingest-key did not resolve via Azure Key Vault -- telemetry NOT sent this session. Check the vault + the session KV auth path (managed identity / AZURE_SP_*).");
+    // A Stop hook must never block the session from ending, but missing telemetry auth stays loud.
+    // The current secret adapter defaults to AWS SSM Parameter Store; avoid directing operators to
+    // the retired Azure vault when a secret is absent or the caller lacks the SSM/KMS grant.
+    console.error(`[fleet-telemetry][BLACKOUT-RISK] posthog-fleet-ingest-key did not resolve from secret backend "${process.env.SECRET_BACKEND || "ssm"}" (normally AWS SSM Parameter Store /otchealth/*). Telemetry NOT sent this session. Check the parameter name and the caller's ssm:GetParameter/KMS decrypt access.`);
     process.exit(0);
   }
   const now = new Date().toISOString();
-  const base = { distinct_id: agent, timestamp: now };
   // callsite_id: the prompt-surface identifier for this session (defaults to the agent role, matching
-  // agent-evals' eval_result.callsite_id default). Substrate for a future quality-per-dollar router that
-  // joins eval scores to real production model/cost by callsite; the router itself is NOT built here.
+  // agent-evals' eval_result.callsite_id default). Join this to quality signals by callsite, but do
+  // not infer provider spend from subscription transcript token counts.
   const callsiteId = (takeVal("--callsite", "") || agent);
-  const aiProps = { "$ai_trace_id": sid, "$ai_model": m.model, "$ai_provider": "anthropic", "$ai_input_tokens": m.inTok + m.cacheW + m.cacheR, "$ai_output_tokens": m.outTok, "$ai_latency": Math.round(m.durMs / 1000), "$ai_total_cost_usd": +m.cost.toFixed(4), agent, callsite_id: callsiteId, session_id: sid };
-  const sessProps = { agent, callsite_id: callsiteId, session_id: sid, model: m.model, models: m.models, turns: m.turns, tool_calls: m.toolCalls, tools_used: Object.keys(m.tools), top_tools: Object.entries(m.tools).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`), tool_errors: m.errors, input_tokens: m.inTok, output_tokens: m.outTok, cache_read_tokens: m.cacheR, total_tokens: m.totalTok, est_cost_usd: +m.cost.toFixed(4), duration_s: Math.round(m.durMs / 1000), outcome: m.errors > 0 ? "had_tool_errors" : "clean" };
-  await capture(key, [{ event: "$ai_generation", properties: { ...aiProps }, ...base }, { event: "agent_session", properties: { ...sessProps }, ...base }]);
-  console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} tools=${m.toolCalls} tok=${m.totalTok} ~$${m.cost.toFixed(3)} -> PostHog Fleet Agents`);
+  const event = buildSessionEvent(m, { agent, callsiteId, sessionId: sid, timestamp: now });
+  await capture(key, [event]);
+  console.log(`telemetry sent: agent=${agent} model=${m.model} turns=${m.turns} calls=${m.modelCalls} tools=${m.toolCalls} tok=${m.totalTok} -> PostHog Fleet Agents`);
 }
 
 // Only run the CLI dispatch when executed directly (node telemetry.mjs ...), NOT when imported by a
