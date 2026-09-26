@@ -25,7 +25,7 @@ Missing values remain omitted. A numeric zero returned by the provider remains z
 
 ## Coverage limitation
 
-The regression test (`tests/openai-usage-coverage.test.mjs`) is a file-level source scan. It checks files under `setup/` and `skills/` for a literal `api.openai.com` reference and requires an actual `recordOpenAIUsage()` call somewhere in the same file, unless the file has a named reason in the test's `ALLOWLIST`. It does not prove that every individual OpenAI request in a file is instrumented. The direct GPT Image checks apply to their three files, but they also confirm file-level presence, not per-request coverage.
+The regression test (`tests/openai-usage-coverage.test.mjs`) is a file-level source scan. Its small lexer skips comments and literals, excludes named function declarations, and looks for recorder call syntax in files under `setup/` and `skills/` that contain a literal `api.openai.com` reference, unless the file has a named reason in the test's `ALLOWLIST`. It is not a full JavaScript parser or call-graph analysis. It does not prove that every individual OpenAI request in a file is instrumented or that the call is reachable for every request. The direct GPT Image checks apply to their three files, but they also confirm file-level presence, not per-request coverage.
 
 The ledger path defaults to `~/.otchealth/openai-usage/usage-<YYYY-MM-DD>.jsonl`. `OPENAI_USAGE_LEDGER_DIR` can point it to another directory.
 
