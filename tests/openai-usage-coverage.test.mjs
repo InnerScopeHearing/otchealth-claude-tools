@@ -312,7 +312,10 @@ function isClassBody(tokens, openBraceIndex) {
     else if (value === "(") parenDepth = Math.max(0, parenDepth - 1);
     else if (value === "]") bracketDepth += 1;
     else if (value === "[") bracketDepth = Math.max(0, bracketDepth - 1);
-    else if (value === "}") braceDepth += 1;
+    else if (value === "}") {
+      if (parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) return false;
+      braceDepth += 1;
+    }
     else if (value === "{") {
       if (braceDepth > 0) braceDepth -= 1;
       else if (parenDepth === 0 && bracketDepth === 0) return false;
@@ -432,6 +435,13 @@ test("function and method declarations do not satisfy the usage coverage guard",
       "};",
       'await fetch("https://api.openai.com/v1/images/generations");',
     ].join("\n"),
+    [
+      "class Recorder {",
+      "  recordOpenAIUsage()",
+      "  {}",
+      "}",
+      'await fetch("https://api.openai.com/v1/images/generations");',
+    ].join("\n"),
   ];
 
   for (const source of declarations) {
@@ -455,10 +465,18 @@ test("a real recorder call satisfies the usage coverage guard", () => {
     "  }",
     "}",
   ].join("\n");
+  const callAfterClassSource = [
+    "class Prior {}",
+    "function caller() {",
+    "  recordOpenAIUsage()",
+    "  {}",
+    "}",
+  ].join("\n");
 
   assert.equal(hasUsageReceiptCoverage("fixture.mjs", invocationSource), true);
   assert.equal(hasUsageRecorderInvocation(templateInvocationSource), true);
   assert.equal(hasUsageRecorderInvocation(callBeforeBlockSource), true);
+  assert.equal(hasUsageRecorderInvocation(callAfterClassSource), true);
 });
 
 test("direct GPT Image scripts are scanned and require usage receipt instrumentation", () => {
