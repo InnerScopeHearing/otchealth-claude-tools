@@ -98,4 +98,3 @@ PostHog -> Fleet Agents project -> Insights on the `agent_session` event (token/
 mix, tool-failure rate, duration, and sessions over time). The ingest key name is
 `posthog-fleet-ingest-key`, resolved from AWS SSM Parameter Store `/otchealth/*` by the current
 secret adapter.
-
