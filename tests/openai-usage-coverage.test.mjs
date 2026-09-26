@@ -1,9 +1,9 @@
 // Regression guard for OpenAI usage receipts: FAILS if any file under setup/ or skills/ mentions
-// "api.openai.com" (a direct OpenAI network call) without also importing/calling recordOpenAIUsage()
+// "api.openai.com" (a direct OpenAI network call) without also invoking recordOpenAIUsage()
 // (setup/openai-usage.mjs) unless the file is explicitly named in ALLOWLIST below, with a reason.
 //
 // This is a FILE-LEVEL text scan, not a call-site-level AST analysis: it proves "this file, which
-// talks to api.openai.com somewhere, ALSO talks to recordOpenAIUsage somewhere," not "every individual
+// talks to api.openai.com somewhere, ALSO invokes recordOpenAIUsage somewhere," not "every individual
 // fetch() call in this file is instrumented." That is a real, deliberate limitation (documented in
 // docs/OPENAI-COST-VISIBILITY.md too) -- a file with two OpenAI call sites where only one is
 // instrumented would pass this test. It is still the right test to have: it is what caught (and now
@@ -74,8 +74,27 @@ const GPT_IMAGE_RECEIPT_PATHS = [
   "skills/designer/scripts/gen-icon-batch.mjs",
 ];
 
+function hasUsageRecorderInvocation(source) {
+  return /\brecordOpenAIUsage\s*\(/.test(source);
+}
+
+function hasUsageReceiptCoverage(rel, source) {
+  return hasUsageRecorderInvocation(source) || Object.prototype.hasOwnProperty.call(ALLOWLIST, rel);
+}
+
 test("there are candidate .mjs files to scan under setup/ and skills/", () => {
   assert.ok(candidateFiles.length > 0, "expected at least one non-test .mjs file under setup/ or skills/");
+});
+
+test("an import-only recorder reference does not satisfy the usage coverage guard", () => {
+  const importOnlySource = [
+    'import { recordOpenAIUsage } from "../setup/openai-usage.mjs";',
+    'await fetch("https://api.openai.com/v1/images/generations");',
+  ].join("\n");
+
+  assert.ok(importOnlySource.includes("recordOpenAIUsage"), "fixture retains the recorder import");
+  assert.match(importOnlySource, /\bapi\.openai\.com\b/, "fixture has a direct OpenAI call path");
+  assert.equal(hasUsageReceiptCoverage("fixture.mjs", importOnlySource), false);
 });
 
 test("direct GPT Image scripts are scanned and require usage receipt instrumentation", () => {
@@ -84,7 +103,7 @@ test("direct GPT Image scripts are scanned and require usage receipt instrumenta
     assert.equal(Object.prototype.hasOwnProperty.call(ALLOWLIST, rel), false, `${rel} must not be exempted`);
     const content = readFileSync(join(ROOT, rel), "utf8");
     assert.match(content, /\bapi\.openai\.com\b/, `${rel} must remain an explicit direct OpenAI call path`);
-    assert.ok(content.includes("recordOpenAIUsage"), `${rel} must record provider-returned usage`);
+    assert.ok(hasUsageRecorderInvocation(content), `${rel} must invoke the provider usage recorder`);
   }
 });
 
@@ -110,7 +129,6 @@ for (const abs of candidateFiles) {
 
   test(`${rel}: references api.openai.com, so it must also call recordOpenAIUsage() or be an explicitly documented exception`, () => {
     const allowReason = ALLOWLIST[rel];
-    const callsHelper = content.includes("recordOpenAIUsage");
     if (allowReason) {
       // An allowlisted file that STARTS calling the helper is not a failure, just stale bookkeeping --
       // still flag it so the allowlist entry gets cleaned up rather than silently rotting.
@@ -121,7 +139,7 @@ for (const abs of candidateFiles) {
       return;
     }
     assert.ok(
-      callsHelper,
+      hasUsageReceiptCoverage(rel, content),
       `${rel} references api.openai.com but never calls recordOpenAIUsage() (setup/openai-usage.mjs) and ` +
         `is not in this test's ALLOWLIST. Either instrument it (see the fleet's existing call sites for the ` +
         `pattern) or add a named, reasoned ALLOWLIST entry explaining why this specific file's OpenAI call ` +
