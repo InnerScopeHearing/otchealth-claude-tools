@@ -1,23 +1,63 @@
 ---
 name: fleet-telemetry
-description: Agent LLM observability into PostHog. Parses a Claude Code session transcript and emits per-session telemetry (cost, tokens, model, tool usage, errors, duration per agent) plus $ai_generation events to the PostHog Fleet Agents project (479484), the $50k-credit observability lane (not Datadog). Turns the agent fleet from a black box into a measurable system. Wire it as an auto Stop hook. Part of Fleet Intelligence #1. Non-PHI ring; metadata only, never prompt/response contents or PHI/MNPI.
+description: Metadata-only Claude Code session usage for explicitly allowlisted company seats in PostHog Fleet Agents (project 479484). Emits token/cache totals, model mix, tool usage, errors, duration, and outcome, but no estimated or inferred dollar cost. Protected personal-legal, PHI/service, and unknown lanes are skipped before transcript or secret access. Never sends prompt/response contents.
 ---
 
 # fleet-telemetry — agent LLM observability into PostHog
 
-Emits per-session agent telemetry to the **PostHog "Fleet Agents" project (479484)** , the
-$50k-credit observability lane (not Datadog). Turns the agent fleet from a black box into a
-measurable system: cost, tokens, model, tool usage, errors, and duration per agent per session.
+Emits per-session metadata to the **PostHog "Fleet Agents" project (479484)** only for the explicit
+company-seat allowlist in `telemetry.mjs` (`cto`, `cfo`, `clo`, `coo`, `cpo`, `cro`, `cco`, and
+`developer`). Personal-legal, PHI/service, and unknown lanes are denied before transcript or secret
+access. Keep the allowlist aligned with `setup/session-start.sh`; new lanes are not opted in automatically.
+A transcript is a session aggregate, not a provider generation. One event per session avoids duplicate
+event volume and false generation counts.
+
+Seat attribution follows the trusted `setup/session-start.sh` contract: a per-session `KB_AGENT` pin
+wins over stale company markers; without a pin, the session marker is checked before the project
+marker. If a company pin conflicts with a durable marker for `clo-personal`, `medreview`, or
+`companion`, telemetry fails closed before reading the transcript, resolving the SSM key, or posting
+to PostHog. The hook ignores CLI seat overrides. A normal company pin and company marker continue to
+use the configured per-session lane.
 
 ## What it sends (metadata only — no prompts, outputs, file contents, PHI or MNPI)
-- `$ai_generation` (PostHog **LLM Observability** product): model, input/output tokens, latency, est cost,
-  `callsite_id` (defaults to the agent role; `--callsite <id>` overrides).
-- `agent_session` (custom analytics): agent, callsite_id, turns, tool_calls, tools_used, tool_errors, tokens, est_cost_usd, duration_s, outcome.
+- `agent_session` (custom analytics): agent, callsite_id, assistant turns, tool calls, tools used,
+  tool errors, per-model call counts, input/output tokens, cache read/write tokens, total tokens,
+  duration, and outcome.
+- No `$ai_generation` is emitted from this session-level source. A per-generation trace requires
+  provider/API instrumentation where each real model response and its usage are available.
+- No dollar-cost field is emitted. Claude Code may use a flat subscription or API billing, and public
+  API price estimates are not invoices. Join session tokens/outcomes to provider billing artifacts
+  for actual spend and keep subscription usage limits as a separate measure.
+
+## Query/filter contract v1 (event schema v2)
+For current session, routing-context, and cache analyses, use the exact HogQL `WHERE` expression in
+`query-contract-v1.json`: `event = 'agent_session' AND properties.telemetry_schema_version = 2 AND
+properties.cost_basis = 'not_observed' AND properties.agent IN ('cto', 'cfo', 'clo', 'coo', 'cpo',
+'cro', 'cco', 'developer')`. This positive event/version/seat filter excludes historical
+`$ai_generation` rows that represented the same whole-session transcript as a pseudo-generation.
+Do not add that legacy event with an `OR` condition.
+
+`model_counts` counts assistant transcript entries with a model label, grouped by model, including
+entries without a usage object. `model_call_count` counts assistant transcript entries with a usage
+object. The latter is a schema-v2 field name, not a verified provider API-call count. The measures
+have different denominators and must not be substituted for each other.
+
+`callsite_id` accepts a lowercase identifier of up to 64 letters, digits, dots, underscores, or
+hyphens; an invalid value falls back to the company-seat role. `session_id` accepts only a UUID;
+missing or invalid values are replaced with a generated UUID. Free-form values are not exported as
+identifiers.
+
+This event is not a cost source. `cost_basis` is `not_observed`, which does not mean zero cost.
+Ignore historical `est_cost_usd`, `$ai_total_cost_usd`, and similar estimates. Actual cost must come
+from provider billing artifacts. Routing analysis may use schema-v2 session tokens, model labels,
+outcome, and `callsite_id` as descriptive signals, with quality results joined by `callsite_id`.
+Cache analysis may sum only `cache_read_tokens` and `cache_write_tokens` from the filtered
+`agent_session` cohort. Do not use legacy pseudo-generation rows or transcript-derived dollar
+estimates for current routing, cache, or cost decisions.
 
 `callsite_id` is the join key against `agent-evals`' `eval_result.callsite_id` (same default: the agent
-role). It is substrate for a future quality-per-dollar router that would join eval scores to real
-production model/cost by callsite; that full router (a live PostHog query wired into dispatch) is NOT
-built here.
+role). It supports quality-versus-token analysis by callsite. Actual dollar cost must come from the
+provider's billing artifact, not be inferred from subscription transcript tokens.
 
 ## Model routing: `task-router.mjs`
 `classifyTask(text, hints?)` is the pure text-based model/budget classifier (opus/sonnet/haiku) that
@@ -42,6 +82,7 @@ that repo's `.claude/settings.json` Stop hook:
 `echo '{"transcript_path":"<x.jsonl>","session_id":"..."}' | KB_AGENT=cto node telemetry.mjs session-end`
 
 ## Where to look
-PostHog -> Fleet Agents project -> **LLM Observability** (traces + spend) and Insights on the
-`agent_session` event (cost-per-agent, tool-failure rate, sessions over time). Keys in Secret
-Manager: `posthog-fleet-project-id`, `posthog-fleet-ingest-key` (phc_, publishable).
+PostHog -> Fleet Agents project -> Insights on the `agent_session` event (token/cache use, model
+mix, tool-failure rate, duration, and sessions over time). The ingest key name is
+`posthog-fleet-ingest-key`, resolved from AWS SSM Parameter Store `/otchealth/*` by the current
+secret adapter.

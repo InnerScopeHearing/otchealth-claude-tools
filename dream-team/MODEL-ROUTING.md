@@ -44,11 +44,13 @@ Tier-1 scripts (Azure credits) and spend the Max pool only where agentic judgmen
   the persona briefs) to cut input cost on repeated calls.
 - **Batch API** for the librarian embeddings + CU understand pass (async, ~50% cheaper) when a room is
   a large one-shot backfill rather than incremental.
-- **Telemetry-driven** (Fleet Intelligence #1): the `fleet-telemetry` cost-per-agent data identifies
-  which skill/agent to optimize first; optimize by measurement, not guess.
+- **Telemetry-driven** (Fleet Intelligence #1): `fleet-telemetry` session token/cache, model-mix,
+  tool-error, and outcome data identifies which agent/task surface to optimize first. Use provider
+  billing artifacts for real dollar cost; do not infer invoices from subscription token counts.
 
 ## Why this is "done enough"
 The resilience fallback is the piece that was actively biting (agents silently degrading on the gpt-4o
 throttle). It is now fleet-wide and proven (company-brain answered through a live throttle via the
 fallback). The cheap-tier routing already exists where it matters (doc-indexer CU on gpt-4.1-mini). The
-cost levers above are real but volume-gated; wire them when the telemetry shows the spend, not before.
+cost levers above are real but volume-gated; use session telemetry to prioritize which model and task
+surfaces to investigate, then use provider billing artifacts to confirm spend before wiring a cost lever.

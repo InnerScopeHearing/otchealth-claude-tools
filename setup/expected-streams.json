@@ -1,5 +1,5 @@
 {
-  "_comment": "W1-5 FLYWHEEL SELF-MONITORING registry. The PostHog-stream sibling of expected-indexes.json: declares every PostHog event stream the fleet's self-improving loop depends on being ALIVE, with a max_age_h freshness SLO, consumed by skills/azure-canary/canary.mjs (the same monitor that already covers Azure AI Search index freshness + scheduled-job liveness). WHY IT EXISTS: on 2026-07-17, while wiring this exact check, we found $ai_generation/agent_session (fleet-telemetry's Stop-hook emit) silent for ~367h (~15 days) and medic_dispatch silent for ~331h (~14 days) fleet-wide -- nothing had ever asserted these streams' FRESHNESS, only their per-event shape (see tests/groundedness-injection.test.mjs-style shape guards elsewhere). A dead stream just stops; only AGE catches that, the same lesson expected-indexes.json already encodes for search indexes. THE RULE: a stream any monitor/dashboard/detector relies on for currency MUST be registered here with a real max_age_h, or its silence goes unnoticed exactly like otchealth-brain did.",
+  "_comment": "W1-5 FLYWHEEL SELF-MONITORING registry. Declares PostHog event streams the fleet's self-improving loop depends on, with max_age_h freshness SLOs, consumed by skills/azure-canary/canary.mjs. On 2026-07-17 the agent_session stream and medic_dispatch were stale for ~367h and ~331h; this registry catches silent streams by age. fleet-telemetry now emits only the metadata-only agent_session aggregate, not a false per-session $ai_generation event. Dollar costs come from provider billing artifacts, not these session token totals. Any stream a monitor/dashboard depends on must be registered here with a real max_age_h.",
   "streams": [
     {
       "stream": "eval_result",
@@ -9,18 +9,11 @@
       "note": "A hard daily cron with no legitimate quiet day (there is always a golden-task suite to run); 30h = the daily cadence plus a half-day grace for a late/retried run, not a full extra day like the doc-room indexes get (those can go quiet on content, this can't)."
     },
     {
-      "stream": "$ai_generation",
+      "stream": "agent_session",
       "project": "Fleet Agents (posthog-fleet-project-id)",
       "emitted_by": "skills/fleet-telemetry/telemetry.mjs session-end, wired as a Stop hook in .claude/settings.json (every Claude Code session)",
       "max_age_h": 30,
-      "note": "PostHog's own LLM-Observability event; the fleet-wide agent-activity heartbeat. 2026-07-17: found STALE at ~367h -- the real, live incident this check exists to catch. 30h gives one calendar day of legitimate low activity before paging."
-    },
-    {
-      "stream": "agent_session",
-      "project": "Fleet Agents (posthog-fleet-project-id)",
-      "emitted_by": "skills/fleet-telemetry/telemetry.mjs session-end (same Stop hook as $ai_generation; both come from one capture pass over the transcript)",
-      "max_age_h": 30,
-      "note": "Same emit path and same 2026-07-17 STALE finding as $ai_generation (they are emitted together from the same hook call); kept as a separate registry row because it is a distinct PostHog event name a detector could depend on independently."
+      "note": "One metadata-only session aggregate per Claude Code session, including model mix, token/cache totals, tool errors, and duration. 30h gives one calendar day of legitimate low activity before paging."
     },
     {
       "stream": "medic_dispatch",

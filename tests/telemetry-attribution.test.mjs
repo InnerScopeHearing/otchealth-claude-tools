@@ -11,7 +11,7 @@ import { resolveAgent } from "../skills/fleet-telemetry/telemetry.mjs";
 
 // Save/restore the env keys resolveAgent reads, so tests never leak into each other or the runner.
 function withEnv(overrides, fn) {
-  const keys = ["KB_AGENT", "HOME", "CLAUDE_PROJECT_DIR"];
+  const keys = ["KB_AGENT", "HOME", "USERPROFILE", "CLAUDE_PROJECT_DIR"];
   const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   try {
     for (const k of keys) {
@@ -27,8 +27,21 @@ function withEnv(overrides, fn) {
   }
 }
 
-test("resolveAgent: explicit KB_AGENT wins and is lowercased", () => {
+test("resolveAgent: per-session KB_AGENT wins and is lowercased", () => {
   withEnv({ KB_AGENT: "CFO" }, () => assert.equal(resolveAgent(), "cfo"));
+});
+
+test("resolveAgent: a per-session company pin overrides a stale company marker", () => {
+  const home = mkdtempSync(join(tmpdir(), "tele-stale-company-home-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", ".kb-agent"), "cfo\n");
+  try {
+    withEnv({ KB_AGENT: "CTO", HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: home }, () =>
+      assert.equal(resolveAgent(), "cto", "a stale ordinary company marker does not disable the session pin"),
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("resolveAgent: falls back to ~/.claude/.kb-agent marker (THE blackout attribution fix)", () => {
@@ -36,7 +49,7 @@ test("resolveAgent: falls back to ~/.claude/.kb-agent marker (THE blackout attri
   mkdirSync(join(home, ".claude"), { recursive: true });
   writeFileSync(join(home, ".claude", ".kb-agent"), "developer\n"); // marker has a trailing newline
   try {
-    withEnv({ KB_AGENT: undefined, HOME: home, CLAUDE_PROJECT_DIR: home }, () =>
+    withEnv({ KB_AGENT: undefined, HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: home }, () =>
       assert.equal(resolveAgent(), "developer", "must read the on-disk marker, not attribute 'unknown'"),
     );
   } finally {
@@ -47,7 +60,7 @@ test("resolveAgent: falls back to ~/.claude/.kb-agent marker (THE blackout attri
 test("resolveAgent: no env and no marker -> 'unknown' (never throws)", () => {
   const home = mkdtempSync(join(tmpdir(), "tele-empty-")); // no .claude/.kb-agent inside
   try {
-    withEnv({ KB_AGENT: undefined, HOME: home, CLAUDE_PROJECT_DIR: home }, () =>
+    withEnv({ KB_AGENT: undefined, HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: home }, () =>
       assert.equal(resolveAgent(), "unknown"),
     );
   } finally {
