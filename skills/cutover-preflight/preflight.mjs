@@ -176,10 +176,9 @@ async function runningTask() {
     if (!r.ok) return { status: 'FAIL', evidence: `OpenAI embeddings HTTP ${r.status}` };
     const j = await r.json();
     recordOpenAIUsage({
-      model: 'text-embedding-3-large',
       kind: 'embedding',
-      promptTokens: j.usage?.prompt_tokens || j.usage?.total_tokens || 0,
-      caller: 'cutover-preflight',
+      response: r,
+      body: j,
     });
     const v = j.data?.[0]?.embedding ?? [];
     // 3072 is the dimensionality the OpenSearch index was built at. Anything else means the query

@@ -15,6 +15,7 @@
 //         All meta files cross-reference each other for traceability.
 
 import { writeFileSync, readFileSync } from 'node:fs';
+import { recordOpenAIUsage } from '../../../setup/openai-usage.mjs';
 import {
     loadCredentials, requireCredential, resolveBrand, pickOutputPath,
     writeMeta, reportCost, parseArgs, brandPromptPrefix,
@@ -94,6 +95,7 @@ async function genOne(name) {
     });
     if (!res.ok) throw new Error(`OpenAI ${res.status} on "${name}": ${await res.text()}`);
     const data = await res.json();
+    recordOpenAIUsage({ kind: 'image', response: res, body: data });
     return Buffer.from(data.data[0].b64_json, 'base64');
 }
 

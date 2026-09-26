@@ -32,10 +32,28 @@ import {
   _bufferLengthForTests,
   _peekBufferForTests,
 } from "./openai-usage.mjs";
+import { awaitBatch } from "./model-routing.mjs";
 
 delete process.env.OPENAI_USAGE_DISABLE;
 
 let tmpDir;
+function mockResponse({ status, requestId } = {}) {
+  const headers = new Map(requestId ? [["x-request-id", requestId]] : []);
+  return {
+    ...(status === undefined ? {} : { status }),
+    headers: { get: (name) => headers.get(String(name).toLowerCase()) ?? null },
+  };
+}
+
+function recordUsage({ kind = "chat", model, id, usage, response = mockResponse({ status: 200, requestId: "req_synthetic_test" }) } = {}) {
+  const body = {
+    ...(model === undefined ? {} : { model }),
+    ...(id === undefined ? {} : { id }),
+    usage,
+  };
+  recordOpenAIUsage({ kind, response, body });
+}
+
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "openai-usage-test-"));
   _resetForTests();
@@ -154,18 +172,19 @@ test("estimateCostUsd: kind:'image' with an unrecognized model name IS tagged un
   assert.equal(unknown, true);
 });
 
-// ============================== recordOpenAIUsage (buffering + ledger) ==============================
+// ============================== recordOpenAIUsage (provider receipts + local JSONL) ===============
 
-test("recordOpenAIUsage: NEVER throws, even with garbage/missing input", () => {
+test("recordOpenAIUsage: NEVER throws and ignores non-response fields", () => {
   assert.doesNotThrow(() => recordOpenAIUsage());
   assert.doesNotThrow(() => recordOpenAIUsage(null));
-  assert.doesNotThrow(() => recordOpenAIUsage({ model: null, kind: "not-a-real-kind", promptTokens: "NaN", completionTokens: -5 }));
+  assert.doesNotThrow(() => recordOpenAIUsage({ model: "caller-model", kind: "not-a-real-kind", promptTokens: "NaN", completionTokens: -5 }));
+  assert.equal(_bufferLengthForTests(), 0);
 });
 
-test("recordOpenAIUsage: OPENAI_USAGE_DISABLE=1 is a hard kill-switch -- nothing is buffered or written", () => {
+test("recordOpenAIUsage: OPENAI_USAGE_DISABLE=1 is a hard kill-switch", () => {
   process.env.OPENAI_USAGE_DISABLE = "1";
   try {
-    recordOpenAIUsage({ model: "gpt-4o", kind: "chat", promptTokens: 100, completionTokens: 50, caller: "test" });
+    recordUsage({ model: "caller-model", usage: { prompt_tokens: 100 } });
   } finally {
     delete process.env.OPENAI_USAGE_DISABLE;
   }
@@ -173,63 +192,187 @@ test("recordOpenAIUsage: OPENAI_USAGE_DISABLE=1 is a hard kill-switch -- nothing
   assert.equal(existsSync(join(tmpDir, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`)), false);
 });
 
-test("recordOpenAIUsage: a normal call buffers exactly one record and appends exactly one JSONL line locally", () => {
-  recordOpenAIUsage({ model: "gpt-4o", kind: "chat", promptTokens: 1000, completionTokens: 500, caller: "unit-test" });
+test("recordOpenAIUsage: records only response-derived metadata and usage in the existing JSONL", () => {
+  const response = mockResponse({ status: 200, requestId: "req_synthetic_chat_01" });
+  const body = {
+    id: "chatcmpl_synthetic_01",
+    model: "gpt-4o-2024-08-06",
+    usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500, prompt_tokens_details: { cached_tokens: 40 } },
+    choices: [{ message: { content: "SENSITIVE_TEST_RESPONSE_SENTINEL" } }],
+  };
+  recordOpenAIUsage({
+    kind: "chat",
+    response,
+    body,
+    model: "caller-supplied-model",
+    promptTokens: 9_999,
+    costUsdOverride: 100,
+    caller: "SENSITIVE_TEST_USER_SENTINEL",
+  });
+
   assert.equal(_bufferLengthForTests(), 1);
   const rec = _peekBufferForTests()[0];
-  assert.equal(rec.model, "gpt-4o");
+  assert.equal(rec.provider, "openai");
+  assert.equal(rec.model, "gpt-4o-2024-08-06");
   assert.equal(rec.kind, "chat");
-  assert.equal(rec.caller, "unit-test");
-  assert.equal(rec.promptTokens, 1000);
-  assert.equal(rec.completionTokens, 500);
-  assert.ok(rec.costUsd > 0);
+  assert.equal(rec.requestId, "req_synthetic_chat_01");
+  assert.equal(rec.responseId, "chatcmpl_synthetic_01");
+  assert.equal(rec.httpStatus, 200);
+  assert.deepEqual(rec.usage, body.usage);
+  assert.deepEqual(Object.keys(rec).sort(), ["httpStatus", "kind", "model", "provider", "requestId", "responseId", "ts", "usage"]);
+  assert.equal(Number.isNaN(Date.parse(rec.ts)), false);
 
   const ledgerPath = join(tmpDir, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`);
-  assert.equal(existsSync(ledgerPath), true);
   const lines = readFileSync(ledgerPath, "utf8").trim().split("\n");
   assert.equal(lines.length, 1);
-  const parsed = JSON.parse(lines[0]);
-  assert.equal(parsed.model, "gpt-4o");
-  assert.equal(parsed.caller, "unit-test");
+  assert.deepEqual(JSON.parse(lines[0]), rec);
+  assert.doesNotMatch(lines[0], /SENSITIVE_TEST_RESPONSE_SENTINEL|SENSITIVE_TEST_USER_SENTINEL|caller-supplied-model|9999|costUsd|caller/);
 });
 
-test("recordOpenAIUsage: costUsdOverride wins outright over the price-table estimate and forces unknown:false", () => {
-  recordOpenAIUsage({ model: "gpt-image-1", kind: "image", images: 1, caller: "designer", costUsdOverride: 0.167 });
+test("recordOpenAIUsage: missing response and usage fields stay omitted while provider-reported zero stays zero", () => {
+  recordUsage({
+    response: mockResponse(),
+    usage: { prompt_tokens: 0, prompt_tokens_details: { cached_tokens: 0 } },
+  });
   const rec = _peekBufferForTests()[0];
-  assert.ok(Math.abs(rec.costUsd - 0.167) < 1e-9);
-  assert.equal(rec.unknown, false);
+  assert.deepEqual(rec.usage, { prompt_tokens: 0, prompt_tokens_details: { cached_tokens: 0 } });
+  assert.deepEqual(Object.keys(rec).sort(), ["kind", "provider", "ts", "usage"]);
+  assert.equal(Object.hasOwn(rec.usage, "completion_tokens"), false);
+  assert.equal(Object.hasOwn(rec.usage, "total_tokens"), false);
+  assert.equal(Object.hasOwn(rec, "model"), false);
+  assert.equal(Object.hasOwn(rec, "requestId"), false);
+  assert.equal(Object.hasOwn(rec, "responseId"), false);
+  assert.equal(Object.hasOwn(rec, "httpStatus"), false);
 });
 
-test("recordOpenAIUsage: an unrecognized model name is tagged unknown:true when no override is given", () => {
-  // NOT gpt-5.6-terra: it is now a KNOWN row in CHAT_PRICES (see openai-usage.mjs's price table).
-  recordOpenAIUsage({ model: "gpt-9.9-nova", kind: "chat", promptTokens: 100, completionTokens: 50, caller: "company-brain" });
-  assert.equal(_peekBufferForTests()[0].unknown, true);
+test("recordOpenAIUsage: a response without numeric usage creates no receipt", () => {
+  recordOpenAIUsage({
+    kind: "chat",
+    response: mockResponse({ status: 200, requestId: "req_synthetic_no_usage" }),
+    body: { id: "chatcmpl_synthetic_no_usage", model: "gpt-4o", choices: [{ message: { content: "not logged" } }] },
+  });
+  assert.equal(_bufferLengthForTests(), 0);
+  assert.equal(existsSync(join(tmpDir, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`)), false);
 });
 
-test("recordOpenAIUsage: gpt-5.6-terra (a KNOWN model since the 2026-09-03 price-table addition) is tagged unknown:false", () => {
-  recordOpenAIUsage({ model: "gpt-5.6-terra", kind: "chat", promptTokens: 100, completionTokens: 50, caller: "company-brain" });
-  assert.equal(_peekBufferForTests()[0].unknown, false);
+test("recordOpenAIUsage: usage receipts exclude prompts, outputs, tool arguments, credentials, and user identity", () => {
+  const body = {
+    id: "chatcmpl_synthetic_private",
+    model: "gpt-5.6-terra",
+    usage: {
+      prompt_tokens: 12,
+      completion_tokens: 4,
+      prompt_tokens_details: {
+        cached_tokens: 2,
+        note: "SENSITIVE_TEST_USAGE_TEXT_SENTINEL",
+        user_id: 7123,
+        estimated_cost_usd: 0.25,
+      },
+      cost_usd_est: 0.5,
+      user_id: 4567,
+    },
+    input: "SENSITIVE_TEST_PROMPT_SENTINEL",
+    choices: [{ message: { content: "SENSITIVE_TEST_RESPONSE_SENTINEL", tool_calls: [{ function: { arguments: "SENSITIVE_TEST_TOOL_ARGUMENTS_SENTINEL" } }] } }],
+    api_key: "SENSITIVE_TEST_SECRET_SENTINEL",
+    user: "SENSITIVE_TEST_USER_SENTINEL",
+  };
+  recordOpenAIUsage({ kind: "chat", response: mockResponse({ status: 200, requestId: "req_synthetic_private" }), body });
+  const serialized = readFileSync(join(tmpDir, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`), "utf8");
+  for (const sentinel of ["SENSITIVE_TEST_USAGE_TEXT_SENTINEL", "SENSITIVE_TEST_PROMPT_SENTINEL", "SENSITIVE_TEST_RESPONSE_SENTINEL", "SENSITIVE_TEST_TOOL_ARGUMENTS_SENTINEL", "SENSITIVE_TEST_SECRET_SENTINEL", "SENSITIVE_TEST_USER_SENTINEL"]) {
+    assert.equal(serialized.includes(sentinel), false, `${sentinel} must not be recorded`);
+  }
+  const rec = JSON.parse(serialized.trim());
+  assert.deepEqual(rec.usage, { prompt_tokens: 12, completion_tokens: 4, prompt_tokens_details: { cached_tokens: 2 } });
+  assert.deepEqual(Object.keys(rec).sort(), ["httpStatus", "kind", "model", "provider", "requestId", "responseId", "ts", "usage"]);
 });
 
-test("recordOpenAIUsage: a missing local ledger directory is created on demand (mkdirSync recursive)", () => {
+test("recordOpenAIUsage: GPT Image response usage is recorded without image data or an unreturned model", () => {
+  const body = {
+    created: 1_797_000_000,
+    data: [{ b64_json: "SENSITIVE_TEST_IMAGE_BYTES_SENTINEL", revised_prompt: "SENSITIVE_TEST_IMAGE_PROMPT_SENTINEL" }],
+    usage: { input_tokens: 7, input_tokens_details: { text_tokens: 5, image_tokens: 2 }, output_tokens: 19, total_tokens: 26 },
+  };
+  recordOpenAIUsage({ kind: "image", response: mockResponse({ status: 200, requestId: "req_synthetic_image" }), body });
+  const serialized = readFileSync(join(tmpDir, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`), "utf8");
+  const rec = JSON.parse(serialized.trim());
+  assert.equal(rec.provider, "openai");
+  assert.equal(rec.kind, "image");
+  assert.equal(rec.requestId, "req_synthetic_image");
+  assert.equal(rec.httpStatus, 200);
+  assert.equal(Object.hasOwn(rec, "model"), false);
+  assert.equal(Object.hasOwn(rec, "responseId"), false);
+  assert.deepEqual(rec.usage, body.usage);
+  assert.equal(serialized.includes("SENSITIVE_TEST_IMAGE_BYTES_SENTINEL"), false);
+  assert.equal(serialized.includes("SENSITIVE_TEST_IMAGE_PROMPT_SENTINEL"), false);
+});
+
+test("awaitBatch: one provider response receipt is recorded per output line without persisting line content or custom IDs", async () => {
+  const batchLine = {
+    id: "batch_req_synthetic_01",
+    custom_id: "SENSITIVE_TEST_CUSTOM_ID_SENTINEL",
+    response: {
+      status_code: 200,
+      request_id: "req_synthetic_batch_01",
+      body: {
+        id: "chatcmpl_synthetic_batch_01",
+        model: "gpt-5.6-terra",
+        choices: [{ message: { content: "SENSITIVE_TEST_BATCH_OUTPUT_SENTINEL" } }],
+        usage: { prompt_tokens: 22, completion_tokens: 8, total_tokens: 30 },
+      },
+    },
+    error: null,
+  };
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/batches/batch_synthetic_01")) {
+      return { ok: true, status: 200, json: async () => ({ status: "completed", output_file_id: "file_synthetic_output" }) };
+    }
+    if (url.endsWith("/files/file_synthetic_output/content")) {
+      return { ok: true, status: 200, text: async () => `${JSON.stringify(batchLine)}\n` };
+    }
+    throw new Error(`unexpected mocked URL: ${url}`);
+  };
+
+  const { results } = await awaitBatch("batch_synthetic_01", {
+    apiKey: "unit-test-key",
+    timeoutMs: 1_000,
+    pollIntervalMs: 0,
+    sleepFn: async () => {},
+    fetchImpl,
+  });
+
+  assert.equal(results.get(batchLine.custom_id).content, "SENSITIVE_TEST_BATCH_OUTPUT_SENTINEL");
+  assert.equal(_bufferLengthForTests(), 1);
+  const rec = _peekBufferForTests()[0];
+  assert.equal(rec.kind, "batch");
+  assert.equal(rec.model, "gpt-5.6-terra");
+  assert.equal(rec.responseId, "chatcmpl_synthetic_batch_01");
+  assert.equal(rec.requestId, "req_synthetic_batch_01");
+  assert.equal(rec.httpStatus, 200);
+  assert.deepEqual(rec.usage, { prompt_tokens: 22, completion_tokens: 8, total_tokens: 30 });
+  const serialized = readFileSync(join(tmpDir, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`), "utf8");
+  assert.equal(serialized.includes("SENSITIVE_TEST_BATCH_OUTPUT_SENTINEL"), false);
+  assert.equal(serialized.includes("SENSITIVE_TEST_CUSTOM_ID_SENTINEL"), false);
+});
+
+test("recordOpenAIUsage: a missing local ledger directory is created on demand", () => {
   const nested = join(tmpDir, "does", "not", "exist", "yet");
   _setLedgerDirForTests(nested);
-  assert.doesNotThrow(() => recordOpenAIUsage({ model: "gpt-4o", kind: "chat", promptTokens: 1, completionTokens: 1, caller: "test" }));
+  assert.doesNotThrow(() => recordUsage({ model: "gpt-4o", usage: { prompt_tokens: 1, completion_tokens: 1 } }));
   assert.equal(existsSync(join(nested, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`)), true);
 });
 
 // ============================== flush() (Datadog emission, ddMetric injected) ==============================
 
-test("flush(): aggregates same (model,kind,caller,repo,unknown) records into ONE point per metric, summing tokens/cost/requests", async () => {
+test("flush(): aggregates provider usage counts by provider/model/kind and emits no dollar estimate", async () => {
   const calls = [];
   _setDdMetricForTests(async (name, value, opts) => {
     calls.push({ name, value, ...opts });
     return { ok: true };
   });
 
-  recordOpenAIUsage({ model: "gpt-4o", kind: "chat", promptTokens: 100, completionTokens: 50, caller: "shark-tank" });
-  recordOpenAIUsage({ model: "gpt-4o", kind: "chat", promptTokens: 200, completionTokens: 75, caller: "shark-tank" });
-  recordOpenAIUsage({ model: "text-embedding-3-large", kind: "embedding", promptTokens: 1000, caller: "kb-memory-embed" });
+  recordUsage({ model: "gpt-4o", usage: { prompt_tokens: 100, completion_tokens: 50 } });
+  recordUsage({ model: "gpt-4o", usage: { prompt_tokens: 200, completion_tokens: 75 } });
+  recordUsage({ kind: "embedding", model: "text-embedding-3-large", usage: { prompt_tokens: 1000, total_tokens: 1000 } });
 
   const result = await flush();
   assert.equal(result.ok, true);
@@ -237,28 +380,30 @@ test("flush(): aggregates same (model,kind,caller,repo,unknown) records into ONE
   assert.equal(_bufferLengthForTests(), 0, "flush must drain the buffer");
 
   const tokenCalls = calls.filter((c) => c.name === "otc.fleet.openai.tokens");
-  const shark = tokenCalls.filter((c) => c.tags.includes("caller:shark-tank"));
-  const inputPoint = shark.find((c) => c.tags.includes("direction:input"));
-  const outputPoint = shark.find((c) => c.tags.includes("direction:output"));
-  assert.equal(inputPoint.value, 300, "100+200 prompt tokens across the two shark-tank chat calls");
-  assert.equal(outputPoint.value, 125, "50+75 completion tokens across the two shark-tank chat calls");
+  const chat = tokenCalls.filter((c) => c.tags.includes("kind:chat"));
+  const inputPoint = chat.find((c) => c.tags.includes("direction:input"));
+  const outputPoint = chat.find((c) => c.tags.includes("direction:output"));
+  assert.equal(inputPoint.value, 300, "100+200 prompt tokens from provider responses");
+  assert.equal(outputPoint.value, 125, "50+75 completion tokens from provider responses");
+  assert.ok(inputPoint.tags.includes("provider:openai"));
+  assert.ok(inputPoint.tags.includes("model:gpt-4o"));
+  assert.equal(inputPoint.tags.some((tag) => tag.startsWith("caller:") || tag.startsWith("repo:")), false);
 
   const requestCalls = calls.filter((c) => c.name === "otc.fleet.openai.requests");
-  const sharkRequests = requestCalls.find((c) => c.tags.includes("caller:shark-tank"));
-  assert.equal(sharkRequests.value, 2);
+  const chatRequests = requestCalls.find((c) => c.tags.includes("kind:chat"));
+  assert.equal(chatRequests.value, 2);
 
   const costCalls = calls.filter((c) => c.name === "otc.fleet.openai.cost_usd_est");
-  assert.equal(costCalls.length, 2, "one cost point per aggregated tag-tuple");
-  for (const c of costCalls) assert.equal(c.type, "count");
+  assert.equal(costCalls.length, 0, "estimated dollars are not emitted");
 });
 
-test("flush(): embedding-only records (completionTokens=0) do not emit a spurious direction:output tokens point", async () => {
+test("flush(): missing output usage does not emit a fabricated direction:output zero", async () => {
   const calls = [];
   _setDdMetricForTests(async (name, value, opts) => {
     calls.push({ name, ...opts });
     return { ok: true };
   });
-  recordOpenAIUsage({ model: "text-embedding-3-large", kind: "embedding", promptTokens: 500, caller: "doc-indexer" });
+  recordUsage({ kind: "embedding", model: "text-embedding-3-large", usage: { prompt_tokens: 500, total_tokens: 500 } });
   await flush();
   const outputPoints = calls.filter((c) => c.name === "otc.fleet.openai.tokens" && c.tags.includes("direction:output"));
   assert.equal(outputPoints.length, 0);
@@ -266,7 +411,7 @@ test("flush(): embedding-only records (completionTokens=0) do not emit a spuriou
 
 test("flush(): a failed Datadog emit is counted in `failures` but does not throw and does not lose other points", async () => {
   _setDdMetricForTests(async () => ({ ok: false, error: "simulated Datadog outage" }));
-  recordOpenAIUsage({ model: "gpt-4o", kind: "chat", promptTokens: 10, completionTokens: 5, caller: "test" });
+  recordUsage({ model: "gpt-4o", usage: { prompt_tokens: 10, completion_tokens: 5 } });
   const result = await flush();
   assert.equal(result.ok, false);
   assert.ok(result.failures > 0);
@@ -293,7 +438,7 @@ test("recordOpenAIUsage: crossing OPENAI_USAGE_FLUSH_THRESHOLD auto-drains the b
   });
   try {
     for (let i = 0; i < 3; i++) {
-      recordOpenAIUsage({ model: "gpt-4o", kind: "chat", promptTokens: 1, completionTokens: 1, caller: `caller-${i}` });
+      recordUsage({ model: "gpt-4o", usage: { prompt_tokens: 1, completion_tokens: 1 } });
     }
     // The threshold-triggered flush is fire-and-forget (not awaited by recordOpenAIUsage itself);
     // give its microtask/promise chain a tick to complete before asserting.

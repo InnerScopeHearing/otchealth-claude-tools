@@ -107,12 +107,9 @@ async function openaiChat(model, sys, user, max, attempt = 0, reasoningEffort) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error("chat " + r.status + " " + JSON.stringify(j).slice(0, 160));
   recordOpenAIUsage({
-    model,
     kind: "chat",
-    promptTokens: j.usage?.prompt_tokens || 0,
-    completionTokens: j.usage?.completion_tokens || 0,
-    cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-    caller: "kb-memory-librarian",
+    response: r,
+    body: j,
   });
   return j.choices?.[0]?.message?.content || "";
 }
