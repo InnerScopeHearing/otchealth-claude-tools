@@ -30,7 +30,9 @@ export const APP_REGISTRY = Object.freeze({
     projectArn: "arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654",
     poolArn: "arn:aws:devicefarm:us-west-2:900915535335:devicepool:58bbc541-f082-4594-b744-738a345f3654/0d514eae-39c6-4700-8d80-6aad6e48e3d0",
     iosIpaArtifactPrefix: "aware-",
-    iosIpaArtifactPattern: /^aware-\d+\.\d+(?:\.\d+)?-\d+-[0-9a-f]{40}$/,
+    // Any marketing-version text (not only N.N or N.N.N), then build number and the 40-char
+    // source SHA; the negative lookahead keeps the internal-QA shape out.
+    iosIpaArtifactPattern: /^aware-(?!internal-qa-).+-\d+-[0-9a-f]{40}$/,
   }),
   iHEARtest: Object.freeze({
     displayName: "iHEARtest",
@@ -319,7 +321,10 @@ export function pickWalkthroughRunnerArtifact(artifacts) {
 /** First artifact whose name starts with the app's ios-depot IPA prefix, or null. */
 /** `matcher` is a name prefix (string) or a full-name RegExp (see AWARE's iosIpaArtifactPattern). */
 export function pickIosIpaArtifact(artifacts, matcher) {
-  const ok = matcher instanceof RegExp ? (n) => matcher.test(n) : (n) => n.startsWith(matcher);
+  // A fresh non-global, non-sticky copy: a /g or /y RegExp keeps lastIndex between test()
+  // calls and would silently miss on the next artifact.
+  const re = matcher instanceof RegExp ? new RegExp(matcher.source, matcher.flags.replace(/[gy]/g, "")) : null;
+  const ok = re ? (n) => re.test(n) : (n) => n.startsWith(matcher);
   return (Array.isArray(artifacts) ? artifacts : []).find((a) => typeof a?.name === "string" && ok(a.name)) || null;
 }
 
