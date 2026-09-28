@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { resolveApp, APP_REGISTRY, artifactFilename, uniqueFilename, classifyAttachment, coverageDigest, parseTestSpecOutput, buildScheduleRunBody, pickWalkthroughRunnerArtifact, pickIosIpaArtifact, pickDispatchedRun, videoFilenameForJob } from "./lib.mjs";
+import { resolveApp, APP_REGISTRY, artifactFilename, uniqueFilename, classifyAttachment, coverageDigest, parseTestSpecOutput, buildScheduleRunBody, pickWalkthroughRunnerArtifact, pickIosIpaArtifact, iosIpaMatcher, pickDispatchedRun, videoFilenameForJob } from "./lib.mjs";
 import { uploadAndWait, scheduleRun, stopRun, waitForRunCompletion, listJobs, listSuites, listArtifacts } from "./df-client.mjs";
 import { dispatchWorkflow, findDispatchedRun, waitForRunCompletion as waitForGhRunCompletion, listRunArtifacts, downloadArtifactZip } from "./gh-client.mjs";
 import { readInfoPlist } from "./plist.mjs";
@@ -54,7 +54,7 @@ function cmdApps() {
     console.log(`  bundle:            ${a.bundleId}`);
     console.log(`  project:           ${a.projectArn}`);
     console.log(`  pool:              ${a.poolArn}`);
-    console.log(`  ios-ipa artifact:  ${a.iosIpaArtifactPrefix}*`);
+    console.log(`  ios-ipa artifact:  ${a.iosIpaArtifactPattern instanceof RegExp ? a.iosIpaArtifactPattern : `${a.iosIpaArtifactPrefix}*`}`);
     console.log("");
   }
 }
@@ -113,9 +113,9 @@ async function cmdFetchIpa(opts) {
   ensureDir(out);
 
   const artifacts = await listRunArtifacts({ owner, repo, runId });
-  const ipaArtifact = pickIosIpaArtifact(artifacts, app.iosIpaArtifactPrefix);
+  const ipaArtifact = pickIosIpaArtifact(artifacts, iosIpaMatcher(app));
   if (!ipaArtifact) {
-    throw new Error(`no "${app.iosIpaArtifactPrefix}*" artifact on run ${runId} (found: ${artifacts.map((a) => a.name).join(", ") || "(none)"})`);
+    throw new Error(`no ${app.iosIpaArtifactPattern instanceof RegExp ? String(app.iosIpaArtifactPattern) : `"${app.iosIpaArtifactPrefix}*"`} artifact on run ${runId} (found: ${artifacts.map((a) => a.name).join(", ") || "(none)"})`);
   }
 
   const zipPath = join(out, "artifact.zip");

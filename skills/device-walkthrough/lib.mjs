@@ -16,9 +16,11 @@
 // `<slug>-ios-ipa-<sha>` name, but AWARE's own ios-depot.yml does not (it uploads
 // `aware-<marketing_version>-<build_number>-<source_sha>` for a PUBLIC build or
 // `aware-internal-qa-<build_number>-<source_sha>` for an internal-QA build -- verified against
-// AWARE's current ios-depot.yml; its `iosIpaArtifactPrefix` below predates that shape and is stale,
-// left as-is here since fixing it is outside this entry's scope). Verify the real artifact name in
-// each app's own ios-depot.yml before trusting a registry prefix.
+// AWARE's current ios-depot.yml). AWARE therefore carries an `iosIpaArtifactPattern` that matches
+// only the PUBLIC shape (an internal-QA IPA is never walked as a release build); every other app
+// keeps its fixed `iosIpaArtifactPrefix`. `all` failed on AWARE 1779565793 (2026-09-28) with the
+// old stale `aware-ios-ipa-` prefix, which is how this was found. Verify the real artifact name in
+// each app's own ios-depot.yml before trusting a registry entry.
 
 export const APP_REGISTRY = Object.freeze({
   AWARE: Object.freeze({
@@ -27,7 +29,8 @@ export const APP_REGISTRY = Object.freeze({
     bundleId: "com.innerscope.aware",
     projectArn: "arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654",
     poolArn: "arn:aws:devicefarm:us-west-2:900915535335:devicepool:58bbc541-f082-4594-b744-738a345f3654/0d514eae-39c6-4700-8d80-6aad6e48e3d0",
-    iosIpaArtifactPrefix: "aware-ios-ipa-",
+    iosIpaArtifactPrefix: "aware-",
+    iosIpaArtifactPattern: /^aware-\d+\.\d+(?:\.\d+)?-\d+-[0-9a-f]{40}$/,
   }),
   iHEARtest: Object.freeze({
     displayName: "iHEARtest",
@@ -314,8 +317,15 @@ export function pickWalkthroughRunnerArtifact(artifacts) {
 }
 
 /** First artifact whose name starts with the app's ios-depot IPA prefix, or null. */
-export function pickIosIpaArtifact(artifacts, prefix) {
-  return (Array.isArray(artifacts) ? artifacts : []).find((a) => typeof a?.name === "string" && a.name.startsWith(prefix)) || null;
+/** `matcher` is a name prefix (string) or a full-name RegExp (see AWARE's iosIpaArtifactPattern). */
+export function pickIosIpaArtifact(artifacts, matcher) {
+  const ok = matcher instanceof RegExp ? (n) => matcher.test(n) : (n) => n.startsWith(matcher);
+  return (Array.isArray(artifacts) ? artifacts : []).find((a) => typeof a?.name === "string" && ok(a.name)) || null;
+}
+
+/** The artifact matcher an app's registry entry asks for: its pattern when it has one, else its prefix. */
+export function iosIpaMatcher(app) {
+  return app?.iosIpaArtifactPattern instanceof RegExp ? app.iosIpaArtifactPattern : app?.iosIpaArtifactPrefix;
 }
 
 /**
