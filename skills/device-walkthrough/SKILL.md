@@ -182,6 +182,13 @@ device-walkthrough.yml (Depot macOS, dispatch-only)     ios-depot.yml (already r
 - **Both apps' on-device process name is literally `"App"`** (the Capacitor default Xcode scheme
   name), not the bundle id or the app's marketing name. The syslog app-lifetime check greps for
   `" App[NNNN]"` for exactly this reason; a bundle-id-based match would find nothing.
+- **In the per-app `Walker.swift`, never read `XCUIElement.frame` after a separate `exists` check.**
+  `.frame` re-resolves the query, and if the page changed in between (AWARE 1779565793: the Today
+  tab passed `exists`, then an exercise player replaced Practice) XCTest records "Failed to get
+  matching snapshot" as a TEST FAILURE, which ended a 49-minute crawl. Read frames through one
+  `try? element.snapshot()` (the walkers' `frameIfPresent(_:)`), which throws and is skipped.
+  Fixed in all three walkers 2026-09-28 (aware #110, iheartest #268, otchealth-companion #106);
+  keep it when porting the walker to another app.
 
 ## Files
 
