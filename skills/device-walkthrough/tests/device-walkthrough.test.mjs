@@ -22,6 +22,7 @@ import {
   buildScheduleRunBody,
   pickWalkthroughRunnerArtifact,
   pickIosIpaArtifact,
+  iosIpaMatcher,
   pickDispatchedRun,
   videoFilenameForJob,
 } from "../lib.mjs";
@@ -361,4 +362,41 @@ test("appInfoPlistPath returns the top-level app Info.plist, never a nested bund
   writeFileSync(join(app, "Info.plist"), "app");
   assert.equal(appInfoPlistPath(dir), join(app, "Info.plist"));
   assert.equal(appInfoPlistPath(join(dir, "missing")), null);
+});
+
+test("iosIpaMatcher: AWARE matches its real PUBLIC artifact name, never the internal-QA one", () => {
+  // AWARE's ios-depot.yml uploads aware-<marketing>-<build>-<sha> (PUBLIC) or
+  // aware-internal-qa-<build>-<sha>. The old "aware-ios-ipa-" prefix matched neither, so
+  // `all --app AWARE` failed at fetch-ipa on build 1779565793 (2026-09-28).
+  const sha = "4af2252259f83d3ea257ff8f6c5bec9c0b3c12fc";
+  const artifacts = [
+    { id: 1, name: `aware-internal-qa-1779565793-${sha}` },
+    { id: 2, name: `walkthrough-runner-${sha}` },
+    { id: 3, name: `aware-1.4.0-1779565793-${sha}` },
+  ];
+  assert.equal(pickIosIpaArtifact(artifacts, iosIpaMatcher(APP_REGISTRY.AWARE)).id, 3);
+  assert.equal(pickIosIpaArtifact(artifacts.slice(0, 2), iosIpaMatcher(APP_REGISTRY.AWARE)), null);
+  assert.equal(pickIosIpaArtifact(artifacts, "aware-ios-ipa-"), null);
+});
+
+test("iosIpaMatcher: apps without a pattern keep their fixed prefix", () => {
+  assert.equal(iosIpaMatcher(APP_REGISTRY.iHEARtest), "iheartest-ios-ipa-");
+  assert.equal(iosIpaMatcher(APP_REGISTRY.HeyMillie), "companion-ios-ipa-");
+});
+
+test("iosIpaMatcher: AWARE accepts any marketing-version text, still rejects internal QA", () => {
+  const sha = "4af2252259f83d3ea257ff8f6c5bec9c0b3c12fc";
+  const m = iosIpaMatcher(APP_REGISTRY.AWARE);
+  for (const v of ["1.4", "1.4.0", "1.4.0.1", "2.0.0-beta.1"]) {
+    assert.equal(pickIosIpaArtifact([{ id: 7, name: `aware-${v}-1779565793-${sha}` }], m)?.id, 7, v);
+  }
+  assert.equal(pickIosIpaArtifact([{ id: 8, name: `aware-internal-qa-1779565793-${sha}` }], m), null);
+});
+
+test("pickIosIpaArtifact: a /g RegExp does not carry lastIndex between artifacts", () => {
+  const g = /^aware-/g;
+  const artifacts = [{ id: 1, name: "aware-a" }, { id: 2, name: "aware-b" }];
+  assert.equal(pickIosIpaArtifact(artifacts, g).id, 1);
+  assert.equal(pickIosIpaArtifact(artifacts, g).id, 1);
+  assert.equal(pickIosIpaArtifact([{ id: 3, name: "aware-c" }], g).id, 3);
 });
