@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ad-studio ad manifest",
+  "description": "Documentation schema. The authoritative checks live in guards.mjs (structureGuard) and are stricter (claims, FTC, brand, copy/PHI gates).",
+  "type": "object",
+  "required": ["id", "product", "productClass", "voice", "script", "shots", "music", "endCard", "outputs", "disclosures", "locales"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-_]{1,60}$" },
+    "product": { "type": "string" },
+    "productClass": { "enum": ["PSAP", "OTC_hearing_aid", "AWARE", "general"], "description": "Passed to claims_check. OTC_hearing_aid is refused (gated elsewhere)." },
+    "voice": { "type": "object", "required": ["voice_id"], "properties": { "voice_id": { "type": "string" }, "voices": { "type": "object", "description": "optional per-locale voice_id" }, "model": { "type": "string", "default": "eleven_v4" }, "settings": { "type": "object", "description": "optional voice_settings; eleven_v4 has no Style/Speed sliders" } } },
+    "script": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "one voiceover line per item; each line is its own TTS job so variants re-pay only the lines that change" },
+    "onScreenText": { "type": "array", "items": { "type": "string" } },
+    "shots": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["id", "prompt", "duration_secs"],
+        "properties": {
+          "id": { "type": "string" },
+          "prompt": { "type": "string" },
+          "duration_secs": { "enum": [4, 6, 8] },
+          "aspect": { "enum": ["9:16", "16:9"], "default": "9:16" },
+          "showsProduct": { "type": "boolean", "description": "true REQUIRES start_frame (a real product photo)" },
+          "start_frame": { "type": "string", "description": "path to a real product photo, relative to the manifest" },
+          "aiActor": { "type": "boolean", "description": "an AI-generated person appears; forces the on-screen AI-generated label; never a customer" },
+          "negative_prompt": { "type": "string" },
+          "seed": { "type": "integer" }
+        }
+      }
+    },
+    "music": { "type": "object", "required": ["prompt", "duration"], "properties": { "prompt": { "type": "string" }, "duration": { "type": "number", "minimum": 3, "maximum": 600 } } },
+    "endCard": { "type": "object", "required": ["headline", "cta", "legal"], "properties": { "headline": { "type": "string" }, "cta": { "type": "string" }, "legal": { "type": "string" }, "background": { "type": "string" }, "textColor": { "type": "string" }, "accent": { "type": "string" } } },
+    "outputs": { "type": "array", "items": { "enum": ["9:16", "1:1", "16:9"] } },
+    "disclosures": { "type": "object", "required": ["aiGenerated"], "properties": { "aiGenerated": { "const": true }, "label": { "type": "string", "default": "AI-generated" }, "showLabel": { "type": "boolean" } } },
+    "locales": { "type": "array", "items": { "enum": ["en", "es"] }, "description": "must include en; every non-en locale needs a reviewed i18n.<locale>.script with the same line count" },
+    "i18n": { "type": "object", "description": "per-locale script, onScreenText, endCard overrides" }
+  }
+}

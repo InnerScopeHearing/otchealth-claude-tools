@@ -4,7 +4,7 @@
 //
 // Usage:
 //   node gen-voiceover.mjs --text "..." [--voice-id <id>]
-//                           [--model eleven_v3]
+//                           [--model eleven_v4]
 //                           [--output marketing/preview-vo.mp3]
 //                           [--dry-run]
 //
@@ -30,10 +30,21 @@ const creds = loadCredentials();
 
 const voiceId = args['voice-id'] || brand.voiceover_default_voice_id
     || '21m00Tcm4TlvDq8ikWAM'; // Rachel — ElevenLabs default warm female
-const model = args.model || 'eleven_v3';
+// Default model is eleven_v4 (docs: https://elevenlabs.io/docs/overview/capabilities/text-to-speech/eleven-v4).
+// v4 has ONLY Stability + Similarity settings (no Style / Speed / speaker boost), and takes up to 10,000 chars/request.
+const model = args.model || 'eleven_v4';
+const IS_V4 = /^eleven_v4/.test(model);
+const MAX_CHARS = IS_V4 ? 10000 : model === 'eleven_v3' ? 5000 : 10000;
+if (text.length > MAX_CHARS) {
+    console.error(`ERROR: ${text.length} characters exceeds the ${MAX_CHARS}-character limit for ${model}. Split the script into lines.`);
+    process.exit(1);
+}
+const voiceSettings = IS_V4
+    ? { stability: 0.55, similarity_boost: 0.75 }
+    : { stability: 0.55, similarity_boost: 0.75, style: 0.3, use_speaker_boost: true };
 
-// ElevenLabs pricing: ~$0.30 per 1000 characters on the creator plan, less on higher tiers
-const costUsd = (text.length / 1000) * 0.30;
+// ElevenLabs API list price: $0.08 per 1K characters for v4/v3 (https://elevenlabs.io/pricing/api); grant credits cover it.
+const costUsd = (text.length / 1000) * 0.08;
 reportCost({
     provider: 'elevenlabs', model,
     units: `${text.length} chars · voice ${voiceId.slice(0, 6)}`,
@@ -59,12 +70,7 @@ const res = await fetch(url, {
     body: JSON.stringify({
         text,
         model_id: model,
-        voice_settings: {
-            stability: 0.55,
-            similarity_boost: 0.75,
-            style: 0.3,
-            use_speaker_boost: true,
-        },
+        voice_settings: voiceSettings,
     }),
 });
 
