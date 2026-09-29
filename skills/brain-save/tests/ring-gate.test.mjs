@@ -20,10 +20,12 @@ test("declared ring via front matter (ring/confidentiality/classification/mnpi);
   for (const [k, v] of [["ring", "finance"], ["confidentiality", "privileged"], ["classification", "PHI"], ["mnpi", "true"], ["ring", "legal-personal"]]) {
     assert.equal(classifyRing({ text: "x", frontmatter: { [k]: v } }).allowed, false, `${k}: ${v}`);
   }
-  for (const [k, v] of [["ring", "commons"], ["classification", "internal"], ["mnpi", "false"], ["ring", "commons-review"]]) {
+  for (const [k, v] of [["ring", "commons"], ["classification", "internal"], ["mnpi", "false"], ["ring", "fleet"]]) {
     assert.equal(classifyRing({ text: "x", frontmatter: { [k]: v } }).allowed, true, `${k}: ${v}`);
   }
   assert.equal(classifyRing({ text: "x", frontmatter: { ring: "legal-personal" } }).routes[0].ring, "legal-personal");
+  // Round 4 (S3): the value keys are an ALLOWlist now, so "commons-review" (not a ring the room can honor) refuses.
+  assert.equal(classifyRing({ text: "x", frontmatter: { ring: "commons-review" } }).allowed, false);
 });
 
 test("every path deny in the reviewed denylist refuses (repo, segments, substrings, both Artifact ids)", () => {

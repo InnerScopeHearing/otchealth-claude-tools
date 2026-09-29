@@ -99,25 +99,30 @@ test("round 2 #8: an ALIAS whose target is not searchable is saved under its own
   assert.notEqual(b.rows[0].brain_id, a.rows[0].brain_id);
 });
 
-test("round 2 #9: --gateway on with a gateway ERROR (HTTP 502) is exit 3; auto keeps it a warning", async () => {
+test("round 2 #9 (round 4, C2): a gateway ERROR (HTTP 502) is never a warning: --gateway on is exit 3, auto is the distinct exit 6 with the room proof kept", async () => {
   const on = await run(put(tmpDoc("a.md", BODY), ["--gateway", "on"]), createFakeBackend({ gatewayError: true }));
   assert.equal(on.code, 3, on.out);
-  const auto = await run(put(tmpDoc("a.md", BODY)), createFakeBackend({ gatewayError: true }));
-  assert.equal(auto.code, 0, auto.out);
-  assert.ok(auto.rows[0].warnings.some((w) => /gateway proof error/.test(w)));
+  const be = createFakeBackend({ gatewayError: true });
+  const auto = await run(put(tmpDoc("a.md", BODY)), be);
+  assert.equal(auto.code, 6, auto.out);
+  assert.equal(auto.rows[0].status, "gateway-unproven");
+  assert.match(auto.rows[0].message, /GATEWAY proof did not pass/);
+  assert.ok(be.room.size > 0, "room-verified: the document stays live and searchable");
+  const off = await run(put(tmpDoc("a.md", BODY), ["--gateway", "off"]), createFakeBackend({ gatewayError: true }));
+  assert.equal(off.code, 0, "--gateway off stays an explicit opt-out");
 });
 
-test("round 2 #10: a thrown search fails only its own docs (exit 3 each, chunks cleaned, registry written); a thrown gateway is a warning under auto", async () => {
+test("round 2 #10 (round 4, C1/C2): a thrown search fails only its own docs (exit 3 each, chunks KEPT because nothing proves a miss, registry written); a thrown gateway is exit 6 under auto", async () => {
   const be = createFakeBackend({ searchThrows: true });
   const r = await run(["put", tmpDoc("a.md", BODY), tmpDoc("b.md", BODY.replace("planning", "roadmap")), "--kind", "research", "--app", "fleet", "--agent", "cto", "--json"], be);
   assert.equal(r.code, 3, r.out + r.err);
   assert.equal(r.rows.length, 2);
   assert.ok(r.rows.every((x) => x.exit === 3 && /could not run/.test(x.message)));
-  assert.equal(be.room.size, 0);
+  assert.ok(be.room.size > 0, "a proof that could not run must not delete the chunks it never proved missing");
+  assert.ok(r.rows.every((x) => /stored \+ pushed, proof could not run/.test(x.message)));
   assert.equal([...be.s3.keys()].filter((k) => k.includes("/registry/")).length, 2);
   const g = await run(put(tmpDoc("a.md", BODY)), createFakeBackend({ gatewayThrows: true }));
-  assert.equal(g.code, 0, g.out);
-  assert.ok(g.rows[0].warnings.some((w) => /gateway/.test(w)));
+  assert.equal(g.code, 6, g.out);
   const gon = await run(put(tmpDoc("a.md", BODY), ["--gateway", "on"]), createFakeBackend({ gatewayThrows: true }));
   assert.equal(gon.code, 3, gon.out);
 });

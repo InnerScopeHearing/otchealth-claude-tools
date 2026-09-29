@@ -15,7 +15,8 @@
 //   brain-save retract <brain_id|key> --reason "<why>"
 //   brain-save doctor
 // Exit: 0 saved+verified (or unchanged) | 1 error | 2 refused, nothing written | 3 stored but NOT
-// searchable | 4 saved, supersede incomplete. Every non-zero code means "not done".
+// searchable (or proof could not run) | 4 saved, supersede/orphan cleanup incomplete | 5 --store-only (stored,
+// not searchable by request) | 6 room-verified, gateway proof attempted and failed. Every non-zero code means "not done".
 import { readFileSync, statSync, existsSync, appendFileSync, realpathSync } from "node:fs";
 import { extname, resolve, dirname, basename } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -24,9 +25,9 @@ import { BrainSaveError, EXIT, combineExitCodes } from "./lib/errors.mjs";
 import { prepareDoc, saveBatch, retract as retractDoc, recordRefusal, inferKind } from "./lib/pipeline.mjs";
 import { collectFiles, gitInfo, resolveAgent, resolveSeat, resolveSession, receiptBrainIds, seatGate } from "./lib/local.mjs";
 import { loadSecretNeedles } from "./lib/secret-values.mjs";
-import { scanParts, formatSecretHits } from "./lib/secret-gate.mjs";
 import { classifyRing, formatRingRefusal } from "./lib/ring-gate.mjs";
-import { KNOWLEDGE_PREFIX, META_PREFIX, ROOM_INDEX, roomPathFor, splitObject, registryKey, sha1, sha256 } from "./lib/provenance.mjs";
+import { gateStoredObject } from "./lib/object-gate.mjs";
+import { KNOWLEDGE_PREFIX, META_PREFIX, ROOM_INDEX, roomPathFor, splitObject, registryKey, sha1, sha256, parseKnowledgeKey, isBrainId } from "./lib/provenance.mjs";
 import { readRegistry, readJson } from "./lib/store.mjs";
 import { pushObject } from "./lib/push.mjs";
 import { rankOf } from "./lib/verify.mjs";
@@ -124,7 +125,7 @@ export function inputFromFile(file, { git = gitInfo, maxBytes = MAX_INPUT_BYTES,
 
 function printResult(io, r, json) {
   if (json) { io.out(JSON.stringify(r)); return; }
-  const tag = { saved: "SAVED", unchanged: "UNCHANGED", alias: "ALIAS", planned: "DRY-RUN", "stored-only": "STORED-ONLY", refused: "REFUSED", error: "ERROR", "not-searchable": "NOT SEARCHABLE", "supersede-pending": "SUPERSEDE PENDING" }[r.status] || r.status.toUpperCase();
+  const tag = { saved: "SAVED", unchanged: "UNCHANGED", alias: "ALIAS", planned: "DRY-RUN", "stored-only": "STORED-ONLY", refused: "REFUSED", error: "ERROR", "not-searchable": "NOT SEARCHABLE", "supersede-pending": "SUPERSEDE PENDING", "gateway-unproven": "GATEWAY UNPROVEN" }[r.status] || r.status.toUpperCase();
   io.out(`[${tag}] exit=${r.exit} ${r.file || ""}`);
   if (r.key) io.out(`   key=${r.key} brain_id=${r.brain_id || ""}${r.version != null ? ` v${r.version}` : ""}${r.chunks ? ` chunks=${r.chunks}` : ""}`);
   if (r.status === "saved" || (r.ranks && r.ranks.id)) io.out(`   proof: id-query rank ${r.ranks.id}, title-query rank ${r.ranks.title}, gateway ${r.ranks.gateway}`);
@@ -211,9 +212,10 @@ async function cmdVerify({ pos, flags }, deps, io) {
   }
   const expect = flags["--expect"];
   if (!expect) return EXIT.OK;
-  let key = String(expect);
-  if (!key.startsWith(KNOWLEDGE_PREFIX)) {
-    const { doc } = await readRegistry(backend, key);
+  const tgt = parseTarget(expect, "verify --expect");
+  let key = tgt.key || "";
+  if (!key) {
+    const { doc } = await readRegistry(backend, tgt.brainId);
     if (!doc || !doc.live_key) { io.out(`expect ${expect}: no live document with that brain_id`); return EXIT.NOT_SEARCHABLE; }
     key = doc.live_key;
   }
@@ -229,16 +231,24 @@ async function cmdRetract({ pos, flags }, deps, io) {
   const target = pos[0];
   const reason = flags["--reason"];
   if (!target || !reason) throw new BrainSaveError(EXIT.ERROR, 'retract: usage: retract <brain_id|key> --reason "<why>"');
+  const parsedTarget = parseTarget(target, "retract");
   const backend = await getBackend(deps, "off");
-  const r = await retractDoc(backend, target.startsWith(KNOWLEDGE_PREFIX) ? { key: target, reason } : { brainId: target, reason });
+  const r = await retractDoc(backend, { ...parsedTarget, reason });
   await backend.refresh().catch(() => {});
   io.out(`[RETRACTED] ${r.brain_id} ${r.key}: ${r.chunksRemoved} chunk(s) removed from ${ROOM_INDEX}; archived at ${r.archived}; registry ${r.registry}`);
   return EXIT.OK;
 }
 
-function parseKnowledgeKey(name) {
-  const m = String(name).match(/^_KNOWLEDGE\/([a-z]+)\/([a-z0-9-]+)\/(\d{4}-\d{2}-\d{2})-(.+)-([0-9a-f]{8})\.md$/);
-  return m ? { key: name, kind: m[1], app: m[2], date: m[3], slug: m[4], sha8: m[5] } : null;
+/** A `retract` / `verify --expect` target: a strict stored key or a brain_id, never a path with `..` or a
+ *  free-form string (adjudication round 4, N1). Returns { key } or { brainId }. */
+export function parseTarget(target, what) {
+  const t = String(target || "");
+  if (t.startsWith(KNOWLEDGE_PREFIX)) {
+    if (!parseKnowledgeKey(t)) throw new BrainSaveError(EXIT.ERROR, `${what}: "${t.slice(0, 120)}" is not a valid stored key (expected _KNOWLEDGE/<kind>/<app>/<yyyy-mm-dd>-<slug>-<sha8>.md); nothing read, nothing changed`);
+    return { key: t };
+  }
+  if (!isBrainId(t)) throw new BrainSaveError(EXIT.ERROR, `${what}: "${t.slice(0, 60)}" is neither a stored key nor a brain_id (KN-<KIND>-<10 hex>); nothing read, nothing changed`);
+  return { brainId: t };
 }
 
 async function cmdList({ flags }, deps, io) {
@@ -271,7 +281,13 @@ async function cmdList({ flags }, deps, io) {
  *    live-missing       (round 3) a registry live_key whose S3 object is gone (audit used to check 0 docs).
  *                       --repair restores it from _ARCHIVE/ or rebuilds it from its chunks (sha256-verified). */
 export async function runAudit(backend, { needles, secrets = true, ring = true, searchable = true, repair = false, keys = null }, io) {
+  // --repair implies BOTH content gates (adjudication round 4, B1): a repair re-pushes, adopts or restores an
+  // object, and it must never do that to one the gates would refuse. `--searchable --repair` used to run with
+  // the gates off entirely.
+  if (repair) { secrets = true; ring = true; }
   const findings = [];
+  // Keys with a secret or ring finding: every repair action on them is SKIPPED and reported as blocked.
+  const blocked = new Set();
   let names = keys ? keys.slice() : (await backend.listMeta(KNOWLEDGE_PREFIX)).map((o) => o.name).filter((n) => n.endsWith(".md"));
   let dark = 0;
   const regCache = new Map();
@@ -298,23 +314,16 @@ export async function runAudit(backend, { needles, secrets = true, ring = true, 
     const { text } = await backend.get(key);
     if (text == null) { findings.push({ key, kind: "missing" }); continue; }
     const { fields, body } = splitObject(text);
-    if (secrets) {
-      const hits = scanParts({ object: text }, needles);
-      if (hits.length) findings.push({ key, kind: "secret", detail: formatSecretHits(hits).join("; ") });
-    }
-    if (ring) {
-      // The seat that accepted an override is recorded in it ("(by <agent>, seat <seat>, signals: ...)"): an
-      // INND override is honored on re-check only if that seat could make it.
-      const ov = fields?.ring_override || "";
-      const seat = (ov.match(/, seat ([^,\s)]+)/) || [])[1] || "";
-      const res = classifyRing({ text: body, source: fields?.source || "", artifactUrl: fields?.artifact_url || "", sourceRepo: (String(fields?.source || "").match(/^([A-Za-z0-9._-]+)@/) || [])[1] || "", override: ov, overrideSeat: seat });
-      if (!res.allowed) findings.push({ key, kind: "ring", detail: formatRingRefusal(res).join("; ") });
+    if (secrets || ring) {
+      const g = gateStoredObject({ key, text, needles: needles || [], secrets, ring });
+      for (const f of g.findings) { findings.push({ key, kind: f.kind, detail: f.detail }); blocked.add(key); }
     }
     if (searchable && !retiredKeys.has(key)) {
       const n = await backend.countByPath(roomPathFor(key));
       if (!n) {
         dark++;
-        if (repair) {
+        if (repair && blocked.has(key)) findings.push({ key, kind: "dark", detail: "stored but 0 chunks; repair BLOCKED (secret/ring finding on this object: nothing was embedded or pushed)" });
+        else if (repair) {
           try { await pushObject(backend, key, text); await backend.refresh(); const n2 = await backend.countByPath(roomPathFor(key)); if (!n2) findings.push({ key, kind: "dark", detail: "repair push did not land" }); else io.out(`  repaired (re-pushed) ${key}`); }
           catch (e) { findings.push({ key, kind: "dark", detail: `repair failed: ${String(e.message).slice(0, 120)}` }); }
         } else findings.push({ key, kind: "dark", detail: "stored but 0 chunks in the room" });
@@ -325,7 +334,8 @@ export async function runAudit(backend, { needles, secrets = true, ring = true, 
         const knownLive = doc && (doc.live_key === key || (doc.versions || []).some((v) => v.key === key && v.status === "live"));
         if (!knownLive) {
           const other = doc && doc.live_key && doc.live_key !== key ? doc.live_key : "";
-          if (repair) {
+          if (repair && blocked.has(key)) findings.push({ key, kind: "unregistered-live", detail: `${n} chunk(s) searchable but unregistered; repair BLOCKED (secret/ring finding on this object: not adopted, not retired)` });
+          else if (repair) {
             try {
               if (other) {
                 const { retireOrphans } = await import("./lib/pipeline.mjs");
@@ -347,8 +357,9 @@ export async function runAudit(backend, { needles, secrets = true, ring = true, 
       if (doc.live_key && !(await backend.get(doc.live_key)).text) {
         if (repair) {
           try {
-            const how = await restoreLiveObject(backend, doc);
-            if (how) io.out(`  repaired: restored missing live object ${doc.live_key} (${how})`);
+            const how = await restoreLiveObject(backend, doc, (t) => gateStoredObject({ key: doc.live_key, text: t, needles: needles || [], secrets: true, ring: true }).findings);
+            if (how && typeof how === "object") findings.push({ key: doc.live_key, kind: "live-missing", detail: `registry ${doc.brain_id}: object missing; repair BLOCKED (the recoverable copy has a ${how.blocked.map((f) => f.kind).join("+")} finding: nothing was restored, embedded or pushed)` });
+            else if (how) io.out(`  repaired: restored missing live object ${doc.live_key} (${how})`);
             else findings.push({ key: doc.live_key, kind: "live-missing", detail: `registry ${doc.brain_id}: object missing and not recoverable from _ARCHIVE/ or the room; re-put the source file` });
           } catch (e) { findings.push({ key: doc.live_key, kind: "live-missing", detail: `repair failed: ${String(e.message).slice(0, 120)}` }); }
         } else findings.push({ key: doc.live_key, kind: "live-missing", detail: `registry ${doc.brain_id} says live, but the S3 object is gone` });
@@ -417,14 +428,21 @@ async function adoptLive(backend, key, fields, chunks) {
 
 /** audit --repair: put a missing live object back, from _ARCHIVE/ or rebuilt from its own chunks (the
  *  rebuild must hash to the chunks' content_hash, the sha256 of the exact stored object). Returns how, or "". */
-async function restoreLiveObject(backend, doc) {
+async function restoreLiveObject(backend, doc, gate = () => []) {
   const key = doc.live_key;
   const arch = await backend.get(`_ARCHIVE/${key}`);
-  if (arch.text != null) { await backend.put(key, arch.text, "text/markdown; charset=utf-8"); return "from _ARCHIVE/"; }
+  if (arch.text != null) {
+    const blockedBy = gate(arch.text);
+    if (blockedBy.length) return { blocked: blockedBy };
+    await backend.put(key, arch.text, "text/markdown; charset=utf-8");
+    return "from _ARCHIVE/";
+  }
   if (typeof backend.chunksByParent !== "function") return "";
   const chunks = await backend.chunksByParent(sha1(key));
   const text = rebuildFromChunks(chunks);
   if (!text) return "";
+  const blockedBy = gate(text);
+  if (blockedBy.length) return { blocked: blockedBy };
   await backend.put(key, text, "text/markdown; charset=utf-8");
   return `rebuilt from ${chunks.length} chunk(s), sha256 verified`;
 }
@@ -454,10 +472,13 @@ export function rebuildFromChunks(chunks) {
 async function cmdAudit({ flags }, deps, io) {
   const any = flags["--secrets"] || flags["--ring"] || flags["--searchable"];
   const backend = await getBackend(deps, "off");
-  const secrets = any ? Boolean(flags["--secrets"]) : true;
+  const repair = Boolean(flags["--repair"]);
+  // --repair implies both content gates (see runAudit): the needles are loaded even for `--searchable --repair`.
+  const secrets = repair || (any ? Boolean(flags["--secrets"]) : true);
   const { needles, count } = secrets ? await getNeedles(deps) : { needles: [], count: 0 };
   const keys = flags["--keys"] ? String(flags["--keys"]).split(",").map((s) => s.trim()).filter(Boolean) : null;
-  const res = await runAudit(backend, { needles, secrets, ring: any ? Boolean(flags["--ring"]) : true, searchable: any ? Boolean(flags["--searchable"]) : true, repair: Boolean(flags["--repair"]), keys }, io);
+  for (const k of keys || []) if (!parseKnowledgeKey(k)) throw new BrainSaveError(EXIT.ERROR, `audit --keys: "${k.slice(0, 120)}" is not a valid stored key (expected _KNOWLEDGE/<kind>/<app>/<yyyy-mm-dd>-<slug>-<sha8>.md); nothing read, nothing changed`);
+  const res = await runAudit(backend, { needles, secrets, ring: repair || (any ? Boolean(flags["--ring"]) : true), searchable: any ? Boolean(flags["--searchable"]) : true, repair, keys }, io);
   for (const f of res.findings) io.out(`  FINDING ${f.kind}: ${f.key}${f.detail ? ` -- ${f.detail}` : ""}`);
   io.out(`audit: ${res.checked} document(s) checked${secrets ? ` against ${count} live secret needle(s)` : ""}; ${res.findings.length} finding(s)`);
   if (res.findings.some((f) => f.kind === "secret" || f.kind === "ring")) return EXIT.REFUSED;
@@ -555,7 +576,8 @@ async function cmdBackfill({ pos, flags }, deps, io) {
       const p = prepareDoc(input, opts, { needles, now: deps.now });
       const [r] = await saveBatch(backend, [p], opts, { needles, embedTitle: async (t) => (await backend.embed([t]))[0] });
       bump(r.status);
-      exits.push(r.exit);
+      // A store-only backfill entry ASKED to be stored without search: its exit 5 is the expected outcome here.
+      exits.push(inc === "store-only" && r.status === "stored-only" ? EXIT.OK : r.exit);
       record(entry, r);
       if (r.status === "saved") written.push(r.key);
       if (inc === "store-only" && (r.status === "stored-only" || r.status === "planned")) {
@@ -563,7 +585,7 @@ async function cmdBackfill({ pos, flags }, deps, io) {
         if (!storeGroups.has(gk)) storeGroups.set(gk, { app: entry.app, folder: dirname(m ? m[3] : entry.path), kind: entry.kind || "design", items: [] });
         storeGroups.get(gk).items.push({ title: p.title, key: r.key, source: p.source || entry.path });
       }
-      if (r.exit) printResult(io, r, false);
+      if (r.exit && !(inc === "store-only" && r.status === "stored-only")) printResult(io, r, false);
     } catch (e) {
       const exit = e.exit || EXIT.ERROR;
       if (exit === EXIT.REFUSED) { bump("refused"); recordRefusal(input, e); }
@@ -608,7 +630,7 @@ const USAGE = `brain-save: put documents into the company brain and prove they a
   audit [--secrets] [--ring] [--searchable] [--repair]
   retract <brain_id|key> --reason "<why>"
   doctor
-exit: 0 saved+verified | 1 error | 2 refused (nothing written) | 3 stored but NOT searchable | 4 supersede incomplete`;
+exit: 0 saved+verified | 1 error | 2 refused (nothing written) | 3 stored but NOT searchable | 4 supersede incomplete | 5 --store-only | 6 gateway proof failed`;
 
 export async function main(argv, deps = {}, ioIn = {}) {
   const io = makeIo(ioIn);

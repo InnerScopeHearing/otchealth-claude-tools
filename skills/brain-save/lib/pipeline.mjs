@@ -10,7 +10,7 @@ import { dirname, join, extname, basename } from "node:path";
 import { normalizeInput, resolveTitle, resolveDate, isGenericTitle, MAX_OBJECT_CHARS, MIN_TEXT_CHARS, decodeTextInput, textChars, base64Share, MAX_BASE64_SHARE, BASE64_RUN_MIN } from "./normalize.mjs";
 import {
   KINDS, isKind, isAppSlug, slugify, contentSha256, identityFor, identityKindFor, brainIdFor, keyFor, srcKeyFor, buildHeader,
-  buildObject, sha256, sha1, TOOL_VERSION, registryKey, keyRefFor, oneLine, isTitleIdentity,
+  buildObject, sha256, sha1, TOOL_VERSION, registryKey, keyRefFor, oneLine, isTitleIdentity, parseKnowledgeKey, isBrainId, sourceIdentity,
 } from "./provenance.mjs";
 import { scanParts, formatSecretHits } from "./secret-gate.mjs";
 import { classifyRing, formatRingRefusal, htmlRawView, jsonRawView, jsonFinanceSignals } from "./ring-gate.mjs";
@@ -131,12 +131,18 @@ export function prepareDoc(input, opts, ctx) {
   };
 }
 
-/** A title/tags correction with an identical body is a NEW version (adjudication round 2: it used to be
- *  "unchanged"/"alias" with exit 0 while the stored header kept the old title). Only EXPLICIT values
- *  count (--title / --tags): a re-put that merely omits them keeps what is stored. */
+/** A title/tags/app/source correction with an identical body is a NEW version (adjudication round 2: title and
+ *  tags used to be "unchanged"/"alias" with exit 0 while the stored header kept the old value; round 4: so did
+ *  --app, and a corrected source). Only EXPLICIT title/tags count (a re-put that merely omits them keeps what
+ *  is stored); the app, kind and source IDENTITY (repo:path or URL, the commit sha is ignored) count whenever
+ *  they are known and differ from what is stored. A changed app re-keys the document (the key embeds it). */
 function metaChanged(live, reg, p) {
   if (p.explicitTitle && p.title !== (live.title ?? (reg && reg.title))) return true;
   if (p.explicitTags && p.tagsKey !== String(live.tags ?? "")) return true;
+  if (reg && reg.app && p.app !== reg.app) return true;
+  if (reg && reg.kind && p.kind !== reg.kind) return true;
+  if (p.source && sourceIdentity(p.source) !== sourceIdentity(live.source || "")) return true;
+  if (p.artifactUrl && sourceIdentity(p.artifactUrl) !== sourceIdentity(live.artifact_url || "")) return true;
   return false;
 }
 
@@ -178,8 +184,11 @@ export async function resolveVersion(backend, p, opts) {
   }
   if (opts.supersedes) {
     const t = String(opts.supersedes);
-    if (t.startsWith("_KNOWLEDGE/")) { supersedesKey = t; supersedesBrainId = opts.supersedesBrainId || ""; }
-    else {
+    if (t.startsWith("_KNOWLEDGE/")) {
+      if (!parseKnowledgeKey(t)) throw new BrainSaveError(EXIT.ERROR, `--supersedes "${t.slice(0, 120)}" is not a valid stored key (expected _KNOWLEDGE/<kind>/<app>/<yyyy-mm-dd>-<slug>-<sha8>.md); nothing saved`);
+      supersedesKey = t; supersedesBrainId = opts.supersedesBrainId || "";
+    } else {
+      if (!isBrainId(t)) throw new BrainSaveError(EXIT.ERROR, `--supersedes "${t.slice(0, 60)}" is neither a stored key nor a brain_id (KN-<KIND>-<10 hex>); nothing saved`);
       const { doc: other } = await readRegistry(backend, t);
       if (!other || !other.live_key) throw new BrainSaveError(EXIT.ERROR, `--supersedes ${t}: no live document with that brain_id`);
       supersedesKey = other.live_key; supersedesBrainId = t;
@@ -200,10 +209,11 @@ function receiptFor(p, result) {
 
 const errText = (e) => String((e && e.message) || e).replace(/Bearer\s+\S+/g, "Bearer [redacted]");
 
-/** Room proof that never throws: a search-backend failure is "not proven", with the reason kept. */
+/** Room proof that never throws: a search-backend failure is "not proven", with the reason kept (verifyInRoom
+ *  itself retries through exceptions and reports the final attempt's `error` / `cleanMiss`). */
 async function safeVerifyInRoom(backend, args) {
-  try { return { ...(await verifyInRoom(backend, args)), error: "" }; }
-  catch (e) { return { ok: false, idRank: 0, titleRank: 0, top3: [], error: errText(e).slice(0, 200) }; }
+  try { return { error: "", cleanMiss: false, ...(await verifyInRoom(backend, args)) }; }
+  catch (e) { return { ok: false, idRank: 0, titleRank: 0, top3: [], error: errText(e).slice(0, 200), cleanMiss: false }; }
 }
 
 /**
@@ -234,7 +244,15 @@ export async function saveBatch(backend, prepared, opts = {}, ctx = {}) {
       let objectPresent;
       try { objectPresent = (await backend.get(plan.key)).text != null; }
       catch (e) { results.push({ ...res, status: "not-searchable", exit: EXIT.NOT_SEARCHABLE, message: `${res.message}, but its stored object could not be checked (${errText(e).slice(0, 160)}); not proven saved` }); continue; }
-      if (v.ok && objectPresent) { receiptFor(p, res); results.push(res); continue; }
+      if (v.ok && objectPresent) {
+        if (plan.mode === "alias") {
+          // The alias records THIS document's identity metadata (adjudication round 4): it used to leave no
+          // trace of the new title / app / source / tags anywhere while exiting 0.
+          try { await recordAlias(backend, p, plan); }
+          catch (e) { results.push({ ...res, status: "error", exit: EXIT.ERROR, message: `${res.message}, but recording this document's identity (${p.brainId}) failed: ${errText(e).slice(0, 200)}; not saved as its own identity` }); continue; }
+        }
+        receiptFor(p, res); results.push(res); continue;
+      }
       // NOT searchable, or the object is gone: fall through to a re-push (no receipt unless it verifies).
       const why = [...(v.ok ? [] : [`was NOT searchable (id rank ${v.idRank}, title rank ${v.titleRank})`]), ...(objectPresent ? [] : ["had NO stored S3 object"])].join(" and ");
       r.warnings.push(`${plan.mode === "alias" ? `alias target ${plan.aliasOf}` : "the live version"} ${plan.key} ${why}; ${plan.mode === "alias" ? "saving this document under its own identity" : objectPresent ? "re-pushing" : "recreating and re-pushing it"}`);
@@ -260,7 +278,7 @@ export async function saveBatch(backend, prepared, opts = {}, ctx = {}) {
         await createObject(backend, srcKeyFor(key, p.ext === ".md" || p.ext === ".markdown" ? ".md" : p.ext), p.input.bytes, contentTypeFor(p.ext));
         stored = true;
         await updateRegistry(backend, p.brainId, (doc) => addVersion(doc, p, { version: plan.version, key, status: "stored-only", searchable: false, src_key: srcKeyFor(key, p.ext) }));
-        const res = { ...r, key, version: plan.version, status: "stored-only", message: `raw source stored under ${srcKeyFor(key, p.ext)} (not searchable by design)` };
+        const res = { ...r, key, version: plan.version, status: "stored-only", exit: EXIT.STORED_ONLY, message: `raw source stored under ${srcKeyFor(key, p.ext)}; NOT searchable, by request (--store-only): exit ${EXIT.STORED_ONLY} means "stored, not in the brain's search"` };
         receiptFor(p, res);
         results.push(res);
       } catch (e) { results.push({ ...r, key, status: "error", exit: EXIT.ERROR, message: `${stored ? "raw source stored but the registry update failed" : "nothing stored"}: ${errText(e).slice(0, 300)}` }); }
@@ -314,20 +332,36 @@ export async function saveBatch(backend, prepared, opts = {}, ctx = {}) {
     const v = await safeVerifyInRoom(backend, { key, brainId: p.brainId, title: p.title, contentSha: p.contentSha, retries: opts.retries ?? 3, delayMs: opts.delayMs ?? verifyDelay(), embedTitle: ctx.embedTitle });
     res.ranks = { id: v.idRank, title: v.titleRank, gateway: "skipped" };
     let gatewayFail = "";
+    let gatewayCouldNotRun = false;
+    let gatewayUnproven = "";
     if (v.ok && opts.gateway !== "off" && (i % every === 0 || i === work.length - 1)) {
       let g;
       try { g = await verifyViaGateway(backend, { key, brainId: p.brainId, title: p.title, contentSha: p.contentSha, retries: opts.gatewayRetries ?? 2, delayMs: opts.delayMs ?? verifyDelay() }); }
       catch (e) { g = { status: "error", rank: 0, query: "", reason: errText(e).slice(0, 200) }; }
       res.ranks.gateway = g.status === "ok" ? `${g.rank} (${g.query} query)` : g.status;
       if (g.status === "missing") gatewayFail = g.reason;
-      else if (g.status !== "ok") {
-        // --gateway on means the gateway proof is REQUIRED: skipped and error both fail it.
-        if (opts.gateway === "on") gatewayFail = `gateway proof required (--gateway on) but ${g.status}: ${g.reason || ""}`.trim();
+      else if (g.status === "error") {
+        // ATTEMPTED and it did not pass (round 4, C2): never a warning. The room proof stands, so the document
+        // stays live, but the exit code is the distinct GATEWAY_UNPROVEN, not 0.
+        if (opts.gateway === "on") { gatewayFail = `gateway proof required (--gateway on) but ${g.status}: ${g.reason || ""}`.trim(); gatewayCouldNotRun = true; }
+        else gatewayUnproven = `gateway proof ${g.status}: ${g.reason || ""}`.trim();
+      } else if (g.status !== "ok") {
+        // "skipped": the proof was never attempted (no lane token). --gateway on makes it REQUIRED.
+        if (opts.gateway === "on") { gatewayFail = `gateway proof required (--gateway on) but ${g.status}: ${g.reason || ""}`.trim(); gatewayCouldNotRun = true; }
         else res.warnings.push(`gateway proof ${g.status}: ${g.reason || ""}`.trim());
       }
     }
     if (!v.ok || gatewayFail) {
+      // A proof that COULD NOT RUN is not a proven miss (round 4, C1): the document was stored and pushed, so
+      // its chunks are KEPT and the exit is non-zero ("stored + pushed, proof could not run"). Chunks are
+      // deleted only after a proven clean miss.
+      const proofCouldNotRun = (!v.ok && Boolean(v.error)) || gatewayCouldNotRun;
       const why = v.error ? `room proof could not run: ${v.error}` : gatewayFail || `room proof failed: id rank ${v.idRank}, title rank ${v.titleRank}; top hits ${v.top3.join(" , ")}`;
+      if (proofCouldNotRun) {
+        try { await updateRegistry(backend, p.brainId, (doc) => setVersion(doc, p, plan, key, { status: "stored-unverified", chunks, ranks: res.ranks, proof: "could-not-run" })); } catch { /* best-effort */ }
+        results.push({ ...res, status: "not-searchable", exit: EXIT.NOT_SEARCHABLE, message: `stored + pushed, proof could not run (${why}); its ${chunks} chunk(s) were LEFT in place (nothing proves it is NOT searchable); re-run \`brain-save put\` on the same file to verify it, or \`brain-save audit --repair\`` });
+        continue;
+      }
       // A same-key header rewrite shares its chunks with the live version: leave them (identical body).
       const sameKeyAsLive = plan.mode === "new" && plan.supersedesKey === key;
       let removed = false;
@@ -356,8 +390,9 @@ export async function saveBatch(backend, prepared, opts = {}, ctx = {}) {
     // newer version of the same identity is live, that orphan must not stay indexable: the armed nightly
     // push (or audit --repair) would resurrect stale content next to the live version (found in verify
     // round 1). Retire every other stored-unverified version of this identity, best-effort and reported.
+    // A FAILED cleanup leaves a stale, still-indexable object behind: exit 4, not a warning (round 4).
     try { await retireOrphans(backend, p.brainId, key, regAfterLive); }
-    catch (e) { res.warnings.push(`orphan cleanup incomplete: ${errText(e).slice(0, 120)} (run audit --repair)`); }
+    catch (e) { res.status = "supersede-pending"; res.exit = EXIT.SUPERSEDE_PENDING; res.message = `saved and verified, but orphan cleanup is incomplete: ${errText(e).slice(0, 160)} (a stale stored-unverified object may still be indexable; run audit --repair)`; }
     // Concurrent saves of ONE identity (adjudication round 2): two parallel v2 saves both went live and
     // both stayed searchable. The registry this save just wrote is authoritative (ETag-guarded): any other
     // version still marked live there is superseded now. The last registry writer always wins.
@@ -377,10 +412,28 @@ export async function saveBatch(backend, prepared, opts = {}, ctx = {}) {
         res.message = `saved and verified, but superseding ${plan.supersedesKey} failed: ${errText(e).slice(0, 200)} (registry supersede_pending; run audit --repair)`;
       }
     }
+    if (gatewayUnproven && res.exit === EXIT.OK) {
+      res.status = "gateway-unproven"; res.exit = EXIT.GATEWAY_UNPROVEN;
+      res.message = `stored and room-verified (id rank ${res.ranks.id}, title rank ${res.ranks.title}), but the GATEWAY proof did not pass: ${gatewayUnproven.replace(/^gateway proof /, "")}; not proven searchable through mcp.otchealth.app. Re-check with \`brain-save verify "<title>" --expect ${p.brainId}\``;
+    } else if (gatewayUnproven) res.warnings.push(gatewayUnproven);
     receiptFor(p, res);
     results.push(res);
   }
   return results;
+}
+
+/** Record an alias: this document's identity (title/app/source/tags) points at the identical content already
+ *  live under another identity. Written only when it is new or changed (an identical re-put stays zero-write). */
+async function recordAlias(backend, p, plan) {
+  const { doc: cur } = await readRegistry(backend, p.brainId);
+  const same = cur && cur.alias_of === plan.aliasOf && cur.alias_key === plan.key && cur.title === p.title && cur.app === p.app && cur.kind === p.kind && cur.tags === (p.tagsKey ?? "") && (!p.source || cur.source === p.source) && (!p.artifactUrl || cur.artifact_url === p.artifactUrl);
+  if (same) return;
+  await updateRegistry(backend, p.brainId, (doc) => {
+    const d = doc || emptyRegistry(p);
+    Object.assign(d, { identity: p.identity, kind: p.kind, app: p.app, title: p.title, tags: p.tagsKey ?? "", source: p.source, artifact_url: p.artifactUrl, alias_of: plan.aliasOf, alias_key: plan.key, aliased_at: new Date().toISOString() });
+    if (!d.live_key) d.status = "alias";
+    return d;
+  });
 }
 
 function contentTypeFor(ext) {
@@ -414,7 +467,7 @@ export function addVersion(doc, p, v) {
 
 function setVersion(doc, p, plan, key, patch) {
   const d = addVersion(doc, p, { version: plan.version, key, supersedes: plan.supersedesKey && plan.supersedesKey !== key ? plan.supersedesKey : "", ...patch });
-  if (patch.status === "live") { d.live_key = key; d.status = "live"; d.supersede_pending = Boolean(patch.supersede_pending); }
+  if (patch.status === "live") { d.live_key = key; d.status = "live"; d.supersede_pending = Boolean(patch.supersede_pending); delete d.alias_of; delete d.alias_key; delete d.aliased_at; }
   return d;
 }
 

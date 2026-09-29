@@ -203,7 +203,7 @@ export function resolveDate({ flag, frontmatter, now = new Date() }) {
 /** Ring-relevant declarations a document can carry OUTSIDE its visible text (adjudication round 2: both
  *  were ignored because <head> is dropped and JSON keys never reach front matter). Keys are lowercased;
  *  values are strings. The ring gate decides what they mean. */
-export const DECLARATION_KEYS = /^(ring|classification|confidentiality|data[_-]?classification|sensitivity|privilege|mnpi|contains[_-]?mnpi|phi|contains[_-]?phi|hipaa|privileged|contains[_-]?privileged|attorney[_-]?client)$/i;
+export const DECLARATION_KEYS = /^(ring|classification|confidentiality|data[_-]?classification|sensitivity|privilege|audience|mnpi|contains[_-]?mnpi|phi|contains[_-]?phi|hipaa|privileged|contains[_-]?privileged|attorney[_-]?client)$/i;
 export function htmlDeclarations(html) {
   const out = {};
   for (const m of neutralizeUnclosedLt(String(html || "")).matchAll(/<meta\b[^>]*>/gi)) {

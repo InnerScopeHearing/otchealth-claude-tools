@@ -291,6 +291,34 @@ function needleViews(needles) {
   }
   return v;
 }
+// Adjudication round 4 (S4): a secret ENCODED before it is pasted (a base64 blob, a url-safe base64 token, a hex
+// dump) matched no needle. Layer B now also searches, for every needle, its standard and url-safe base64
+// encodings at ALL THREE byte alignments (the needle may start at any offset of a longer base64 stream, so
+// the leading/trailing characters that depend on neighbouring bytes are dropped and only the clean middle is
+// searched) and its lowercase hex encoding (matched case-insensitively, so upper-case hex is covered).
+const MIN_ENCODED_FRAGMENT = 10;
+const b64Fragments = (needle) => {
+  const bytes = Buffer.from(needle, "utf8");
+  const out = [];
+  for (const [k, skip] of [[0, 0], [1, 2], [2, 3]]) {
+    const enc = Buffer.concat([Buffer.alloc(k, 0x41), bytes]).toString("base64").replace(/=+$/, "");
+    const drop = (k + bytes.length) % 3 !== 0 ? 1 : 0;
+    const frag = enc.slice(skip, enc.length - drop);
+    if (frag.length >= MIN_ENCODED_FRAGMENT) { out.push(frag); out.push(frag.replace(/\+/g, "-").replace(/\//g, "_")); }
+  }
+  return [...new Set(out)];
+};
+const _encodedViews = new WeakMap();
+/** Per-needle encoded search strings (computed once per needle list, only when a text reaches the encoded pass). */
+export function encodedNeedleViews(needles) {
+  let v = _encodedViews.get(needles);
+  if (!v) {
+    v = needleViews(needles).map((n) => ({ name: n.name, b64: b64Fragments(n.needle), hex: Buffer.from(n.needle, "utf8").toString("hex") }));
+    _encodedViews.set(needles, v);
+  }
+  return v;
+}
+
 /** Line (1-based) of the k-th non-whitespace character of `s`. */
 function lineOfSquashedIndex(s, k) {
   let line = 1, seen = 0;
@@ -337,6 +365,20 @@ export function scanLayerB(text, needles) {
     creds ??= [...decodedCredentials(t), ...(norm === t ? [] : decodedCredentials(norm))];
     const c = creds.find((x) => x.text.includes(n.needle));
     if (c) { offs ||= lineStarts(t); hit(n.name, lineAt(offs, Math.min(c.index, t.length - 1))); }
+  }
+  // Encoded pass (round 4, S4): base64 / url-safe base64 (3 alignments) and hex encodings of each needle.
+  const enc = encodedNeedleViews(needles);
+  if (enc.length) {
+    norm ??= normalizeForSecrets(t);
+    squashed ??= norm.replace(/\s+/g, "");
+    let lowerSq = null;
+    for (const e of enc) {
+      if (seen.has(e.name)) continue;
+      let i = -1;
+      for (const frag of e.b64) { i = squashed.indexOf(frag); if (i >= 0) break; }
+      if (i < 0 && e.hex.length >= MIN_ENCODED_FRAGMENT) { lowerSq ??= squashed.toLowerCase(); i = lowerSq.indexOf(e.hex); }
+      if (i >= 0) hit(e.name, lineOfSquashedIndex(norm, i));
+    }
   }
   return hits;
 }

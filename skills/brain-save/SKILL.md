@@ -34,8 +34,10 @@ node /tmp/octools/skills/brain-save/brain-save.mjs put <file-or-folder> \
 | 0 | saved and verified, or unchanged (identical content already live AND re-proven searchable just now), or an alias (identical content saved under another id, re-proven) |
 | 1 | error: bad input (empty / under 16 VISIBLE characters of text (zero-width and other format characters do not count), binary, NUL bytes, UTF-16, not UTF-8, over 30% base64), file over 20 MB (50 MB with `--store-only`; checked before reading), generic title (pass `--title`), > 400,000 chars (split it), an identity collision (below), `--title`/`--id` with several files, nothing stored (the first S3 write failed), dependency down or timed out before anything was stored |
 | 2 | REFUSED by the secret or ring gate: nothing was written anywhere and nothing was embedded |
-| 3 | stored but NOT searchable (push or proof failed; its chunks were removed; a re-run retries) |
-| 4 | saved and verified, but superseding the previous version is incomplete (`audit --repair`) |
+| 3 | stored but NOT searchable. Either the proof RAN and missed (a clean miss: its chunks were removed) or it COULD NOT RUN (a search / gateway error on the final attempt: "stored + pushed, proof could not run", its chunks are LEFT in place because nothing proved them not searchable). A re-run of the same `put` retries and verifies |
+| 4 | saved and verified, but superseding the previous version, or retiring an orphaned failed attempt, is incomplete (`audit --repair`) |
+| 5 | `--store-only`: the raw source is stored and NOTHING was embedded. "Stored, NOT searchable by request": not a failure of the tool, but not "in the brain's search" either, so it is never exit 0 (a `backfill` treats its own `include: store-only` entries as expected) |
+| 6 | stored and room-verified, but the GATEWAY proof was attempted (`kb_search` on mcp.otchealth.app as the `coo` lane) and did not pass (error, or a clean miss remembered across retries turns into exit 3): not proven searchable through the path every lane uses. `--gateway off` is the explicit opt-out; a gateway that was never attempted (no lane token) stays a warning under `auto` |
 
 ## Document identity (what a re-save replaces)
 
@@ -80,8 +82,14 @@ After the push and one index refresh, the tool searches the live room:
    which is unindexable when it ends in a-f) must return it at **rank 1**, and a hybrid (BM25 + kNN)
    query on its **title** must return it in the **top 10**;
 2. the gateway (`mcp.otchealth.app`) `kb_search` on a minted **coo** lane token (the least-privileged
-   internal lane that reads commons) must find it. No lane token or a gateway error -> warning only;
-   token but no hit -> exit 3. With `--gateway on` the gateway proof is REQUIRED: skipped or error is exit 3.
+   internal lane that reads commons) must find it. No lane token (never attempted) -> warning only; a
+   gateway ERROR (attempted, did not pass) -> exit 6 with the room proof kept; token but no hit -> exit 3 (a
+   clean miss is remembered: a later transport error on another query cannot turn it back into an error).
+   With `--gateway on` the gateway proof is REQUIRED: skipped or error is exit 3. `--gateway off` opts out.
+
+A room proof that hits an exception (a 503, a timeout) is retried inside its retry loop. If the FINAL
+attempt could not run, that is "stored + pushed, proof could not run": exit 3 with the chunks KEPT (only a
+proven clean miss deletes them).
 
 An identical re-put ("unchanged" / "alias") is re-proven every time (keyword-only, zero writes, zero
 embedding calls) AND its S3 object must exist. If the live version fell out of the room or its object is
@@ -97,11 +105,23 @@ default 15 min); the SSM secret-set load has its own (`BRAIN_SAVE_SSM_TIMEOUT_MS
 timeout there is the usual exit-2 "secret set unavailable"). A timeout before anything is stored is exit 1;
 after the object is stored it is exit 3. A timed-out gateway call ends the gateway proof (no retries into a
 black hole), and the CLI exits as soon as its output has flushed.
-A `--title` correction of the same file, or a `--tags` change, with an unchanged body is a new version.
+A `--title` correction of the same file, or a `--tags` change, with an unchanged body is a new version. So
+is an `--app` correction (the key embeds the app, so the document is re-keyed and re-pushed) and a changed
+source IDENTITY (`repo:path` or URL: a new commit sha alone is not a change). An ALIAS (identical content
+already live under another identity) records THIS document's identity in its own registry entry
+(`alias_of` / `alias_key`, title, app, tags, source); if that record cannot be written the save is exit 1.
 
 The nightly job (`otchealth-job-daily-digest`) catalogs commons objects but does NOT push them
 (`SKIP_PUSH_SEARCH=1`; the allow-listed push `COMMONS_PUSH_PREFIXES=_KNOWLEDGE/,_DAILY/` is a gated
 arming step), so a raw S3 upload is never searchable. brain-save does not depend on the nightly job.
+**Arming the nightly commons push takes BOTH: remove `SKIP_PUSH_SEARCH` from the task definition AND set
+`COMMONS_PUSH_PREFIXES=_KNOWLEDGE/,_DAILY/`; either alone leaves it off** (the job logs which one is still
+holding it). Once armed, the push runs the commons CONTENT GATE on every row before it is embedded
+(`skills/doc-indexer/commons-push-gate.mjs`: the same secret layers A+B and ring gate as `put`/`audit`, plus
+brain-save provenance for `_KNOWLEDGE/`); a blocked row is skipped, logged by path and rule name only, and
+makes the run exit non-zero. If the live secret set cannot be loaded the WHOLE push is refused (exit 2). A
+failed push makes the nightly job exit non-zero at the END, after its other steps ran. `--prefixes` may only
+name `_KNOWLEDGE/` and `_DAILY/` (`COMMONS_PUSH_ALLOWED_PREFIXES` in `push-rules.mjs`); anything else is exit 2.
 
 ## Rings (hard)
 
@@ -111,7 +131,7 @@ Perplexity connectors. The bar for "safe to save" is "safe for an external conne
 | Signal | Kind | Route printed on refusal |
 |---|---|---|
 | a secret shape or a live SSM secret VALUE | hard | remove the value; reference the SSM parameter NAME `/otchealth/<name>` |
-| `--ring` other than commons; a declaration (front matter in any YAML form: scalar, flow list/map, `- item` list, next-line or block scalar, nested key; HTML `<meta name=classification/confidentiality/ring>`; a JSON key at ANY depth, arrays and array roots included, except under rule contexts such as a charter's `classifier`) whose `ring/classification/confidentiality/sensitivity/privilege` CONTAINS privileged/attorney/legal/work product/PHI/HIPAA/MNPI/finance/CFO/CLO/restricted, or a truthy `contains_phi/phi/hipaa/mnpi/privileged` flag. A value that starts with a negation ("non-PHI (...)") ignores its own family's words | hard | per ring |
+| `--ring` other than commons; a declaration (front matter in any YAML form: scalar, flow list/map, `- item` list, next-line or block scalar, nested key; HTML `<meta name=classification/confidentiality/ring>`; a JSON key at ANY depth, arrays and array roots included, except under rule contexts such as a charter's `classifier`) whose `ring/classification/confidentiality/sensitivity/privilege/audience` value is NOT on the explicit safe allowlist (commons, public, internal, internal-only/use, general, fleet, all, everyone, team, engineering, developers, unclassified, low, normal, standard, none, no, false, n/a, 0, off; an `audience` that is an http(s) URL is an OAuth/JWT audience, not a ring): so `ring: exec`, `sensitivity: high`, `audience: cfo only`, `confidentiality: confidential` all refuse. Or a truthy `contains_phi/phi/hipaa/mnpi/privileged` flag. A value that starts with a negation ("non-PHI (...)") ignores its own family's words | hard | per ring |
 | denylisted path/repo/Artifact (`config/ring-denylist.json`: medreview (repo and path segment), legal-personal, CFO folders, `_MEMORY/_HANDOFF/_DISPATCH/_JOURNAL`, moore-playbook, two CFO Artifacts), matched case-insensitively with every `-_ .` separator removed and a file's extension ignored; finance/legal entries also match inside a segment (`finance-cfo-source-docs/`, `legal-personal.md`); on the symlink-resolved path too; the repo is parsed out of `repo@sha:path`, `repo:path`, GitHub https URLs and `git@host:org/repo.git` | hard | per ring |
 | a standalone privilege / PHI / MNPI banner line (separators: hyphen, any Unicode dash, colon, pipe, comma, slash, period, semicolon, repeated like `//`; tails such as DRAFT, COMMUNICATION, FOR COUNSEL REVIEW; a leading CONFIDENTIAL - / DRAFT -; also inside an HTML comment); "ATTORNEY-CLIENT COMMUNICATION", "PROTECTED HEALTH INFORMATION", "NOT FOR DISTRIBUTION: MNPI"; a bare PRIVILEGED / PHI line only when shouted or bold and not a Markdown heading | hard | CLO / BAA / CLO |
 | PHI data: SSNs (`SSN`, `SS#`, `Social:`, table cells), DOB (numeric, ISO, "March 3rd, 1962", "3 March 1962", `Born:`), MRN (with a digit), MBI, payment cards, bank account/routing numbers | hard | BAA environment / CFO |
@@ -181,7 +201,10 @@ version of the same identity verifies, and `audit` flags/repairs any that slippe
 ```bash
 brain-save verify "<query>" [--expect <brain_id|key>] [--top 10]     # prove a doc is findable (exit 3 if not)
 brain-save list [--kind k] [--app a] [--since YYYY-MM-DD] [--details] [--check]   # --check flags DARK docs
-brain-save audit [--secrets] [--ring] [--searchable] [--repair]      # re-gate everything stored (layer C proof) + drift:
+brain-save audit [--secrets] [--ring] [--searchable] [--repair]      # re-gate everything stored (layer C proof) + drift
+#   (--repair implies BOTH content gates and NEVER repairs an object with a secret or ring finding: no re-push,
+#   no adopt, no restore from _ARCHIVE/ or its chunks; it is reported as "repair BLOCKED"). --keys must be
+#   strict stored keys (`..` and odd shapes are exit 1):
 #   dark, stale-chunks, orphan-object, extra-live, unregistered-live (searchable but not the registry's live
 #   version: --repair retires it, or adopts it when nothing else is live), live-missing (registry live_key
 #   whose S3 object is gone: --repair restores it from _ARCHIVE/ or rebuilds it from its chunks, sha256-verified)
@@ -218,10 +241,13 @@ prints one quiet, non-blocking reminder when this session's scratchpad or change
 - **`push-search --prefix` used to push the WHOLE catalog.** Since 2026-09-29 `--prefix`/`--prefixes`
   scope the push (`skills/doc-indexer/push-rules.mjs`), but never run an unscoped commons push: the
   catalog holds `_JOURNAL/` session digests and older ring-sensitive research.
-- **An unscoped commons push-search is refused by `indexer.mjs` itself** (2026-09-29): the privileged
-  lanes' journals (`_JOURNAL/cfo|clo|clo-personal|exec|capital/`) joined `_MEMORY/ _HANDOFF/ _DISPATCH/`
-  in SKIP_PREFIXES, and the aws-dr-canary's `commons-ring-residue` check pages (LEAK) on any chunk under
-  those prefixes in the open room; `node skills/doc-indexer/purge-ring-residue.mjs [--commit]` removes them.
+- **An unscoped commons push-search is refused by `indexer.mjs` itself** (2026-09-29): ALL of `_JOURNAL/`
+  and `_VAULT/` joined `_MEMORY/ _HANDOFF/ _DISPATCH/` in SKIP_PREFIXES (round 4 dropped the per-lane list),
+  the skip check normalizes and case-folds the path (`/_MEMORY/x`, `_memory//x`, `_KNOWLEDGE/../_MEMORY/x`
+  are all skipped), and the aws-dr-canary's `commons-ring-residue` check pages (LEAK) on any chunk under
+  those prefixes in the open room (a case-insensitive prefix query; an ok `_count` reply without a numeric
+  count is an ERROR, never 0); `node skills/doc-indexer/purge-ring-residue.mjs [--commit]` removes them.
+  Documented limit: a prefix query does not match `//`, leading-`/` or `./` spellings of a room path.
 - **Folder puts never follow symlinks** (each one is reported); put a symlink's target explicitly.
 - **Retraction filtering does not cover commons docs** (gateway retractions are memory-ledger ids);
   a stale doc stays searchable until `retract` or a superseding save removes its chunks.

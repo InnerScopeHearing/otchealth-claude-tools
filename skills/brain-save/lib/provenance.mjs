@@ -89,6 +89,16 @@ export function brainIdFor(kind, identity) {
   return `KN-${k3}-${sha1(String(identity)).slice(0, 10)}`;
 }
 
+/** Strict shape of a stored key: `_KNOWLEDGE/<kind>/<app>/<yyyy-mm-dd>-<slug>-<sha8>.md`, every segment from the
+ *  slug alphabet, so `..`, `//`, `.`, upper case and extra segments never match (adjudication round 4, N1).
+ *  Returns { key, kind, app, date, slug, sha8 } or null. */
+export function parseKnowledgeKey(name) {
+  const m = String(name == null ? "" : name).match(/^_KNOWLEDGE\/([a-z]+)\/([a-z0-9][a-z0-9-]*)\/(\d{4}-\d{2}-\d{2})-([a-z0-9][a-z0-9-]*)-([0-9a-f]{8})\.md$/);
+  return m && isKind(m[1]) ? { key: String(name), kind: m[1], app: m[2], date: m[3], slug: m[4], sha8: m[5] } : null;
+}
+/** A brain_id: `KN-<KIND3>-<10 hex>`. */
+export const isBrainId = (v) => /^KN-[A-Z]{3}-[0-9a-f]{10}$/.test(String(v == null ? "" : v));
+
 export function keyFor({ kind, app, date, slug, contentSha }) {
   return `${KNOWLEDGE_PREFIX}${kind}/${app}/${date}-${slug}-${String(contentSha).slice(0, 8)}.md`;
 }

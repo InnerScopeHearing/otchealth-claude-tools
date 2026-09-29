@@ -31,6 +31,7 @@ export const ROUTES = Object.freeze({
   phi: "Do not save. PHI stays inside the MedReview BAA environment. Save a PHI-free summary instead.",
   "innd-mnpi": "INND MNPI / investor-facing material: CLO seat + counsel + Matt (Reg FD). Never the commons room.",
   ledger: "Lane-private ledger prefix (_MEMORY/_HANDOFF/_DISPATCH/_JOURNAL): these are ring-scoped by design; use kb-memory (`mem.mjs`) or the owning lane's tooling, never the commons room.",
+  restricted: "This document DECLARES a ring, classification or audience the commons room cannot honor (anything other than commons / public / internal / fleet ...). Remove the declaration if the content is genuinely commons-safe, or route it to the owning lane's own store; the commons room is readable by every lane, external connectors included.",
   secret: "Remove the value and reference the SSM parameter NAME (`/otchealth/<name>`), then re-run.",
 });
 
@@ -38,9 +39,37 @@ export const ROUTES = Object.freeze({
 // exact-token match let "classification: Attorney-Client Privileged", "confidentiality: privileged and
 // confidential" and "contains_phi: true" through. Values are now matched by CONTAINS (word-bounded so
 // "philosophy" is not "phi"), and a PHI/MNPI/privilege FLAG key with any truthy value declares the ring.
-const VALUE_KEYS = /^(ring|classification|confidentiality|data[_-]?classification|sensitivity|privilege)$/i;
+const VALUE_KEYS = /^(ring|classification|confidentiality|data[_-]?classification|sensitivity|privilege|audience)$/i;
 const FLAG_KEYS = /^(mnpi|contains[_-]?mnpi|phi|contains[_-]?phi|hipaa|privileged|contains[_-]?privileged|attorney[_-]?client)$/i;
 const SAFE_DECLARED = /^(commons|public|internal|internal[- ]only|general|false|no|none|n\/?a|0|off)$/i;
+// Adjudication round 4 (S3): for the VALUE keys above a deny-regex (RESTRICTED_VALUE) was the whole rule, so
+// `ring: exec`, `sensitivity: high` and `audience: cfo only` passed (no restricted WORD in them). A declared
+// ring / classification / audience value is now judged by an explicit SAFE ALLOWLIST: anything not on it is
+// treated as a restriction the commons room cannot honor, and refused. Flag keys (phi: true ...) keep the
+// old truthy rule.
+const SAFE_RING_VALUE = /^(commons|public|internal|internal[- ]only|internal[- ]use|general|fleet|all|everyone|team|engineering|developers?|unclassified|low|normal|standard|false|no|none|n\/?a|0|off)$/i;
+// `audience` is also an OAuth/JWT field in JSON documents ("audience": "https://api.example"): a URL is not a ring.
+const URL_VALUE = /^https?:\/\/\S+$/i;
+/** True when ONE declared value (already split) is explicitly safe for the commons room. */
+function isSafeDeclaredValue(part, key) {
+  const v = String(part).trim().replace(/^[\s"'`\[\(]+|[\s"'`\]\)\.]+$/g, "");
+  if (!v) return true;
+  if (SAFE_RING_VALUE.test(v)) return true;
+  if (/^audience$/i.test(key) && URL_VALUE.test(v)) return true;
+  // A NEGATED declaration ("non-PHI", "Non-PHI ring only", "no PHI"): safe unless a restricted word of a
+  // DIFFERENT family remains after the negation and its commentary are stripped (see stripNegations).
+  if (/^(?:(?:non|no|not|without|zero)[-_ ]+(?:phi|pii|hipaa|mnpi|privileged|legal|finance|financial)|(?:phi|pii|mnpi)[-_ ]+free)(?![a-z])/i.test(v)) return !RESTRICTED_VALUE.test(stripNegations(v));
+  return false;
+}
+const NEGATION_LEAD = /^\s*(?:(?:non|no|not|without|zero)[-_ ]+(?:phi|pii|hipaa|mnpi|privileged|legal|finance|financial)|(?:phi|pii|mnpi)[-_ ]+free)(?![a-z])/i;
+/** A declared string value is safe iff it is a negation-led sentence with no OTHER restricted family in it
+ *  ("non-PHI (keeps it outside HIPAA; the PHI ring is a hard wall)"), or EVERY comma/semicolon/pipe-separated
+ *  part is itself safe. */
+function isSafeDeclared(v, key) {
+  const s = String(v);
+  if (NEGATION_LEAD.test(s)) return !RESTRICTED_VALUE.test(stripNegations(s));
+  return s.split(/[,;|]/).every((part) => isSafeDeclaredValue(part, key));
+}
 const RESTRICTED_VALUE = /(?<![a-z])(privileg|attorney|legal|work[- ]?product|phi(?![a-z])|hipaa|mnpi|material non-?public|financ|cfo(?![a-z])|clo(?![a-z])|restricted|secret(?![a-z]))/i;
 // A NEGATED declaration is the opposite of a restricted one: every app.manifest.json declares
 // `"ring": "non-phi"` (found by the round-2 corpus scan: 10 manifests would have been refused).
@@ -70,7 +99,8 @@ function ringForDeclared(key, value = "") {
   if (/(?<![a-z])(phi|hipaa)(?![a-z])|protected health/.test(s)) return "phi";
   if (/mnpi|non-?public/.test(s)) return "innd-mnpi";
   if (/legal|clo|privileg|attorney|work[- ]?product/.test(s)) return "legal";
-  return "finance";
+  if (/financ|cfo|ledger|books/.test(s)) return "finance";
+  return "restricted";
 }
 /** RING_DECLARED signals from a declarations map ({key: value | value[]}, keys any case). A key may carry
  *  SEVERAL values (a YAML list, a key repeated at different JSON depths, several <meta> tags): each value
@@ -83,7 +113,7 @@ export function declaredSignals(decl) {
     for (const one of Array.isArray(rawVal) ? rawVal : [rawVal]) {
       const v = String(one == null ? "" : one).trim();
       if (!v || SAFE_DECLARED.test(v)) continue;
-      const restricted = (VALUE_KEYS.test(k) && RESTRICTED_VALUE.test(stripNegations(v))) || FLAG_KEYS.test(k);
+      const restricted = (VALUE_KEYS.test(k) && !isSafeDeclared(v, k)) || FLAG_KEYS.test(k);
       if (restricted) out.push({ code: "RING_DECLARED", ring: ringForDeclared(k, v), detail: `declared ${k}: ${v.slice(0, 40)}` });
     }
   }

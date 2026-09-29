@@ -354,7 +354,7 @@ test("round 3 #16: a WRAPPED data URI is stripped (no junk chunks); a fenced bas
   // --store-only keeps raw bytes and is not blocked by the base64 share
   be = createFakeBackend();
   r = await run(put(tmpDoc("f2.md", `# Screenshot notes widget raw\n\n\`\`\`\n${wrap}\n\`\`\`\n`), ["--kind", "research", "--app", "fleet", "--store-only"]), be);
-  assert.equal(r.code, 0, r.out);
+  assert.equal(r.code, 5, r.out); // round 4 (C3): stored-only exits 5 ("stored, NOT searchable by request")
 });
 
 test("round 3 #17: zero-width-only text is empty (exit 1); oversize inputs are refused by size BEFORE they are read", async () => {

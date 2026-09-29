@@ -3,7 +3,7 @@
 // object ({path: key, entity: "_KNOWLEDGE", title: basename(key), sha256: sha256(object bytes)}) and the
 // chunks come from the SAME chunkText/buildChunkDocs (skills/doc-indexer/chunking.mjs) at 2000/200, so
 // parent_id = sha1(key) and chunk ids match a nightly push or --reindex exactly: nightly converges on
-// brain-save's output instead of duplicating it. tests/push.test.mjs pins this.
+// brain-save's output instead of duplicating it. skills/brain-save/tests/push-verify.test.mjs ("chunk parity") pins this.
 // ATOMICITY: every chunk of a document is embedded BEFORE any is pushed; a partial embed or partial
 // bulk failure deletes that parent's chunks. Never writes _CATALOG/ or _TEXT/ (the nightly index owns those).
 import { basename } from "node:path";

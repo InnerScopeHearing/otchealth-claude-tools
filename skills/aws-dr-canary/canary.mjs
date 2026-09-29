@@ -10,7 +10,7 @@
  * that SLO is exceeded — an exact `path`-based existence check in the room's OpenSearch index (never
  * document content). See the "check 7" section below for why this compares OBJECT PRESENCE rather than
  * a literal timestamp field (the live chunked schema has none). Check 8 (2026-09-29): ring RESIDUE —
- * zero chunks under every ring-private prefix (_MEMORY/ _HANDOFF/ _DISPATCH/ + privileged _JOURNAL lanes)
+ * zero chunks under every ring-private prefix (_MEMORY/ _HANDOFF/ _DISPATCH/ _JOURNAL/ _VAULT/)
  * in the open commons room; a non-zero count is status LEAK (an anomaly, pages under --strict).
  *
  * THE n8n CHECKS (added 2026-08-28) close the exact "age-not-floor" blind spot this canary was built
@@ -49,9 +49,9 @@ import { awsFetch } from "../../setup/aws-sigv4.mjs";
 import { s3Head, s3Get } from "../fleet-backup/s3-client.mjs";
 import { listBlobsMetaFromS3 } from "../kb-memory/s3-blob.mjs";
 import { resolveOpenSearchConfig } from "../kb-memory/opensearch-write.mjs";
-import { osCount } from "../doc-indexer/opensearch-client.mjs";
+import { osCount, osSearch } from "../doc-indexer/opensearch-client.mjs";
 import { classifyIndexLane } from "../fleet-backup/os-snapshot.mjs";
-import { RING_PRIVATE_PREFIXES } from "../doc-indexer/push-rules.mjs";
+import { RING_PRIVATE_PREFIXES, pathPrefixQuery } from "../doc-indexer/push-rules.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -481,6 +481,38 @@ export function resolveRoomIndexPrefixes(room) {
   return Array.isArray(room.indexPrefixes) && room.indexPrefixes.length ? room.indexPrefixes.slice() : null;
 }
 
+/** Pure (round 4, N3): the integer `count` of an OpenSearch `_count` response, or THROW. A response that is ok
+ *  but carries no numeric count (a proxy error page, a changed shape, `null`) used to be read as 0 -- which
+ *  reads as "no chunks" (a false all-clear for the ring-residue check, a false STALE for freshness). Callers
+ *  turn the throw into status ERROR. */
+export function strictCount(res, label = "_count") {
+  const c = res && res.json ? res.json.count : undefined;
+  if (typeof c !== "number" || !Number.isFinite(c) || c < 0) throw new Error(`${label}: response carried no numeric count (${JSON.stringify(res && res.json ? Object.keys(res.json) : null)}); refusing to read it as 0`);
+  return c;
+}
+
+/** Pure (round 4, C5): EVERY text object under `prefixes` that is older than `sloHours` (so already due to be
+ *  searchable), newest first, capped at `limit` (default 200). The single newest due object used to be the only
+ *  one checked, so one missing older document hid behind a healthy newer one. Returns
+ *  { due, totalDue, newest, candidates } where totalDue is the uncapped count. */
+export function pickDueObjects(blobs, prefixes, sloHours, nowMs = Date.now(), limit = 200) {
+  const cands = (blobs || []).filter((b) => b && b.name && !b.name.endsWith("/") && !isRoomPipelineInternal(b.name)
+    && prefixes.some((p) => b.name.startsWith(p))
+    && INDEXABLE_TEXT_EXTS.some((e) => b.name.toLowerCase().endsWith(e)));
+  const byNewest = (a, b) => Date.parse(b.lastModified) - Date.parse(a.lastModified);
+  const allDue = cands.filter((b) => (nowMs - Date.parse(b.lastModified)) / 3600000 > sloHours).sort(byNewest);
+  return { due: allDue.slice(0, Math.max(1, limit)), totalDue: allDue.length, newest: [...cands].sort(byNewest)[0] || null, candidates: cands.length };
+}
+
+/** Pure: judge the due objects against the set of room paths that ARE present. STALE lists what is missing. */
+export function assessDueObjects({ dueNames, presentNames, totalDue, sloHours }) {
+  const present = new Set(presentNames || []);
+  const missing = (dueNames || []).filter((n) => !present.has(n));
+  const capped = totalDue > (dueNames || []).length ? ` (the ${dueNames.length} newest of ${totalDue} due)` : "";
+  if (missing.length) return { state: "STALE", reason: `${missing.length} of ${dueNames.length} due object(s)${capped}, each past the ${sloHours}h SLO, have ZERO chunks in the index by exact path match: ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? `, ... +${missing.length - 5} more` : ""}` };
+  return { state: "OK", reason: `all ${dueNames.length} due object(s)${capped}, each past the ${sloHours}h SLO, are present in the index by exact path match` };
+}
+
 /** Pure: among real text objects under `prefixes`, the newest one OLDER than `sloHours` (the most
  *  recent object that should already be searchable), plus the newest overall (informational) and the
  *  candidate count. Returns { due, newest, candidates }. */
@@ -566,7 +598,9 @@ export async function checkOneBrainRoomFreshness(room) {
   if (!res.ok) {
     return { name, status: "ERROR", detail: `cannot check (OpenSearch _count HTTP ${res.status} for index "${room.index}"): ${(res.text || "").slice(0, 200)}` };
   }
-  const count = Number(res.json?.count ?? 0);
+  let count;
+  try { count = strictCount(res, `OpenSearch _count against "${room.index}"`); }
+  catch (e) { return { name, status: "ERROR", detail: `cannot check (${String((e && e.message) || e).slice(0, 300)})` }; }
   const v = assessRoomFreshness(ageH, sloHours, count);
   return { name, status: v.state, detail: `newest source object "${newest.name}" (${ageH.toFixed(1)}h old, SLO ${sloHours}h) ${v.reason}` };
 }
@@ -575,21 +609,25 @@ export async function checkOneBrainRoomFreshness(room) {
  *  under the push allow-list that is already past the SLO. Same ERROR-vs-STALE discipline as the legacy
  *  path: anything that prevents the check from running is ERROR, never STALE. */
 async function checkRoomByDueObject(room, name, blobs, prefixes, sloHours) {
-  const { due, newest, candidates } = pickNewestDueObject(blobs, prefixes, sloHours);
+  const { due, totalDue, newest, candidates } = pickDueObjects(blobs, prefixes, sloHours);
   const scope = `[${prefixes.join(", ")}]`;
   if (!candidates) return { name, status: "OK", detail: `no text objects under the push allow-list ${scope} yet (nothing is expected to be searchable)` };
   const info = newest ? ` (newest overall: "${newest.name}", ${((Date.now() - Date.parse(newest.lastModified)) / 3600000).toFixed(1)}h old, informational)` : "";
-  if (!due) return { name, status: "OK", detail: `all ${candidates} object(s) under ${scope} are within the ${sloHours}h SLO -- none is due to be indexed yet${info}` };
+  if (!due.length) return { name, status: "OK", detail: `all ${candidates} object(s) under ${scope} are within the ${sloHours}h SLO -- none is due to be indexed yet${info}` };
   let cfg;
   try { cfg = await resolveOpenSearchConfig(); }
   catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch config/credentials unresolvable): ${String((e && e.message) || e).slice(0, 300)}` }; }
+  const prefix = `${room.account}/${room.container}/`;
+  const paths = due.map((b) => `${prefix}${b.name}`);
   let res;
-  try { res = await osCount(cfg, room.index, { term: { "path.keyword": `${room.account}/${room.container}/${due.name}` } }); }
-  catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch _count against "${room.index}" failed): ${String((e && e.message) || e).slice(0, 300)}` }; }
-  if (!res.ok) return { name, status: "ERROR", detail: `cannot check (OpenSearch _count HTTP ${res.status} for index "${room.index}"): ${(res.text || "").slice(0, 200)}` };
-  const ageH = (Date.now() - Date.parse(due.lastModified)) / 3600000;
-  const v = assessRoomFreshness(ageH, sloHours, Number(res.json?.count ?? 0));
-  return { name, status: v.state, detail: `newest DUE object under ${scope} "${due.name}" (${ageH.toFixed(1)}h old, SLO ${sloHours}h) ${v.reason}${info}` };
+  // ONE terms query + a terms aggregation over path.keyword answers "which of these due paths have chunks".
+  try { res = await osSearch(cfg, room.index, { size: 0, query: { terms: { "path.keyword": paths } }, aggs: { present: { terms: { field: "path.keyword", size: paths.length } } } }); }
+  catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch _search against "${room.index}" failed): ${String((e && e.message) || e).slice(0, 300)}` }; }
+  if (!res.ok) return { name, status: "ERROR", detail: `cannot check (OpenSearch _search HTTP ${res.status} for index "${room.index}"): ${(res.text || "").slice(0, 200)}` };
+  const buckets = res.json && res.json.aggregations && res.json.aggregations.present && res.json.aggregations.present.buckets;
+  if (!Array.isArray(buckets)) return { name, status: "ERROR", detail: `cannot check (OpenSearch _search for "${room.index}" returned no aggregation buckets; refusing to read that as "nothing is indexed")` };
+  const v = assessDueObjects({ dueNames: due.map((b) => b.name), presentNames: buckets.map((x) => (String(x.key).startsWith(prefix) ? String(x.key).slice(prefix.length) : String(x.key))), totalDue, sloHours });
+  return { name, status: v.state, detail: `${v.reason}${info}` };
 }
 
 async function checkBrainRoomsFreshness() {
@@ -622,10 +660,11 @@ async function checkCommonsRingResidue() {
   const counts = [];
   for (const prefix of RING_PRIVATE_PREFIXES) {
     let res;
-    try { res = await osCount(cfg, RING_RESIDUE_ROOM.index, { prefix: { "path.keyword": `${RING_RESIDUE_ROOM.account}/${RING_RESIDUE_ROOM.container}/${prefix}` } }); }
+    try { res = await osCount(cfg, RING_RESIDUE_ROOM.index, pathPrefixQuery(`${RING_RESIDUE_ROOM.account}/${RING_RESIDUE_ROOM.container}/${prefix}`)); }
     catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch _count failed for ${prefix}): ${String((e && e.message) || e).slice(0, 300)}` }; }
     if (!res.ok) return { name, status: "ERROR", detail: `cannot check (OpenSearch _count HTTP ${res.status} for ${prefix})` };
-    counts.push({ prefix, count: Number(res.json?.count ?? 0) });
+    try { counts.push({ prefix, count: strictCount(res, `_count for ${prefix}`) }); }
+    catch (e) { return { name, status: "ERROR", detail: `cannot check (${String((e && e.message) || e).slice(0, 300)})` }; }
   }
   return { name, ...assessRingResidue(counts) };
 }

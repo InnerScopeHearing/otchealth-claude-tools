@@ -71,7 +71,7 @@ import * as OS from "../kb-memory/opensearch-write.mjs";
 import { OS_VECTOR_FIELD_FLAT, OS_VECTOR_FIELD_CHUNKED, classifyRoomShape, countWords, chunkText, buildChunkDocs } from "./chunking.mjs";
 export { OS_VECTOR_FIELD_FLAT, OS_VECTOR_FIELD_CHUNKED, classifyRoomShape, countWords, chunkText, buildChunkDocs };
 // SKIP_PREFIXES + the push-row selection rules live in ./push-rules.mjs (pure, importable).
-import { SKIP_PREFIXES, isSkippedPath, selectPushRows, parsePrefixList, unscopedPushRefusal } from "./push-rules.mjs";
+import { SKIP_PREFIXES, isSkippedPath, selectPushRows, parsePrefixList, unscopedPushRefusal, commonsScopeRefusal, isCommonsTarget, extractScopeArgs } from "./push-rules.mjs";
 export { SKIP_PREFIXES, isSkippedPath, selectPushRows, parsePrefixList };
 
 const argv = process.argv.slice(2);
@@ -82,12 +82,18 @@ const BUCKET_OV = takeVal("--bucket");
 const ACCT_OV = takeVal("--azure-account");
 const KEYSECRET_OV = takeVal("--key-secret");
 const idxOverride = takeVal("--index");
-const PREFIX = takeVal("--prefix", "");
+// --prefix / --prefixes are pulled out by extractScopeArgs (push-rules.mjs), NOT takeVal: takeVal swallowed the
+// NEXT argument whatever it was (`--prefixes --s3` scoped the push to "--s3"; a trailing `--prefixes` or the
+// `--prefixes=x` form ran UNSCOPED). A missing / flag-like value is a hard error, exit 2, before any I/O.
+const _scopeArgs = extractScopeArgs(argv);
+argv.splice(0, argv.length, ..._scopeArgs.argv);
+if (_scopeArgs.error) { console.error(`[indexer] ${_scopeArgs.error}`); process.exit(2); }
+const PREFIX = _scopeArgs.prefix;
 // push-search SCOPE (2026-09-29, brain-save directive). --prefixes a,b,c (or a single --prefix p) now
 // restricts which catalog rows push-search may embed + push; previously PREFIX was consumed only by
 // `index` and `build-csv`, so `push-search --prefix X` silently pushed the WHOLE un-pushed catalog.
 // Unset = the legacy unscoped push (the librarian jobs rely on that). See push-rules.mjs selectPushRows().
-const PREFIXES_RAW = takeVal("--prefixes", null);
+const PREFIXES_RAW = _scopeArgs.prefixes;
 const LIMIT = parseInt(takeVal("--limit", "0"), 10) || 0;
 const SKIP = parseInt(takeVal("--skip", "0"), 10) || 0; // push-search: skip the first N filtered docs (targeted tail re-push after an interrupted reindex)
 const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
@@ -149,11 +155,33 @@ async function scopePushRows(rows) {
   if (scope != null) console.error(`[push-search] scoped to prefixes [${scope.join(", ") || "(none -> nothing selected)"}]: ${out.length} of ${rows.length} catalog row(s) eligible`);
   return out;
 }
-async function objectStillLive(path) {
-  if (!REQUIRE_LIVE_OBJECT) return true;
-  if (BACKEND !== "s3") { console.error("[push-search] --require-live-object is only enforced on the s3 backend; ignoring"); return true; }
-  return (await headObjectMetaFromS3(S3ACCT, S3CONTAINER, path)) !== null;
+/** Selection + liveness for a push run, FINISHED before any embedding or write (round 4): every row that is not
+ *  already present is HEAD-checked (when --require-live-object) up front. A source that is genuinely gone (404)
+ *  is skipped; ANY OTHER head error (403/5xx/timeout) fails the whole run closed after selection, with a clear
+ *  message and no partial writes: an unreadable head is never "gone" and never "live". Returns null on a
+ *  failed run (process.exitCode already set), else { eligible, skipped, gone }. */
+async function preflightPushRows(rows, isPresent) {
+  const eligible = [];
+  let skipped = 0, gone = 0;
+  const headErrors = [];
+  for (const r of rows) {
+    if (isPresent(r)) { skipped++; continue; }
+    if (REQUIRE_LIVE_OBJECT) {
+      try { if ((await headObjectMetaFromS3(S3ACCT, S3CONTAINER, r.path)) === null) { gone++; continue; } }
+      catch (e) { headErrors.push(`${r.path}: ${String((e && e.message) || e).slice(0, 140)}`); continue; }
+    }
+    eligible.push(r);
+  }
+  if (headErrors.length) {
+    console.error(`[push-search] --require-live-object could not confirm ${headErrors.length} source object(s) (a HEAD failed with something other than "not found"), so the run FAILED CLOSED after selection: nothing was embedded, nothing was written.\n  ${headErrors.slice(0, 5).join("\n  ")}${headErrors.length > 5 ? `\n  ... and ${headErrors.length - 5} more` : ""}`);
+    process.exitCode = 1;
+    return null;
+  }
+  return { eligible, skipped, gone };
 }
+// The commons content gate (skills/doc-indexer/commons-push-gate.mjs), armed by runPushSearch when the target
+// is commons-company-journal. null for every other room.
+let COMMONS_GATE = null;
 
 const SM = "otchealth-shared-prod";
 const CATALOG_KEY = "_CATALOG/catalog.jsonl";
@@ -496,7 +524,7 @@ async function runIndex() {
   await initStorage();
   const rows = REINDEX ? [] : await loadCatalog();
   const done = new Set(rows.map((r) => r.path));
-  const objs = (await listAll(PREFIX)).filter((o) => !SKIP_PREFIXES.some((p) => o.name.startsWith(p)) && !o.name.endsWith("/"));
+  const objs = (await listAll(PREFIX)).filter((o) => !isSkippedPath(o.name) && !o.name.endsWith("/"));
   const todo = objs.filter((o) => REINDEX || !done.has(o.name));
   console.error(`[index] profile=${PROFILE} backend=${BACKEND} target=${targetRoom()} room=${objs.length}; ${done.size} cataloged; ${todo.length} to do${LIMIT ? ` (limit ${LIMIT})` : ""}.`);
   const haveIndex = await openIndex();
@@ -575,7 +603,7 @@ async function runBuildIndex() {
 async function runStatus() {
   await initStorage();
   const rows = await loadCatalog();
-  const objs = (await listAll(PREFIX)).filter((o) => !SKIP_PREFIXES.some((p) => o.name.startsWith(p)) && !o.name.endsWith("/"));
+  const objs = (await listAll(PREFIX)).filter((o) => !isSkippedPath(o.name) && !o.name.endsWith("/"));
   const byCat = {}, byEnt = {}, byEng = {}; let ocrN = 0, errN = 0, material = 0, side = 0;
   for (const r of rows) { byCat[r.category] = (byCat[r.category] || 0) + 1; byEnt[r.entity] = (byEnt[r.entity] || 0) + 1; byEng[r.engine || "?"] = (byEng[r.engine || "?"] || 0) + 1; if (r.ocr) ocrN++; if (r.err) errN++; if (r.material) material++; if (r.sidecar) side++; }
   console.log(`profile=${PROFILE} target=${targetRoom()}`);
@@ -757,12 +785,14 @@ async function runPushSearchAzure() {
   let rows = await scopePushRows((await loadCatalog()).filter((r) => r.sidecar && !r.err));
   if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
   const existing = REINDEX ? new Set() : await aisExistingIds(); // --reindex forces a full re-push
+  const pre = await preflightPushRows(rows, (r) => existing.has(crypto.createHash("sha1").update(r.path).digest("hex"))); // resumable: already in the index
+  if (!pre) return;
   console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME}`);
   // Embed in BATCHES of 16 (the endpoint accepts an array): ~16x fewer requests than per-doc, which
   // is what ends the 429-exhaustion death spiral on a 16k-doc room. Push to AI Search in 64-doc
   // batches with retry. embErr docs are skipped (logged) so one bad doc never stalls the room.
   const EMB_BATCH = 16, PUSH_BATCH = 64;
-  let n = 0, skipped = 0, embErr = 0, ready = [], pend = [], texts = [];
+  let n = 0, skipped = pre.skipped, embErr = 0, ready = [], pend = [], texts = [];
   async function pushReady(force) {
     while (ready.length >= PUSH_BATCH || (force && ready.length)) { const b = ready.splice(0, PUSH_BATCH); await aisPushRetry(b); n += b.length; console.error(`  pushed ${n} (skip ${skipped}${embErr ? `, embErr ${embErr}` : ""})`); }
   }
@@ -773,10 +803,8 @@ async function runPushSearchAzure() {
     pend = []; texts = [];
     await pushReady(false);
   }
-  for (const r of rows) {
+  for (const r of pre.eligible) {
     const id = crypto.createHash("sha1").update(r.path).digest("hex");
-    if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
-    if (!(await objectStillLive(r.path))) continue; // never resurrect a deleted/superseded source
     if (PUSH_DRY_RUN) { console.log(`  would push: ${r.path}`); continue; }
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
     const summary = r.summary || "";
@@ -1081,10 +1109,12 @@ async function runPushSearchOpenSearchChunked(cfg, index) {
     return;
   }
   const existingPaths = REINDEX ? new Set() : await osExistingChunkPaths(index); // --reindex forces a full re-chunk
+  const pre = await preflightPushRows(rows, (r) => !REINDEX && existingPaths.has(`${account}/${container}/${r.path}`)); // resumable: an already-present document is skipped
+  if (!pre) return;
   console.error(`[push-search] CHUNKED room ${index}: ${rows.length} catalog doc(s) with text; ${existingPaths.size} distinct doc(s) already present by path -> chunking new docs only (chunk<=${CHUNK_MAX_CHARS}c, overlap ${CHUNK_OVERLAP}c)`);
 
   const EMB_BATCH = 16, PUSH_BATCH = 64;
-  let docsNew = 0, docsSkipped = 0, docsEmpty = 0, docsEmbFailed = 0, docsGone = 0, n = 0, pushErr = 0, ready = [];
+  let docsNew = 0, docsSkipped = pre.skipped, docsEmpty = 0, docsEmbFailed = 0, docsGone = pre.gone, n = 0, pushErr = 0, ready = [];
   const dryPaths = [];
   async function pushReady(force) {
     while (ready.length >= PUSH_BATCH || (force && ready.length)) {
@@ -1095,13 +1125,14 @@ async function runPushSearchOpenSearchChunked(cfg, index) {
       console.error(`  pushed ${n} chunk(s) across ${docsNew} new doc(s) (skip ${docsSkipped}${docsEmbFailed ? `, embFailed ${docsEmbFailed}` : ""}${pushErr ? `, pushErr ${pushErr}` : ""})`);
     }
   }
-  for (const r of rows) {
-    const fullPath = `${account}/${container}/${r.path}`;
-    if (!REINDEX && existingPaths.has(fullPath)) { docsSkipped++; continue; } // resumable: this document already has chunks in the room
-    if (!(await objectStillLive(r.path))) { docsGone++; continue; } // superseded/retracted/deleted source: never resurrect it
-    if (PUSH_DRY_RUN) { dryPaths.push(r.path); continue; }
+  for (const r of pre.eligible) {
+    // Dry-run reads nothing per row EXCEPT under the commons gate, where the sidecar is read so the dry run
+    // reports exactly what the content gate would block.
+    if (PUSH_DRY_RUN && !COMMONS_GATE) { dryPaths.push(r.path); continue; }
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || "";
     if (!txt.trim()) { docsEmpty++; continue; }
+    if (COMMONS_GATE && !COMMONS_GATE.allow(r.path, txt)) continue; // secret / ring / provenance block: never embedded
+    if (PUSH_DRY_RUN) { dryPaths.push(r.path); continue; }
     const chunks = chunkText(txt, { maxChunkSize: CHUNK_MAX_CHARS, overlap: CHUNK_OVERLAP });
     if (!chunks.length) { docsEmpty++; continue; }
 
@@ -1132,6 +1163,7 @@ async function runPushSearchOpenSearchChunked(cfg, index) {
   if (PUSH_DRY_RUN) {
     for (const p of dryPaths) console.log(`  would push: ${p}`);
     console.log(`[push-search --dry-run] would push ${dryPaths.length} new document(s) to CHUNKED index ${index} (${docsSkipped} already present${docsGone ? `, ${docsGone} source object(s) gone -> skipped` : ""}); nothing embedded, nothing written`);
+    finishCommonsGate();
     return;
   }
   await pushReady(true);
@@ -1139,24 +1171,38 @@ async function runPushSearchOpenSearchChunked(cfg, index) {
   const failNote = (pushErr ? `, ${pushErr} push-failed` : "") + (docsGone ? `, ${docsGone} gone-source skipped` : "");
   console.log(`pushed ${n} chunk(s) across ${docsNew} new document(s) (${docsSkipped} doc(s) already present, ${docsEmpty} doc(s) with no usable text${docsEmbFailed ? `, ${docsEmbFailed} doc(s) embed-failed (retried next run)` : ""}${failNote}) to OpenSearch CHUNKED index ${index}`);
   if (pushErr > 0) process.exitCode = 1; // a partial bulk failure must not read as a clean run
+  if (docsEmbFailed > 0) { process.exitCode = 1; console.error(`[push-search] ${docsEmbFailed} document(s) failed to embed and were NOT pushed (retried next run): exiting non-zero`); } // never a clean run
+  finishCommonsGate();
+}
+
+/** Print the commons content-gate summary and make any block a non-zero exit. */
+function finishCommonsGate() {
+  if (!COMMONS_GATE) return;
+  console.error(`[push-search] ${COMMONS_GATE.summary()}`);
+  if (COMMONS_GATE.exitCode()) process.exitCode = 1;
 }
 
 async function runPushSearchOpenSearch() {
   await initStorage();
   const cfg = await OS.resolveOpenSearchConfig();
   IDXNAME = computeIndexName();
-  const shape = await osEnsureRoomIndex(cfg, IDXNAME);
+  // --dry-run must not CREATE or ALTER anything (round 4): osEnsureRoomIndex PUTs a new index (or extends a
+  // mapping) when the room is absent/unmapped, so a dry run reads the shape only.
+  const shape = PUSH_DRY_RUN ? await osRoomShape(cfg, IDXNAME) : await osEnsureRoomIndex(cfg, IDXNAME);
   if (shape === "chunked") {
     return runPushSearchOpenSearchChunked(cfg, IDXNAME);
   }
+  if (PUSH_DRY_RUN && shape !== "flat") console.error(`[push-search --dry-run] index ${IDXNAME} is ${shape}; a real run would ${shape === "absent" ? "create" : "extend"} it (flat schema). Nothing was created.`);
   let rows = await scopePushRows((await loadCatalog()).filter((r) => r.sidecar && !r.err));
   if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
-  const existing = REINDEX ? new Set() : await OS.existingIds(IDXNAME); // --reindex forces a full re-push
+  const existing = REINDEX || shape === "absent" ? new Set() : await OS.existingIds(IDXNAME); // --reindex forces a full re-push
+  const pre = await preflightPushRows(rows, (r) => existing.has(crypto.createHash("sha1").update(r.path).digest("hex"))); // resumable: already in the index
+  if (!pre) return;
   console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME} (opensearch)`);
   // Same batching shape as the Azure path: embed 16 at a time, push 64 at a time, one bad doc/batch
   // never stalls the whole room.
   const EMB_BATCH = 16, PUSH_BATCH = 64;
-  let n = 0, skipped = 0, embErr = 0, pushErr = 0, ready = [], pend = [], texts = [];
+  let n = 0, skipped = pre.skipped, embErr = 0, pushErr = 0, ready = [], pend = [], texts = [];
   async function pushReady(force) {
     while (ready.length >= PUSH_BATCH || (force && ready.length)) {
       const b = ready.splice(0, PUSH_BATCH);
@@ -1175,22 +1221,24 @@ async function runPushSearchOpenSearch() {
     pend = []; texts = [];
     await pushReady(false);
   }
-  for (const r of rows) {
-    const id = crypto.createHash("sha1").update(r.path).digest("hex");
-    if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
-    if (!(await objectStillLive(r.path))) continue; // never resurrect a deleted/superseded source
-    if (PUSH_DRY_RUN) { console.log(`  would push: ${r.path}`); continue; }
+  for (const r of pre.eligible) {
+    if (PUSH_DRY_RUN && !COMMONS_GATE) { console.log(`  would push: ${r.path}`); continue; }
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
+    if (COMMONS_GATE && !COMMONS_GATE.allow(r.path, txt)) continue; // secret / ring / provenance block: never embedded
+    if (PUSH_DRY_RUN) { console.log(`  would push: ${r.path}`); continue; }
     pend.push(buildFlatSearchDoc(r, txt, null));
     texts.push(((r.title || "") + "\n" + (r.summary || "") + "\n" + txt).slice(0, 8000));
     if (texts.length >= EMB_BATCH) await flushEmb();
   }
+  if (PUSH_DRY_RUN) { finishCommonsGate(); return; }
   await flushEmb();
   await pushReady(true);
   if (n > 0) { try { await OS.refresh(IDXNAME); } catch { /* best-effort -- docs are already durably written; a refresh failure only delays search-visibility */ } }
   const failNote = pushErr ? `, ${pushErr} push-failed` : "";
   console.log(`pushed ${n} new docs (${skipped} already present${embErr ? `, ${embErr} embed-failed` : ""}${failNote}) to OpenSearch index ${IDXNAME}`);
   if (pushErr > 0) process.exitCode = 1; // a partial bulk failure must not read as a clean run
+  if (embErr > 0) { process.exitCode = 1; console.error(`[push-search] ${embErr} document(s) failed to embed and were NOT pushed: exiting non-zero`); }
+  finishCommonsGate();
 }
 
 async function runCloudSearchOpenSearch(q) {
@@ -1226,11 +1274,27 @@ async function runCloudSearchOpenSearch(q) {
 
 async function runSearchInit() { return SEARCH_BACKEND === "azure" ? runSearchInitAzure() : runSearchInitOpenSearch(); }
 async function runPushSearch() {
-  // Refused BEFORE any storage/catalog/embedding work (see push-rules.mjs unscopedPushRefusal).
+  // Every refusal below happens BEFORE any storage, catalog, SSM or embedding work.
   let target = "";
   try { target = computeIndexName(); } catch { /* resolved later; the profile check still applies */ }
-  const refusal = unscopedPushRefusal(PROFILE, pushScope(), target);
+  const scope = pushScope();
+  const commons = isCommonsTarget(PROFILE, target);
+  // Unscoped, or scoped outside the reviewed allow-set (push-rules.mjs COMMONS_PUSH_ALLOWED_PREFIXES).
+  const refusal = commonsScopeRefusal(PROFILE, scope, target);
   if (refusal) { console.error(`[push-search] ${refusal}`); process.exitCode = 2; return; }
+  // --require-live-object is enforced through an S3 HEAD; on any other storage backend it used to be silently
+  // ignored (round 4), which let a superseded document be pushed from a stale catalog row.
+  if (REQUIRE_LIVE_OBJECT && BACKEND !== "s3") { console.error(`[push-search] --require-live-object is only enforced on the s3 storage backend (this run is ${BACKEND}); refusing rather than silently ignoring it`); process.exitCode = 2; return; }
+  if (commons) {
+    // The commons content gate cannot be applied to the retired Azure search path, so it is refused there.
+    if (SEARCH_BACKEND === "azure") { console.error("[push-search] refusing a commons push to the azure search backend: the commons content gate (secret + ring + provenance) is only wired on OpenSearch"); process.exitCode = 2; return; }
+    // Layer B needs the live secret-value set. Unavailable -> refuse the WHOLE push (never fail open).
+    try {
+      const G = await import("./commons-push-gate.mjs");
+      COMMONS_GATE = G.createCommonsGate({ needles: await G.loadCommonsNeedles(), log: (m) => console.error(m) });
+      console.error(`[push-search] commons content gate armed: secret layers A+B (${COMMONS_GATE.needleCount} live secret needle(s), values held in memory only), ring gate, brain-save provenance for _KNOWLEDGE/`);
+    } catch (e) { console.error(`[push-search] ${String((e && e.message) || e)}`); process.exitCode = 2; return; }
+  }
   return SEARCH_BACKEND === "azure" ? runPushSearchAzure() : runPushSearchOpenSearch();
 }
 async function runCloudSearch(q) { return SEARCH_BACKEND === "azure" ? runCloudSearchAzure(q) : runCloudSearchOpenSearch(q); }

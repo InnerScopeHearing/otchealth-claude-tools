@@ -8,7 +8,7 @@
 // unscoped push had already written.
 //
 // What it does: for every prefix in push-rules.mjs RING_PRIVATE_PREFIXES, find the chunk ids whose
-// `path.keyword` starts with `otchealthcommons/company-journal/<prefix>` and bulk-delete them. It never
+// `path.keyword` (matched case-insensitively) starts with `otchealthcommons/company-journal/<prefix>` and bulk-delete them. It never
 // reads or prints document content (ids and counts only) and never touches S3: the source objects stay
 // exactly where they are (the privileged lanes' own tooling and the ring-aware memory-exec room read
 // them), so the purge is reversible by construction.
@@ -20,7 +20,7 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolveOpenSearchConfig, deleteDocs, refresh } from "../kb-memory/opensearch-write.mjs";
 import { osSearch, osCount } from "./opensearch-client.mjs";
-import { RING_PRIVATE_PREFIXES, parsePrefixList } from "./push-rules.mjs";
+import { RING_PRIVATE_PREFIXES, parsePrefixList, pathPrefixQuery } from "./push-rules.mjs";
 
 export const ROOM = "commons-company-journal";
 export const ROOM_PATH_PREFIX = "otchealthcommons/company-journal/";
@@ -34,12 +34,21 @@ export function purgePrefixes(raw) {
   return want;
 }
 
-export const prefixQuery = (prefix) => ({ prefix: { "path.keyword": `${ROOM_PATH_PREFIX}${prefix}` } });
+// CASE-INSENSITIVE (adjudication round 4, N2): a residue chunk under `_memory/` or `_Journal/` must be found too.
+export const prefixQuery = (prefix) => pathPrefixQuery(`${ROOM_PATH_PREFIX}${prefix}`);
+
+/** Pure (N3): the integer count of a `_count` response, or throw: a missing/non-numeric count must never read
+ *  as 0, because "0 chunks left" is exactly what the purge's exit code and the canary trust. */
+export function countOf(res, label) {
+  const c = res && res.json ? res.json.count : undefined;
+  if (typeof c !== "number" || !Number.isFinite(c) || c < 0) throw new Error(`_count for ${label}: response carried no numeric count; refusing to read it as 0`);
+  return c;
+}
 
 async function countPrefix(cfg, prefix) {
   const r = await osCount(cfg, ROOM, prefixQuery(prefix));
   if (!r.ok) throw new Error(`_count HTTP ${r.status} for ${prefix}`);
-  return Number(r.json?.count ?? 0);
+  return countOf(r, prefix);
 }
 
 async function purgePrefix(cfg, prefix, { maxRounds = 200 } = {}) {

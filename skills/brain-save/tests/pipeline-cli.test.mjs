@@ -191,9 +191,11 @@ test("folder: exit-code precedence (refused beats saved) and every supported fil
 test("--store-only keeps raw bytes under _KNOWLEDGE-META/src/, registry searchable:false, nothing embedded", async () => {
   const be = createFakeBackend();
   const r = await run(["put", tmpDoc("mock.html", "<html><head><title>Widget mockup screen one</title></head><body>x</body></html>"), "--kind", "design", "--app", "fleet", "--store-only", "--json"], be);
-  assert.equal(r.code, 0, r.out);
+  // Round 4 (C3): stored-only is a DISTINCT non-zero exit (5): "stored, NOT searchable by request".
+  assert.equal(r.code, 5, r.out);
   const res = JSON.parse(r.out);
   assert.equal(res.status, "stored-only");
+  assert.equal(res.exit, 5);
   assert.equal(be.calls.embed, 0);
   assert.equal(knowledgeKeys(be).length, 0);
   const reg = JSON.parse(be.s3.get(`_KNOWLEDGE-META/registry/${res.brain_id}.json`).text);

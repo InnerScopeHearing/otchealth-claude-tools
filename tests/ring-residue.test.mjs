@@ -9,21 +9,19 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { SKIP_PREFIXES, RING_PRIVATE_PREFIXES, RING_PRIVATE_JOURNAL_LANES, isSkippedPath, unscopedPushRefusal, selectPushRows } from "../skills/doc-indexer/push-rules.mjs";
+import { SKIP_PREFIXES, RING_PRIVATE_PREFIXES, isSkippedPath, unscopedPushRefusal, selectPushRows } from "../skills/doc-indexer/push-rules.mjs";
 import { assessRingResidue, pageExitCode, ANOMALY_STATUSES, RING_RESIDUE_ROOM } from "../skills/aws-dr-canary/canary.mjs";
 import { purgePrefixes, prefixQuery, ROOM, ROOM_PATH_PREFIX } from "../skills/doc-indexer/purge-ring-residue.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-test("every ring-private prefix is a SKIP_PREFIX; the privileged journal lanes are included, ordinary lanes are not", () => {
+test("every ring-private prefix is a SKIP_PREFIX; ALL of _JOURNAL/ and _VAULT/ are never-push (round 4: no per-lane list)", () => {
   for (const p of RING_PRIVATE_PREFIXES) assert.ok(SKIP_PREFIXES.includes(p), p);
-  for (const p of ["_MEMORY/", "_HANDOFF/", "_DISPATCH/", "_JOURNAL/cfo/", "_JOURNAL/clo/", "_JOURNAL/clo-personal/", "_JOURNAL/exec/", "_JOURNAL/capital/"]) assert.ok(RING_PRIVATE_PREFIXES.includes(p), p);
-  assert.deepEqual([...RING_PRIVATE_JOURNAL_LANES].sort(), ["capital", "cfo", "clo", "clo-personal", "exec"]);
-  assert.equal(isSkippedPath("_JOURNAL/cfo/2026-09-01/_DIGEST.md"), true);
-  assert.equal(isSkippedPath("_JOURNAL/cto/2026-09-01/_DIGEST.md"), false);
-  assert.equal(isSkippedPath("_JOURNAL/cfox/x.md"), false, "a lane prefix is a whole segment");
+  assert.deepEqual([...RING_PRIVATE_PREFIXES].sort(), ["_DISPATCH/", "_HANDOFF/", "_JOURNAL/", "_MEMORY/", "_VAULT/"]);
+  for (const lane of ["cfo", "clo", "clo-personal", "exec", "capital", "cto", "coo", "developer"]) assert.equal(isSkippedPath(`_JOURNAL/${lane}/2026-09-01/_DIGEST.md`), true, lane);
+  assert.equal(isSkippedPath("_VAULT/registry.md"), true);
   assert.equal(isSkippedPath("_KNOWLEDGE/research/fleet/x.md"), false);
-  assert.deepEqual(selectPushRows([{ path: "_JOURNAL/cfo/a/_DIGEST.md" }, { path: "_JOURNAL/cto/a/_DIGEST.md" }], ["_JOURNAL/"]).map((r) => r.path), ["_JOURNAL/cto/a/_DIGEST.md"]);
+  assert.deepEqual(selectPushRows([{ path: "_JOURNAL/cfo/a/_DIGEST.md" }, { path: "_JOURNAL/cto/a/_DIGEST.md" }, { path: "_DAILY/2026-09-01.md" }], ["_JOURNAL/", "_DAILY/"]).map((r) => r.path), ["_DAILY/2026-09-01.md"]);
 });
 
 test("unscopedPushRefusal: the commons profile (or the commons room by --index) must be scoped; other rooms keep the legacy push", () => {
@@ -48,9 +46,9 @@ test("aws-dr-canary ring residue: zero chunks is OK; any chunk is a LEAK anomaly
   assert.equal(RING_RESIDUE_ROOM.index, "commons-company-journal");
   const ok = assessRingResidue(RING_PRIVATE_PREFIXES.map((prefix) => ({ prefix, count: 0 })));
   assert.equal(ok.status, "OK");
-  const leak = assessRingResidue([{ prefix: "_MEMORY/", count: 87 }, { prefix: "_HANDOFF/", count: 28 }, { prefix: "_JOURNAL/cfo/", count: 17 }, { prefix: "_DISPATCH/", count: 0 }]);
+  const leak = assessRingResidue([{ prefix: "_MEMORY/", count: 87 }, { prefix: "_HANDOFF/", count: 28 }, { prefix: "_JOURNAL/", count: 17 }, { prefix: "_DISPATCH/", count: 0 }]);
   assert.equal(leak.status, "LEAK");
-  assert.match(leak.detail, /132 chunk\(s\).*_MEMORY\/ 87, _HANDOFF\/ 28, _JOURNAL\/cfo\/ 17/);
+  assert.match(leak.detail, /132 chunk\(s\).*_MEMORY\/ 87, _HANDOFF\/ 28, _JOURNAL\/ 17/);
   assert.ok(!/_DISPATCH/.test(leak.detail), "zero-count prefixes are not listed as leaks");
   assert.ok(ANOMALY_STATUSES.includes("LEAK"));
   assert.equal(pageExitCode([{ name: "commons-ring-residue", ...leak }], true), 1);
@@ -59,10 +57,12 @@ test("aws-dr-canary ring residue: zero chunks is OK; any chunk is a LEAK anomaly
 
 test("purge-ring-residue: the prefix list can only be narrowed, never widened; queries are path.keyword prefixes in the commons room", () => {
   assert.deepEqual(purgePrefixes(null), RING_PRIVATE_PREFIXES.slice());
-  assert.deepEqual(purgePrefixes("_MEMORY/,_JOURNAL/cfo/"), ["_MEMORY/", "_JOURNAL/cfo/"]);
+  assert.deepEqual(purgePrefixes("_MEMORY/,_JOURNAL/"), ["_MEMORY/", "_JOURNAL/"]);
   assert.throws(() => purgePrefixes("_KNOWLEDGE/"), /may only name ring-private prefixes/);
-  assert.throws(() => purgePrefixes("_JOURNAL/"), /may only name ring-private prefixes/, "never the whole journal tree");
+  assert.deepEqual(purgePrefixes("_JOURNAL/"), ["_JOURNAL/"], "the whole journal tree IS ring-private now");
+  assert.throws(() => purgePrefixes("_JOURNAL/cto/"), /may only name ring-private prefixes/, "a sub-prefix is not on the reviewed list");
+  assert.throws(() => purgePrefixes("_DAILY/"), /may only name ring-private prefixes/);
   assert.equal(ROOM, "commons-company-journal");
-  assert.deepEqual(prefixQuery("_MEMORY/"), { prefix: { "path.keyword": `${ROOM_PATH_PREFIX}_MEMORY/` } });
+  assert.deepEqual(prefixQuery("_MEMORY/"), { prefix: { "path.keyword": { value: `${ROOM_PATH_PREFIX}_MEMORY/`, case_insensitive: true } } });
   assert.equal(ROOM_PATH_PREFIX, "otchealthcommons/company-journal/");
 });

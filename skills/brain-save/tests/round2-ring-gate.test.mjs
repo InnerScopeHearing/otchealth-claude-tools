@@ -51,8 +51,12 @@ test("round 2 front matter: restricted values match by CONTAINS, and truthy PHI/
     assert.equal(r.allowed, false, `${k}: ${v}`);
     assert.equal(r.routes[0].ring, ring, `${k}: ${v}`);
   }
-  for (const [k, v] of [["classification", "philosophy notes"], ["classification", "internal"], ["contains_phi", "false"], ["phi", "none"], ["mnpi", "no"], ["ring", "commons-review"], ["confidentiality", "confidential"], ["ring", "non-phi"], ["classification", "PHI-free"], ["ring", "no-mnpi"]]) {
+  for (const [k, v] of [["classification", "public"], ["classification", "internal"], ["contains_phi", "false"], ["phi", "none"], ["mnpi", "no"], ["ring", "fleet"], ["confidentiality", "none"], ["ring", "non-phi"], ["classification", "PHI-free"], ["ring", "no-mnpi"]]) {
     assert.equal(declaredSignals({ [k]: v }).length, 0, `${k}: ${v}`);
+  }
+  // Round 4 (S3): the value keys are an allowlist; a non-listed value declares a restriction even without a restricted word.
+  for (const [k, v] of [["classification", "philosophy notes"], ["ring", "commons-review"], ["confidentiality", "confidential"]]) {
+    assert.equal(declaredSignals({ [k]: v }).length, 1, `${k}: ${v}`);
   }
 });
 

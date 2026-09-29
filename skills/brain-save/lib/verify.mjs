@@ -44,37 +44,51 @@ export function idQueriesFor(brainId, key, contentSha) {
 export function idQueryFor(brainId, key, contentSha) { return idQueriesFor(brainId, key, contentSha)[0]; }
 
 /**
- * Room proof with retries. Returns { ok, idRank, titleRank, top3 }.
+ * Room proof with retries. Returns { ok, idRank, titleRank, top3, error, cleanMiss }.
  * `embedTitle` (async text -> vector) is optional: without it the title query is keyword-only.
- * Throws only if the search backend throws (callers treat that as "not proven").
+ * NEVER throws (adjudication round 4, C1): a search exception inside the retry loop is caught and retried.
+ *   ok         the doc is findable (id query rank 1, title query in the top 10)
+ *   cleanMiss  the FINAL attempt ran to completion without an exception and the doc was NOT findable: the
+ *              only outcome that proves it is not searchable. Callers may delete a document's chunks only
+ *              on a clean miss.
+ *   error      the FINAL attempt threw (the proof could not run); "" when ok or on a clean miss.
  */
 export async function verifyInRoom(backend, { key, brainId, title, contentSha, retries = 3, delayMs = 2000, embedTitle }) {
   let vector = null;
   if (embedTitle) { try { vector = await embedTitle(title); } catch { vector = null; } }
-  let last = { ok: false, idRank: 0, titleRank: 0, top3: [] };
+  let last = { ok: false, idRank: 0, titleRank: 0, top3: [], error: "", cleanMiss: false };
   const queries = idQueriesFor(brainId, key, contentSha);
-  for (let a = 0; a < retries; a++) {
+  for (let a = 0; a < Math.max(1, retries); a++) {
     if (a > 0) await sleep(delayMs);
-    let idRank = 0;
-    let idHits = [];
-    for (const q of queries) {
-      const hits = await backend.search({ queryText: q, top: 10 });
-      const r = rankOf(hits, key);
-      if (!idHits.length) idHits = hits;
-      if (r && (!idRank || r < idRank)) { idRank = r; idHits = hits; }
-      if (r === 1) break;
+    try {
+      let idRank = 0;
+      let idHits = [];
+      for (const q of queries) {
+        const hits = await backend.search({ queryText: q, top: 10 });
+        const r = rankOf(hits, key);
+        if (!idHits.length) idHits = hits;
+        if (r && (!idRank || r < idRank)) { idRank = r; idHits = hits; }
+        if (r === 1) break;
+      }
+      const titleHits = await backend.search({ queryText: title, vector, top: 10 });
+      const titleRank = rankOf(titleHits, key);
+      const ok = idRank === 1 && titleRank >= 1 && titleRank <= 10;
+      last = { ok, idRank, titleRank, top3: (idRank === 1 ? titleHits : idHits).slice(0, 3).map((h) => h.path), error: "", cleanMiss: !ok };
+      if (ok) return last;
+    } catch (e) {
+      last = { ok: false, idRank: last.idRank, titleRank: last.titleRank, top3: last.top3, error: String((e && e.message) || e).replace(/Bearer\s+\S+/g, "Bearer [redacted]").slice(0, 200), cleanMiss: false };
     }
-    const titleHits = await backend.search({ queryText: title, vector, top: 10 });
-    const titleRank = rankOf(titleHits, key);
-    last = { ok: idRank === 1 && titleRank >= 1 && titleRank <= 10, idRank, titleRank, top3: (idRank === 1 ? titleHits : idHits).slice(0, 3).map((h) => h.path) };
-    if (last.ok) return last;
   }
   return last;
 }
 
-/** Gateway proof. Returns { status: "ok"|"skipped"|"missing"|"error", rank, query, reason }. */
+/** Gateway proof. Returns { status: "ok"|"skipped"|"missing"|"error", rank, query, reason }.
+ *  A CLEAN miss ("not in the top 10" on a query that ran) is remembered: a later transport error on another
+ *  query or retry can no longer overwrite it into "error" (adjudication round 4, C2). */
 export async function verifyViaGateway(backend, { key, brainId, title, contentSha, retries = 2, delayMs = 2000 }) {
   let lastReason = "";
+  let missReason = "";
+  const missing = () => ({ status: "missing", rank: 0, query: "", reason: missReason });
   for (let a = 0; a < retries; a++) {
     if (a > 0) await sleep(delayMs);
     for (const [label, q] of [["title", title], ...idQueriesFor(brainId, key, contentSha).map((x) => ["id", x])]) {
@@ -83,15 +97,16 @@ export async function verifyViaGateway(backend, { key, brainId, title, contentSh
       catch (e) {
         const reason = `gateway call failed: ${String((e && e.message) || e).replace(/Bearer\s+\S+/g, "Bearer [redacted]").slice(0, 160)}`;
         // A timed-out call means a black-holed dependency: do not spend the remaining retries on it.
-        if (e && e.deadline) return { status: "error", rank: 0, query: label, reason };
+        if (e && e.deadline) return missReason ? missing() : { status: "error", rank: 0, query: label, reason };
         r = { ok: false, skipped: false, reason };
       }
       if (r.skipped) return { status: "skipped", rank: 0, query: label, reason: r.reason };
       if (!r.ok) { lastReason = r.reason || "gateway error"; continue; }
       const rank = rankOf(r.matches, key);
       if (rank) return { status: "ok", rank, query: label };
-      lastReason = `not in the top 10 for the ${label} query`;
+      missReason = `not in the top 10 for the ${label} query`;
     }
   }
-  return { status: lastReason.startsWith("not in") ? "missing" : "error", rank: 0, query: "", reason: lastReason };
+  if (missReason) return missing();
+  return { status: "error", rank: 0, query: "", reason: lastReason };
 }
