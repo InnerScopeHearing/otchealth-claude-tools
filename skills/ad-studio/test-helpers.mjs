@@ -1,6 +1,6 @@
 // test-helpers.mjs -- shared fixtures for ad-studio tests (NOT a test file; no network, no credits).
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 

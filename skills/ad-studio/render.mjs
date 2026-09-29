@@ -16,7 +16,7 @@ import { assetPath, cacheRoot, clearPending, getJson, getOrCreate, getPending, h
 import { loadManifest, validateManifest } from './validate.mjs';
 import { needsAiLabel } from './guards.mjs';
 import { chunkWords, stripAudioTags, wordTimings } from './captions.mjs';
-import { buildAudioMaster, computeTimeline, layoutVoLines, measureLoudness, probe, renderVideo, XFADE } from './assemble.mjs';
+import { buildAudioMaster, computeTimeline, layoutVoLines, measureLoudness, probe, renderVideo } from './assemble.mjs';
 import { parseFlags, spendOptions, SPEND_BOOLS } from './cli.mjs';
 
 export const DEFAULT_VIDEO_MODEL = 'veo-3.1-fast-generate-001';

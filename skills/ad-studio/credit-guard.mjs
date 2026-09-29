@@ -28,7 +28,7 @@ export const UNITS = { video: 'second', tts: 'char', music: 'second', sfx: 'seco
 
 /** perUnit = credits per unit. source explains where the number came from. null perUnit = UNKNOWN. */
 export const KNOWN_RATES = {
-  'video|veo-3.1-fast-generate-001|1080p|silent': { perUnit: 1000, source: 'measured 2026-09-29: 4 s = 4,000 credits (grant account)' },
+  'video|veo-3.1-fast-generate-001|1080p|silent': { perUnit: 1000, source: 'measured 2026-09-29 on this exact config only (veo-3.1-fast, 1080p, silent): generation gc8wfOZ1bQ5h90BDM9pW, 4 s, account balance moved by 4,000 credits (grant account). Every other video config stays UNKNOWN and is bounded by the ceiling' },
   // Docs (overview/capabilities/sound-effects.md): "40 credits per second when duration is specified".
   'sfx': { perUnit: 40, source: 'docs: 40 credits/s when duration_seconds is given' },
 };

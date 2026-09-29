@@ -7,7 +7,9 @@
 //  - The API key is sent ONLY to the ElevenLabs API host, never to a signed content URL (downloads use
 //    a bare fetch), and never appears in an error message or log line.
 //  - Signed URLs are truncated (host + first path chars, query stripped) whenever they are logged.
-//  - 429 and 5xx are retried with exponential backoff (Retry-After honored); other 4xx fail at once.
+//  - Reads (GET) retry 429 and 5xx with exponential backoff (Retry-After honored). Requests that CREATE billable work
+//    retry ONLY a 429 (rejected before any work starts); a timeout, network error or 5xx fails at once as OUTCOME UNKNOWN.
+//    Other 4xx fail at once.
 //  - Nothing in this file decides to SPEND. Spending is gated by credit-guard.mjs and render.mjs.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';

@@ -107,7 +107,7 @@ See `examples/sample-ad.json` and `ad-manifest.schema.json`. Key fields: `produc
 
 | File | Purpose |
 |---|---|
-| `el-client.mjs` | dependency-free ElevenLabs client (balance, Flows video, TTS with timestamps, music, SFX, dubbing), 429/5xx retry, key and signed URLs never logged |
+| `el-client.mjs` | dependency-free ElevenLabs client (balance, Flows video, TTS with timestamps, music, SFX, dubbing), reads retry 429/5xx, billable requests retry only 429, key and signed URLs never logged |
 | `credit-guard.mjs` | rate table, estimator, spend gate, runtime cap, JSONL ledger with learned rates |
 | `guards.mjs`, `validate.mjs`, `claims.mjs` | structure, FTC, brand, copy/PHI guards and the gateway claims gate |
 | `render.mjs` | validate, estimate, generate (cached), assemble |
