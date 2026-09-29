@@ -10,12 +10,12 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { imageReferenceFromFile, createClient, resolveApiKey } from './el-client.mjs';
+import { imageReferenceFromFile, createClient, resolveApiKey, GenerationFailed } from './el-client.mjs';
 import { BudgetExceeded, defaultLedgerPath, formatPlan, planSpend, readLedger, SpendGuard } from './credit-guard.mjs';
-import { assetPath, cacheRoot, getJson, getOrCreate, hashFile, hashJson, peek, putJson } from './cache.mjs';
+import { assetPath, cacheRoot, clearPending, getJson, getOrCreate, getPending, hashFile, hashJson, peek, putJson, putPending } from './cache.mjs';
 import { loadManifest, validateManifest } from './validate.mjs';
 import { needsAiLabel } from './guards.mjs';
-import { chunkWords, wordTimings } from './captions.mjs';
+import { chunkWords, stripAudioTags, wordTimings } from './captions.mjs';
 import { buildAudioMaster, computeTimeline, layoutVoLines, measureLoudness, probe, renderVideo, XFADE } from './assemble.mjs';
 import { parseFlags, spendOptions, SPEND_BOOLS } from './cli.mjs';
 
@@ -44,14 +44,34 @@ export function buildJobs(m, { baseDir, cacheDir = cacheRoot(), model = DEFAULT_
     const aspect = shot.aspect || '9:16';
     const negative = shot.negative_prompt || DEFAULT_NEGATIVE;
     const key = hashJson({ v: 1, kind: 'video', model, resolution, audio, prompt: shot.prompt, negative, seconds, aspect, seed: shot.seed ?? null, enhance: false, startFrame: sf ? hashFile(sf) : null });
+    const cached = !!peek(cacheDir, 'video', key, 'mp4');
     const job = {
       kind: 'video', label: `shot ${shot.id} (${seconds}s ${aspect} ${resolution})`, model, resolution, audio, seconds, key,
-      cached: !!peek(cacheDir, 'video', key, 'mp4'), shot,
+      cached, shot,
+      // a generation id saved from an earlier run means the money is ALREADY spent: resume it, do not submit a new one
+      resumed: !cached && !!getPending(cacheDir, 'video', key),
       async run(client) {
         const body = { model_id: model, prompt: shot.prompt, duration_secs: seconds, aspect_ratio: aspect, resolution, generate_audio: audio, negative_prompt: negative, enhance_prompt: false };
         if (Number.isInteger(shot.seed)) body.seed = shot.seed;
         if (sf) body.start_frame = imageReferenceFromFile(sf);
-        const r = await getOrCreate(cacheDir, 'video', key, 'mp4', async () => (await client.flowsVideoRun(body)).buffer, { model, resolution, prompt: shot.prompt });
+        const r = await getOrCreate(cacheDir, 'video', key, 'mp4', async () => {
+          let id = getPending(cacheDir, 'video', key)?.id;
+          if (!id) {
+            ({ id } = await client.flowsVideoCreate(body));
+            putPending(cacheDir, 'video', key, { id, model, resolution, seconds }); // persisted BEFORE waiting
+          }
+          try {
+            const done = await client.flowsVideoWait(id);
+            const buf = await client.download(done.content_url);
+            clearPending(cacheDir, 'video', key);
+            return buf;
+          } catch (e) {
+            // a FAILED generation is not charged, so the next run may submit a fresh one; anything else (timeout,
+            // download error) keeps the id so the next run resumes the same paid generation.
+            if (e instanceof GenerationFailed) clearPending(cacheDir, 'video', key);
+            throw e;
+          }
+        }, { model, resolution, prompt: shot.prompt });
         return r.path;
       },
     };
@@ -120,7 +140,7 @@ async function assembleAll(m, built, { outDir, workDir, cacheDir, log, preset, c
     const timeline = computeTimeline({ shotDurations: shots.map((s) => s.duration), voLines });
     const wdir = join(workDir, locale);
     const master = await buildAudioMaster({ voLines, musicPath, totalSec: timeline.total, workDir: wdir });
-    const captions = voLines.flatMap((l) => chunkWords(wordTimings(l.text, l.alignment, l.durationSec)).map((c) => ({ text: c.text, start: c.start + l.startSec, end: c.end + l.startSec })));
+    const captions = voLines.flatMap((l) => chunkWords(stripAudioTags(wordTimings(l.text, l.alignment, l.durationSec))).map((c) => ({ text: c.text, start: c.start + l.startSec, end: c.end + l.startSec })));
     const overlays = planOverlays(b.onScreenText, timeline.contentLen);
     const label = needsAiLabel(m) ? { text: m.disclosures?.label || 'AI-generated' } : null;
     for (const aspect of m.outputs) {
@@ -142,8 +162,9 @@ export async function renderAd(manifest, opts = {}) {
   const {
     baseDir = process.cwd(), outDir = resolve('ad-studio-out', manifest.id || 'ad'), client, callTool, validator = validateManifest,
     offline = false, commit = false, maxCredits, allowUnknownRate = false, model = DEFAULT_VIDEO_MODEL, resolution = '1080p', audio = false,
-    cacheDir = cacheRoot(), ledgerPath = defaultLedgerPath(), log = console.log, forbidNewVideo = false, preset = 'medium', crf = 18, font, sizeDivisor = 1,
+    cacheDir = cacheRoot(), ledgerPath = defaultLedgerPath(), log = console.log, forbidNewVideo = false, preset = 'medium', crf = 18, font, sizeDivisor = 1, spendGuard,
   } = opts;
+  if (audio) return { ok: false, stage: 'options', errors: ['--audio is not supported: Veo audio is NOT mixed into the assembly (the VO and music are), so generate_audio stays false and you never pay for audio that would be discarded'] };
 
   const v = await validator(manifest, { baseDir, offline, callTool });
   for (const w of v.warnings) log('  warn: ' + w);
@@ -157,7 +178,9 @@ export async function renderAd(manifest, opts = {}) {
   const ledger = readLedger(ledgerPath);
   let balance = null;
   if (needsSpend && commit && client) balance = await client.balance();
-  const plan = planSpend({ jobs: built.jobs, commit, maxCredits, allowUnknownRate, ledger, balanceRemaining: balance?.remaining ?? null });
+  // With a shared guard (variants) the cap is ONE budget for the whole run, so this plan sees only what is left of it.
+  const planCap = spendGuard ? spendGuard.maxCredits - spendGuard.spent : maxCredits;
+  const plan = planSpend({ jobs: built.jobs, commit, maxCredits: planCap, allowUnknownRate, ledger, balanceRemaining: balance?.remaining ?? null });
   log(formatPlan(plan, { maxCredits }));
 
   let spent = 0;
@@ -166,18 +189,19 @@ export async function renderAd(manifest, opts = {}) {
     if (!v.cleared) return { ok: false, stage: 'gate', errors: ['claims_check must have run and passed before any spend (do not combine --offline with --commit)'], plan };
     if (!plan.proceed) return { ok: false, stage: 'spend-gate', errors: plan.reasons, plan };
     if (!client) return { ok: false, stage: 'client', errors: ['no ElevenLabs client (API key missing)'], plan };
-    const guard = new SpendGuard({ client, maxCredits, ledgerPath, runId: `${manifest.id}-${Date.now()}` });
+    const guard = spendGuard || new SpendGuard({ client, maxCredits, ledgerPath, runId: `${manifest.id}-${Date.now()}` });
+    const spentBefore = guard.spent;
     for (const job of built.jobs) {
       if (job.cached) continue;
       log(`  generating: ${job.label}`);
       try { await guard.run(job, () => job.run(client)); }
       catch (e) {
-        if (e instanceof BudgetExceeded) return { ok: false, stage: 'budget', errors: [e.message], spent: guard.spent, plan };
-        return { ok: false, stage: 'generate', errors: [`${job.label}: ${e.message}`], spent: guard.spent, plan };
+        if (e instanceof BudgetExceeded) return { ok: false, stage: 'budget', errors: [e.message], spent: guard.spent - spentBefore, plan };
+        return { ok: false, stage: 'generate', errors: [`${job.label}: ${e.message}`], spent: guard.spent - spentBefore, plan };
       }
     }
-    spent = guard.spent;
-    log(`  spent ${spent.toLocaleString()} credits (cap ${maxCredits.toLocaleString()})`);
+    spent = guard.spent - spentBefore;
+    log(`  spent ${spent.toLocaleString()} credits (run total ${guard.spent.toLocaleString()} of cap ${guard.maxCredits.toLocaleString()})`);
   } else if (!v.cleared) {
     return { ok: false, stage: 'gate', errors: ['assets are cached, but this manifest is not cleared (claims_check did not run); refusing to assemble'], plan };
   }

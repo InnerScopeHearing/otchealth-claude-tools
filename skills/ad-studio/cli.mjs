@@ -5,8 +5,13 @@ export function parseFlags(argv, { bool = [] } = {}) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const key = a.slice(2);
-      if (key.includes('=')) { const [k, ...v] = key.split('='); flags[k] = v.join('='); continue; }
-      if (bool.includes(key) || argv[i + 1] === undefined || argv[i + 1].startsWith('--')) flags[key] = true;
+      if (key.includes('=')) { const [k, ...v] = key.split('='); const val = v.join('='); flags[k] = bool.includes(k) ? /^(true|yes|1)$/i.test(val) : val; continue; }
+      const next = argv[i + 1];
+      if (bool.includes(key)) {
+        // boolean flags: `--commit`, `--commit=false`, `--commit false` must all mean what they say
+        if (next !== undefined && /^(true|false|yes|no|1|0)$/i.test(next)) { flags[key] = /^(true|yes|1)$/i.test(next); i++; }
+        else flags[key] = true;
+      } else if (next === undefined || next.startsWith('--')) flags[key] = true;
       else flags[key] = argv[++i];
     } else flags._.push(a);
   }

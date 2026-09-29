@@ -26,6 +26,7 @@ import {
     writeMeta, reportCost, parseArgs, brandPromptPrefix,
     getVertexAccessToken, runVeoJob, extractVeoVideoB64, requireAzureOpenAI,
 } from './_lib.mjs';
+import { truthy } from './_spend.mjs';
 import { soraGenerateVideo } from './_azure.mjs';
 import { openaiGenerateVideo } from './_openai.mjs';
 
@@ -179,8 +180,9 @@ if (engine === 'elevenlabs') {
     const { planSpend, formatPlan, readLedger, SpendGuard } = await import('../../ad-studio/credit-guard.mjs');
     const job = { kind: 'video', model: elModel, resolution: elRes, audio, seconds: elSecs, label: `${elSecs}s ${ratio} ${elRes}${audio ? ' +audio' : ''}` };
     const maxCredits = args['max-credits'] === undefined ? undefined : Number(String(args['max-credits']).replace(/[,_]/g, ''));
-    const commit = Boolean(args.commit) && !dryRun;
-    const plan = planSpend({ jobs: [job], commit, maxCredits, allowUnknownRate: Boolean(args['allow-unknown-rate']), ledger: readLedger() });
+    // `--commit false` / `--commit=0` mean NO (a bare Boolean('false') would have meant yes)
+    const commit = truthy(args.commit) && !truthy(args['dry-run']) && !dryRun;
+    const plan = planSpend({ jobs: [job], commit, maxCredits, allowUnknownRate: truthy(args['allow-unknown-rate']), ledger: readLedger() });
     console.log(formatPlan(plan, { maxCredits }));
     console.log('PROMPT:');
     console.log(`  ${fullPrompt}`);

@@ -50,19 +50,37 @@ See `examples/sample-ad.json` and `ad-manifest.schema.json`. Key fields: `produc
 
 ## Spend rules (hard)
 
-1. Every generating command is a **dry run** unless you pass `--commit` **and** `--max-credits N`.
-2. If the known estimate exceeds the cap, or the remaining balance, nothing is submitted.
-3. Any job with an **UNKNOWN** rate blocks the run unless `--allow-unknown-rate` is passed. The cap still applies at runtime:
-   the guard reads the balance before and after every job (strictly one job at a time) and refuses to start the next job once
-   the cap would be crossed.
-4. Known rates today: Veo 3.1 Fast, 1080p, silent = **1,000 credits per second** (measured 2026-09-29) and sound effects
-   40 credits per second (docs). Everything else is unknown until measured. Each real job appends
-   `{balance before, after, delta, units}` to the ledger and the estimator uses the median of the learned samples, so
-   the first run of a new combination is the calibration run. Do it small (one 4 s shot) with a low cap.
-5. A cached asset costs nothing. When every asset is cached, `render.mjs` needs no `--commit`; it just re-assembles.
-6. Failed generations are not charged by ElevenLabs. A timeout does not cancel the server-side job: the error carries the
-   generation id so it can be looked up.
-7. `--offline` (claims not run) can never be combined with a spend.
+1. Every generating command is a **dry run** unless you pass `--commit` **and** `--max-credits N`. Boolean flags mean what they
+   say: `--commit false`, `--commit=0` and `--commit no` are NOT commits.
+2. `--max-credits` is one budget for the **whole run**. `variants.mjs` shares a single guard across all variants, so N variants
+   together can never spend more than the cap (each later variant is planned against what is left of it).
+3. **What the cap does and does not guarantee.** Known-rate jobs (Veo fast 1080p silent, 1,000 credits/s measured; SFX with a
+   duration, 40 credits/s from the docs) are estimated exactly. Every other rate is UNPUBLISHED, so those jobs are bounded by a
+   deliberately high **ceiling** (video 5,000/s, TTS 2/char, music 300/s, dubbing 2,000/s of speech, auto-length SFX 1,200):
+   the planner refuses unless `known + ceilings <= cap`, and the runtime guard refuses to START a job whose bound would push the
+   total past the cap. Unknown-rate jobs additionally need `--allow-unknown-rate`. The ceilings are guesses made to be too
+   high, not measurements: if one is wrong, that single job can still cost more than its ceiling before the guard sees the
+   balance afterwards, and then it stops everything else. Keep calibration runs small.
+4. The guard runs one job at a time and reads the balance before and after each. A missing, zero or negative delta on a job that
+   ran is NOT treated as free: it is charged at its estimate (or ceiling) against the cap and is never used to learn a rate.
+   A definite failure with no balance movement is not charged; a timeout or 5xx on a generating request is treated as possibly
+   charged.
+5. Each real job appends `{balance before, after, delta, charged}` to `~/.cache/ad-studio/credit-ledger.jsonl`. A learned rate
+   needs at least 2 clean samples and can only **raise** a known rate, never lower it.
+6. Generating requests are **never auto-retried** on a timeout, network error or 5xx (the first attempt may already have been
+   accepted and charged). Only a 429, which is rejected before any work starts, is retried. An "OUTCOME UNKNOWN" error means:
+   check the balance before doing anything again.
+7. A Flows video generation id is saved to the cache **before** waiting. If the wait times out or the download fails, the next
+   run resumes that same generation (no new charge, and it does not count against the cap again) instead of submitting a new
+   one. A generation that FAILED is not charged, so it is cleared and may be resubmitted.
+8. A cached asset costs nothing. When every asset is cached, `render.mjs` needs no `--commit`; it just re-assembles.
+9. `--offline` (claims not run) can never be combined with a spend.
+10. `--audio` is refused: Veo audio is not mixed into the assembly, so `generate_audio` stays false.
+11. `dub.mjs` obeys the same cap (its worst case is 2,000 credits per second of speech). The target language is passed in the
+    project-create call; the separate paid add-language endpoint is never used.
+12. The single-shot designer scripts (`gen-voiceover`, `gen-music`, `gen-sfx`, and `gen-video --engine elevenlabs`) write the same
+    ledger. The first three still spend by default for backward compatibility (`--dry-run` previews); pass `--max-credits N` to
+    make them honor a cap.
 
 ## Compliance rules (all enforced before spend, fail closed)
 
@@ -70,14 +88,15 @@ See `examples/sample-ad.json` and `ad-manifest.schema.json`. Key fields: `produc
   goes through the gateway `claims_check` tool with `channel: ad` and the manifest `productClass`. Only a `pass` verdict passes.
   An unreachable gateway, a bad token or an unparseable answer is a failure, not a pass. TReO is a PSAP: never hearing-aid,
   medical, FDA or cure language. `OTC_hearing_aid` is refused outright (gated to Matt and clinical review).
-- **FTC**: no testimonial framing. First-person voiceover (I, my), "as a customer", "real users", invented star ratings or
-  reviews, and before/after outcomes are rejected. A person speaking to camera is allowed only with `aiActor: true` and a
+- **FTC**: no testimonial framing, checked case-insensitively on voiceover, on-screen text and end card, in English and Spanish, after
+  Unicode normalization (zero-width and look-alike letters cannot hide a phrase). First-person voice (I, my, yo, mi, me), "as a customer",
+  "real users", invented star ratings or reviews, and before/after outcomes are rejected. A person speaking to camera is allowed only with `aiActor: true` and a
   configured on-screen "AI-generated" label (burned in for the whole video), and an AI actor may never be framed as a
   customer, patient or reviewer.
 - **Brand**: competitor and third-party brand names (Apple, AirPods, Bose, Sony, Jabra, Phonak, Oticon and others) are rejected in
-  prompts and copy. Any shot that shows the product must set `showsProduct: true` and supply `start_frame` (a REAL product
-  photo). Veo drew an AirPods look-alike from an unbranded prompt, so device words in a non-product shot are rejected too.
-- **Copy**: no em or en dashes in any published text, and no PHI-ring field names or PHI-shaped text.
+  prompts and copy, including spaced, dotted, accented, full-width, homoglyph and leetspeak spellings. Any shot that shows the product must set `showsProduct: true` and supply `start_frame` (a REAL product
+  photo). Veo drew an AirPods look-alike from an unbranded prompt, so any prompt that mentions a generic device word (earbud, earphone, headphone, earpiece, gadget, device, hearing aid, amplifier, wearable) counts as a product shot and must set `showsProduct: true` with a real `start_frame`.
+- **Copy**: no dash punctuation other than the plain hyphen in any published text (every Unicode Pd character is rejected), no PHI-ring field names or PHI-shaped text, and a PSAP end card must carry "not a hearing aid" (Spanish: "no es un audífono") in every locale. `endCard.background`, `textColor` and `accent` must be `#RRGGBB`.
 - Spanish (`locales: ["en","es"]`) needs a reviewed `i18n.es.script` with the same line count. Each line is claims-checked and
   synthesized with `language_code: es`. `dub.mjs` (Dubbing v2, audio only) exists for review use; its machine translation cannot
   pass claims_check, so it is never mixed into an ad automatically.
@@ -115,6 +134,7 @@ the ffmpeg assembly tests use generated color bars and sine tones. No test touch
   Cross-language v4 speech is fluent in the target language rather than carrying the source accent.
 - Each VO line is synthesized on its own (no previous_text or next_text) so line jobs stay independently cacheable. Keep lines
   self-contained sentences.
+- v4 audio tags such as `[whispers]` are stripped from captions.
 - Captions take their words from the manifest text and their timing from the TTS character alignment; if the API normalizes the
   text differently the timing falls back to an even spread across the line.
 - ffmpeg must include libass (the `ass` filter) and libx264. The captions use DejaVu Sans via fontconfig.

@@ -30,6 +30,23 @@ export function wordTimings(text, alignment, durationSec) {
   });
 }
 
+/** Drop v4 audio tags such as [whispers] or [laughs softly] (they direct delivery and are never spoken), so they are
+ *  not burned into the captions. Tags may span several whitespace-separated words. */
+export function stripAudioTags(words) {
+  const out = [];
+  let inTag = false;
+  for (const w of words) {
+    let text = '';
+    for (const ch of w.word) {
+      if (inTag) { if (ch === ']') inTag = false; continue; }
+      if (ch === '[') { inTag = true; continue; }
+      text += ch;
+    }
+    if (text.trim()) out.push({ ...w, word: text });
+  }
+  return out;
+}
+
 /** Group words into caption cards: <= maxWords and <= maxChars per card, splitting after sentence punctuation. */
 export function chunkWords(words, { maxWords = 4, maxChars = 24 } = {}) {
   const chunks = [];
@@ -59,8 +76,10 @@ export function assTime(sec) {
   const h = Math.floor(cs / 360000), m = Math.floor((cs % 360000) / 6000), ss = Math.floor((cs % 6000) / 100), c = cs % 100;
   return `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}.${String(c).padStart(2, '0')}`;
 }
+/** Only #RRGGBB is ever interpolated into ASS or an ffmpeg filter string; anything else falls back to `fallback`. */
+export function safeHex(v, fallback) { return /^#[0-9a-fA-F]{6}$/.test(String(v ?? '')) ? String(v) : fallback; }
 export function assColor(hex, alpha = 0) {
-  const h = String(hex).replace('#', '').padStart(6, '0');
+  const h = safeHex(hex, '#FFFFFF').replace('#', '');
   const r = h.slice(0, 2), g = h.slice(2, 4), b = h.slice(4, 6);
   return `&H${alpha.toString(16).toUpperCase().padStart(2, '0')}${b}${g}${r}`.toUpperCase();
 }

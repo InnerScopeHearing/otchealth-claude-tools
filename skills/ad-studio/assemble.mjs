@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { buildAss } from './captions.mjs';
+import { buildAss, safeHex } from './captions.mjs';
 
 export const OUTPUT_SIZES = { '9:16': [1080, 1920], '1:1': [1080, 1080], '16:9': [1920, 1080] };
 export const FPS = 30;
@@ -149,7 +149,7 @@ export async function renderVideo({ shots, audioPath, timeline, aspect, outFile,
 
   const args = ['-y', '-hide_banner', '-nostats'];
   shots.forEach((s) => args.push('-i', resolve(s.path)));
-  args.push('-f', 'lavfi', '-i', `color=c=${(endCard?.bg || '#12263A').replace('#', '0x')}:s=${W}x${H}:d=${END_CARD_SECS}:r=${FPS}`);
+  args.push('-f', 'lavfi', '-i', `color=c=${safeHex(endCard?.bg, '#12263A').replace('#', '0x')}:s=${W}x${H}:d=${END_CARD_SECS}:r=${FPS}`);
   args.push('-i', resolve(audioPath));
   const cardIdx = shots.length, audIdx = shots.length + 1;
   const g = [];

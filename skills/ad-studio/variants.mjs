@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url';
 import { createClient, resolveApiKey } from './el-client.mjs';
 import { loadManifest } from './validate.mjs';
 import { renderAd, DEFAULT_VIDEO_MODEL } from './render.mjs';
+import { defaultLedgerPath, SpendGuard } from './credit-guard.mjs';
 import { parseFlags, spendOptions, SPEND_BOOLS } from './cli.mjs';
 
 /** Pure: derive a variant manifest. Shots and music are never touched (that is what keeps video cost at zero). */
@@ -38,9 +39,14 @@ export function deriveVariant(base, spec) {
 
 export async function renderVariants(base, specs, opts = {}) {
   const results = [];
+  // ONE guard for the whole run: --max-credits is the budget for ALL variants together, not per variant.
+  let spendGuard = opts.spendGuard;
+  if (!spendGuard && opts.commit && opts.client && Number.isFinite(opts.maxCredits) && opts.maxCredits > 0) {
+    spendGuard = new SpendGuard({ client: opts.client, maxCredits: opts.maxCredits, ledgerPath: opts.ledgerPath || defaultLedgerPath(), runId: `${base.id}-variants-${Date.now()}` });
+  }
   for (const spec of specs) {
     const m = deriveVariant(base, spec);
-    const r = await renderAd(m, { ...opts, forbidNewVideo: true, outDir: resolve(opts.outDir || 'ad-studio-out', m.id) });
+    const r = await renderAd(m, { ...opts, spendGuard, forbidNewVideo: true, outDir: resolve(opts.outDir || 'ad-studio-out', m.id) });
     results.push({ id: m.id, ...r });
   }
   return results;

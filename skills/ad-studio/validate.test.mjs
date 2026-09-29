@@ -127,11 +127,24 @@ test('PHI: PHI-ring field names and PHI-shaped text are rejected', async () => {
   m = base(); m.onScreenText = ['ID 123-45-6789'];
   assert.ok(has(await V(m), /SSN-shaped/));
 });
-test('copy: PSAP legal line without "not a hearing aid" is a WARNING, not an error', async () => {
+test('M9: a PSAP end card without the "not a hearing aid" disclaimer is an ERROR (not a warning)', async () => {
   const m = base(); m.endCard.legal = 'Terms apply.';
   const r = await V(m);
-  assert.equal(r.ok, true);
-  assert.ok(r.warnings.some((w) => /not a hearing aid/.test(w)));
+  assert.equal(r.ok, false);
+  assert.ok(has(r, /PSAP en end card legal line must say "not a hearing aid"/));
+  assert.equal(r.claimsRan, true);
+  // counterfactual: the disclaimer present -> passes; another productClass is not forced to carry it
+  assert.equal((await V(base())).ok, true);
+  const g = base(); g.productClass = 'general'; g.endCard.legal = 'Terms apply.';
+  assert.equal((await V(g)).ok, true);
+});
+test('M9: each PSAP locale needs its own disclaimer (Spanish must say no es un audifono)', async () => {
+  const m = base(); m.locales = ['en', 'es']; m.i18n = { es: { script: ['Conozca TReO.', 'Más información abajo.'] } };
+  assert.ok(has(await V(m), /PSAP es end card legal line must say "no es un audífono".*missing/));
+  m.i18n.es.endCard = { legal: 'Amplificador de sonido personal.' };
+  assert.ok(has(await V(m), /PSAP es end card legal line must say/));
+  m.i18n.es.endCard = { legal: 'Amplificador de sonido personal, no es un audífono.' };
+  assert.equal((await V(m)).ok, true);
 });
 
 // ---- structure ---------------------------------------------------------------------------------
@@ -150,6 +163,7 @@ test('structure: es translation must have the same number of lines and is claims
   const m = base(); m.locales = ['en', 'es']; m.i18n = { es: { script: ['Conozca TReO.'] } };
   assert.ok(has(await V(m), /same number of lines/));
   m.i18n.es.script = ['Conozca TReO.', 'Más información abajo.'];
+  m.i18n.es.endCard = { legal: 'Amplificador de sonido personal, no es un audífono.' };
   const seen = [];
   const r = await V(m, { callTool: async (n, a) => { seen.push(a.text); return passAllClaims(); } });
   assert.equal(r.ok, true);
@@ -216,4 +230,80 @@ test('checkClaims dedupes identical strings but still reports every location', a
   let n = 0;
   const r = await checkClaims([{ id: 'a', where: 'A', text: 'same' }, { id: 'b', where: 'B', text: 'same' }], { productClass: 'PSAP', callTool: async () => { n++; return passAllClaims(); }, includeNetImpression: false });
   assert.equal(n, 1); assert.equal(r.results.length, 2); assert.equal(r.ok, true);
+});
+
+// ---- M6: FTC guard hardening ---------------------------------------------------------------------
+test('M6 FTC: first-person detection is case-insensitive and applies to on-screen text and the end card', async () => {
+  for (const [field, set] of [['vo', (m, t) => { m.script[0] = t; }], ['on-screen', (m, t) => { m.onScreenText = [t]; }], ['end card', (m, t) => { m.endCard.headline = t; }], ['end card cta', (m, t) => { m.endCard.cta = t; }]]) {
+    for (const t of ['i can hear again', 'MY hearing is better', 'I LOVE IT']) {
+      const m = base(); set(m, t);
+      assert.ok(has(await V(m), /FTC:/), `${field}: ${t}`);
+    }
+  }
+  // counterfactual: disabling the guard removes it (so the assertion above is the guard's doing)
+  const m = base(); m.endCard.headline = 'MY hearing'; 
+  assert.ok(!has(await V(m, { disable: ['ftcText'] }), /FTC:/));
+});
+test('M6 FTC: Spanish first-person, real-customer and outcome patterns are rejected in es locale copy', async () => {
+  const bad = ['Yo puedo oír de nuevo.', 'Mi audición mejoró.', 'Me cambió la vida.', 'Como cliente, lo recomiendo.', 'Clientes reales, resultados reales.', 'Antes y después.', 'Cinco estrellas 5 estrellas', 'Por fin oigo mejor.', 'Estoy feliz con TReO.'];
+  for (const t of bad) {
+    const m = base(); m.locales = ['en', 'es'];
+    m.i18n = { es: { script: [t, 'Más información abajo.'], endCard: { legal: 'Amplificador de sonido personal, no es un audífono.' } } };
+    assert.ok(has(await V(m), /FTC: es voiceover line 1/), t);
+  }
+  // clean Spanish copy is NOT flagged (accents and word boundaries are handled)
+  const ok = base(); ok.locales = ['en', 'es'];
+  ok.i18n = { es: { script: ['Conozca TReO, un amplificador de sonido personal.', 'Más información en el enlace de abajo.'], endCard: { legal: 'Amplificador de sonido personal, no es un audífono.' } } };
+  assert.ok(!has(await V(ok), /FTC/), 'clean Spanish must pass');
+});
+test('M6 FTC: look-alike Unicode and zero-width characters cannot hide a testimonial', async () => {
+  const m = base(); m.script[0] = 'm\u200By hearing is better';            // zero width space inside "my"
+  assert.ok(has(await V(m), /FTC: en voiceover line 1/));
+  const c = base(); c.script[0] = '\u0406 can hear again';                   // Cyrillic I
+  assert.ok(has(await V(c), /FTC: en voiceover line 1/));
+});
+
+// ---- M7: brand guard hardening -------------------------------------------------------------------
+test('M7 brand: NFKC, zero-width, homoglyphs, leetspeak and spacing inside a competitor name are all caught', async () => {
+  const variants = ['Air Pods', 'AIRPODS', 'A\u200Bir\u200BPods', '\uFF21\uFF49\uFF52\uFF30\uFF4F\uFF44\uFF53', '\u0410irPods', 'A.i.r.P.o.d.s', 'B0se speakers', 'S o n y', 'Ph\u043Enak', 'Pho-nak', '\u00C1pple'];
+  for (const v of variants) {
+    const m = base(); m.shots[1].prompt = `A person wearing ${v} on a train`;
+    assert.ok(has(await V(m), /brand: shots\[1\]\.prompt names a competitor/), v);
+  }
+  // counterfactual: innocent words are not flagged (the fold has boundaries)
+  const m = base(); m.shots[1].prompt = 'A pineapple and a sonnet on a table, no people';
+  assert.ok(!has(await V(m), /competitor/));
+});
+test('M7 brand: generic device words make it a PRODUCT shot that needs showsProduct + a real start_frame', async () => {
+  for (const w of ['earbud', 'gadget', 'device', 'hearing aid', 'amplifier', 'earpiece', 'headphones', 'Ear Buds']) {
+    const m = base(); m.shots[1].prompt = `Close-up of a small ${w} on a table`;
+    assert.ok(has(await V(m), /mentions a device/), w);
+    m.shots[1].showsProduct = true; // still no start_frame
+    assert.ok(has(await V(m), /shows the product but has no start_frame/), w);
+    m.shots[1].start_frame = 'assets/close.jpg';
+    assert.equal((await V(m)).errors.filter((x) => /brand:/.test(x)).length, 0, w);
+  }
+});
+
+// ---- M8: dash guard ------------------------------------------------------------------------------
+test('M8 dash: every Unicode dash (Pd) except the plain hyphen is rejected; hyphen-minus and the minus sign stay allowed', async () => {
+  const bad = ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2E3A', '\u2E3B', '\uFE58', '\uFE63', '\uFF0D', '\u058A', '\u1806', '\u30A0'];
+  for (const d of bad) {
+    const m = base(); m.script[1] = `Learn${d}more today.`;
+    assert.ok(has(await V(m), /copy: en voiceover line 2/), `U+${d.codePointAt(0).toString(16)}`);
+  }
+  const ok = base(); ok.script[1] = 'A well-known 3-step plan, 5 \u2212 2 = 3.';
+  assert.ok(!has(await V(ok), /dash/));
+});
+
+// ---- endCard colors (filter-graph injection) ----------------------------------------------------
+test('endCard colors must be #RRGGBB (they are interpolated into the ffmpeg filter graph)', async () => {
+  for (const bad of ['red', '#12', '#12263A;movie=/etc/passwd', '0x12263A', '#GGGGGG']) {
+    const m = base(); m.endCard.background = bad;
+    assert.ok(has(await V(m), /endCard\.background: must be a #RRGGBB/), bad);
+  }
+  const m = base(); m.endCard.background = '#12263A'; m.endCard.textColor = '#ffffff'; m.endCard.accent = '#0D9488';
+  assert.equal((await V(m)).ok, true);
+  const i = base(); i.i18n = { es: { endCard: { accent: 'blue' } } };
+  assert.ok(has(await V(i), /i18n\.es\.endCard\.accent/));
 });

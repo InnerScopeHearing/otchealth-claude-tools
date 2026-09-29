@@ -6,7 +6,7 @@
 // Usage:
 //   node gen-music.mjs --prompt "calm ambient piano, hopeful, unobtrusive" \
 //        [--duration 30] [--vocal] [--model music_v2_5] [--name app-ambience] \
-//        [--output marketing/bed.mp3] [--dry-run]
+//        [--output marketing/bed.mp3] [--dry-run] [--max-credits N]
 //
 // --duration is seconds (3–600). Defaults to instrumental (best for beds);
 // pass --vocal to allow sung vocals. Falls back to brand.music.default_style
@@ -15,6 +15,7 @@
 // Output: MP3 at brand.output_root/music/<slug>.mp3 + .meta.json.
 
 import { writeFileSync } from 'node:fs';
+import { guardedGenerate } from './_spend.mjs';
 import {
     loadCredentials, requireCredential, resolveBrand, pickOutputPath,
     writeMeta, reportCost, parseArgs,
@@ -56,26 +57,31 @@ if (dryRun) {
 
 requireCredential(creds, 'elevenlabsKey', 'ELEVENLABS_API_KEY');
 
-const res = await fetch('https://api.elevenlabs.io/v1/music', {
-    method: 'POST',
-    headers: {
-        'xi-api-key': creds.elevenlabsKey,
-        'Content-Type': 'application/json',
-        'Accept': 'audio/mpeg',
-    },
-    body: JSON.stringify({
-        prompt,
-        music_length_ms: musicLengthMs,
-        model_id: modelId,
-        // The API field is force_instrumental; the old `music_instrumental` is not in the current schema.
-        force_instrumental: instrumental,
-    }),
-});
-if (!res.ok) {
-    console.error(`ElevenLabs Music ${res.status}: ${await res.text()}`);
+let buf;
+try {
+    buf = await guardedGenerate({
+        job: { kind: 'music', model: modelId, seconds: durationSec, label: `music ${durationSec}s` },
+        args, apiKey: creds.elevenlabsKey,
+        generate: async () => {
+            const res = await fetch('https://api.elevenlabs.io/v1/music', {
+                method: 'POST',
+                headers: { 'xi-api-key': creds.elevenlabsKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+                body: JSON.stringify({
+                    prompt,
+                    music_length_ms: musicLengthMs,
+                    model_id: modelId,
+                    // The API field is force_instrumental; the old `music_instrumental` is not in the current schema.
+                    force_instrumental: instrumental,
+                }),
+            });
+            if (!res.ok) throw new Error(`ElevenLabs Music ${res.status}: ${await res.text()}`);
+            return Buffer.from(await res.arrayBuffer());
+        },
+    });
+} catch (e) {
+    console.error(e.message);
     process.exit(2);
 }
-const buf = Buffer.from(await res.arrayBuffer());
 
 const slug = args.name || prompt.split(/\s+/).slice(0, 6).join(' ');
 const outputPath = pickOutputPath({

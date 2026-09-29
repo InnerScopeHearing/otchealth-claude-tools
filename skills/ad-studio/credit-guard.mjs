@@ -3,9 +3,13 @@
 // RULES
 //  1. Every generating command is a DRY RUN unless BOTH --commit AND --max-credits N are given.
 //  2. Known-rate estimates are summed; if the sum exceeds the cap, nothing is submitted.
-//  3. A job whose rate is UNKNOWN blocks the run unless --allow-unknown-rate is given.
-//  4. While running, the guard keeps a running total of ACTUAL credits (balance delta after each job) and refuses
-//     to start another job once the cap would be crossed (this bounds unknown-rate jobs too).
+//  3. A job whose rate is UNKNOWN blocks the run unless --allow-unknown-rate is given. Even then it is not free of
+//     the cap: every unknown-rate job is bounded by a deliberately HIGH default ceiling (CEILING_RATES), and the
+//     planner and the runtime guard both require known estimates + ceilings to fit under the cap.
+//  4. While running, the guard keeps a running total of credits (balance delta after each job; when the delta is
+//     missing, zero or negative the job is charged at its estimate/ceiling instead) and refuses to START a job whose
+//     bound would push the total past the cap. A single job can still cost more than its ceiling if the ceiling is
+//     wrong; the guard then stops everything after it and the ledger learns the real number.
 //  5. Every real job appends {balance before/after, delta, units} to a JSONL ledger. The estimator reads the
 //     ledger, so rates that were unknown become known after one real run.
 //
@@ -28,6 +32,24 @@ export const KNOWN_RATES = {
   // Docs (overview/capabilities/sound-effects.md): "40 credits per second when duration is specified".
   'sfx': { perUnit: 40, source: 'docs: 40 credits/s when duration_seconds is given' },
 };
+
+/** Deliberately HIGH per-unit ceilings for kinds whose real rate is unpublished. Used only to bound the spend of
+ *  unknown-rate jobs against the cap; they are never presented as estimates. Overestimates by design. */
+export const CEILING_RATES = {
+  video: 5000,     // credits per second (measured Veo fast 1080p silent is 1,000)
+  tts: 2,          // credits per character
+  music: 300,      // credits per second
+  sfx: 40,         // credits per second (docs)
+  dubbing: 2000,   // credits per second of source speech
+};
+const SFX_AUTO_CEILING = 30 * 40; // auto-length SFX can run to the 30 s maximum
+
+export function ceilingOf(job) {
+  if (job.kind === 'sfx' && !(job.seconds > 0)) return SFX_AUTO_CEILING;
+  const per = CEILING_RATES[job.kind] ?? 5000;
+  const units = unitsOf(job);
+  return Math.ceil(per * (Number.isFinite(units) && units > 0 ? units : 60));
+}
 
 export function rateKey(job) {
   switch (job.kind) {
@@ -83,27 +105,31 @@ export function learnedRates(ledger) {
   return out;
 }
 
-/** Look up a rate: learned (ledger) first, then the measured/docs table, else UNKNOWN (perUnit null). */
+/** Look up a rate. A LEARNED rate needs >= 2 ledger samples, and where a measured/docs rate already exists a
+ *  learned rate may only RAISE it (a lucky cheap sample never lowers the guard). Otherwise: table, else UNKNOWN. */
+export const MIN_LEARNED_SAMPLES = 2;
 export function lookupRate(job, ledger = []) {
   const key = rateKey(job);
-  const learned = learnedRates(ledger)[key];
-  if (learned) return { key, ...learned };
-  const known = KNOWN_RATES[key];
+  const l = learnedRates(ledger)[key];
+  const learned = l && l.samples >= MIN_LEARNED_SAMPLES ? l : null;
+  let known = KNOWN_RATES[key];
+  if (known && job.kind === 'sfx' && !(job.seconds > 0)) known = null; // sfx table rate only applies with a duration
   if (known && known.perUnit != null) {
-    // The sfx rate is only valid when a duration was specified (docs); auto-length is unknown.
-    if (job.kind === 'sfx' && !(job.seconds > 0)) return { key, perUnit: null, source: 'sfx without duration_seconds: cost not published' };
+    if (learned && learned.perUnit > known.perUnit) return { key, ...learned };
     return { key, ...known };
   }
+  if (learned) return { key, ...learned };
   return { key, perUnit: null, source: 'UNKNOWN: no published or measured rate' };
 }
 
-/** Estimate one job. cached jobs cost 0. */
+/** Estimate one job. cached or resumed (already paid) jobs cost 0. `ceiling` is what the guard bounds the job at. */
 export function estimateJob(job, ledger = []) {
-  if (job.cached) return { job, credits: 0, known: true, key: rateKey(job), source: 'cache hit, no spend' };
+  if (job.cached || job.resumed) return { job, credits: 0, ceiling: 0, known: true, key: rateKey(job), source: job.cached ? 'cache hit, no spend' : 'resuming an already-paid generation, no new spend' };
   const r = lookupRate(job, ledger);
   const units = unitsOf(job);
-  if (r.perUnit == null || !(units >= 0)) return { job, credits: null, known: false, key: r.key, source: r.source, units };
-  return { job, credits: Math.ceil(r.perUnit * units), known: true, key: r.key, source: r.source, units };
+  if (r.perUnit == null || !(units >= 0)) return { job, credits: null, ceiling: ceilingOf(job), known: false, key: r.key, source: r.source, units };
+  const credits = Math.ceil(r.perUnit * units);
+  return { job, credits, ceiling: credits, known: true, key: r.key, source: r.source, units };
 }
 
 /**
@@ -115,28 +141,31 @@ export function planSpend({ jobs, commit = false, maxCredits, allowUnknownRate =
   const estimates = jobs.map((j) => estimateJob(j, ledger));
   const knownTotal = estimates.reduce((a, e) => a + (e.known ? e.credits : 0), 0);
   const unknown = estimates.filter((e) => !e.known);
+  const ceilingTotal = unknown.reduce((a, e) => a + e.ceiling, 0);
+  const worstCase = knownTotal + ceilingTotal;
   const lines = estimates.map((e) => {
     const j = e.job;
     const what = `${j.kind.padEnd(7)} ${j.label || ''}`.trim();
-    const cost = e.known ? `${e.credits.toLocaleString()} credits` : 'UNKNOWN credits';
-    return `  ${what.padEnd(46)} ${cost.padStart(18)}   [${e.source}]`;
+    const cost = e.known ? `${e.credits.toLocaleString()} credits` : `UNKNOWN (bounded at ${e.ceiling.toLocaleString()})`;
+    return `  ${what.padEnd(46)} ${cost.padStart(30)}   [${e.source}]`;
   });
   const reasons = [];
   const mode = commit ? 'commit' : 'dry-run';
   if (commit) {
     if (!(Number.isFinite(maxCredits) && maxCredits > 0)) reasons.push('--commit requires --max-credits N (a positive number)');
     else if (knownTotal > maxCredits) reasons.push(`known estimate ${knownTotal.toLocaleString()} exceeds --max-credits ${maxCredits.toLocaleString()}`);
-    if (unknown.length && !allowUnknownRate) reasons.push(`${unknown.length} job(s) have an UNKNOWN rate (${[...new Set(unknown.map((u) => u.key))].join(', ')}); pass --allow-unknown-rate to accept the risk (the running cap still applies)`);
-    if (balanceRemaining != null && knownTotal > balanceRemaining) reasons.push(`known estimate ${knownTotal.toLocaleString()} exceeds remaining balance ${balanceRemaining.toLocaleString()}`);
+    else if (worstCase > maxCredits) reasons.push(`worst case ${worstCase.toLocaleString()} (known ${knownTotal.toLocaleString()} + ceilings for ${unknown.length} unknown-rate job(s) ${ceilingTotal.toLocaleString()}) exceeds --max-credits ${maxCredits.toLocaleString()}`);
+    if (unknown.length && !allowUnknownRate) reasons.push(`${unknown.length} job(s) have an UNKNOWN rate (${[...new Set(unknown.map((u) => u.key))].join(', ')}); pass --allow-unknown-rate to accept the risk (each is still bounded by a ceiling under the cap)`);
+    if (balanceRemaining != null && worstCase > balanceRemaining) reasons.push(`worst case ${worstCase.toLocaleString()} exceeds remaining balance ${balanceRemaining.toLocaleString()}`);
   }
-  return { mode, proceed: commit && reasons.length === 0, lines, knownTotal, unknownCount: unknown.length, reasons, estimates };
+  return { mode, proceed: commit && reasons.length === 0, lines, knownTotal, ceilingTotal, worstCase, unknownCount: unknown.length, reasons, estimates };
 }
 
 export function formatPlan(plan, { maxCredits } = {}) {
   const out = [];
   out.push(plan.mode === 'commit' ? 'SPEND PLAN (commit requested)' : 'SPEND PLAN (DRY RUN, nothing will be submitted)');
   out.push(...plan.lines);
-  out.push(`  known total: ${plan.knownTotal.toLocaleString()} credits` + (plan.unknownCount ? `  +  ${plan.unknownCount} job(s) with UNKNOWN cost` : ''));
+  out.push(`  known total: ${plan.knownTotal.toLocaleString()} credits` + (plan.unknownCount ? `  +  ${plan.unknownCount} unknown-rate job(s) bounded at ${plan.ceilingTotal.toLocaleString()} (worst case ${plan.worstCase.toLocaleString()})` : ''));
   if (maxCredits) out.push(`  cap: ${Number(maxCredits).toLocaleString()} credits`);
   if (plan.mode === 'dry-run') out.push('  To spend: re-run with --commit --max-credits N (and --allow-unknown-rate if any rate is UNKNOWN).');
   for (const r of plan.reasons) out.push(`  REFUSED: ${r}`);
@@ -153,40 +182,51 @@ export class BudgetExceeded extends Error {
 }
 
 export class SpendGuard {
-  constructor({ client, maxCredits, ledgerPath = defaultLedgerPath(), runId = `run-${Date.now()}`, ledger = readLedger(ledgerPath), now = () => new Date().toISOString() }) {
-    if (!(Number.isFinite(maxCredits) && maxCredits > 0)) throw new Error('SpendGuard requires a positive maxCredits');
+  /** `uncapped: true` (legacy single-shot scripts with no --max-credits) keeps the ledger + before/after logging but
+   *  enforces no ceiling. Everything else requires a positive cap. */
+  constructor({ client, maxCredits, uncapped = false, ledgerPath = defaultLedgerPath(), runId = `run-${Date.now()}`, ledger = readLedger(ledgerPath), now = () => new Date().toISOString() }) {
+    if (uncapped) maxCredits = Infinity;
+    else if (!(Number.isFinite(maxCredits) && maxCredits > 0)) throw new Error('SpendGuard requires a positive maxCredits');
     Object.assign(this, { client, maxCredits, ledgerPath, runId, ledger, now });
     this.spent = 0;
+    this.warnings = [];
   }
 
   async run(job, fn) {
-    if (job.cached) return fn();
+    if (job.cached || job.resumed) return fn();
     const est = estimateJob(job, this.ledger);
-    if (est.known && this.spent + est.credits > this.maxCredits) {
-      throw new BudgetExceeded(`refusing to start "${job.label || job.kind}": ${this.spent.toLocaleString()} spent + ${est.credits.toLocaleString()} estimated > cap ${this.maxCredits.toLocaleString()}`);
-    }
-    if (this.spent >= this.maxCredits) {
-      throw new BudgetExceeded(`cap reached (${this.spent.toLocaleString()} of ${this.maxCredits.toLocaleString()} spent); stopping before "${job.label || job.kind}"`);
+    const bound = est.known ? est.credits : est.ceiling;
+    if (this.spent + bound > this.maxCredits) {
+      throw new BudgetExceeded(`refusing to start "${job.label || job.kind}": ${this.spent.toLocaleString()} spent + ${bound.toLocaleString()} ${est.known ? 'estimated' : 'ceiling (unknown rate)'} > cap ${this.maxCredits.toLocaleString()}`);
     }
     const before = await this.client.balance();
     let ok = true, result, err;
     try { result = await fn(); } catch (e) { ok = false; err = e; }
     let after = null;
-    try { after = await this.client.balance(); } catch { /* ledger still records the failure */ }
-    const delta = after && before.used != null && after.used != null ? after.used - before.used : null;
-    if (delta != null && delta > 0) this.spent += delta;
+    try { after = await this.client.balance(); } catch { /* recorded below as a missing delta */ }
+    const delta = after && Number.isFinite(before.used) && Number.isFinite(after.used) ? after.used - before.used : null;
+    const reliable = delta != null && delta > 0;
+    // A missing / zero / negative delta on a job that succeeded (or may have been accepted) is NOT "free": charge the bound.
+    let charged;
+    if (reliable) charged = delta;
+    else if (ok || err?.outcomeUnknown) charged = bound;
+    else charged = 0; // a definite failure with no balance movement was not charged
+    this.spent += charged;
     const entry = {
       ts: this.now(), runId: this.runId, kind: job.kind, label: job.label, rateKey: rateKey(job),
       model: job.model, resolution: job.resolution, audio: !!job.audio, units: unitsOf(job),
-      before: before.used, after: after?.used ?? null, delta, estimate: est.known ? est.credits : null,
-      ok, attributable: true, // the guard runs jobs strictly one at a time, so the delta belongs to this job
+      before: before.used, after: after?.used ?? null, delta, charged, deltaReliable: reliable, estimate: est.known ? est.credits : null,
+      ok, attributable: reliable && ok, // the guard runs jobs strictly one at a time, so a positive delta belongs to this job
     };
     appendLedger(entry, this.ledgerPath);
     this.ledger.push(entry);
     if (!ok) throw err;
-    if (delta != null && est.known && delta > est.credits * 1.5 + 10) {
-      // not fatal: the ledger now knows the real rate. Surface it so the operator sees the estimate was low.
-      result = result && typeof result === 'object' ? { ...result, spendWarning: `actual ${delta} credits vs estimate ${est.credits}` } : result;
+    const warn = !reliable ? `balance delta unavailable; charged the ${est.known ? 'estimate' : 'ceiling'} (${charged}) against the cap`
+      : (est.known && delta > est.credits * 1.5 + 10 ? `actual ${delta} credits vs estimate ${est.credits}` : null);
+    if (warn) {
+      this.warnings.push(warn);
+      // only PLAIN objects are decorated; a Buffer/array result (raw audio, etc.) must come back untouched
+      if (result && Object.getPrototypeOf(result) === Object.prototype) result = { ...result, spendWarning: warn };
     }
     return result;
   }

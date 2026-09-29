@@ -1,10 +1,13 @@
 // test-helpers.mjs -- shared fixtures for ad-studio tests (NOT a test file; no network, no credits).
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-export const tmp = (p = 'ads-') => mkdtempSync(join(tmpdir(), p));
+const made = [];
+// every scratch dir is removed when the test process exits (the ffmpeg renders are large)
+process.on('exit', () => { for (const d of made) rmSync(d, { recursive: true, force: true }); });
+export const tmp = (p = 'ads-') => { const d = mkdtempSync(join(tmpdir(), p)); made.push(d); return d; };
 
 /** Mock fetch: `handlers` is a function (url, init, callIndex) => Response | {status, json?, body?, headers?}. Records calls. */
 export function mockFetch(handler) {

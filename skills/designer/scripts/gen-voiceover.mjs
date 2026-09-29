@@ -6,12 +6,16 @@
 //   node gen-voiceover.mjs --text "..." [--voice-id <id>]
 //                           [--model eleven_v4]
 //                           [--output marketing/preview-vo.mp3]
-//                           [--dry-run]
+//                           [--dry-run] [--max-credits N]
+//
+// Every real call is logged to the ad-studio credit ledger (~/.cache/ad-studio/credit-ledger.jsonl). With --max-credits N the
+// estimate/ceiling must fit under N before anything is sent (exit 2 otherwise). Without it the script behaves as before.
 //
 // Default voice: "warm middle-aged female calm narrator" — set per project
 // via brand.voiceover_default_voice_id or override with --voice-id.
 
 import { writeFileSync } from 'node:fs';
+import { guardedGenerate } from './_spend.mjs';
 import {
     loadCredentials, requireCredential, resolveBrand, pickOutputPath,
     writeMeta, reportCost, parseArgs,
@@ -60,26 +64,25 @@ if (dryRun) {
 requireCredential(creds, 'elevenlabsKey', 'ELEVENLABS_API_KEY');
 
 const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
-const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-        'xi-api-key': creds.elevenlabsKey,
-        'Content-Type': 'application/json',
-        'Accept': 'audio/mpeg',
-    },
-    body: JSON.stringify({
-        text,
-        model_id: model,
-        voice_settings: voiceSettings,
-    }),
-});
-
-if (!res.ok) {
-    console.error(`ElevenLabs ${res.status}: ${await res.text()}`);
+let buf;
+try {
+    buf = await guardedGenerate({
+        job: { kind: 'tts', model, chars: text.length, label: `voiceover ${text.length} chars` },
+        args, apiKey: creds.elevenlabsKey,
+        generate: async () => {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'xi-api-key': creds.elevenlabsKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+                body: JSON.stringify({ text, model_id: model, voice_settings: voiceSettings }),
+            });
+            if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${await res.text()}`);
+            return Buffer.from(await res.arrayBuffer());
+        },
+    });
+} catch (e) {
+    console.error(e.message);
     process.exit(2);
 }
-
-const buf = Buffer.from(await res.arrayBuffer());
 
 const slug = args.name || text.split(/\s+/).slice(0, 6).join(' ');
 const outputPath = pickOutputPath({

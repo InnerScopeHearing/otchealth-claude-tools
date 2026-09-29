@@ -35,9 +35,12 @@ export function scrub(text, apiKey) {
 }
 
 export class ElevenLabsError extends Error {
-  constructor(message, { status, code, requestId, body } = {}) {
+  constructor(message, { status, code, requestId, body, outcomeUnknown } = {}) {
     super(message);
     this.name = 'ElevenLabsError';
+    // true when a GENERATING request may have been accepted and charged (timeout, network drop, 5xx). Never blind-retry:
+    // check the balance / cache sidecar first.
+    this.outcomeUnknown = !!outcomeUnknown;
     this.status = status;
     this.code = code;
     this.requestId = requestId;
@@ -45,12 +48,15 @@ export class ElevenLabsError extends Error {
   }
 }
 
+const FAILURE_REASONS = ['timeout', 'model_error', 'moderated', 'invalid_parameters', 'dependency_failed', 'charging_failed', 'internal_error'];
 export class GenerationFailed extends Error {
-  constructor(id, reason, message) {
-    super(`generation ${id} failed: ${reason}${message ? ' - ' + message : ''}`);
+  /** `message` is the server's error_message: it is scrubbed (signed URLs, the API key) and truncated before it can reach a log. */
+  constructor(id, reason, message, apiKey) {
+    const r = FAILURE_REASONS.includes(reason) ? reason : 'unknown';
+    super(`generation ${scrub(id, apiKey)} failed: ${r}${message ? ' - ' + scrub(message, apiKey) : ''}`);
     this.name = 'GenerationFailed';
     this.generationId = id;
-    this.failureReason = reason;
+    this.failureReason = r;
   }
 }
 
@@ -88,6 +94,11 @@ export function imageReferenceFromFile(path) {
   return { type: 'inline_base64', content_base64: readFileSync(path).toString('base64'), mime_type: mime };
 }
 
+/** Music synthesis + streaming grows with the track: 2 min + 1.5x the requested length, capped at 20 min (a 600 s track needs ~17). */
+export function musicTimeoutMs(lengthMs) {
+  return Math.min(20 * 60_000, Math.max(120_000, 120_000 + Math.round((lengthMs || 60_000) * 1.5)));
+}
+
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- client --------------------------------------------------------------------------------
@@ -103,7 +114,10 @@ export function createClient({
 } = {}) {
   if (!apiKey) throw new Error('ElevenLabs API key missing (set ELEVENLABS_API_KEY or ~/.designer/credentials.env)');
 
-  async function raw(method, path, { json, form, query, accept } = {}) {
+  /** `generating: true` marks a request that CREATES billable work. Those are never auto-retried on timeout, network
+   *  error or 5xx (the server may already have accepted and charged the first attempt). Only a 429, which is rejected
+   *  before any work starts, is retried, and only a bounded number of times. */
+  async function raw(method, path, { json, form, query, accept, generating = false, timeoutMs = requestTimeoutMs } = {}) {
     let url = baseUrl + path;
     if (query) {
       const qs = new URLSearchParams();
@@ -121,12 +135,13 @@ export function createClient({
     for (;;) {
       let res;
       try {
-        res = await fetchImpl(url, { method, headers, body, signal: AbortSignal.timeout(requestTimeoutMs) });
+        res = await fetchImpl(url, { method, headers, body, signal: AbortSignal.timeout(timeoutMs) });
       } catch (e) {
-        if (attempt < maxRetries) { attempt++; await sleep(backoffMs(attempt)); continue; }
-        throw new ElevenLabsError(`network error on ${method} ${path}: ${scrub(e.message, apiKey)}`);
+        if (!generating && attempt < maxRetries) { attempt++; await sleep(backoffMs(attempt)); continue; }
+        throw new ElevenLabsError(`network error on ${method} ${path}: ${scrub(e.message, apiKey)}${generating ? ' (OUTCOME UNKNOWN: the request may have been accepted and charged; do not resubmit before checking the balance)' : ''}`, { outcomeUnknown: generating });
       }
-      if ((res.status === 429 || res.status >= 500) && attempt < maxRetries) {
+      const retryable = res.status === 429 || (!generating && res.status >= 500);
+      if (retryable && attempt < maxRetries) {
         attempt++;
         const ra = Number(res.headers?.get?.('retry-after'));
         const wait = Number.isFinite(ra) && ra > 0 ? ra * 1000 : backoffMs(attempt);
@@ -142,6 +157,7 @@ export function createClient({
         const msg = typeof detail === 'string' ? detail : (detail?.message ?? text);
         throw new ElevenLabsError(`HTTP ${res.status} on ${method} ${path}: ${scrub(msg, apiKey)}`, {
           status: res.status, code, requestId: detail?.request_id, body: scrub(text, apiKey),
+          outcomeUnknown: generating && res.status >= 500,
         });
       }
       return res;
@@ -171,16 +187,16 @@ export function createClient({
      *  body = {model_id, prompt, duration_secs, aspect_ratio, resolution, generate_audio, start_frame?, ...}.
      *  References are {type:'inline_base64'|'asset'|'generation', ...}. NOTE (docs): `images` cannot be combined
      *  with start_frame/end_frame and requires duration 8. */
-    flowsVideoCreate: (body) => jsonReq('POST', '/v1/flows/video', { json: body }),
+    flowsVideoCreate: (body) => jsonReq('POST', '/v1/flows/video', { json: body, generating: true }),
     /** GET /v1/flows/video/{id}. status pending|generating|completed(content_url)|failed(failure_reason,error_message). */
     flowsVideoGet: (id) => jsonReq('GET', `/v1/flows/video/${encodeURIComponent(id)}`),
     /** Poll until terminal. Video floor is 10 s per the docs; backs off x1.5 up to maxIntervalMs; hard ceiling timeoutMs. */
-    flowsVideoWait: (id, opts) => waitForGeneration(client.flowsVideoGet, id, { minIntervalMs: 10_000, maxIntervalMs: 60_000, timeoutMs: 15 * 60_000, sleep, log, ...opts, floorMs: 10_000 }),
+    flowsVideoWait: (id, opts) => waitForGeneration(client.flowsVideoGet, id, { minIntervalMs: 10_000, maxIntervalMs: 60_000, timeoutMs: 15 * 60_000, sleep, log, apiKey, ...opts, floorMs: 10_000 }),
     /** POST /v1/flows/image (UNVERIFIED body: same pattern as video with model_id/prompt/aspect_ratio; ref cookbook). */
-    flowsImageCreate: (body) => jsonReq('POST', '/v1/flows/image', { json: body }),
+    flowsImageCreate: (body) => jsonReq('POST', '/v1/flows/image', { json: body, generating: true }),
     flowsImageGet: (id) => jsonReq('GET', `/v1/flows/image/${encodeURIComponent(id)}`),
     /** Images: docs floor is 2 s. */
-    flowsImageWait: (id, opts) => waitForGeneration(client.flowsImageGet, id, { minIntervalMs: 2_000, maxIntervalMs: 20_000, timeoutMs: 5 * 60_000, sleep, log, ...opts, floorMs: 2_000 }),
+    flowsImageWait: (id, opts) => waitForGeneration(client.flowsImageGet, id, { minIntervalMs: 2_000, maxIntervalMs: 20_000, timeoutMs: 5 * 60_000, sleep, log, apiKey, ...opts, floorMs: 2_000 }),
 
     /** Download signed content. Deliberately WITHOUT the xi-api-key header (the URL is pre-authorized, and the
      *  key must never be sent to a storage host). Returns a Buffer. */
@@ -207,7 +223,7 @@ export function createClient({
       const form = new FormData();
       form.set('asset', new Blob([readFileSync(path)]), name || basename(path));
       form.set('name', name || basename(path));
-      return jsonReq('POST', '/v1/assets', { form });
+      return jsonReq('POST', '/v1/assets', { form, generating: true });
     },
 
     // ---- speech / music / sfx -----------------------------------------------------------------
@@ -222,7 +238,7 @@ export function createClient({
       if (previousText) body.previous_text = previousText;
       if (nextText) body.next_text = nextText;
       if (Number.isInteger(seed)) body.seed = seed;
-      const j = await jsonReq('POST', `/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps`, { json: body, query: { output_format: outputFormat } });
+      const j = await jsonReq('POST', `/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps`, { json: body, query: { output_format: outputFormat }, generating: true });
       return { audio: Buffer.from(j.audio_base64, 'base64'), alignment: j.alignment ?? null, normalizedAlignment: j.normalized_alignment ?? null };
     },
     /** POST /v1/music. Docs: api-reference/music/compose.md. Fields: prompt, music_length_ms (3000..600000),
@@ -230,7 +246,9 @@ export function createClient({
     async music({ prompt, lengthMs, modelId = 'music_v2_5', forceInstrumental = true, outputFormat = 'mp3_44100_128' }) {
       const body = { prompt, model_id: modelId, force_instrumental: forceInstrumental };
       if (lengthMs) body.music_length_ms = lengthMs;
-      const res = await raw('POST', '/v1/music', { json: body, query: { output_format: outputFormat }, accept: 'audio/mpeg' });
+      // a 600 s track takes minutes to synthesize and stream back: scale the timeout with the requested length (2 min + 1.5x the track, max 20 min)
+      const timeoutMs = musicTimeoutMs(lengthMs);
+      const res = await raw('POST', '/v1/music', { json: body, query: { output_format: outputFormat }, accept: 'audio/mpeg', generating: true, timeoutMs });
       return Buffer.from(await res.arrayBuffer());
     },
     /** POST /v1/sound-generation. Docs: api-reference/text-to-sound-effects/convert.md. duration_seconds 0.5..30. */
@@ -239,7 +257,7 @@ export function createClient({
       if (durationSeconds != null) body.duration_seconds = durationSeconds;
       if (promptInfluence != null) body.prompt_influence = promptInfluence;
       if (loop) body.loop = true;
-      const res = await raw('POST', '/v1/sound-generation', { json: body, accept: 'audio/mpeg' });
+      const res = await raw('POST', '/v1/sound-generation', { json: body, accept: 'audio/mpeg', generating: true });
       return Buffer.from(await res.arrayBuffer());
     },
 
@@ -254,47 +272,51 @@ export function createClient({
       if (reference) form.set('reference', reference);
       if (targetLanguage) form.set('target_language', targetLanguage);
       for (const k of keyterms || []) form.append('keyterms', k);
-      return jsonReq('POST', '/v1/dubbing/project', { form });
+      return jsonReq('POST', '/v1/dubbing/project', { form, generating: true });
     },
     dubbingGetProject: (id) => jsonReq('GET', `/v1/dubbing/project/${encodeURIComponent(id)}`),
     /** POST /v1/dubbing/project/{id}/language {target_language, voice_settings?}. Billed per generation. */
-    dubbingAddLanguage: (projectId, { targetLanguage, voiceSettings }) => jsonReq('POST', `/v1/dubbing/project/${encodeURIComponent(projectId)}/language`, { json: { target_language: targetLanguage, ...(voiceSettings ? { voice_settings: voiceSettings } : {}) } }),
+    dubbingAddLanguage: (projectId, { targetLanguage, voiceSettings }) => jsonReq('POST', `/v1/dubbing/project/${encodeURIComponent(projectId)}/language`, { json: { target_language: targetLanguage, ...(voiceSettings ? { voice_settings: voiceSettings } : {}) }, generating: true }),
     dubbingGetLanguage: (projectId, languageId) => jsonReq('GET', `/v1/dubbing/project/${encodeURIComponent(projectId)}/language/${encodeURIComponent(languageId)}`),
-    /** Wait for project ready, then a language completed. Output is `outputs.lossless_audio` (a FLAC, signed URL ~1 h);
-     *  the docs list no video output, so dubbing is an AUDIO stage in ad-studio. */
+    /** Dub `filePath` into ONE language. The first language is queued by the project-create call itself (`target_language`),
+     *  which is what the minimum charge prepays; we never call the separate paid add-language endpoint for it.
+     *  Output is `outputs.lossless_audio` (a FLAC, signed URL ~1 h); the docs list no video output, so dubbing is an AUDIO stage. */
     async dubbingRun({ filePath, sourceUrl, sourceLanguage = 'en', targetLanguage, reference, pollMs = 5_000, timeoutMs = 20 * 60_000, now = Date.now }) {
+      if (!targetLanguage) throw new Error('targetLanguage required');
       const start = now();
-      const project = await client.dubbingCreateProject({ filePath, sourceUrl, sourceLanguage, reference });
+      const project = await client.dubbingCreateProject({ filePath, sourceUrl, sourceLanguage, reference, targetLanguage });
       let p = project;
       while (p.status !== 'ready') {
-        if (p.status === 'failed') throw new Error(`dubbing project failed: ${scrub(p.error?.error, apiKey)}`);
+        if (p.status === 'failed') throw new Error(`dubbing project ${project.project_id} failed: ${scrub(p.error?.error, apiKey)}`);
         if (now() - start > timeoutMs) throw new GenerationTimeout(project.project_id, timeoutMs);
         await sleep(pollMs);
         p = await client.dubbingGetProject(project.project_id);
       }
-      let lang = await client.dubbingAddLanguage(project.project_id, { targetLanguage });
+      const languageId = project.language_ids?.[0] ?? p.language_ids?.[0];
+      if (!languageId) throw new Error(`dubbing project ${project.project_id} is ready but has no language target; refusing to add one (a separate paid generation) without a human check`);
+      let lang = await client.dubbingGetLanguage(project.project_id, languageId);
       while (lang.status !== 'completed') {
-        if (lang.status === 'failed') throw new Error(`dubbing language failed: ${scrub(lang.error?.error, apiKey)}`);
-        if (now() - start > timeoutMs) throw new GenerationTimeout(lang.language_id, timeoutMs);
+        if (lang.status === 'failed') throw new Error(`dubbing language ${languageId} failed: ${scrub(lang.error?.error, apiKey)}`);
+        if (now() - start > timeoutMs) throw new GenerationTimeout(languageId, timeoutMs);
         await sleep(pollMs);
-        lang = await client.dubbingGetLanguage(project.project_id, lang.language_id);
+        lang = await client.dubbingGetLanguage(project.project_id, languageId);
       }
       const url = lang.outputs?.lossless_audio;
       if (!url) throw new Error('dubbing completed but no outputs.lossless_audio URL was returned');
-      return { projectId: project.project_id, languageId: lang.language_id, buffer: await client.download(url), format: 'flac' };
+      return { projectId: project.project_id, languageId, buffer: await client.download(url), format: 'flac' };
     },
   };
   return client;
 }
 
 /** Shared poll loop. `getFn(id)` returns {status,...}. Interval never drops below floorMs (docs polling guidance). */
-export async function waitForGeneration(getFn, id, { minIntervalMs, maxIntervalMs, timeoutMs, floorMs, sleep = defaultSleep, now = Date.now, log = () => {} }) {
+export async function waitForGeneration(getFn, id, { minIntervalMs, maxIntervalMs, timeoutMs, floorMs, sleep = defaultSleep, now = Date.now, log = () => {}, apiKey }) {
   const start = now();
   let interval = Math.max(floorMs, minIntervalMs);
   for (;;) {
     const r = await getFn(id);
     if (r.status === 'completed') return r;
-    if (r.status === 'failed') throw new GenerationFailed(id, r.failure_reason, r.error_message);
+    if (r.status === 'failed') throw new GenerationFailed(id, r.failure_reason, r.error_message, apiKey);
     if (r.status !== 'pending' && r.status !== 'generating') throw new ElevenLabsError(`unexpected generation status "${r.status}" for ${id}`);
     if (now() - start + interval > timeoutMs) throw new GenerationTimeout(id, timeoutMs);
     log(`generation ${id} ${r.status}; next poll in ${Math.round(interval / 1000)}s`);

@@ -3,6 +3,7 @@
 // The claims_check gate is network-based and lives in claims.mjs; validate.mjs runs all of them.
 import { existsSync, statSync } from 'node:fs';
 import { extname, isAbsolute, resolve } from 'node:path';
+import { foldBrand, normalizeText } from './confusables.mjs';
 
 export const PRODUCT_CLASSES = ['PSAP', 'OTC_hearing_aid', 'AWARE', 'general'];
 export const OUTPUTS = ['9:16', '1:1', '16:9'];
@@ -60,6 +61,10 @@ export function structureGuard(m, { baseDir = process.cwd() } = {}) {
   }
   if (!m.music || !isStr(m.music.prompt) || !(m.music.duration >= 3 && m.music.duration <= 600)) e.push('music: {prompt, duration seconds 3..600} required');
   if (!m.endCard || !isStr(m.endCard.headline) || !isStr(m.endCard.cta) || !isStr(m.endCard.legal)) e.push('endCard: {headline, cta, legal} all required');
+  const hex = (v) => v === undefined || /^#[0-9a-fA-F]{6}$/.test(String(v));
+  for (const [where, ec] of [['endCard', m.endCard], ...Object.entries(m.i18n || {}).map(([l, b]) => [`i18n.${l}.endCard`, b?.endCard])]) {
+    for (const k of ['background', 'textColor', 'accent']) if (ec && !hex(ec[k])) e.push(`${where}.${k}: must be a #RRGGBB hex color (it is interpolated into the ffmpeg filter graph)`);
+  }
   if (!Array.isArray(m.outputs) || !m.outputs.length || !m.outputs.every((o) => OUTPUTS.includes(o))) e.push(`outputs: non-empty subset of ${OUTPUTS.join(', ')}`);
   if (m.disclosures?.aiGenerated !== true) e.push('disclosures.aiGenerated must be true (this ad contains AI-generated video)');
   if (!Array.isArray(m.locales) || !m.locales.length || !m.locales.every((l) => LOCALES.includes(l))) e.push(`locales: non-empty subset of ${LOCALES.join(', ')}`);
@@ -73,27 +78,46 @@ export function structureGuard(m, { baseDir = process.cwd() } = {}) {
 
 // ---------- FTC / testimonial guard ---------------------------------------------------------------
 
-// First-person singular in a voiceover reads as a customer testimonial. Deliberately blunt: fail closed.
-const FIRST_PERSON = /\b(I|I'm|I've|I'd|I'll|Ive|my|mine|myself)\b/;
+// Unicode-aware boundaries (JS \b is ASCII-only and breaks on accents such as "mí" or "audífono").
+const L = '(?<![\\p{L}\\p{N}])';
+const R = '(?![\\p{L}\\p{N}])';
+const rx = (src) => new RegExp(L + '(?:' + src + ')' + R, 'iu');
+// First-person voice reads as a customer testimonial. Deliberately blunt: fail closed. Case-insensitive.
+const FIRST_PERSON_EN = rx("i|my|mine|myself");
+const FIRST_PERSON_ES = rx("yo|mi|mis|m[ií]o|m[ií]a|m[ií]os|m[ií]as|m[ií]|conmigo|me|estoy|soy|tengo|puedo|oigo|escucho|encontr[eé]|compr[eé]|prob[eé]|volv[ií]");
 const TESTIMONIAL_PATTERNS = [
-  [/\bas a (real )?(customer|user|patient|buyer|client)\b/i, 'claims to speak as a customer'],
-  [/\b(real|actual|verified|happy|satisfied) (customers?|users?|patients?|buyers?|reviews?|people)\b/i, 'real-user framing'],
-  [/\btestimonials?\b/i, 'testimonial framing'],
-  [/\b(customer|user|verified|five[- ]star|5[- ]star|star) reviews?\b/i, 'review framing'],
-  [/\b\d(\.\d)?\s*(\/\s*5|out of 5)\b/i, 'invented star rating'],
-  [/\b\d(\.\d)?\s*stars?\b/i, 'invented star rating'],
-  [/[★⭐]/, 'star glyph rating'],
-  [/\b(five|4|four)[- ]stars?\b/i, 'invented star rating'],
-  [/\bbefore[ -]?(and|&|\/)[ -]?after\b/i, 'before/after outcome framing'],
-  [/\b(changed|saved|transformed) my (life|marriage|hearing)\b/i, 'invented personal outcome'],
-  [/\bcan hear again\b/i, 'restored-hearing outcome claim'],
-  [/\bhear(ing)? (again|like (I|they) used to)\b/i, 'restored-hearing outcome claim'],
+  [rx("as an? (real )?(customer|user|patient|buyer|client)"), 'claims to speak as a customer'],
+  [rx("(real|actual|verified|happy|satisfied) (customers?|users?|patients?|buyers?|reviews?|people)"), 'real-user framing'],
+  [rx("testimonials?"), 'testimonial framing'],
+  [rx("(customer|user|verified|five[- ]star|5[- ]star|star) reviews?"), 'review framing'],
+  [rx("\\d(\\.\\d)?\\s*(\\/\\s*5|out of 5)"), 'invented star rating'],
+  [rx("\\d(\\.\\d)?\\s*stars?"), 'invented star rating'],
+  [/[★⭐]/u, 'star glyph rating'],
+  [rx("(five|4|four)[- ]stars?"), 'invented star rating'],
+  [rx("before[ -]?(and|&|\\/)[ -]?after"), 'before/after outcome framing'],
+  [rx("(changed|saved|transformed) my (life|marriage|hearing)"), 'invented personal outcome'],
+  [rx("can hear again"), 'restored-hearing outcome claim'],
+  [rx("hear(ing)? (again|like (i|they) used to)"), 'restored-hearing outcome claim'],
+  // Spanish
+  [rx("como (un |una )?(cliente|usuari[oa]|paciente|comprador[a]?)"), 'claims to speak as a customer (es)'],
+  [rx("(clientes|usuarios|pacientes|compradores|rese[nñ]as) (reales|verificad[oa]s)"), 'real-user framing (es)'],
+  [rx("usuari[oa] verificad[oa]|cliente verificad[oa]|cliente[s]? satisfech[oa]s?|cliente[s]? feliz|clientes felices"), 'real-user framing (es)'],
+  [rx("testimonios?|rese[nñ]as?"), 'testimonial/review framing (es)'],
+  [rx("\\d(\\.\\d)?\\s*(estrellas?|de 5|\\/\\s*5)"), 'invented star rating (es)'],
+  [rx("antes y despu[eé]s"), 'before/after outcome framing (es)'],
+  [rx("(me )?cambi[oó] (mi|la) vida"), 'invented personal outcome (es)'],
+  [rx("(puedo|vuelvo a|volv[ií] a|por fin) (o[ií]r|escuchar)( de nuevo| otra vez)?"), 'restored-hearing outcome claim (es)'],
+  [rx("(o[ií]r|escuchar) de nuevo"), 'restored-hearing outcome claim (es)'],
 ];
 export function ftcTextGuard(m) {
   const e = [];
   for (const t of publishedTexts(m)) {
-    if (t.role === 'vo' && FIRST_PERSON.test(t.text)) e.push(`FTC: ${t.where} uses first-person voice ("${t.text.slice(0, 60)}"), which reads as a customer testimonial`);
-    for (const [re, why] of TESTIMONIAL_PATTERNS) if (re.test(t.text)) e.push(`FTC: ${t.where} ${why} ("${t.text.slice(0, 60)}")`);
+    if (t.role === 'label') continue;
+    const n = normalizeText(t.text);
+    const show = `"${t.text.slice(0, 60)}"`;
+    if (FIRST_PERSON_EN.test(n)) e.push(`FTC: ${t.where} uses first-person voice (${show}), which reads as a customer testimonial`);
+    else if (t.locale !== 'en' && FIRST_PERSON_ES.test(n)) e.push(`FTC: ${t.where} uses first-person voice in Spanish (${show}), which reads as a customer testimonial`);
+    for (const [re, why] of TESTIMONIAL_PATTERNS) if (re.test(n)) e.push(`FTC: ${t.where} ${why} (${show})`);
   }
   return e;
 }
@@ -105,7 +129,7 @@ export function ftcActorGuard(m) {
   const labelOk = typeof (m.disclosures?.label ?? 'AI-generated') === 'string' && String(m.disclosures?.label ?? 'AI-generated').trim().length > 0;
   (m.shots || []).forEach((s, i) => {
     const at = `shots[${i}] (${s.id})`;
-    const p = String(s.prompt || '');
+    const p = normalizeText(String(s.prompt || ''));
     if (SPEAKING.test(p) && s.aiActor !== true) e.push(`FTC: ${at} depicts a person speaking to camera; only allowed with aiActor:true plus an on-screen AI-generated label`);
     if (s.aiActor === true) {
       if (!labelOk) e.push(`FTC: ${at} aiActor requires a non-empty disclosures.label ("AI-generated") to be burned on screen`);
@@ -126,15 +150,33 @@ export const COMPETITOR_TERMS = [
   'Anker', 'Soundcore', 'Nuheara', 'IQbuds', 'Phonak', 'Oticon', 'Signia', 'Starkey', 'Widex', 'ReSound', 'Unitron', 'Beltone', 'Bernafon',
   'Rexton', 'Hansaton', 'Eargo', 'Lexie', 'Miracle-Ear', 'MiracleEar', 'Audicus', 'Kirkland', 'Costco', 'Lively', 'Sonova', 'Demant',
 ];
-const COMPETITOR_RE = new RegExp(`\\b(${COMPETITOR_TERMS.map((t) => t.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')).join('|')})\\b`, 'i');
-const DEVICE_WORDS = /\b(ear ?buds?|earphones?|headphones?|earpieces?|in[- ]ear|ear ?pods?|hearing (aid|device|instrument)s?|amplifier|wearable|charging case|earbud case)\b/i;
+const NAME_RES = COMPETITOR_TERMS.map((term) => {
+  const letters = [...foldBrand(term).replace(/[^a-z0-9]/g, '')];
+  // optional junk (spaces, dots, dashes, stars) between any two letters: "Air Pods", "A.i.r.P.o.d.s", "b-o-s-e"
+  return { term, re: new RegExp('(?<![a-z0-9])' + letters.join('[^a-z0-9]{0,2}') + '(?![a-z0-9])') };
+});
+export function findCompetitors(text) {
+  const f = foldBrand(text);
+  return NAME_RES.filter(({ re }) => re.test(f)).map(({ term }) => term);
+}
+// Generic device words: a shot that mentions ANY of these is a PRODUCT shot and must be anchored to a real photo,
+// otherwise Veo invents a look-alike (it drew AirPods from an unbranded prompt).
+const DEVICE_WORDS = /(?<![a-z])(ear ?buds?|earphones?|headphones?|headsets?|earpieces?|in[- ]ear|ear ?pods?|hearing (aid|device|instrument)s?|amplifiers?|wearables?|gadgets?|devices?|charging case|earbud case)(?![a-z])/;
 
 export function brandGuard(m, { baseDir = process.cwd(), exists = existsSync, size = (p) => statSync(p).size } = {}) {
   const e = [];
-  const scan = (where, text) => { const mm = COMPETITOR_RE.exec(text || ''); if (mm) e.push(`brand: ${where} names a competitor/third-party brand "${mm[1]}"`); };
+  const scan = (where, text) => {
+    const hits = findCompetitors(text || '');
+    if (hits.length) e.push(`brand: ${where} names a competitor/third-party brand ${hits.map((h) => `"${h}"`).join(', ')}`);
+  };
   (m.shots || []).forEach((s, i) => {
     scan(`shots[${i}].prompt`, s.prompt);
     const at = `shots[${i}] (${s.id})`;
+    const deviceHit = DEVICE_WORDS.test(foldBrand(s.prompt || ''));
+    if (deviceHit && s.showsProduct !== true) {
+      e.push(`brand: ${at} prompt mentions a device (earbud/gadget/device/hearing aid/amplifier/earpiece) but showsProduct is not true; set showsProduct:true with a real start_frame, or remove the device from the prompt`);
+      return;
+    }
     if (s.showsProduct === true) {
       if (!s.start_frame) e.push(`brand: ${at} shows the product but has no start_frame (a REAL product photo is required; an unbranded prompt makes Veo invent a look-alike)`);
       else {
@@ -143,8 +185,6 @@ export function brandGuard(m, { baseDir = process.cwd(), exists = existsSync, si
         else if (!exists(p)) e.push(`brand: ${at} start_frame file not found: ${s.start_frame}`);
         else if (size(p) > 25 * 1024 * 1024) e.push(`brand: ${at} start_frame exceeds the 25 MB inline limit`);
       }
-    } else if (DEVICE_WORDS.test(s.prompt || '')) {
-      e.push(`brand: ${at} prompt mentions a device (earbuds/headphones/hearing device) but showsProduct is not true; set showsProduct:true with a real start_frame, or remove the device from the prompt`);
     }
   });
   for (const t of publishedTexts(m)) scan(t.where, t.text);
@@ -163,17 +203,29 @@ const PHI_TEXT = [
   [/\bhearing number\b/i, 'Hearing Number (PHI-ring field)'],
   [/\b\d{1,3}\s?db\s?hl\b/i, 'audiometric threshold value'],
 ];
+/** Reject EVERY dash-punctuation character (Unicode Pd: en, em, figure, hyphen U+2010/2011, minus-like, small/full-width
+ *  variants, ...) except the plain hyphen-minus U+002D. U+2212 (minus sign) is not Pd and stays allowed. Checked raw and NFKC. */
+export function hasBadDash(text) {
+  const bad = (t) => [...String(t)].some((ch) => ch !== '-' && /\p{Pd}/u.test(ch));
+  return bad(text) || bad(String(text).normalize('NFKC'));
+}
 export function copyGuard(m) {
   const e = [];
   for (const t of publishedTexts(m)) {
-    if (/[\u2013\u2014]/.test(t.text)) e.push(`copy: ${t.where} contains an em or en dash (published copy must use commas, periods or line breaks)`);
+    if (hasBadDash(t.text)) e.push(`copy: ${t.where} contains an em or en dash (published copy must use commas, periods or line breaks)`);
     for (const [re, why] of PHI_TEXT) if (re.test(t.text)) e.push(`PHI: ${t.where} contains ${why}`);
   }
   // Prompts render text in-frame too, so dashes there are also a risk; keep them out.
-  (m.shots || []).forEach((s, i) => { if (/[\u2013\u2014]/.test(s.prompt || '')) e.push(`copy: shots[${i}].prompt contains an em or en dash (Veo can render it as on-screen text)`); });
+  (m.shots || []).forEach((s, i) => { if (hasBadDash(s.prompt || '')) e.push(`copy: shots[${i}].prompt contains an em or en dash (Veo can render it as on-screen text)`); });
   walk(m, (k, v, path) => { if (PHI_KEYS.test(k) && v !== undefined) e.push(`PHI: manifest field "${path}" is a PHI-ring field name and must not appear in an ad manifest`); });
-  const legal = m.endCard?.legal;
-  if (m.productClass === 'PSAP' && legal && !/not a hearing aid/i.test(legal)) e.push('warn: PSAP end card legal line should say "not a hearing aid" (see the claims_check acceptance test G1/G4)');
+  if (m.productClass === 'PSAP') {
+    const need = { en: [/not a hearing aid/i, 'not a hearing aid'], es: [/no es un (aud[i\u00ED]fono|aparato auditivo)/i, 'no es un audífono'] };
+    for (const loc of m.locales || []) {
+      const legal = loc === 'en' ? m.endCard?.legal : m.i18n?.[loc]?.endCard?.legal;
+      const [re, phrase] = need[loc] || need.en;
+      if (!legal || !re.test(normalizeText(legal))) e.push(`copy: PSAP ${loc} end card legal line must say "${phrase}" (claims_check acceptance test G1/G4)${loc !== 'en' && !legal ? `; i18n.${loc}.endCard.legal is missing` : ''}`);
+    }
+  }
   return e;
 }
 

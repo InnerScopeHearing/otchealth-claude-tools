@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildJobs, localeBlock, planOverlays, renderAd } from './render.mjs';
+import { GenerationFailed, GenerationTimeout } from './el-client.mjs';
+import { getPending, getJson, putJson } from './cache.mjs';
 import { deriveVariant, renderVariants } from './variants.mjs';
 import { dubVoice } from './dub.mjs';
 import { readLedger } from './credit-guard.mjs';
@@ -25,11 +27,15 @@ before(() => {
 /** Fake ElevenLabs client. Every generation increments a counter and the fake balance, like the real thing. */
 function fakeEl({ ttsCost = (t) => t.length, videoPerSec = 1000, musicCost = 600 } = {}) {
   let used = 5000;
-  const c = { video: 0, tts: 0, music: 0, dub: 0, bodies: [] };
+  const c = { video: 0, tts: 0, music: 0, dub: 0, waits: 0, downloads: 0, bodies: [] };
+  const hooks = { wait: null, download: null }; // tests can make wait()/download() fail once
   return {
-    c,
+    c, hooks,
     balance: async () => ({ used, limit: 33_100_000, remaining: 33_100_000 - used }),
-    flowsVideoRun: async (body) => { c.video++; c.bodies.push(body); used += body.duration_secs * videoPerSec; return { id: 'gen', buffer: videoBuf, mime: 'video/mp4' }; },
+    // like the real API the charge happens at CREATE time; wait/download are free
+    flowsVideoCreate: async (body) => { c.video++; c.bodies.push(body); used += body.duration_secs * videoPerSec; return { id: `gen_${c.video}`, status: 'pending' }; },
+    flowsVideoWait: async (id) => { c.waits++; if (hooks.wait) await hooks.wait(id); return { status: 'completed', id, content_url: 'https://cdn.example/x.mp4?sig=1', content_mime_type: 'video/mp4' }; },
+    download: async () => { c.downloads++; if (hooks.download) await hooks.download(); return videoBuf; },
     ttsWithTimestamps: async ({ text, voiceId, languageCode }) => {
       c.tts++; c.bodies.push({ tts: text, voiceId, languageCode }); used += ttsCost(text);
       const chars = [...text];
@@ -56,7 +62,7 @@ test('DRY RUN is the default: nothing generated, nothing written, plan shows UNK
   assert.equal(existsSync(s.outDir), false);
   assert.equal(existsSync(s.ledgerPath), false);
   const plan = lines.join('\n');
-  assert.match(plan, /DRY RUN/); assert.match(plan, /UNKNOWN credits/);
+  assert.match(plan, /DRY RUN/); assert.match(plan, /UNKNOWN \(bounded at/);
   assert.match(plan, /shot hero.*4,?000 credits/);
 });
 
@@ -131,14 +137,19 @@ test('full run: every requested output exists at the right size; ledger learns r
   assert.equal(el.c.tts, 3); assert.equal(el.c.video, 2);
 });
 
-test('the runtime cap stops the run mid-way when an unknown-rate job blows the budget; finished assets stay cached', async () => {
+test('the runtime cap stops the run mid-way when an unknown-rate job blows past its ceiling; finished assets stay cached', async () => {
   const s = setup(); const el = fakeEl({ ttsCost: () => 20_000 });
-  const r = await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 9000, allowUnknownRate: true }));
+  // 12,000 clears the planner (8,000 known + ~3,700 of ceilings), but the first real TTS costs 20,000, far over its ceiling
+  const r = await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 12_000, allowUnknownRate: true }));
   assert.equal(r.ok, false); assert.equal(r.stage, 'budget');
   assert.equal(el.c.video, 2);           // 8000 known, fits
   assert.equal(el.c.tts, 1);             // first TTS costs 20,000 -> cap blown -> nothing else starts
   assert.equal(el.c.music, 0);
   assert.equal(r.spent, 28_000);
+  // and the planner alone would have refused a cap below the worst case (known + ceilings)
+  const s2 = setup();
+  const tight = await renderAd(s2.m, opts(s2, { client: fakeEl(), commit: true, maxCredits: 9000, allowUnknownRate: true }));
+  assert.equal(tight.stage, 'spend-gate'); assert.match(tight.errors.join(' '), /worst case/);
   assert.ok(readdirSync(join(s.cacheDir, 'video')).some((f) => f.endsWith('.mp4')), 'paid-for video stays cached for the resume');
 });
 
@@ -242,4 +253,117 @@ test('dub stage requires the English VO to be cached first', async () => {
   const s = setup(); const el = fakeEl();
   const r = await dubVoice(s.m, { lang: 'es', client: el, baseDir: s.dir, outDir: join(s.dir, 'dub'), cacheDir: s.cacheDir, ledgerPath: s.ledgerPath, callTool: passAllClaims, log: () => {} });
   assert.equal(r.ok, false); assert.equal(r.stage, 'prereq');
+});
+
+// ---- B2: one budget across all variants ---------------------------------------------------------
+test('B2: --max-credits is ONE budget for the whole variants run, not per variant', async () => {
+  const s = setup(); const el = fakeEl();
+  const base = await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  assert.equal(base.ok, true, JSON.stringify(base.errors));
+  const specs = [{ id: 'one', hook: 'Hook number one is here.' }, { id: 'two', hook: 'Hook number two is here.' }]; // 24 chars each
+  // counterfactual (the OLD behavior): each variant rendered on its own with cap 40 -> both pass, 48 credits spent in total
+  const solo = setup(); const soloEl = fakeEl();
+  await renderAd(solo.m, opts(solo, { client: soloEl, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  const before = soloEl.c.tts;
+  for (const sp of specs) {
+    const r = await renderAd(deriveVariant(solo.m, sp), opts(solo, { client: soloEl, commit: true, maxCredits: 40, forbidNewVideo: true }));
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+  }
+  assert.equal(soloEl.c.tts - before, 2, 'per-variant caps let the run spend 2 x 24 = 48 credits under a "cap" of 40');
+  // the fix: renderVariants shares one guard, so the second variant sees only what is left of the 40
+  const before2 = el.c.tts;
+  const res = await renderVariants(s.m, specs, { ...opts(s, { client: el, commit: true, maxCredits: 40 }), outDir: s.outDir });
+  assert.equal(res[0].ok, true, JSON.stringify(res[0].errors));
+  assert.equal(res[1].ok, false); assert.equal(res[1].stage, 'spend-gate');
+  assert.match(res[1].errors.join(' '), /exceeds --max-credits 16/, 'the second variant is planned against the REMAINING 16 credits');
+  assert.equal(el.c.tts - before2, 1);
+});
+
+test('B2: when the shared cap runs out mid-run, later variants generate nothing', async () => {
+  const s = setup(); const el = fakeEl({ ttsCost: () => 500 });
+  await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  const t0 = el.c.tts;
+  const res = await renderVariants(s.m, [{ id: 'a', hook: 'A brand new hook line.' }, { id: 'b', hook: 'Another new hook line.' }, { id: 'c', hook: 'Yet another hook line.' }],
+    { ...opts(s, { client: el, commit: true, maxCredits: 600 }), outDir: s.outDir });
+  assert.deepEqual(res.map((r) => r.ok), [true, false, false]);
+  assert.equal(el.c.tts - t0, 1);
+});
+
+// ---- M3: resume a paid generation instead of re-submitting --------------------------------------
+test('M3: the generation id is saved BEFORE waiting; a timeout resumes the SAME generation on the next run (no second charge)', async () => {
+  const s = setup(); const el = fakeEl();
+  el.hooks.wait = async (id) => { if (id === 'gen_1') { el.hooks.wait = null; throw new GenerationTimeout(id, 900000); } };
+  const r1 = await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  assert.equal(r1.ok, false); assert.equal(r1.stage, 'generate'); assert.match(r1.errors.join(' '), /did not finish/);
+  const jobs = buildJobs(s.m, { baseDir: s.dir, cacheDir: s.cacheDir });
+  const hero = jobs.shotJobs[0];
+  assert.equal(getPending(s.cacheDir, 'video', hero.key).id, 'gen_1', 'saved before waiting');
+  assert.equal(hero.resumed, true); assert.equal(el.c.video, 1);
+  const lines = [];
+  const r2 = await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 200_000, allowUnknownRate: true, log: (x) => lines.push(x) }));
+  assert.equal(r2.ok, true, JSON.stringify(r2.errors));
+  assert.equal(el.c.video, 2, 'hero is NOT re-created (1 create in run 1) and only the second shot is created in run 2');
+  assert.equal(el.c.bodies.filter((b) => b.prompt?.includes('Slow push-in')).length, 1);
+  assert.match(lines.join('\n'), /resuming an already-paid generation/);
+  assert.equal(getPending(s.cacheDir, 'video', hero.key), null, 'pending is cleared once downloaded');
+  assert.equal(readLedger(s.ledgerPath).filter((e) => e.label?.startsWith('shot hero')).length, 1, 'the resumed shot is not charged to the cap a second time');
+});
+test('M3: a failed DOWNLOAD keeps the generation id; a FAILED generation (not charged) clears it so a fresh one may be submitted', async () => {
+  const s = setup(); const el = fakeEl();
+  el.hooks.download = async () => { el.hooks.download = null; throw new Error('storage 503'); };
+  const r1 = await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  assert.equal(r1.ok, false);
+  const heroKey = buildJobs(s.m, { baseDir: s.dir, cacheDir: s.cacheDir }).shotJobs[0].key;
+  assert.equal(getPending(s.cacheDir, 'video', heroKey).id, 'gen_1');
+  const r2 = await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  assert.equal(r2.ok, true, JSON.stringify(r2.errors));
+  assert.equal(el.c.bodies.filter((b) => b.prompt?.includes('Slow push-in')).length, 1, 'download retry did not re-submit');
+  // failed generation: pending cleared
+  const f = setup(); const el2 = fakeEl();
+  el2.hooks.wait = async (id) => { el2.hooks.wait = null; throw new GenerationFailed(id, 'moderated', 'blocked'); };
+  const rf = await renderAd(f.m, opts(f, { client: el2, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  assert.equal(rf.ok, false);
+  assert.equal(getPending(f.cacheDir, 'video', buildJobs(f.m, { baseDir: f.dir, cacheDir: f.cacheDir }).shotJobs[0].key), null);
+});
+
+// ---- misc hardening ------------------------------------------------------------------------------
+test('--audio is rejected: Veo audio is not mixed, so we never pay for it', async () => {
+  const s = setup(); const el = fakeEl();
+  const r = await renderAd(s.m, opts(s, { client: el, audio: true, commit: true, maxCredits: 1e6, allowUnknownRate: true }));
+  assert.equal(r.ok, false); assert.equal(r.stage, 'options'); assert.match(r.errors[0], /NOT mixed/);
+  assert.equal(total(el.c), 0);
+  const ok = await renderAd(s.m, opts(s, { client: el })); // counterfactual: without --audio the run proceeds to the (dry-run) plan
+  assert.equal(ok.dryRun, true);
+});
+test('TTS mp3 + alignment are written atomically and alignment first: an mp3 in the cache always has its alignment', async () => {
+  const s = setup(); const el = fakeEl();
+  await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  const files = readdirSync(join(s.cacheDir, 'tts'));
+  assert.ok(!files.some((f) => f.includes('.tmp-')), 'no temp files left behind');
+  for (const f of files.filter((x) => x.endsWith('.mp3'))) assert.ok(files.includes(f.replace('.mp3', '.align.json')));
+  // a crash between the two writes (alignment written, mp3 missing) is NOT treated as cached
+  const s2 = setup();
+  const t = buildJobs(s2.m, { baseDir: s2.dir, cacheDir: s2.cacheDir }).voJobs.en[0];
+  putJson(s2.cacheDir, 'tts', t.key, { alignment: null });
+  assert.equal(buildJobs(s2.m, { baseDir: s2.dir, cacheDir: s2.cacheDir }).voJobs.en[0].cached, false);
+  assert.ok(getJson(s2.cacheDir, 'tts', t.key));
+});
+test('v4 audio tags like [whispers] are never burned into captions', async () => {
+  const { stripAudioTags, wordTimings, chunkWords } = await import('./captions.mjs');
+  const text = '[whispers] Meet TReO [laughs softly] today[pause].';
+  const words = stripAudioTags(wordTimings(text, null, 3));
+  assert.deepEqual(words.map((w) => w.word), ['Meet', 'TReO', 'today.']);
+  assert.ok(!chunkWords(words).some((c) => /[\[\]]/.test(c.text)));
+  // counterfactual: without stripping the tag words would be captioned
+  assert.ok(chunkWords(wordTimings(text, null, 3)).some((c) => /\[/.test(c.text)));
+});
+test('dub: --max-credits applies to the dub stage too (ceiling 2,000 credits/s of speech)', async () => {
+  const s = setup(); const el = fakeEl();
+  await renderAd(s.m, opts(s, { client: el, commit: true, maxCredits: 200_000, allowUnknownRate: true }));
+  const common = { lang: 'es', client: el, baseDir: s.dir, outDir: join(s.dir, 'dub'), cacheDir: s.cacheDir, ledgerPath: s.ledgerPath, callTool: passAllClaims, log: () => {} };
+  const r = await dubVoice(s.m, { ...common, commit: true, maxCredits: 2000, allowUnknownRate: true });
+  assert.equal(r.ok, false); assert.match(r.errors.join(' '), /worst case/);
+  assert.equal(el.c.dub, 0);
+  const ok = await dubVoice(s.m, { ...common, commit: true, maxCredits: 20_000, allowUnknownRate: true });
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors)); assert.equal(el.c.dub, 1);
 });
