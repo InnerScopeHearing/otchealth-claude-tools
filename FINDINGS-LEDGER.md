@@ -1216,3 +1216,11 @@ finding with `node ledger.mjs finding add`, close one with
 - **Verified by:** (not verified)
 - **Opened:** 2026-09-14T18:15:46.994Z
 - **Closed:** (open)
+
+### finding:FND-20260929-b613 severity:high status:open | OpenSearch domain otchealth-brain has fine-grained access control OFF and an access policy allowing every principal in account 900915535335, so any account role (any ECS task role) can read the privileged legal-personal/legal-company/finance indexes directly; ring isolation is enforced only in the gateway. Fix: enable FGAC or scope the domain policy to the gateway + librarian roles, per-index
+
+- **Source audit doc:** phone-brain DESIGN.md 2026-09-29 (scratchpad), OpenSearch domain otchealth-brain
+- **Fix commit:** (none yet)
+- **Verified by:** (not verified)
+- **Opened:** 2026-09-29T06:35:06.409Z
+- **Closed:** (open)
