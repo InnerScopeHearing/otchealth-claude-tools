@@ -65,7 +65,10 @@ export const APP_REGISTRY = Object.freeze({
 export function resolveApp(name) {
   const known = Object.keys(APP_REGISTRY);
   if (!name) throw new Error(`--app is required (one of: ${known.join(", ")})`);
-  const key = known.find((k) => k.toLowerCase() === String(name).toLowerCase());
+  // Accept the registry key (HeyMillie) or the display name ("Hey Millie"): cmdAll hands its
+  // sub-steps app.displayName, so both spellings must resolve to the same entry.
+  const norm = (s) => String(s).toLowerCase().replace(/\s+/g, "");
+  const key = known.find((k) => norm(k) === norm(name) || norm(APP_REGISTRY[k].displayName) === norm(name));
   if (!key) throw new Error(`unknown --app "${name}" (expected one of: ${known.join(", ")})`);
   return APP_REGISTRY[key];
 }
