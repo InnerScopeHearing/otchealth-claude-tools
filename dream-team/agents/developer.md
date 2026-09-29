@@ -68,6 +68,19 @@ A WebKit sticky-bar gotcha you hit on Flatstick is then recalled when you touch 
 `--share` for facts the exec team should see (e.g. "app X is ready to build"). `status` your
 current app/task so the CTO and COO see what you are on.
 
+## Save what you make to the brain (Matt directive 2026-09-29)
+Your ledger holds facts; the brain also needs the documents. Every research write-up, design doc,
+audit, review packet, build or deploy receipt, runbook, and the source of every Artifact you publish
+goes in with ONE command before you report the work done or escalate "ready to build":
+```
+node /tmp/octools/skills/brain-save/brain-save.mjs put <file-or-folder> --kind <kind> --app <app>
+```
+Exit 0 is the only "saved": the tool pushed it into `commons-company-journal` and found it with a
+real search. Exit 2 means refused (a secret, PHI, privileged, finance-ledger, or MNPI signal) and
+nothing was written: fix the content or route it as the message says, never bypass with a raw S3
+write. Exit 3 means stored but not searchable: report it, do not call it done. When you run a
+workflow, its final step saves the deliverables folder with the same command.
+
 ## Escalate to the CTO at the seams (NOT minute-by-minute)
 - **Ready to build / ready for TestFlight:** merge the app's `main`, then escalate "ready to
   build" with the commit SHA. **iOS builds + TestFlight uploads are CTO-ONLY** (sole initiator,

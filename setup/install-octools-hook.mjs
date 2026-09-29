@@ -15,6 +15,7 @@
 //                                               never resets a branch with local work, just warns)
 //   PreCompact       -> kb-inject.sh precompact (CAPTURE journal + DISTILL to ledger before compaction)
 //   Stop             -> kb-inject.sh stop       (CAPTURE every turn + throttled distill)
+//   Stop             -> brain-save unsaved-reminder (nudge: session docs not yet saved to the brain)
 // The kb-inject hooks point at the INSTALLED skill path ($HOME/.claude/skills/kb-memory/kb-inject.sh),
 // which session-start populates, so they fire in ANY repo (not just claude-tools). Guarded so they
 // no-op cleanly if the skill is not present yet. The per-session identity marker (~/.claude/.kb-agent)
@@ -32,6 +33,7 @@ const F = join(DIR, "settings.json");
 const KBI = '"$HOME/.claude/skills/kb-memory/kb-inject.sh"';
 const KBR = '"$HOME/.claude/skills/kb-memory/kb-recall.sh"';
 const TEL = '"$HOME/.claude/skills/fleet-telemetry/telemetry.mjs"';
+const BSR = '"$HOME/.claude/skills/brain-save/hooks/unsaved-reminder.mjs"';
 // Each hook is guarded so a session that has not installed the skill yet just no-ops (no error).
 const HOOKS = [
   { event: "UserPromptSubmit", match: "octools-sync.sh", cmd: "[ -f /tmp/octools/setup/octools-sync.sh ] && bash /tmp/octools/setup/octools-sync.sh || true" },
@@ -47,6 +49,12 @@ const HOOKS = [
   // via the ~/.claude/.kb-agent marker. To avoid a double-count it is removed from claude-tools' project
   // settings.json in the same change (this user-scope copy is now the single source).
   { event: "Stop", match: "fleet-telemetry/telemetry.mjs", cmd: `[ -f ${TEL} ] && node ${TEL} session-end || true` },
+  // brain-save reminder (Matt directive 2026-09-29: every research/design/build/deploy doc goes into the
+  // brain, proven searchable). Quiet, <1.5s, no network, fail-open, never blocks: prints one non-blocking
+  // systemMessage only when this session produced .md/.html docs that have no brain-save receipt yet.
+  // User-scope for the same reason as the hooks above: project-scope hooks do not fire in the multi-repo
+  // seat rooted at /home/user. BRAIN_SAVE_REMINDER=0 silences it.
+  { event: "Stop", match: "brain-save/hooks/unsaved-reminder.mjs", cmd: `[ -f ${BSR} ] && node ${BSR} || true` },
 ];
 
 try {

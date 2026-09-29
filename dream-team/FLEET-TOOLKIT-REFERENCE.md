@@ -248,6 +248,13 @@ Capacitor/Ionic packs, available when their plugins/skills load.
   - **company-brain** — `brain.mjs ask "<q>"`: one cited answer federated across every data room
     (memory-exec, legal-company, finance, commerce, journal). The Billion Dollar Brain. Ask it before
     researching. legal-personal excluded unless `--include-personal --agent clo`; answers are internal.
+  - **brain-save** (Matt directive 2026-09-29) — THE write path for documents: `brain-save.mjs put
+    <file-or-folder> --kind <kind> --app <app>` saves research, designs, audits, packets, build/deploy
+    receipts, runbooks and Artifact sources to the S3 commons (`_KNOWLEDGE/`), pushes them into
+    `commons-company-journal` itself, and PROVES retrieval with a real search (room + gateway
+    `kb_search`); exit 0 is the only "saved". Secret gate (shapes + live SSM values) and ring gate
+    (PHI / privileged / finance ledgers / INND MNPI) refuse fail-closed. Also `verify`, `list --check`,
+    `audit --secrets`, `retract`, `backfill`, `doctor`. Skill: `skills/brain-save/SKILL.md`.
   - **agent-evals** + **fleet-telemetry** — golden-task quality scoring + per-session LLM observability
     into PostHog "Fleet Agents" 479484 (Fleet Intelligence #1).
   - **focus-group-loop** + **shark-tank** — 20-persona product review (10 customers, 5 pros, 5 real

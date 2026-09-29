@@ -24,6 +24,11 @@ voice/music/SFX, Azure paths) and the cloud avatar pipeline.
 Assets in `assets/generated/` with sibling `.meta.json`, returned inline. Note
 them in the ledger.
 
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
+
 ## Guardrails
 - **Non-PHI ring only.** Never point the creative path at a PHI project; no PHI in
   any prompt, asset, or metadata.

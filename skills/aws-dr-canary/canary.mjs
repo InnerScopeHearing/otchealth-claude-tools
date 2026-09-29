@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * canary.mjs — the AWS-native DR chain's verification canary. See SKILL.md for the full design and
- * the "AGE not a doc-count floor" rationale. Seven checks: SSM secrets-archive freshness (S3), OpenSearch
+ * the "AGE not a doc-count floor" rationale. Eight checks: SSM secrets-archive freshness (S3), OpenSearch
  * snapshot freshness (repo status + newest SUCCESS), RDS automated-snapshot freshness, n8n's Lightsail
  * AutoSnapshot add-on freshness (+ the add-on itself still being Enabled), n8n's public /healthz
  * reachability, a weekly (day-of-week gated) restore-PROOF drill covering the OpenSearch and SSM legs
@@ -9,7 +9,9 @@
  * each non-privileged doc room, the newest S3 source object's age vs a per-room SLO, and — only once
  * that SLO is exceeded — an exact `path`-based existence check in the room's OpenSearch index (never
  * document content). See the "check 7" section below for why this compares OBJECT PRESENCE rather than
- * a literal timestamp field (the live chunked schema has none).
+ * a literal timestamp field (the live chunked schema has none). Check 8 (2026-09-29): ring RESIDUE —
+ * zero chunks under every ring-private prefix (_MEMORY/ _HANDOFF/ _DISPATCH/ + privileged _JOURNAL lanes)
+ * in the open commons room; a non-zero count is status LEAK (an anomaly, pages under --strict).
  *
  * THE n8n CHECKS (added 2026-08-28) close the exact "age-not-floor" blind spot this canary was built
  * to prevent, applied to the customer-service n8n host (skills/aws-dr-canary/SKILL.md's rationale):
@@ -49,6 +51,7 @@ import { listBlobsMetaFromS3 } from "../kb-memory/s3-blob.mjs";
 import { resolveOpenSearchConfig } from "../kb-memory/opensearch-write.mjs";
 import { osCount } from "../doc-indexer/opensearch-client.mjs";
 import { classifyIndexLane } from "../fleet-backup/os-snapshot.mjs";
+import { RING_PRIVATE_PREFIXES } from "../doc-indexer/push-rules.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -438,7 +441,14 @@ export function isRoomPipelineInternal(name) {
 // flap" for these exact rooms), overridable per room via BRAIN_FRESHNESS_SLO_H_<ROOM> (see
 // resolveRoomSloHours below) without a code change.
 export const BRAIN_ROOMS = Object.freeze([
-  { name: "commons-company-journal", index: "commons-company-journal", account: "otchealthcommons", container: "company-journal", sloHours: 48 },
+  // indexPrefixes (2026-09-29, brain-save directive): the commons room is written EVERY night, so "is the
+  // single newest object indexed yet?" is never asked (the newest object is always inside the SLO) and the
+  // check read OK for the whole seven weeks the commons push was switched off. For a room that declares
+  // indexPrefixes, the check instead picks the newest text object under those prefixes that is OLDER than
+  // the SLO (the most recent one that should be searchable by now) and requires chunks for it. Default is
+  // _KNOWLEDGE/ only (brain-save pushes and verifies those itself); widen to "_KNOWLEDGE/,_DAILY/" via
+  // BRAIN_FRESHNESS_PREFIXES_COMMONS_COMPANY_JOURNAL once the nightly allow-listed push is armed.
+  { name: "commons-company-journal", index: "commons-company-journal", account: "otchealthcommons", container: "company-journal", sloHours: 48, indexPrefixes: ["_KNOWLEDGE/"] },
   { name: "commerce-commerce-source-docs", index: "commerce-commerce-source-docs", account: "otchealthcommerce", container: "commerce-source-docs", sloHours: 72 },
   { name: "finance-cfo-source-docs", index: "finance-cfo-source-docs", account: "otchealthcfodata", container: "cfo-source-docs", sloHours: 168 },
   { name: "legal-company", index: "legal-company", account: "otchealthlegalstore", container: "company", sloHours: 168 },
@@ -455,6 +465,32 @@ export function pickNewestSourceBlob(blobs) {
   const real = (blobs || []).filter((b) => b && b.name && !b.name.endsWith("/") && !isRoomPipelineInternal(b.name));
   if (!real.length) return null;
   return real.reduce((a, b) => (Date.parse(b.lastModified) > Date.parse(a.lastModified) ? b : a));
+}
+
+const INDEXABLE_TEXT_EXTS = [".md", ".txt", ".html", ".json", ".csv"];
+
+function prefixesEnvName(roomName) {
+  return `BRAIN_FRESHNESS_PREFIXES_${String(roomName).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+}
+
+/** Pure (reads only process.env): the room's push allow-list, or null for a legacy room without one.
+ *  BRAIN_FRESHNESS_PREFIXES_<ROOM>="a/,b/" overrides the registry default. */
+export function resolveRoomIndexPrefixes(room) {
+  const raw = process.env[prefixesEnvName(room.name)];
+  if (raw != null && raw.trim() !== "") return raw.split(",").map((x) => x.trim()).filter(Boolean);
+  return Array.isArray(room.indexPrefixes) && room.indexPrefixes.length ? room.indexPrefixes.slice() : null;
+}
+
+/** Pure: among real text objects under `prefixes`, the newest one OLDER than `sloHours` (the most
+ *  recent object that should already be searchable), plus the newest overall (informational) and the
+ *  candidate count. Returns { due, newest, candidates }. */
+export function pickNewestDueObject(blobs, prefixes, sloHours, nowMs = Date.now()) {
+  const cands = (blobs || []).filter((b) => b && b.name && !b.name.endsWith("/") && !isRoomPipelineInternal(b.name)
+    && prefixes.some((p) => b.name.startsWith(p))
+    && INDEXABLE_TEXT_EXTS.some((e) => b.name.toLowerCase().endsWith(e)));
+  const newestOf = (arr) => (arr.length ? arr.reduce((a, b) => (Date.parse(b.lastModified) > Date.parse(a.lastModified) ? b : a)) : null);
+  const due = newestOf(cands.filter((b) => (nowMs - Date.parse(b.lastModified)) / 3600000 > sloHours));
+  return { due, newest: newestOf(cands), candidates: cands.length };
 }
 
 function sloEnvName(roomName) {
@@ -503,6 +539,8 @@ export async function checkOneBrainRoomFreshness(room) {
   } catch (e) {
     return { name, status: "ERROR", detail: `cannot check (S3 listing of ${room.account}/${room.container} failed): ${String((e && e.message) || e).slice(0, 300)}` };
   }
+  const prefixes = resolveRoomIndexPrefixes(room);
+  if (prefixes) return checkRoomByDueObject(room, name, blobs, prefixes, sloHours);
   const newest = pickNewestSourceBlob(blobs);
   if (!newest) {
     return { name, status: "ERROR", detail: `cannot check cleanly: 0 source object(s) found under ${room.account}/${room.container} after filtering pipeline-internal paths -- either genuinely empty or a listing/permission problem` };
@@ -533,15 +571,71 @@ export async function checkOneBrainRoomFreshness(room) {
   return { name, status: v.state, detail: `newest source object "${newest.name}" (${ageH.toFixed(1)}h old, SLO ${sloHours}h) ${v.reason}` };
 }
 
+/** The allow-listed variant (see BRAIN_ROOMS.indexPrefixes): require chunks for the newest text object
+ *  under the push allow-list that is already past the SLO. Same ERROR-vs-STALE discipline as the legacy
+ *  path: anything that prevents the check from running is ERROR, never STALE. */
+async function checkRoomByDueObject(room, name, blobs, prefixes, sloHours) {
+  const { due, newest, candidates } = pickNewestDueObject(blobs, prefixes, sloHours);
+  const scope = `[${prefixes.join(", ")}]`;
+  if (!candidates) return { name, status: "OK", detail: `no text objects under the push allow-list ${scope} yet (nothing is expected to be searchable)` };
+  const info = newest ? ` (newest overall: "${newest.name}", ${((Date.now() - Date.parse(newest.lastModified)) / 3600000).toFixed(1)}h old, informational)` : "";
+  if (!due) return { name, status: "OK", detail: `all ${candidates} object(s) under ${scope} are within the ${sloHours}h SLO -- none is due to be indexed yet${info}` };
+  let cfg;
+  try { cfg = await resolveOpenSearchConfig(); }
+  catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch config/credentials unresolvable): ${String((e && e.message) || e).slice(0, 300)}` }; }
+  let res;
+  try { res = await osCount(cfg, room.index, { term: { "path.keyword": `${room.account}/${room.container}/${due.name}` } }); }
+  catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch _count against "${room.index}" failed): ${String((e && e.message) || e).slice(0, 300)}` }; }
+  if (!res.ok) return { name, status: "ERROR", detail: `cannot check (OpenSearch _count HTTP ${res.status} for index "${room.index}"): ${(res.text || "").slice(0, 200)}` };
+  const ageH = (Date.now() - Date.parse(due.lastModified)) / 3600000;
+  const v = assessRoomFreshness(ageH, sloHours, Number(res.json?.count ?? 0));
+  return { name, status: v.state, detail: `newest DUE object under ${scope} "${due.name}" (${ageH.toFixed(1)}h old, SLO ${sloHours}h) ${v.reason}${info}` };
+}
+
 async function checkBrainRoomsFreshness() {
   return Promise.all(BRAIN_ROOMS.map((room) => checkOneBrainRoomFreshness(room)));
 }
 
+// ---------------------------------------------------------------------------------------------
+// Check 8 (2026-09-29, brain-save adjudication round 2): RING RESIDUE in the open commons room.
+// commons-company-journal is readable by every gateway lane, external connectors included. A
+// content-free count found 87 _MEMORY/ chunks (exec-feed ledgers), 28 _HANDOFF/ chunks (cfo.md, clo.md,
+// capital.md) and 17 _JOURNAL/cfo/ digest chunks live there: SKIP_PREFIXES is a crawl-time rule and
+// never purged what an older unscoped push had already written. This asserts ZERO chunks under every
+// ring-private prefix (the single list in skills/doc-indexer/push-rules.mjs), counting by
+// `path.keyword` prefix only -- never reading content. Any non-zero count is a LEAK (an anomaly).
+export const RING_RESIDUE_ROOM = Object.freeze({ index: "commons-company-journal", account: "otchealthcommons", container: "company-journal" });
+
+/** Pure: [{prefix, count}] -> { status: OK|LEAK, detail }. */
+export function assessRingResidue(counts) {
+  const leaks = (counts || []).filter((c) => Number(c.count) > 0);
+  if (!leaks.length) return { status: "OK", detail: `0 chunks under ${(counts || []).length} ring-private prefix(es) (${(counts || []).map((c) => c.prefix).join(" ")}) in ${RING_RESIDUE_ROOM.index}` };
+  const total = leaks.reduce((a, c) => a + Number(c.count), 0);
+  return { status: "LEAK", detail: `${total} chunk(s) of ring-private content in the OPEN room ${RING_RESIDUE_ROOM.index}: ${leaks.map((c) => `${c.prefix} ${c.count}`).join(", ")} -- purge with \`node skills/doc-indexer/purge-ring-residue.mjs --commit\` (S3 sources are untouched)` };
+}
+
+async function checkCommonsRingResidue() {
+  const name = "commons-ring-residue";
+  let cfg;
+  try { cfg = await resolveOpenSearchConfig(); }
+  catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch config/credentials unresolvable): ${String((e && e.message) || e).slice(0, 300)}` }; }
+  const counts = [];
+  for (const prefix of RING_PRIVATE_PREFIXES) {
+    let res;
+    try { res = await osCount(cfg, RING_RESIDUE_ROOM.index, { prefix: { "path.keyword": `${RING_RESIDUE_ROOM.account}/${RING_RESIDUE_ROOM.container}/${prefix}` } }); }
+    catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch _count failed for ${prefix}): ${String((e && e.message) || e).slice(0, 300)}` }; }
+    if (!res.ok) return { name, status: "ERROR", detail: `cannot check (OpenSearch _count HTTP ${res.status} for ${prefix})` };
+    counts.push({ prefix, count: Number(res.json?.count ?? 0) });
+  }
+  return { name, ...assessRingResidue(counts) };
+}
+
 /** Exit-code policy, mirrors every sibling canary's convention exactly: report-only by default (never
- *  a non-zero exit), --strict pages (non-zero exit) on any live anomaly (STALE/ERROR). SKIPPED is
+ *  a non-zero exit), --strict pages (non-zero exit) on any live anomaly (STALE/ERROR/LEAK). SKIPPED is
  *  never an anomaly (a day the drill is not scheduled, or a missing optional passphrase, is expected). */
+export const ANOMALY_STATUSES = Object.freeze(["STALE", "ERROR", "LEAK"]);
 export function pageExitCode(results, strict) {
-  const anomalies = results.filter((r) => r.status === "STALE" || r.status === "ERROR");
+  const anomalies = results.filter((r) => ANOMALY_STATUSES.includes(r.status));
   if (!strict) return 0;
   return anomalies.length ? 1 : 0;
 }
@@ -555,6 +649,7 @@ async function main() {
       checkN8nAutoSnapshot(),
       checkN8nHealthz(),
       checkWeeklyDrill(),
+      checkCommonsRingResidue(),
     ])),
     ...(await checkBrainRoomsFreshness()),
   ];
@@ -564,7 +659,7 @@ async function main() {
     console.log(`# aws-dr-canary — ${results.length} check(s)${STRICT ? " [--strict]" : ""}`);
     for (const r of results) console.log(`[${r.status.padEnd(8)}] ${r.name.padEnd(24)} ${r.detail}`);
   }
-  const anomalies = results.filter((r) => r.status === "STALE" || r.status === "ERROR");
+  const anomalies = results.filter((r) => ANOMALY_STATUSES.includes(r.status));
   if (anomalies.length) {
     console.error(`::warning::[aws-dr-canary] ${anomalies.length} anomal${anomalies.length === 1 ? "y" : "ies"}: ${anomalies.map((a) => a.name).join(", ")}`);
   }

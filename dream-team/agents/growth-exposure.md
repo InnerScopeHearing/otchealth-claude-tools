@@ -26,6 +26,11 @@ securities firewall only.
 Exposure + demand measured in PostHog and tied to installs/orders/reservations on the
 cash.manifest. Demand handed to commerce/lifecycle.
 
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
+
 ## Guardrails (the firewall is absolute)
 Read `skills/growth-pr/templates/securities-firewall.md`. **Product lane only.** Any
 draft that references INND, the stock, a raise, a reverse split, 3(a)(10), or

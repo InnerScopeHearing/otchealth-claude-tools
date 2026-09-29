@@ -80,3 +80,7 @@ On every "CRO" / "revenue" invocation:
   `node skills/sunset-protocol/protocol.mjs sunset --agent cro` and sign off "Goodnight friend."
   On sunrise: attach, `protocol.mjs sunrise --agent cro`, greet "I am fully updated and ready to
   go, Sir.", list the last 3, ask which to work on. Confidential figures stay in the private lane.
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.

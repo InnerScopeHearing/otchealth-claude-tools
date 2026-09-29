@@ -31,6 +31,11 @@ the specific violation + the fix to the owning agent. Escalate regulated decisio
 Matt + counsel (AskUserQuestion / the human gate); you prepare and flag, you do not
 make the legal call.
 
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
+
 ## Guardrails
 When in doubt, block and escalate. A cash lever that trips a regulator is the most
 expensive roadblock of all; preventing it IS serving the cash goal.

@@ -57,7 +57,7 @@ import { tmpdir } from "node:os";
 import { join, basename, extname } from "node:path";
 import { fleetSecret } from "./fleet-secret.mjs";
 import { mergeSchemaAdditive } from "./schema-merge.mjs";
-import { getBufferFromS3, getBufferMetaFromS3, putObjectToS3, listBlobsMetaFromS3, s3LocationFor } from "../kb-memory/s3-blob.mjs";
+import { getBufferFromS3, getBufferMetaFromS3, putObjectToS3, listBlobsMetaFromS3, s3LocationFor, headObjectMetaFromS3 } from "../kb-memory/s3-blob.mjs";
 import { writeCatalogIfChanged } from "./catalog-conditional-write.mjs";
 import { osFetch, osGetMapping, osSearch } from "./opensearch-client.mjs";
 // The proven Amazon OpenSearch writer (Wave-2b port): SigV4 signing, credential resolution
@@ -65,6 +65,14 @@ import { osFetch, osGetMapping, osSearch } from "./opensearch-client.mjs";
 // update+doc_as_upsert primitive. Reused verbatim rather than reimplemented -- see this file's own
 // SEARCH_BACKEND section below for why push-search now targets it by default.
 import * as OS from "../kb-memory/opensearch-write.mjs";
+// Pure chunked-room helpers, extracted 2026-09-29 so skills/brain-save can reuse them without importing
+// this CLI script. Re-exported so every existing `import * as Indexer from "../indexer.mjs"` caller and
+// test keeps working unchanged.
+import { OS_VECTOR_FIELD_FLAT, OS_VECTOR_FIELD_CHUNKED, classifyRoomShape, countWords, chunkText, buildChunkDocs } from "./chunking.mjs";
+export { OS_VECTOR_FIELD_FLAT, OS_VECTOR_FIELD_CHUNKED, classifyRoomShape, countWords, chunkText, buildChunkDocs };
+// SKIP_PREFIXES + the push-row selection rules live in ./push-rules.mjs (pure, importable).
+import { SKIP_PREFIXES, isSkippedPath, selectPushRows, parsePrefixList, unscopedPushRefusal } from "./push-rules.mjs";
+export { SKIP_PREFIXES, isSkippedPath, selectPushRows, parsePrefixList };
 
 const argv = process.argv.slice(2);
 function takeVal(name, def = null) { const i = argv.indexOf(name); if (i >= 0) { const v = argv[i + 1]; argv.splice(i, 2); return v; } return def; }
@@ -75,6 +83,11 @@ const ACCT_OV = takeVal("--azure-account");
 const KEYSECRET_OV = takeVal("--key-secret");
 const idxOverride = takeVal("--index");
 const PREFIX = takeVal("--prefix", "");
+// push-search SCOPE (2026-09-29, brain-save directive). --prefixes a,b,c (or a single --prefix p) now
+// restricts which catalog rows push-search may embed + push; previously PREFIX was consumed only by
+// `index` and `build-csv`, so `push-search --prefix X` silently pushed the WHOLE un-pushed catalog.
+// Unset = the legacy unscoped push (the librarian jobs rely on that). See push-rules.mjs selectPushRows().
+const PREFIXES_RAW = takeVal("--prefixes", null);
 const LIMIT = parseInt(takeVal("--limit", "0"), 10) || 0;
 const SKIP = parseInt(takeVal("--skip", "0"), 10) || 0; // push-search: skip the first N filtered docs (targeted tail re-push after an interrupted reindex)
 const OCR_MODEL = takeVal("--ocr-model", "prebuilt-read");
@@ -118,6 +131,29 @@ const BACKEND = flags.has("--s3") ? "s3" : flags.has("--azure") ? "azure" : flag
 const REINDEX = flags.has("--reindex");
 const NO_OCR = flags.has("--no-ocr");
 const NO_TEXT = flags.has("--no-text");
+// push-search only: --dry-run prints the count + paths it WOULD push (no embedding, no write);
+// --require-live-object HEADs each selected row's source object first and skips rows whose object is
+// gone, so a document brain-save superseded or retracted can never be resurrected from a stale catalog row.
+const PUSH_DRY_RUN = flags.has("--dry-run");
+const REQUIRE_LIVE_OBJECT = flags.has("--require-live-object");
+/** The push-search scope: --prefixes wins, else a non-empty --prefix, else null (legacy unscoped). */
+function pushScope() {
+  if (PREFIXES_RAW != null) return parsePrefixList(PREFIXES_RAW);
+  if (PREFIX) return [PREFIX];
+  return null;
+}
+/** Apply the scope + the live-object check to catalog rows, before any embedding. */
+async function scopePushRows(rows) {
+  const scope = pushScope();
+  let out = selectPushRows(rows, scope);
+  if (scope != null) console.error(`[push-search] scoped to prefixes [${scope.join(", ") || "(none -> nothing selected)"}]: ${out.length} of ${rows.length} catalog row(s) eligible`);
+  return out;
+}
+async function objectStillLive(path) {
+  if (!REQUIRE_LIVE_OBJECT) return true;
+  if (BACKEND !== "s3") { console.error("[push-search] --require-live-object is only enforced on the s3 backend; ignoring"); return true; }
+  return (await headObjectMetaFromS3(S3ACCT, S3CONTAINER, path)) !== null;
+}
 
 const SM = "otchealth-shared-prod";
 const CATALOG_KEY = "_CATALOG/catalog.jsonl";
@@ -129,7 +165,8 @@ const TEXT_PREFIX = "_TEXT/";
 // document text anyway. Catalog them but skip extraction. Override with MAX_INDEX_MB.
 const MAX_INDEX_MB = parseInt(process.env.MAX_INDEX_MB || "200", 10);
 const MAX_INDEX_BYTES = MAX_INDEX_MB * 1024 * 1024;
-const SKIP_PREFIXES = ["_CATALOG/", "_TEXT/", "_SUMMARY/", "_TRASH/", "_NON-ACCOUNTING/", "_DUPLICATES/", "_ARCHIVE/", "_MEMORY/", "_HANDOFF/", "_DISPATCH/"]; // our own artifacts, PLUS (2026-07-12, ring-safety fix) the kb-memory/sunset-protocol ledger prefixes in the commons container -- _MEMORY/ holds the CFO/CLO exec-feed ledgers (MNPI/privileged), already indexed ring-aware into memory-exec by semantic.mjs. If a commons index/push-search run ever crawled the WHOLE container instead of a --prefix-scoped slice, these prefixes would otherwise get their raw ledger text embedded into the UNRESTRICTED commons-company-journal index (the "journal" room every agent can query, no ring wall) -- a real MNPI/privileged leak. Never remove this without adding an equivalent ring wall to the commons profile itself.
+// SKIP_PREFIXES (our own artifacts + the ring-sensitive commons ledger prefixes + brain-save's _KNOWLEDGE-META/)
+// now lives in ./push-rules.mjs with its full history; imported + re-exported at the top of this file.
 // 2026-08-04 (CLO brief §2): the reported "indexer indexes its own output" artifacts
 // (_TEXT/_TEXT/...txt.txt, _TEXT/_SUMMARY/.../_TEXT/...txt.md.txt) all live UNDER _TEXT/, which was
 // already excluded -- this codebase never had, and still does not have, any code path that writes or
@@ -717,7 +754,7 @@ async function runPushSearchAzure() {
     }
   } catch { /* GET failure -> proceed; aisCreateIndex handles first-create + real errors */ }
   await aisCreateIndex();
-  let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  let rows = await scopePushRows((await loadCatalog()).filter((r) => r.sidecar && !r.err));
   if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
   const existing = REINDEX ? new Set() : await aisExistingIds(); // --reindex forces a full re-push
   console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME}`);
@@ -739,6 +776,8 @@ async function runPushSearchAzure() {
   for (const r of rows) {
     const id = crypto.createHash("sha1").update(r.path).digest("hex");
     if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
+    if (!(await objectStillLive(r.path))) continue; // never resurrect a deleted/superseded source
+    if (PUSH_DRY_RUN) { console.log(`  would push: ${r.path}`); continue; }
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
     const summary = r.summary || "";
     pend.push({ "@search.action": "mergeOrUpload", id, indexed_at: new Date().toISOString(), path: r.path, entity: r.entity || "", category: r.category || "", title: r.title || basename(r.path), summary: summary.slice(0, 16000), content: txt.slice(0, 32000), material: !!r.material, execution_status: r.execution_status || "", signed: !!r.has_signature });
@@ -775,8 +814,7 @@ async function runCloudSearchAzure(q) {
 // mapping's vector field rather than duplicating that TypeScript list into a second, driftable copy)
 // not of which search engine serves it, so a flat push has nothing valid to do against a chunked
 // room and must SKIP cleanly, exactly like the Azure path already does.
-const OS_VECTOR_FIELD_FLAT = "contentVector";
-const OS_VECTOR_FIELD_CHUNKED = "text_vector";
+// OS_VECTOR_FIELD_FLAT / OS_VECTOR_FIELD_CHUNKED are imported from ./chunking.mjs (top of this file).
 
 /** The OpenSearch mapping for a freshly-created FLAT doc room. Field-for-field the same fields (and
  *  the same names) aisCreateIndex()'s Azure schema carries -- `content`/`summary`/`title` are exactly
@@ -806,18 +844,7 @@ export function flatRoomMapping(dims = EMB_DIMS) {
   };
 }
 
-/** Classify a room's live shape from its `_mapping` response body (the SAME REST shape osGetMapping()
- *  returns): 'chunked' (carries text_vector -- fed by enrich.mjs / the migration bulk loader, never by
- *  push-search), 'flat' (carries contentVector -- what push-search itself creates/maintains), or
- *  'unknown' (the index exists but neither vector field is mapped yet -- a room created but never
- *  written to under either shape). Pure -- no network -- so the decision is directly unit-testable
- *  without a live cluster. `index` is the index name (OpenSearch nests the mapping response under it). */
-export function classifyRoomShape(mappingJson, index) {
-  const props = mappingJson?.[index]?.mappings?.properties || {};
-  if (props[OS_VECTOR_FIELD_CHUNKED]) return "chunked";
-  if (props[OS_VECTOR_FIELD_FLAT]) return "flat";
-  return "unknown";
-}
+// classifyRoomShape() lives in ./chunking.mjs (imported + re-exported at the top of this file).
 
 /** Build the exact document `push-search` writes for one catalog row on OpenSearch -- field-for-field
  *  the Azure schema's non-`@search.action` fields (id/path/entity/category/title/summary/content/
@@ -918,119 +945,8 @@ export function buildFlatSearchDoc(row, txt, vector, nowIso = new Date().toISOSt
 // otchealth-cto/CLAUDE.md's 2026-08-19 entry: "legal-personal stays excluded regardless
 // (attorney-privileged ring)"). This section only gets a new document structurally INTO the room so
 // BM25/path/title retrieval can find it even before enrichment ever runs.
-function dirnameBelowRoot(path) {
-  // Mirrors enrich.mjs's own private dirnameBelowRoot() exactly (this codebase's established
-  // convention is a small parallel copy per file rather than a cross-file import for tiny
-  // profile/path helpers -- see indexer.mjs's and enrich.mjs's own separately-maintained
-  // PROFILES/STORAGE_PROFILES tables for the same pattern).
-  const parts = String(path || "").split("/");
-  parts.pop();
-  return parts.join("/");
-}
-
-/** Word count matching enrich.mjs's own definition exactly. Pure, exported for a direct unit test
- *  and so a caller can compute it ONCE on the full sidecar text and reuse it across every chunk of
- *  that document (see buildChunkDocs -- word_count is a per-DOCUMENT value, not per-chunk). */
-export function countWords(text) {
-  return ((text || "").match(/\S+/g) || []).length;
-}
-
-/** Find the best split point in `text` within (from, to]: the last paragraph break, else the last
- *  sentence-ending punctuation, else the last newline, else the last plain space -- in that
- *  preference order -- so a chunk boundary never falls mid-word. Returns -1 when the window has no
- *  usable boundary at all (the caller then hard-cuts at `to`; this only happens for a pathological
- *  run of text with no whitespace anywhere in the lookback window, e.g. a very long URL or hash). */
-function findChunkBreak(text, from, to) {
-  const window = text.slice(from, to);
-  const para = window.lastIndexOf("\n\n");
-  if (para > 0) return from + para + 2;
-  let sentenceEnd = -1;
-  for (const m of window.matchAll(/[.!?]["')\]]?\s+/g)) sentenceEnd = from + m.index + m[0].length;
-  if (sentenceEnd > from) return sentenceEnd;
-  const nl = window.lastIndexOf("\n");
-  if (nl > 0) return from + nl + 1;
-  const sp = window.lastIndexOf(" ");
-  if (sp > 0) return from + sp + 1;
-  return -1;
-}
-
-/** Split `text` into overlapping chunks of at most `maxChunkSize` characters each, with consecutive
- *  chunks overlapping by roughly `overlap` characters. Pure, exported for direct unit testing.
- *  Defaults (2000/200) match the live-measured chunked-room corpus -- see this section's header.
- *
- *  Prefers a paragraph/sentence/whitespace boundary near the target size (findChunkBreak) over a
- *  hard character cut, and snaps the START of the next chunk's overlap forward to the next
- *  whitespace run too, so neither the END of one chunk nor the START of the next ever falls
- *  mid-word except in a pathological no-whitespace run.
- *
- *  Returns [] for empty/whitespace-only input (a document with no real text must never produce a
- *  garbage chunk) and [text] unchanged when it already fits in one chunk (no spurious overlap on a
- *  short document -- matches buildFlatSearchDoc()'s own "no chunking needed" precedent for a flat
- *  room's single-document case). */
-export function chunkText(text, opts = {}) {
-  const maxChunkSize = Math.max(1, Math.floor(opts.maxChunkSize ?? 2000));
-  const overlap = Math.max(0, Math.min(Math.floor(opts.overlap ?? 200), Math.floor(maxChunkSize / 2)));
-  const t = String(text == null ? "" : text);
-  if (!t.trim()) return [];
-  if (t.length <= maxChunkSize) return [t];
-
-  const LOOKBACK = Math.max(1, Math.floor(maxChunkSize * 0.3));
-  const chunks = [];
-  let start = 0;
-  while (start < t.length) {
-    let end = Math.min(start + maxChunkSize, t.length);
-    if (end < t.length) {
-      const bp = findChunkBreak(t, Math.max(start, end - LOOKBACK), end);
-      if (bp > start) end = bp;
-    }
-    chunks.push(t.slice(start, end));
-    if (end >= t.length) break;
-    let next = end - overlap;
-    if (next > start) {
-      const m = t.slice(next, Math.min(next + 60, end)).search(/\s/);
-      if (m >= 0) next += m + 1;
-    }
-    if (next <= start) next = end; // guarantee forward progress even on a pathological input
-    start = next;
-  }
-  return chunks;
-}
-
-/** Build the OpenSearch chunk documents for ONE catalog row, given its text already split into
- *  `chunks` (see chunkText). Field-for-field the structural subset this section's header describes
- *  -- never an enrichment field (those are enrich.mjs's job, run separately, later; see the LEGAL
- *  WALL note above). Pure (no I/O; `vectors`/`wordCount` are passed in) so the exact document shape
- *  is directly assertable in a unit test with no live cluster or embedding call.
- *
- *  `vectors[i]`, when given, becomes chunk i's text_vector; a caller that has not embedded yet (or
- *  whose embed call failed) may omit `vectors` entirely and add it to the returned docs itself, or
- *  pass a sparse/undefined entry -- this function does not require every chunk to have a vector, it
- *  only ever sets the field when one is actually provided. */
-export function buildChunkDocs(row, chunks, opts = {}) {
-  const { account, container, vectors = [], wordCount = 0 } = opts;
-  const parentId = crypto.createHash("sha1").update(row.path).digest("hex");
-  const fullPath = `${account}/${container}/${row.path}`;
-  const baseTitle = row.title || basename(row.path);
-  const sourcePath = dirnameBelowRoot(row.path);
-  return chunks.map((chunkStr, i) => {
-    const chunk_id = `${parentId}_${i}`;
-    const doc = {
-      id: chunk_id,
-      chunk_id,
-      parent_id: parentId,
-      path: fullPath,
-      source_path: sourcePath,
-      title: baseTitle,
-      doc_title: baseTitle,
-      chunk: chunkStr,
-      content_hash: row.sha256 || "",
-      entity: row.entity || "",
-      word_count: wordCount,
-    };
-    if (vectors[i]) doc[OS_VECTOR_FIELD_CHUNKED] = vectors[i];
-    return doc;
-  });
-}
+// dirnameBelowRoot / countWords / findChunkBreak / chunkText / buildChunkDocs live in ./chunking.mjs
+// (pure, importable without this file's CLI side effects); imported + re-exported at the top of this file.
 
 /** The (account, container) pair embedded in every chunked-room document's `path` field --
  *  INDEPENDENT of which storage BACKEND (s3/azure/gcs) actually serves the bytes; see this
@@ -1156,7 +1072,7 @@ async function pruneStaleChunks(cfg, index, parentId, keepCount) {
  *  fully embedded and queued, or not queued at all, so an incomplete document is never marked
  *  "present" and is simply retried whole on the next run. */
 async function runPushSearchOpenSearchChunked(cfg, index) {
-  let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  let rows = await scopePushRows((await loadCatalog()).filter((r) => r.sidecar && !r.err));
   if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
   const { account, container } = chunkRoomAccountContainer();
   if (!account || !container) {
@@ -1168,7 +1084,8 @@ async function runPushSearchOpenSearchChunked(cfg, index) {
   console.error(`[push-search] CHUNKED room ${index}: ${rows.length} catalog doc(s) with text; ${existingPaths.size} distinct doc(s) already present by path -> chunking new docs only (chunk<=${CHUNK_MAX_CHARS}c, overlap ${CHUNK_OVERLAP}c)`);
 
   const EMB_BATCH = 16, PUSH_BATCH = 64;
-  let docsNew = 0, docsSkipped = 0, docsEmpty = 0, docsEmbFailed = 0, n = 0, pushErr = 0, ready = [];
+  let docsNew = 0, docsSkipped = 0, docsEmpty = 0, docsEmbFailed = 0, docsGone = 0, n = 0, pushErr = 0, ready = [];
+  const dryPaths = [];
   async function pushReady(force) {
     while (ready.length >= PUSH_BATCH || (force && ready.length)) {
       const b = ready.splice(0, PUSH_BATCH);
@@ -1181,6 +1098,8 @@ async function runPushSearchOpenSearchChunked(cfg, index) {
   for (const r of rows) {
     const fullPath = `${account}/${container}/${r.path}`;
     if (!REINDEX && existingPaths.has(fullPath)) { docsSkipped++; continue; } // resumable: this document already has chunks in the room
+    if (!(await objectStillLive(r.path))) { docsGone++; continue; } // superseded/retracted/deleted source: never resurrect it
+    if (PUSH_DRY_RUN) { dryPaths.push(r.path); continue; }
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || "";
     if (!txt.trim()) { docsEmpty++; continue; }
     const chunks = chunkText(txt, { maxChunkSize: CHUNK_MAX_CHARS, overlap: CHUNK_OVERLAP });
@@ -1210,9 +1129,14 @@ async function runPushSearchOpenSearchChunked(cfg, index) {
       catch (e) { console.error(`  [push-search] WARN: stale-chunk prune failed for ${r.path.slice(-60)}: ${e.message}`); }
     }
   }
+  if (PUSH_DRY_RUN) {
+    for (const p of dryPaths) console.log(`  would push: ${p}`);
+    console.log(`[push-search --dry-run] would push ${dryPaths.length} new document(s) to CHUNKED index ${index} (${docsSkipped} already present${docsGone ? `, ${docsGone} source object(s) gone -> skipped` : ""}); nothing embedded, nothing written`);
+    return;
+  }
   await pushReady(true);
   if (n > 0) { try { await OS.refresh(index); } catch { /* best-effort -- docs are already durably written; a refresh failure only delays search-visibility */ } }
-  const failNote = pushErr ? `, ${pushErr} push-failed` : "";
+  const failNote = (pushErr ? `, ${pushErr} push-failed` : "") + (docsGone ? `, ${docsGone} gone-source skipped` : "");
   console.log(`pushed ${n} chunk(s) across ${docsNew} new document(s) (${docsSkipped} doc(s) already present, ${docsEmpty} doc(s) with no usable text${docsEmbFailed ? `, ${docsEmbFailed} doc(s) embed-failed (retried next run)` : ""}${failNote}) to OpenSearch CHUNKED index ${index}`);
   if (pushErr > 0) process.exitCode = 1; // a partial bulk failure must not read as a clean run
 }
@@ -1225,7 +1149,7 @@ async function runPushSearchOpenSearch() {
   if (shape === "chunked") {
     return runPushSearchOpenSearchChunked(cfg, IDXNAME);
   }
-  let rows = (await loadCatalog()).filter((r) => r.sidecar && !r.err);
+  let rows = await scopePushRows((await loadCatalog()).filter((r) => r.sidecar && !r.err));
   if (SKIP > 0) { console.error(`[push-search] --skip ${SKIP}: re-pushing only the tail (docs ${SKIP}..${rows.length}) after an interrupted reindex`); rows = rows.slice(SKIP); }
   const existing = REINDEX ? new Set() : await OS.existingIds(IDXNAME); // --reindex forces a full re-push
   console.error(`[push-search] ${rows.length} docs with text; ${existing.size} already indexed -> index ${IDXNAME} (opensearch)`);
@@ -1254,6 +1178,8 @@ async function runPushSearchOpenSearch() {
   for (const r of rows) {
     const id = crypto.createHash("sha1").update(r.path).digest("hex");
     if (existing.has(id)) { skipped++; continue; } // resumable: already in the index
+    if (!(await objectStillLive(r.path))) continue; // never resurrect a deleted/superseded source
+    if (PUSH_DRY_RUN) { console.log(`  would push: ${r.path}`); continue; }
     const txt = (await getBuf(TEXT_PREFIX + r.path + ".txt"))?.toString("utf8") || ""; if (!txt) continue;
     pend.push(buildFlatSearchDoc(r, txt, null));
     texts.push(((r.title || "") + "\n" + (r.summary || "") + "\n" + txt).slice(0, 8000));
@@ -1299,7 +1225,14 @@ async function runCloudSearchOpenSearch(q) {
 }
 
 async function runSearchInit() { return SEARCH_BACKEND === "azure" ? runSearchInitAzure() : runSearchInitOpenSearch(); }
-async function runPushSearch() { return SEARCH_BACKEND === "azure" ? runPushSearchAzure() : runPushSearchOpenSearch(); }
+async function runPushSearch() {
+  // Refused BEFORE any storage/catalog/embedding work (see push-rules.mjs unscopedPushRefusal).
+  let target = "";
+  try { target = computeIndexName(); } catch { /* resolved later; the profile check still applies */ }
+  const refusal = unscopedPushRefusal(PROFILE, pushScope(), target);
+  if (refusal) { console.error(`[push-search] ${refusal}`); process.exitCode = 2; return; }
+  return SEARCH_BACKEND === "azure" ? runPushSearchAzure() : runPushSearchOpenSearch();
+}
 async function runCloudSearch(q) { return SEARCH_BACKEND === "azure" ? runCloudSearchAzure(q) : runCloudSearchOpenSearch(q); }
 
 // ============================ Azure Content Understanding (the "understand" tier) ============================

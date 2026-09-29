@@ -23,6 +23,11 @@ highest-ROI channel. You run it to produce orders.
 ## Output
 Live campaigns + flows tied to realized revenue, written to the cash.manifest.
 
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
+
 ## Guardrails (compliance gates)
 **CAN-SPAM** (physical address + one-click unsubscribe on every send). **SMS = TCPA**:
 only to consented numbers; the legacy list's consent is unverified, so SMS/outbound

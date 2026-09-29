@@ -44,10 +44,21 @@ node "$ROOT/skills/doc-indexer/indexer.mjs" index --no-ocr --profile commons --s
 # pushes the new digest. This corrects the older comment here, which claimed a flat push would be
 # "rejected" and that an S1 pull-indexer would collect the digest instead; on AWS nothing would have
 # collected it. SKIP_PUSH_SEARCH=1 remains a deliberate cost/latency opt-out, not a workaround.
+#
+# ALLOW-LISTED PUSH (2026-09-29, brain-save directive): the commons room is readable by EVERY lane,
+# including external ChatGPT/Perplexity connectors, and an UNSCOPED push embeds every un-pushed catalog
+# row with a sidecar -- which includes _JOURNAL/<agent>/ session digests (the CFO lane's among them) and
+# older ring-sensitive _RESEARCH/ material. So the push now runs ONLY when COMMONS_PUSH_PREFIXES names an
+# explicit allow-list (the planned arming value is "_KNOWLEDGE/,_DAILY/"), and --require-live-object
+# keeps a superseded/retracted brain-save document from being resurrected off a stale catalog row.
+# Unset (the live task definition today) = skip, exactly like SKIP_PUSH_SEARCH=1: this change merges as
+# a no-op on the running job. An unscoped commons push is never allowed again.
 if [ "$SKIP_PUSH_SEARCH" = "1" ]; then
   echo "[nightly] SKIP_PUSH_SEARCH=1 -> skipping commons push-search (deliberate cost/latency opt-out)"
+elif [ -z "$COMMONS_PUSH_PREFIXES" ]; then
+  echo "[nightly] COMMONS_PUSH_PREFIXES unset -> skipping commons push-search (an unscoped commons push is never allowed)"
 else
-  node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --s3
+  node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --s3 --prefixes "$COMMONS_PUSH_PREFIXES" --require-live-object
 fi
 # METADATA ENRICHMENT (opt-in, default OFF; commerce is the 2026-07-21 proving ground -- see
 # skills/doc-indexer/enrich.mjs + skills/doc-indexer/metadata-schema.mjs). Universal-core metadata

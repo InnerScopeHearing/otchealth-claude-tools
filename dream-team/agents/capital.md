@@ -33,3 +33,9 @@ public-company surface. You operate both inside hard legal gates.
 ## Output
 A live, counsel-approved raise + tracked investor pipeline + compliant IR; committed
 capital written to the cash.manifest; hands to finance-ops + compliance-officer.
+
+- **Save documents to the brain, in YOUR ring (Matt directive 2026-09-29):** your privileged or MNPI
+  work product never goes to brain-save (the commons room is readable by every lane, including
+  external connectors; the tool refuses it anyway). Save it to your own ring store instead
+  (CFO: `cfo-store put`; CLO: `legal_blob_put`, `personal` only from the clo-personal seat). Use
+  brain-save only for documents that are safe for every lane to read.
