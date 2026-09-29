@@ -12,6 +12,11 @@
 //                      [--seed-image path.png] [--output marketing/preview.mp4]
 //                      [--dry-run]
 //
+//   --engine elevenlabs  ElevenLabs Flows (Veo 3.1 / 3.1 Fast through the workspace credit grant). It is a DRY RUN
+//                        unless you pass BOTH --commit and --max-credits N (plus --allow-unknown-rate when the
+//                        credit rate for that model/resolution/audio combination has not been measured yet).
+//                        Ads: use skills/ad-studio (claims, FTC and brand gates run there); this flag is for one-off clips.
+//
 // Output: MP4 at brand.output_root/video/<slug>.mp4 + .meta.json.
 //         Veo jobs are asynchronous — script polls until ready then downloads.
 
@@ -21,6 +26,7 @@ import {
     writeMeta, reportCost, parseArgs, brandPromptPrefix,
     getVertexAccessToken, runVeoJob, extractVeoVideoB64, requireAzureOpenAI,
 } from './_lib.mjs';
+import { truthy } from './_spend.mjs';
 import { soraGenerateVideo } from './_azure.mjs';
 import { openaiGenerateVideo } from './_openai.mjs';
 
@@ -41,8 +47,8 @@ if (!prompt) {
     console.error('Usage: gen-video.mjs --prompt "..." [--engine openai|veo|azure] [--duration N] [--ratio 16:9|9:16|1:1] [--resolution 720p|1080p] [--audio] [--model ...]');
     process.exit(1);
 }
-if (!['openai', 'veo', 'azure'].includes(engine)) {
-    console.error(`--engine must be 'openai', 'veo', or 'azure' (got '${engine}')`);
+if (!['openai', 'veo', 'azure', 'elevenlabs'].includes(engine)) {
+    console.error(`--engine must be 'openai', 'veo', 'azure', or 'elevenlabs' (got '${engine}')`);
     process.exit(1);
 }
 
@@ -148,6 +154,64 @@ if (engine === 'azure') {
     });
     console.log(`\nOUTPUT: ${outputPath}`);
     console.log(`Cost: ~$${soraCost.toFixed(2)} (Azure grant)`);
+    process.exit(0);
+}
+
+// ─── ElevenLabs Flows (Veo 3.1 via the ElevenLabs credit grant) ────────
+// Docs: https://elevenlabs.io/docs/api-reference/flows/video/create  (POST /v1/flows/video, poll GET /v1/flows/video/{id}).
+// Veo constraints: duration 4|6|8 s, aspect 16:9|9:16, resolution 720p|1080p|4K. Nothing is spent without --commit + --max-credits.
+if (engine === 'elevenlabs') {
+    const elModel = args.model || 'veo-3.1-fast-generate-001';
+    if (!['veo-3.1-fast-generate-001', 'veo-3.1-generate-001'].includes(elModel)) {
+        console.error(`--model for --engine elevenlabs must be veo-3.1-fast-generate-001 or veo-3.1-generate-001 (got '${elModel}')`);
+        process.exit(1);
+    }
+    if (!['16:9', '9:16'].includes(ratio)) {
+        console.error(`--ratio for --engine elevenlabs must be 16:9 or 9:16 (got '${ratio}')`);
+        process.exit(1);
+    }
+    const elRes = String(resolution).toLowerCase() === '4k' ? '4K' : resolution;
+    if (!['720p', '1080p', '4K'].includes(elRes)) {
+        console.error(`--resolution for --engine elevenlabs must be 720p, 1080p or 4K (got '${resolution}')`);
+        process.exit(1);
+    }
+    const elSecs = [4, 6, 8].reduce((a, b) => Math.abs(b - duration) < Math.abs(a - duration) ? b : a, 8);
+    const { createClient, imageReferenceFromFile } = await import('../../ad-studio/el-client.mjs');
+    const { planSpend, formatPlan, readLedger, SpendGuard } = await import('../../ad-studio/credit-guard.mjs');
+    const job = { kind: 'video', model: elModel, resolution: elRes, audio, seconds: elSecs, label: `${elSecs}s ${ratio} ${elRes}${audio ? ' +audio' : ''}` };
+    const maxCredits = args['max-credits'] === undefined ? undefined : Number(String(args['max-credits']).replace(/[,_]/g, ''));
+    // `--commit false` / `--commit=0` mean NO (a bare Boolean('false') would have meant yes)
+    const commit = truthy(args.commit) && !truthy(args['dry-run']) && !dryRun;
+    const plan = planSpend({ jobs: [job], commit, maxCredits, allowUnknownRate: truthy(args['allow-unknown-rate']), ledger: readLedger() });
+    console.log(formatPlan(plan, { maxCredits }));
+    console.log('PROMPT:');
+    console.log(`  ${fullPrompt}`);
+    if (!commit) {
+        console.log('Nothing was submitted. To spend: add --commit --max-credits N.');
+        process.exit(0);
+    }
+    if (!plan.proceed) {
+        for (const r of plan.reasons) console.error(`REFUSED: ${r}`);
+        process.exit(2);
+    }
+    requireCredential(creds, 'elevenlabsKey', 'ELEVENLABS_API_KEY');
+    const client = createClient({ apiKey: creds.elevenlabsKey, log: (m) => process.stderr.write(m + '\n') });
+    const body = { model_id: elModel, prompt: fullPrompt, duration_secs: elSecs, aspect_ratio: ratio, resolution: elRes, generate_audio: audio };
+    if (seedImage) body.start_frame = imageReferenceFromFile(seedImage);
+    const guard = new SpendGuard({ client, maxCredits, runId: `gen-video-${Date.now()}` });
+    let result;
+    try { result = await guard.run(job, () => client.flowsVideoRun(body)); }
+    catch (e) { console.error(`ERROR (ElevenLabs Flows): ${e.message}`); process.exit(2); }
+    const slug = args.name || prompt.split(/\s+/).slice(0, 6).join(' ');
+    const outputPath = pickOutputPath({ brand, type: 'video', name: slug, ext: 'mp4', explicit: args.output });
+    writeFileSync(outputPath, result.buffer);
+    writeMeta(outputPath, {
+        user_prompt: prompt, full_prompt: fullPrompt, duration_sec: elSecs, aspect_ratio: ratio, resolution: elRes,
+        native_audio: audio, seed_image: seedImage, engine: 'elevenlabs', model: elModel, generation_id: result.id,
+        credits_spent: guard.spent, brand_name: brand.name,
+    });
+    console.log(`\nOUTPUT: ${outputPath}`);
+    console.log(`Credits spent: ${guard.spent.toLocaleString()} (ElevenLabs grant)`);
     process.exit(0);
 }
 

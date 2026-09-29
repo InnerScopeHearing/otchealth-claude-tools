@@ -5,8 +5,8 @@
 //
 // Usage:
 //   node gen-music.mjs --prompt "calm ambient piano, hopeful, unobtrusive" \
-//        [--duration 30] [--vocal] [--name app-ambience] \
-//        [--output marketing/bed.mp3] [--dry-run]
+//        [--duration 30] [--vocal] [--model music_v2_5] [--name app-ambience] \
+//        [--output marketing/bed.mp3] [--dry-run] [--max-credits N]
 //
 // --duration is seconds (3–600). Defaults to instrumental (best for beds);
 // pass --vocal to allow sung vocals. Falls back to brand.music.default_style
@@ -15,6 +15,7 @@
 // Output: MP3 at brand.output_root/music/<slug>.mp3 + .meta.json.
 
 import { writeFileSync } from 'node:fs';
+import { guardedGenerate } from './_spend.mjs';
 import {
     loadCredentials, requireCredential, resolveBrand, pickOutputPath,
     writeMeta, reportCost, parseArgs,
@@ -36,12 +37,13 @@ if (!prompt) {
 const durationSec = Math.min(600, Math.max(3, parseInt(args.duration || '30', 10)));
 const musicLengthMs = durationSec * 1000;
 const instrumental = !args.vocal; // beds are instrumental unless told otherwise
+// Current music model (POST /v1/music model_id: music_v1 | music_v2 | music_v2_5). Docs: https://elevenlabs.io/docs/api-reference/music/compose
+const modelId = args.model || 'music_v2_5';
 
-// ElevenLabs Music consumes the startup grant; rough $-equivalent for the
-// dry-run quote (~$0.06 per 10s on the creator tier; verify in dashboard).
-const costUsd = (durationSec / 10) * 0.06;
+// ElevenLabs Music consumes the startup grant; API list price $0.15 per minute (https://elevenlabs.io/pricing/api).
+const costUsd = (durationSec / 60) * 0.15;
 reportCost({
-    provider: 'elevenlabs', model: 'eleven-music',
+    provider: 'elevenlabs', model: modelId,
     units: `${durationSec}s ${instrumental ? 'instrumental' : 'with vocals'}`,
     costUsd, dryRun,
 });
@@ -55,24 +57,31 @@ if (dryRun) {
 
 requireCredential(creds, 'elevenlabsKey', 'ELEVENLABS_API_KEY');
 
-const res = await fetch('https://api.elevenlabs.io/v1/music', {
-    method: 'POST',
-    headers: {
-        'xi-api-key': creds.elevenlabsKey,
-        'Content-Type': 'application/json',
-        'Accept': 'audio/mpeg',
-    },
-    body: JSON.stringify({
-        prompt,
-        music_length_ms: musicLengthMs,
-        music_instrumental: instrumental,
-    }),
-});
-if (!res.ok) {
-    console.error(`ElevenLabs Music ${res.status}: ${await res.text()}`);
+let buf;
+try {
+    buf = await guardedGenerate({
+        job: { kind: 'music', model: modelId, seconds: durationSec, label: `music ${durationSec}s` },
+        args, apiKey: creds.elevenlabsKey,
+        generate: async () => {
+            const res = await fetch('https://api.elevenlabs.io/v1/music', {
+                method: 'POST',
+                headers: { 'xi-api-key': creds.elevenlabsKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+                body: JSON.stringify({
+                    prompt,
+                    music_length_ms: musicLengthMs,
+                    model_id: modelId,
+                    // The API field is force_instrumental; the old `music_instrumental` is not in the current schema.
+                    force_instrumental: instrumental,
+                }),
+            });
+            if (!res.ok) throw new Error(`ElevenLabs Music ${res.status}: ${await res.text()}`);
+            return Buffer.from(await res.arrayBuffer());
+        },
+    });
+} catch (e) {
+    console.error(e.message);
     process.exit(2);
 }
-const buf = Buffer.from(await res.arrayBuffer());
 
 const slug = args.name || prompt.split(/\s+/).slice(0, 6).join(' ');
 const outputPath = pickOutputPath({

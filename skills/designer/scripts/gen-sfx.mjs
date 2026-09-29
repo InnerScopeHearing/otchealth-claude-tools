@@ -6,7 +6,7 @@
 // Usage:
 //   node gen-sfx.mjs --prompt "soft success chime, gentle bell, positive" \
 //        [--duration 1.5] [--influence 0.4] [--name success-chime] \
-//        [--output assets/sfx/success.mp3] [--dry-run]
+//        [--output assets/sfx/success.mp3] [--dry-run] [--max-credits N]
 //
 // --duration is seconds (0.5–30); omit to let the model pick. --influence
 // (0–1, default 0.3) — higher hugs the prompt more tightly, less variety.
@@ -14,6 +14,7 @@
 // Output: MP3 at brand.output_root/sfx/<slug>.mp3 + .meta.json.
 
 import { writeFileSync } from 'node:fs';
+import { guardedGenerate } from './_spend.mjs';
 import {
     loadCredentials, requireCredential, resolveBrand, pickOutputPath,
     writeMeta, reportCost, parseArgs,
@@ -33,10 +34,12 @@ const creds = loadCredentials();
 const duration = args.duration ? Math.min(30, Math.max(0.5, parseFloat(args.duration))) : null;
 const influence = args.influence ? Math.min(1, Math.max(0, parseFloat(args.influence))) : 0.3;
 
-// SFX are cheap; small flat estimate against the ElevenLabs grant.
-const costUsd = 0.02;
+// SFX are cheap. API list price $0.12/min (https://elevenlabs.io/pricing/api); auto-length is estimated at a flat $0.02.
+const costUsd = duration ? (duration / 60) * 0.12 : 0.02;
+// Current SFX model (POST /v1/sound-generation model_id; the only allowed value today). Docs: https://elevenlabs.io/docs/api-reference/text-to-sound-effects/convert
+const SFX_MODEL = 'eleven_text_to_sound_v2';
 reportCost({
-    provider: 'elevenlabs', model: 'eleven-sound-effects',
+    provider: 'elevenlabs', model: SFX_MODEL,
     units: duration ? `${duration}s` : 'auto-length',
     costUsd, dryRun,
 });
@@ -50,23 +53,28 @@ if (dryRun) {
 
 requireCredential(creds, 'elevenlabsKey', 'ELEVENLABS_API_KEY');
 
-const body = { text: prompt, prompt_influence: influence };
+const body = { text: prompt, model_id: SFX_MODEL, prompt_influence: influence };
 if (duration !== null) body.duration_seconds = duration;
 
-const res = await fetch('https://api.elevenlabs.io/v1/sound-generation', {
-    method: 'POST',
-    headers: {
-        'xi-api-key': creds.elevenlabsKey,
-        'Content-Type': 'application/json',
-        'Accept': 'audio/mpeg',
-    },
-    body: JSON.stringify(body),
-});
-if (!res.ok) {
-    console.error(`ElevenLabs SFX ${res.status}: ${await res.text()}`);
+let buf;
+try {
+    buf = await guardedGenerate({
+        job: { kind: 'sfx', model: SFX_MODEL, seconds: duration ?? undefined, label: duration ? `sfx ${duration}s` : 'sfx auto-length' },
+        args, apiKey: creds.elevenlabsKey,
+        generate: async () => {
+            const res = await fetch('https://api.elevenlabs.io/v1/sound-generation', {
+                method: 'POST',
+                headers: { 'xi-api-key': creds.elevenlabsKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error(`ElevenLabs SFX ${res.status}: ${await res.text()}`);
+            return Buffer.from(await res.arrayBuffer());
+        },
+    });
+} catch (e) {
+    console.error(e.message);
     process.exit(2);
 }
-const buf = Buffer.from(await res.arrayBuffer());
 
 const slug = args.name || prompt.split(/\s+/).slice(0, 6).join(' ');
 const outputPath = pickOutputPath({
@@ -77,7 +85,7 @@ writeMeta(outputPath, {
     prompt,
     duration_seconds: duration,
     prompt_influence: influence,
-    model: 'eleven-sound-effects',
+    model: SFX_MODEL,
     brand_name: brand.name,
     cost_estimate_usd: costUsd,
 });

@@ -1,0 +1,61 @@
+{
+  "_note": "PLACEHOLDER. Every line below is neutral scaffolding that still MUST pass claims_check. Replace the start_frame paths with REAL product photographs before validating; validation fails on a missing file on purpose.",
+  "id": "treo-sample-01",
+  "product": "TReO",
+  "productClass": "PSAP",
+  "voice": { "voice_id": "REPLACE_WITH_CONSENTED_VOICE_ID", "model": "eleven_v4" },
+  "script": [
+    "Meet TReO, a personal sound amplifier.",
+    "Made for everyday listening, at home or on the go.",
+    "Learn more at the link below."
+  ],
+  "onScreenText": ["Meet TReO"],
+  "shots": [
+    {
+      "id": "hero",
+      "prompt": "Slow gentle push-in on the product resting on a light wooden table, soft window daylight, shallow depth of field, calm mood",
+      "duration_secs": 6,
+      "aspect": "9:16",
+      "showsProduct": true,
+      "start_frame": "assets/treo-hero.jpg"
+    },
+    {
+      "id": "lifestyle",
+      "prompt": "A sunlit kitchen table with a coffee cup and a folded newspaper, morning light drifting across the surface, no people, no text",
+      "duration_secs": 4,
+      "aspect": "9:16",
+      "showsProduct": false
+    },
+    {
+      "id": "closeup",
+      "prompt": "Slow orbit around the product on a neutral surface, soft studio light, clean background",
+      "duration_secs": 6,
+      "aspect": "9:16",
+      "showsProduct": true,
+      "start_frame": "assets/treo-closeup.jpg"
+    }
+  ],
+  "music": { "prompt": "warm, unhurried acoustic instrumental bed, gentle guitar and soft piano, friendly and calm", "duration": 20 },
+  "endCard": {
+    "headline": "TReO",
+    "cta": "Learn more",
+    "legal": "Personal sound amplifier, not a hearing aid.",
+    "background": "#12263A",
+    "textColor": "#FFFFFF",
+    "accent": "#0D9488"
+  },
+  "outputs": ["9:16", "1:1", "16:9"],
+  "disclosures": { "aiGenerated": true, "label": "AI-generated", "showLabel": true },
+  "locales": ["en"],
+  "i18n": {
+    "es": {
+      "script": [
+        "Conozca TReO, un amplificador de sonido personal.",
+        "Pensado para escuchar a diario, en casa o fuera de ella.",
+        "Obtenga más información en el enlace de abajo."
+      ],
+      "onScreenText": ["Conozca TReO"],
+      "endCard": { "cta": "Más información", "legal": "Amplificador de sonido personal, no es un audífono." }
+    }
+  }
+}

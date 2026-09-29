@@ -32,10 +32,10 @@ if (creds.openaiKey) {
 
 // 2) ElevenLabs — required for voice/music/sfx
 if (creds.elevenlabsKey) {
-    const r = await timed(() => fetch('https://api.elevenlabs.io/v1/user', { headers: { 'xi-api-key': creds.elevenlabsKey } }));
+    const r = await timed(() => fetch('https://api.elevenlabs.io/v1/user/subscription', { headers: { 'xi-api-key': creds.elevenlabsKey } }));
     if (r._err) rec('ElevenLabs', 'FAIL', r._err);
     else if (r.ok) {
-        const j = await r.json(); const s = j.subscription || {};
+        const j = await r.json(); const s = j.subscription || j; // /v1/user/subscription returns the record directly
         const used = s.character_count ?? '?', lim = s.character_limit ?? '?';
         rec('ElevenLabs', 'PASS', `tier ${s.tier || '?'} · ${used}/${lim} chars used`);
     } else rec('ElevenLabs', 'FAIL', `HTTP ${r.status}`);

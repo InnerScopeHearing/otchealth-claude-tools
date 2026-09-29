@@ -37,6 +37,14 @@ def split_into_segments(text, max_seconds=None):
     return segments
 
 
+def voice_settings_for(model):
+    """Eleven v4 (and v4 Turbo) expose ONLY Stability + Similarity; Style / speaker boost are not part of v4.
+    Older models keep the previous four-field set. https://elevenlabs.io/docs/overview/capabilities/text-to-speech/eleven-v4"""
+    if str(model).startswith("eleven_v4"):
+        return {"stability": 0.5, "similarity_boost": 0.75}
+    return {"stability": 0.5, "similarity_boost": 0.75, "style": 0.3, "use_speaker_boost": True}
+
+
 def synthesize_segment(text, out_path):
     """Render one text segment to an MP3 via ElevenLabs."""
     if not config.ELEVENLABS_API_KEY:
@@ -54,7 +62,7 @@ def synthesize_segment(text, out_path):
         json={
             "text": text,
             "model_id": config.ELEVENLABS_MODEL,
-            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.3, "use_speaker_boost": True},
+            "voice_settings": voice_settings_for(config.ELEVENLABS_MODEL),
         },
         timeout=300,
     )
