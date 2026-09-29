@@ -37,7 +37,7 @@ test("nothing due / nothing under the allow-list", () => {
 
 test("commons declares _KNOWLEDGE/ by default; an env override widens it once the nightly push is armed; other rooms keep the legacy check", () => {
   const commons = BRAIN_ROOMS.find((r) => r.name === "commons-company-journal");
-  assert.deepEqual(resolveRoomIndexPrefixes(commons), ["_KNOWLEDGE/"]);
+  assert.deepEqual(resolveRoomIndexPrefixes(commons), ["_KNOWLEDGE/", "_DAILY/"]);
   process.env.BRAIN_FRESHNESS_PREFIXES_COMMONS_COMPANY_JOURNAL = "_KNOWLEDGE/,_DAILY/";
   try { assert.deepEqual(resolveRoomIndexPrefixes(commons), ["_KNOWLEDGE/", "_DAILY/"]); }
   finally { delete process.env.BRAIN_FRESHNESS_PREFIXES_COMMONS_COMPANY_JOURNAL; }

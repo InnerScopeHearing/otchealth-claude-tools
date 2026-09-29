@@ -445,10 +445,11 @@ export const BRAIN_ROOMS = Object.freeze([
   // single newest object indexed yet?" is never asked (the newest object is always inside the SLO) and the
   // check read OK for the whole seven weeks the commons push was switched off. For a room that declares
   // indexPrefixes, the check instead picks the newest text object under those prefixes that is OLDER than
-  // the SLO (the most recent one that should be searchable by now) and requires chunks for it. Default is
-  // _KNOWLEDGE/ only (brain-save pushes and verifies those itself); widen to "_KNOWLEDGE/,_DAILY/" via
-  // BRAIN_FRESHNESS_PREFIXES_COMMONS_COMPANY_JOURNAL once the nightly allow-listed push is armed.
-  { name: "commons-company-journal", index: "commons-company-journal", account: "otchealthcommons", container: "company-journal", sloHours: 48, indexPrefixes: ["_KNOWLEDGE/"] },
+  // the SLO (the most recent one that should be searchable by now) and requires chunks for it. The default
+  // covers BOTH allow-listed prefixes: _KNOWLEDGE/ (brain-save) and _DAILY/ (the nightly digest push), so a
+  // nightly refresh that silently stops pushing pages instead of going dark for weeks again. Narrow it only
+  // on purpose via BRAIN_FRESHNESS_PREFIXES_COMMONS_COMPANY_JOURNAL.
+  { name: "commons-company-journal", index: "commons-company-journal", account: "otchealthcommons", container: "company-journal", sloHours: 48, indexPrefixes: ["_KNOWLEDGE/", "_DAILY/"] },
   { name: "commerce-commerce-source-docs", index: "commerce-commerce-source-docs", account: "otchealthcommerce", container: "commerce-source-docs", sloHours: 72 },
   { name: "finance-cfo-source-docs", index: "finance-cfo-source-docs", account: "otchealthcfodata", container: "cfo-source-docs", sloHours: 168 },
   { name: "legal-company", index: "legal-company", account: "otchealthlegalstore", container: "company", sloHours: 168 },
