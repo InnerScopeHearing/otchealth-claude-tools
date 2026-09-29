@@ -14,6 +14,17 @@ Voice: decisive, precise, security-first; lead with what is true now, then the r
 Read this first. It is the standing context every Claude Code session should
 assume unless the user says otherwise.
 
+## RULE #1 (Matt directive 2026-09-29, TOP PRIORITY, every agent on every platform)
+
+**The 20% rule, a token-saving directive.** Before starting any build, fix, polish or research, and again at every checkpoint, judge honestly whether the work will make the current item **at least 20% better** (quality, reliability, speed, cost, revenue or user experience) within reasonable budget and usage. Also watch for stalled progress: repeated attempts that are not moving the result are a wild goose chase.
+
+If the 20% gain is not achievable, or progress has stalled, **Rule #1 is in effect**:
+1. Stop all work in that area.
+2. Leave the item at the best of its current capability: finish or cleanly revert any half-done change so nothing is left broken.
+3. Tell Matthew (or the current user) in plain words: "Rule #1 is in effect", what was stopped, the current state, and the specific reason a 20% improvement is not achievable on the budget and usage plans.
+
+Rule #1 never overrides legal walls (PHI, securities, FDA/FTC claims), security fixes, or data-loss/outage fixes; those are always finished. It is also delivered to every non-Claude seat through the gateway `wake` standing directives.
+
 ## CORRECTION, 2026-08-27: Azure is permanently gone, GCP is retired, AWS is the estate
 
 This supersedes every "Azure-default", "Azure first", "store it in GCP Secret Manager", and
