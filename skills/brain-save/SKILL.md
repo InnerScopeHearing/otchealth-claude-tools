@@ -119,7 +119,7 @@ arming step), so a raw S3 upload is never searchable. brain-save does not depend
 holding it). Once armed, the push runs the commons CONTENT GATE on every row before it is embedded
 (`skills/doc-indexer/commons-push-gate.mjs`: the same secret layers A+B and ring gate as `put`/`audit`, plus
 brain-save provenance for `_KNOWLEDGE/`); a blocked row is skipped, logged by path and rule name only, and
-makes the run exit non-zero. If the live secret set cannot be loaded the WHOLE push is refused (exit 2). A
+makes the run exit 1. If the live secret set cannot be loaded the WHOLE push is refused (exit 2). A
 failed push makes the nightly job exit non-zero at the END, after its other steps ran. `--prefixes` may only
 name `_KNOWLEDGE/` and `_DAILY/` (`COMMONS_PUSH_ALLOWED_PREFIXES` in `push-rules.mjs`); anything else is exit 2.
 

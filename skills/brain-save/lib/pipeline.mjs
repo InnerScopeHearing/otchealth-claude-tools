@@ -6,7 +6,7 @@
 //   one verified, so there is never a window with nothing searchable) -> local receipt.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, extname, basename } from "node:path";
+import { dirname, join, extname } from "node:path";
 import { normalizeInput, resolveTitle, resolveDate, isGenericTitle, MAX_OBJECT_CHARS, MIN_TEXT_CHARS, decodeTextInput, textChars, base64Share, MAX_BASE64_SHARE, BASE64_RUN_MIN } from "./normalize.mjs";
 import {
   KINDS, isKind, isAppSlug, slugify, contentSha256, identityFor, identityKindFor, brainIdFor, keyFor, srcKeyFor, buildHeader,

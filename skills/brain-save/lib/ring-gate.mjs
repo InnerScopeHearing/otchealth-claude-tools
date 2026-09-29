@@ -226,7 +226,7 @@ const BARE_BANNERS = [[/^privileged$/i, "legal"], [/^phi$/i, "phi"]];
 /** Fold every Unicode hyphen/dash (U+2010..U+2015, U+2212) to "-", then drop Markdown decoration. */
 export function foldDashes(s) { return String(s || "").replace(/[\u2010-\u2015\u2212]/g, "-"); }
 function stripDecoration(line) {
-  return foldDashes(line).replace(/<!--|-->/g, " ").replace(/[#*>_`~]/g, " ").replace(/\s+/g, " ").trim().replace(/[.!:;]+$/, "").trim();
+  return foldDashes(line).replace(/<!--|--!?>/g, " ").replace(/[#*>_`~]/g, " ").replace(/\s+/g, " ").trim().replace(/[.!:;]+$/, "").trim();
 }
 const isHeading = (line) => /^\s{0,3}#{1,6}(\s|$)/.test(String(line || ""));
 export function bannerSignals(text) {
@@ -413,7 +413,7 @@ export function heuristicSignals(text, { sourceRepo, extraAmounts = 0, extraTerm
 // PRIVILEGED banner in an HTML comment, or a JSON field never reached the gate.
 /** Every text node, comment, script and style body of an HTML document, one piece per line. */
 export function htmlRawView(html) {
-  return decodeEntities(stripTagsLinear(String(html || "").replace(/<!--|-->/g, "\n"), "\n"));
+  return decodeEntities(stripTagsLinear(String(html || "").replace(/<!--|--!?>/g, "\n"), "\n"));
 }
 /** Every primitive of a parsed JSON value as a `key: value` line (so "ssn: 219-09-9999" stays labeled). */
 export function jsonRawView(v) {

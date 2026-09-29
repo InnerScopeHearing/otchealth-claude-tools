@@ -71,7 +71,7 @@ import * as OS from "../kb-memory/opensearch-write.mjs";
 import { OS_VECTOR_FIELD_FLAT, OS_VECTOR_FIELD_CHUNKED, classifyRoomShape, countWords, chunkText, buildChunkDocs } from "./chunking.mjs";
 export { OS_VECTOR_FIELD_FLAT, OS_VECTOR_FIELD_CHUNKED, classifyRoomShape, countWords, chunkText, buildChunkDocs };
 // SKIP_PREFIXES + the push-row selection rules live in ./push-rules.mjs (pure, importable).
-import { SKIP_PREFIXES, isSkippedPath, selectPushRows, parsePrefixList, unscopedPushRefusal, commonsScopeRefusal, isCommonsTarget, extractScopeArgs } from "./push-rules.mjs";
+import { SKIP_PREFIXES, isSkippedPath, selectPushRows, parsePrefixList, commonsScopeRefusal, isCommonsTarget, extractScopeArgs } from "./push-rules.mjs";
 export { SKIP_PREFIXES, isSkippedPath, selectPushRows, parsePrefixList };
 
 const argv = process.argv.slice(2);

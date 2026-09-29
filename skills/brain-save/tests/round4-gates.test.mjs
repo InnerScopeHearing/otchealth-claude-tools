@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BS from "../brain-save.mjs";
 import * as PROV from "../lib/provenance.mjs";
-import { prepareDoc, saveBatch } from "../lib/pipeline.mjs";
+import { prepareDoc } from "../lib/pipeline.mjs";
 import { scanLayerB, scanParts } from "../lib/secret-gate.mjs";
 import { declaredSignals, classifyRing } from "../lib/ring-gate.mjs";
 import { buildHeader, buildObject, registryKey, keyRefFor } from "../lib/provenance.mjs";

@@ -4,12 +4,11 @@
 // #17 input bounds.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync, openSync, ftruncateSync, closeSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, openSync, ftruncateSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { main, runAudit, rebuildFromChunks, MAX_INPUT_BYTES, MAX_STORE_ONLY_BYTES } from "../brain-save.mjs";
-import { prepareDoc, saveBatch } from "../lib/pipeline.mjs";
 import { _resetShapeCacheForTests } from "../lib/push.mjs";
 import { seatGate } from "../lib/local.mjs";
 import { sha256 } from "../lib/provenance.mjs";

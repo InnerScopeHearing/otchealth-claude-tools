@@ -80,7 +80,7 @@ test("changed content: v2 saved and verified, THEN v1 superseded (chunks deleted
   const reg = JSON.parse(be.s3.get(`_KNOWLEDGE-META/registry/${v1.brain_id}.json`).text);
   assert.equal(reg.live_key, v2.key);
   assert.equal(reg.versions.find((v) => v.key === v1.key).status, "superseded");
-  assert.match(be.s3.get(v2.key).text, new RegExp(`^supersedes: "${v1.key.replace(/[.]/g, "\\.")}"$`, "m"));
+  assert.match(be.s3.get(v2.key).text, new RegExp(`^supersedes: "${v1.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"$`, "m"));
 });
 
 test("verify failure: exit 3, the new version's chunks are removed, the old version stays live and untouched; a re-run retries", async () => {

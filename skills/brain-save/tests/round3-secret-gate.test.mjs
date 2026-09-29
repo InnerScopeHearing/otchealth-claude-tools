@@ -61,7 +61,7 @@ test("round 3 #7: layer B finds a live value however it is written (split, escap
     verbatim: `key ${secret} end`,
     "split by a newline": `key ${secret.slice(0, 20)}\n${secret.slice(20)} end`,
     "split by spaces": `key ${secret.slice(0, 10)} ${secret.slice(10)} end`,
-    "markdown-escaped underscore": `key ${secret.replace(/_/g, "\\_")} end`,
+    "markdown-escaped underscore": `key ${secret.split("_").join("\\_")} end`,
     "zero-width space": `key ${secret.slice(0, 10)}​${secret.slice(10)} end`,
     "soft hyphen + BOM": `key ${secret.slice(0, 5)}­${secret.slice(5, 9)}﻿${secret.slice(9)} end`,
     "bidi control": `key ${secret.slice(0, 7)}‮${secret.slice(7)} end`,

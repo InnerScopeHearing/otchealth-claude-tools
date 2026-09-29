@@ -27,7 +27,7 @@ import { collectFiles, gitInfo, resolveAgent, resolveSeat, resolveSession, recei
 import { loadSecretNeedles } from "./lib/secret-values.mjs";
 import { classifyRing, formatRingRefusal } from "./lib/ring-gate.mjs";
 import { gateStoredObject } from "./lib/object-gate.mjs";
-import { KNOWLEDGE_PREFIX, META_PREFIX, ROOM_INDEX, roomPathFor, splitObject, registryKey, sha1, sha256, parseKnowledgeKey, isBrainId } from "./lib/provenance.mjs";
+import { KNOWLEDGE_PREFIX, META_PREFIX, ROOM_INDEX, roomPathFor, splitObject, sha1, sha256, parseKnowledgeKey, isBrainId } from "./lib/provenance.mjs";
 import { readRegistry, readJson } from "./lib/store.mjs";
 import { pushObject } from "./lib/push.mjs";
 import { rankOf } from "./lib/verify.mjs";
@@ -313,7 +313,7 @@ export async function runAudit(backend, { needles, secrets = true, ring = true, 
   for (const key of names) {
     const { text } = await backend.get(key);
     if (text == null) { findings.push({ key, kind: "missing" }); continue; }
-    const { fields, body } = splitObject(text);
+    const { fields } = splitObject(text);
     if (secrets || ring) {
       const g = gateStoredObject({ key, text, needles: needles || [], secrets, ring });
       for (const f of g.findings) { findings.push({ key, kind: f.kind, detail: f.detail }); blocked.add(key); }
