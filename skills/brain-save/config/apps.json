@@ -1,0 +1,23 @@
+{
+  "_comment": "Repo name -> app slug used when --app auto (or omitted) and the file lives in a git work tree. Unknown repos fall back to the repo name itself when it is a valid slug.",
+  "repos": {
+    "iheartest": "iheartest",
+    "aware-aural-rehab": "aware",
+    "aware-aural-rehab-ci": "aware",
+    "otchealth-companion": "hey-millie",
+    "flatstick": "flatstick",
+    "fourvault": "fourvault",
+    "plantid-app": "plantid",
+    "innerease": "innerease",
+    "fictionary": "fictionary",
+    "haulai": "haulai",
+    "innd-website": "innd-website",
+    "otchealthmart-shopify": "otchealthmart",
+    "voice-agent-evals": "voice-agent-evals",
+    "otchealth-cto": "otchealth-cto",
+    "otchealth-claude-tools": "otchealth-claude-tools",
+    "otchealth-mcp-server": "otchealth-mcp-server",
+    "otchealth-ops": "otchealth-ops"
+  },
+  "kinds": ["research", "design", "spec", "audit", "review", "packet", "build", "deploy", "receipt", "runbook", "artifact", "report", "decision", "doc"]
+}

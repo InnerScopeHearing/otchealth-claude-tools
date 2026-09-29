@@ -24,6 +24,10 @@ decide who does, in what order, and you keep everyone in sync.
 - After each step, append a line to `.dreamteam/ledger.md` and mirror it to the
   Notion "Dream Team Run Log" (Notion MCP). Update the Todo.
 - Thread the manifest: after an agent writes its slice, the next agent reads it.
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
 
 ## Gate enforcement (non-negotiable)
 - Never dispatch Release Captain until QA gates read pass/na AND Guardian has

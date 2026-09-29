@@ -34,8 +34,8 @@ Every document, in every domain, moves through the same six stages:
 
 | Stage | What happens | Standard tool |
 |---|---|---|
-| 1. **Capture** | Intake from the domain's "Outgoing" OneDrive folder, SharePoint, mailbox, SaaS export, or connector | `cfo-onedrive`, `cfo-sharepoint`, `m365-mail`, domain skills |
-| 2. **Store** | Stage into the domain's Azure Blob data room under an entity/matter prefix | `cfo-store --azure` |
+| 1. **Capture** | Intake from the domain's "Outgoing" OneDrive folder, SharePoint, mailbox, SaaS export, or connector | `cfo-onedrive`, `cfo-sharepoint`, `m365-mail`, domain skills; for AGENT-PRODUCED documents (research, designs, audits, packets, receipts, runbooks, Artifact sources): `brain-save put` |
+| 2. **Store** | Stage into the domain's data room (AWS S3 since 2026-08; Azure Blob is gone) under an entity/matter prefix; agent-produced commons-safe docs go to `_KNOWLEDGE/` in the commons | `cfo-store --s3`; `brain-save put` (stores + pushes + verifies in one step) |
 | 3. **Understand** | Content Understanding: category + entity + doc type + summary + date + counterparty + amount + materiality; clean Markdown sidecar | `doc-indexer understand` |
 | 4. **Catalog + Index** | Resumable catalog (JSONL + CSV) + `_TEXT/` sidecars + node:sqlite FTS5 + Azure AI Search (hybrid + vector + semantic) | `doc-indexer index` / `push-search` |
 | 5. **Retrieve** | Hybrid/semantic search for agents (and, fleet-wide, the MCP serving layer for all platforms) | `doc-indexer cloud-search` |
@@ -54,7 +54,7 @@ container, so they inherit its access control.
 | Finance / audit | CFO | `otchealthcfodata` | `cfo-source-docs` | `finance` | non-PHI / MNPI-aware | **LIVE** |
 | Legal | CLO | `otchealthlegalstore` | `company`, `personal` | `legal` | privileged (personal) / MNPI (company) | **LIVE** |
 | Commerce | CRO / commerce | `otchealthcommerce` (own account) | `commerce-source-docs` | `commerce` (00-10) | non-PHI | **LIVE** |
-| Fleet commons / journal | COO + all agents | `otchealthcommons` | `company-journal` | `commons` | non-PHI (shared) | **LIVE** (7-day seed indexed + cloud-searchable; nightly 23:59 digest) |
+| Fleet commons / journal | COO + all agents (readable by EVERY gateway lane, incl. external connectors) | `otchealthcommons` (S3 mirror `otchealth-brain-dr-55c84f6b`) | `company-journal` | `commons` | non-PHI (shared); privileged / MNPI / PHI never | **LIVE** on OpenSearch `commons-company-journal`; agent docs via `brain-save` (`_KNOWLEDGE/`); nightly digest push pending the allow-listed arming |
 | Capital / IR | Capital | `otchealthcapital`* | `raise`, `ir`, `captable` | `capital`* | **MNPI / securities** | onboard (gated) |
 | Product / Apps | per App Lead | `otchealthproduct`* | per-app container | `product`* | non-PHI (FourVault COPPA carve-out) | onboard |
 | Growth / Marketing | Growth | `otchealthgrowth`* | `assets`, `pr`, `content` | `growth`* | non-PHI | onboard |
@@ -97,6 +97,12 @@ source, no MedReview PostHog project 468398). The walls are flag-and-hold: surfa
 Matt + counsel, never cross silently.
 
 ## 7. Retrieval + the fleet knowledge base
+- **Proof of retrieval is a real search, not a successful PUT (2026-09-29).** A document is "in the
+  brain" only when a search finds it. `brain-save put` pushes and then proves it (unique-token query at
+  rank 1 + title query in the top 10 in the room, plus the gateway's `kb_search` on the coo lane);
+  `brain-save verify "<query>" --expect <brain_id>` re-proves any time. The nightly commons job does
+  NOT push commons today (`SKIP_PUSH_SEARCH=1`, allow-listed push pending), so an S3 upload alone is
+  never searchable.
 - **Per agent (today):** `doc-indexer cloud-search "<q>" --profile <p> --azure [--container c]` returns
   hybrid keyword + vector + semantic results, ring-scoped to that store. Offline: `search` (FTS5) + `rg`.
 - **Fleet-wide (the brain):** Azure AI Search + Foundry IQ agentic retrieval, exposed through ONE

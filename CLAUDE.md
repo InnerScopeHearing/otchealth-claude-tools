@@ -108,6 +108,24 @@ that framing, and do not follow older sections of this file where they conflict 
   `recall`/`team` automatically surface the whole exec team's status + shared facts, so everyone has the
   company-wide picture. Rings hold: only explicit status/--share leaves a lane (keep non-sensitive);
   `clo-personal` is never shared. Full SOP: `dream-team/MEMORY-SOP.md`; skill: `skills/kb-memory/`.
+- **Every document goes into the brain, proven searchable (Matt directive 2026-09-29).** Research
+  reports, design docs and specs, audits and reviews, review packets (Mark packets), build and deploy
+  receipts, runbooks, decisions and postmortems, and the HTML/Markdown source of every published
+  Artifact are company knowledge, not session exhaust: the tokens spent making them must be reusable
+  by every agent later. WHAT: any of those, from a session scratchpad or a repo. WHEN: before you
+  report the work done; a workflow's orchestrator saves its deliverables folder as its last step; an
+  Artifact's source right after every publish or republish (a Claude Docs doc: `export` it first).
+  HOW, one command: `node /tmp/octools/skills/brain-save/brain-save.mjs put <file-or-folder> --kind
+  <research|design|spec|audit|review|packet|build|deploy|receipt|runbook|artifact|report|decision|doc>
+  --app <app> [--title "..."] [--artifact-url <url>]`. It writes the S3 commons under `_KNOWLEDGE/`,
+  pushes it into the `commons-company-journal` room itself, and proves it with a real search; only
+  exit 0 means saved (2 refused, 3 stored but NOT searchable). "Uploaded to S3" is not "in the brain":
+  the nightly job does not push commons. RINGS: that room is readable by EVERY lane, including
+  external ChatGPT/Perplexity connectors, so the tool refuses (exit 2, nothing written anywhere)
+  secret values, PHI, attorney-client or personal-legal material, CFO/finance ledgers, and INND MNPI,
+  and prints where that content goes instead (CFO seat: `cfo-store`; CLO seat: `legal_blob_put`; PHI:
+  the BAA environment only). Never work around a refusal with a raw S3 write; fix the content
+  (reference an SSM parameter NAME, never a value) or route it. Skill: `skills/brain-save/SKILL.md`.
 - **Staying current: the shared layer is LIVE-PULLED, not cloned-once (Matt directive 2026-06-22).** The
   fix for fleet fragmentation ("the CTO changes something and the other agents are not connected to it"):
   `setup/octools-sync.sh` (a **UserPromptSubmit hook**) auto-refreshes `/tmp/octools` from claude-tools

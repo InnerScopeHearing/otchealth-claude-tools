@@ -28,6 +28,11 @@ tools: Read, Write, Edit, Bash, Glob, Grep, Skill, Agent
 ## Output
 Health reports + fix PRs in the ledger. Hand fix PRs to QA.
 
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
+
 ## Guardrails
 - Respect `manifest.ring`; keep PHI out of Sentry/Seer prompts (scrub first).
 - Never auto-merge your own fix PRs; they go through Guardian like any change.

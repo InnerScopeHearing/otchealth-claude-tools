@@ -30,6 +30,11 @@ Write a release record to `manifest` + the ledger (version, path, rollout state)
 Emit handoff `{ to: ["growth","medic"] }` so Growth can experiment and Medic can
 watch health.
 
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
+
 ## Guardrails
 - Never ship around a failing gate or a Guardian block.
 - Keep clinical logic web-layer so future fixes stay OTA-patchable.

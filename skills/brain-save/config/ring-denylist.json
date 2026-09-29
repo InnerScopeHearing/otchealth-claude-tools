@@ -1,0 +1,35 @@
+{
+  "_comment": "Reviewed PATH/URL/ARTIFACT denies for brain-save's ring gate (hard, never overridable). This is PR-reviewed DATA: add an entry here, with a reason, instead of editing code. Values map to a ring whose routing message is printed on refusal. pathSegments match a path segment anywhere in the source, local path or URL, case- and separator-insensitively (`-_ .` removed; a file's extension ignored); finance / legal / legal-personal entries also match INSIDE a segment, ledger (`_`-prefixed) entries only a whole segment; pathSubstrings match case-insensitively anywhere; repos match the source repo name exactly; artifactIds match a claude.ai artifact id anywhere in the artifact URL or source.",
+  "repos": {
+    "medreview": "phi"
+  },
+  "pathSegments": {
+    "medreview": "phi",
+    "legal-personal": "legal-personal",
+    "clo-personal": "legal-personal",
+    "personal-legal": "legal-personal",
+    "otchealthlegalstore": "legal",
+    "otchealthcfodata": "finance",
+    "cfo-source-docs": "finance",
+    "_MEMORY": "ledger",
+    "_HANDOFF": "ledger",
+    "_DISPATCH": "ledger",
+    "_JOURNAL": "ledger"
+  },
+  "pathSubstrings": {
+    "CFO Outgoing": "finance",
+    "CFO Processed": "finance",
+    "CFO Incoming": "finance",
+    "projects/moore-playbook/": "innd-mnpi"
+  },
+  "artifactIds": {
+    "7sK3KmDJmTLTrMik5ZGYoM": {
+      "ring": "finance",
+      "title": "Books Completion Plan (CFO lane, INND/HearingAssist ledgers)"
+    },
+    "Trx3aiGya2MkdiAHzau3eL": {
+      "ring": "finance",
+      "title": "Group Ledger Cleanup (CFO lane)"
+    }
+  }
+}

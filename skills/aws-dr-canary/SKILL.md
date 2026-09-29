@@ -87,6 +87,11 @@ probe added alongside the backup checks because the n8n host had no automated li
    `finance-cfo-source-docs` and `legal-company` (both classify `finance-company-legal`) and
    `legal-personal` (classifies `personal-legal`) permanently excluded; only
    `commons-company-journal` and `commerce-commerce-source-docs` are ever actually listed or queried.
+   **Allow-listed rooms check EVERY due object (round 4, 2026-09-29)**: a room that declares
+   `indexPrefixes` (commons: `_KNOWLEDGE/` and `_DAILY/`) is judged by all text objects under that allow-list that are
+   already past the SLO (the 200 newest, one `terms` query + aggregation over `path.keyword`), not only the
+   newest one; a missing older document used to hide behind a healthy newer one. A `_count` reply without a
+   numeric `count` is an `ERROR`, never read as 0, and the ring-residue prefix queries are case-insensitive.
    **"Cannot check" is always reported distinctly from "checked and stale"**: an unmapped room, a
    failed S3 listing, unresolvable OpenSearch config/credentials, or a failed/non-2xx `_count` call are
    all `ERROR` (the check itself could not complete); `STALE` is reserved for the one case where the

@@ -27,6 +27,11 @@ is to make the store convert and the units ship.
 Orders + realized revenue written to the cash.manifest; demand needs handed to
 lifecycle/growth-exposure; deals to fulfill.
 
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
+
 ## Guardrails
 No medical/device/efficacy claims; never claim OTCHealth holds a 510(k); Sontro sold
 only under Soundwave's brand. No PHI. Every customer touch keeps Procedure 00 (adverse

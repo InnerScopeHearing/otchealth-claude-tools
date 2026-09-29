@@ -557,7 +557,7 @@ test("push-search on a CHUNKED room handles the single-chunk case end to end, an
   assert.equal(doc.content_hash, "", "CATALOG_ROW carries no sha256 in this fixture -- content_hash must default to an empty string, never 'undefined'");
 });
 
-test("push-search on a CHUNKED room NEVER pushes a partial chunk set: a document whose SECOND embed batch fails gets ZERO chunks written, is counted embed-failed, and the run still exits 0 (isolated per document, not fatal)", async () => {
+test("push-search on a CHUNKED room NEVER pushes a partial chunk set: a document whose SECOND embed batch fails gets ZERO chunks written, is counted embed-failed, and the run exits NON-ZERO (round 4, C4: isolated per document, but never a clean run)", async () => {
   // >16 chunks (EMB_BATCH) so embedding this ONE document spans two embed calls; failing the
   // second call (embedCallCount > 1) proves the atomicity guarantee at the point that actually
   // matters -- a batch AFTER the first one already looked like it might succeed.
@@ -568,7 +568,10 @@ test("push-search on a CHUNKED room NEVER pushes a partial chunk set: a document
     ["push-search", "--profile", "finance", "--s3"],
     { roomShape: "chunked", catalogRows: [bigRow], sidecars: { [bigPath]: bigText }, failEmbeddingsAfterCalls: 1 },
   );
-  assert.equal(r.status, 0, `an embed failure on one document must not be fatal to the whole run; stderr: ${r.stderr}`);
+  // Round 4 (C4): the failing document is still isolated (the rest of the room would have been pushed), but a run
+  // that left a document un-pushed is exit 1, so a nightly job does not report green over it.
+  assert.equal(r.status, 1, `an embed failure on one document must make the run exit non-zero; stderr: ${r.stderr}`);
+  assert.match(r.stderr, /failed to embed and were NOT pushed/);
   assert.deepEqual(r.calls.filter((c) => isHost(c.url, OS_HOST) && pathOf(c.url).endsWith("/_bulk")), [], "NOT EVEN THE FIRST, successfully-embedded batch of chunks may be pushed for a document whose embedding did not fully complete");
   assert.match(r.stdout, /pushed 0 chunk\(s\) across 0 new document\(s\) \(0 doc\(s\) already present, 0 doc\(s\) with no usable text, 1 doc\(s\) embed-failed \(retried next run\)\)/);
 });

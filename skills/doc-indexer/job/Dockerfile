@@ -17,6 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY setup/ /app/setup/
 COPY skills/doc-indexer/ /app/skills/doc-indexer/
+# brain-save: the commons push-search content gate (skills/doc-indexer/commons-push-gate.mjs) imports its
+# secret gate, ring gate and secret-value loader, so a nightly commons push cannot even start without it
+# (and refuses, exit 2, rather than pushing ungated). Also lets `brain-save audit` run from the image.
+COPY skills/brain-save/ /app/skills/brain-save/
 COPY skills/cfo-store/ /app/skills/cfo-store/
 COPY skills/daily-digest/ /app/skills/daily-digest/
 COPY skills/github-app/ /app/skills/github-app/

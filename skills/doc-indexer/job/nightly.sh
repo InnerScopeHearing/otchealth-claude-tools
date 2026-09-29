@@ -44,10 +44,34 @@ node "$ROOT/skills/doc-indexer/indexer.mjs" index --no-ocr --profile commons --s
 # pushes the new digest. This corrects the older comment here, which claimed a flat push would be
 # "rejected" and that an S1 pull-indexer would collect the digest instead; on AWS nothing would have
 # collected it. SKIP_PUSH_SEARCH=1 remains a deliberate cost/latency opt-out, not a workaround.
+#
+# ALLOW-LISTED PUSH (2026-09-29, brain-save directive): the commons room is readable by EVERY lane,
+# including external ChatGPT/Perplexity connectors, and an UNSCOPED push embeds every un-pushed catalog
+# row with a sidecar -- which includes _JOURNAL/<agent>/ session digests (the CFO lane's among them) and
+# older ring-sensitive _RESEARCH/ material. So the push now runs ONLY when COMMONS_PUSH_PREFIXES names an
+# explicit allow-list (the planned arming value is "_KNOWLEDGE/,_DAILY/"), and --require-live-object
+# keeps a superseded/retracted brain-save document from being resurrected off a stale catalog row.
+# Unset (the live task definition today) = skip, exactly like SKIP_PUSH_SEARCH=1: this change merges as
+# a no-op on the running job. An unscoped commons push is never allowed again.
+#
+# ARMING the commons push takes BOTH of these, and either one alone leaves it OFF (the log line below names
+# whichever one is still holding it):
+#   1. REMOVE SKIP_PUSH_SEARCH from the task definition (or set it to anything other than "1"), AND
+#   2. SET COMMONS_PUSH_PREFIXES=_KNOWLEDGE/,_DAILY/   (indexer.mjs refuses any other prefix, exit 2).
+# Once armed, every row is gated (secret layers A+B, ring gate, brain-save provenance for _KNOWLEDGE/) before it
+# is embedded; a blocked row or a failed push makes THIS job exit non-zero AT THE END, after every remaining
+# nightly step has still run (the push failure must page, but must not also cost the fleet-watch and
+# memory-reindex steps).
+PUSH_RC=0
 if [ "$SKIP_PUSH_SEARCH" = "1" ]; then
-  echo "[nightly] SKIP_PUSH_SEARCH=1 -> skipping commons push-search (deliberate cost/latency opt-out)"
+  echo "[nightly] SKIP_PUSH_SEARCH=1 -> skipping commons push-search (deliberate cost/latency opt-out; arming needs SKIP_PUSH_SEARCH removed AND COMMONS_PUSH_PREFIXES set)"
+elif [ -z "$COMMONS_PUSH_PREFIXES" ]; then
+  echo "[nightly] COMMONS_PUSH_PREFIXES unset -> skipping commons push-search (an unscoped commons push is never allowed; arming needs SKIP_PUSH_SEARCH removed AND COMMONS_PUSH_PREFIXES set)"
 else
-  node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --s3
+  node "$ROOT/skills/doc-indexer/indexer.mjs" push-search --profile commons --s3 --prefixes "$COMMONS_PUSH_PREFIXES" --require-live-object || PUSH_RC=$?
+  if [ "$PUSH_RC" -ne 0 ]; then
+    echo "[nightly] commons push-search FAILED (exit $PUSH_RC): continuing the remaining nightly steps, this job will exit $PUSH_RC at the end"
+  fi
 fi
 # METADATA ENRICHMENT (opt-in, default OFF; commerce is the 2026-07-21 proving ground -- see
 # skills/doc-indexer/enrich.mjs + skills/doc-indexer/metadata-schema.mjs). Universal-core metadata
@@ -75,4 +99,8 @@ node "$ROOT/skills/kb-memory/semantic.mjs" reindex || echo "[nightly] memory rei
 echo "[nightly] fleet watcher: heartbeat check + image-drift + drift-recon -> commons"
 { echo "# Fleet Watch $DATE (UTC)"; echo; echo "## Heartbeat (silence = failure)"; node "$ROOT/setup/heartbeat.mjs" check 2>&1; echo; echo "## Image drift (mutable tag = risk)"; node "$ROOT/setup/image-drift.mjs" 2>&1; echo; echo "## Digest drift-recon (stale @sha256 pin vs current main build)"; node "$ROOT/setup/drift-recon.mjs" 2>&1; } > "/tmp/fleet-watch-$DATE.md" 2>&1 || true
 node "$ROOT/skills/cfo-store/store.mjs" --s3 --account otchealthcommons --container company-journal put "/tmp/fleet-watch-$DATE.md" "_FLEET-WATCH/$DATE.md" || echo "[nightly] fleet-watch stage non-fatal: $?"
+if [ "$PUSH_RC" -ne 0 ]; then
+  echo "[nightly] FAILED: the commons push-search exited $PUSH_RC (a content-gate block, a failed embed/push, a refused scope, or an unloadable secret set); every other step ran"
+  exit "$PUSH_RC"
+fi
 echo "[nightly] done: $DATE digest indexed + cloud-searchable + brain memory refreshed + fleet-watch staged"

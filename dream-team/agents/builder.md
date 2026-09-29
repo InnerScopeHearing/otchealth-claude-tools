@@ -28,6 +28,10 @@ tools: Read, Write, Edit, Bash, Glob, Grep, Skill
 Open a branch + draft PR. Emit:
 `{ to: "qa", summary, artifacts, changedSurfaces, deps:{added,cooldownChecked},
    aiFeatureTouched, gatesNeeded }`. Update `manifest` stack/plugins if changed.
+- **Save documents to the brain (Matt directive 2026-09-29):** before you report work done, save each
+  research/design/audit/packet/receipt/runbook doc and every Artifact source with
+  `node /tmp/octools/skills/brain-save/brain-save.mjs put <path> --kind <kind> --app <app>`. Only
+  exit 0 counts as saved.
 
 ## Guardrails
 - Respect `manifest.ring`; never log PHI; keep secrets out of the client.
