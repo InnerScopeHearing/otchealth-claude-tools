@@ -107,8 +107,14 @@ test("session-end quarantines transcript aggregates from the provider-generation
     assert.deepEqual(sentBatches[0].map((event) => event.event), ["agent_session"]);
     assert.equal(sentBatches[0][0].properties.input_tokens, 120);
     assert.equal(sentBatches[0][0].properties.output_tokens, 18);
+    assert.deepEqual(sentBatches[0][0].properties.model_counts, { "claude-sonnet-4-5": 1 });
+    assert.equal(sentBatches[0][0].properties.model_call_count, 1);
     assert.equal(sentBatches[0][0].properties.cost_basis, "not_observed");
     assert.deepEqual(Object.keys(sentBatches[0][0].properties).filter((key) => key.startsWith("$ai_")), []);
+    assert.deepEqual(
+      Object.keys(sentBatches[0][0].properties).filter((key) => /^(?:\$ai_total_cost_usd|est_cost_usd|estimated_cost_usd|cost_usd)$/.test(key)),
+      [],
+    );
     assert.equal(JSON.stringify(sentBatches).includes("synthetic response"), false);
   } finally {
     for (const key of keys) {
@@ -331,3 +337,4 @@ test("parseTranscriptText uses valid timestamps when malformed timestamps are al
   const metrics = parseTranscriptText(transcript);
   assert.equal(metrics.durMs, 5000);
 });
+
