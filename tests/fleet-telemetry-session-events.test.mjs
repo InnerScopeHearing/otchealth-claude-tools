@@ -337,4 +337,3 @@ test("parseTranscriptText uses valid timestamps when malformed timestamps are al
   const metrics = parseTranscriptText(transcript);
   assert.equal(metrics.durMs, 5000);
 });
-
