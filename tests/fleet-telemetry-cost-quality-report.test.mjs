@@ -231,8 +231,33 @@ test("rejects fields outside the normalized input contract", () => {
   assert.throws(() => buildCostQualityDelta({ baseline: validBaseline, candidate: validCandidate, customer: "fixture-only" }), /unsupported fields/);
   assert.throws(() => buildCostQualityDelta({ baseline: { ...validBaseline, extra: true }, candidate: validCandidate }), /unsupported fields/);
   assert.throws(() => buildCostQualityDelta({ baseline: { ...validBaseline, period: { ...validBaseline.period, customer: "fixture-only" } }, candidate: validCandidate }), /unsupported fields/);
+
   assert.throws(() => buildCostQualityDelta({
     baseline: { ...validBaseline, receipts: [{ ...validBaseline.receipts[0], account_name: "fixture-only" }, ...validBaseline.receipts.slice(1)] },
     candidate: validCandidate,
   }), /unsupported fields/);
+});
+
+test("paired same-window allocations reject reused receipt IDs but allow a shared source invoice", () => {
+  const baselineReceipts = completeReceipts(10, start, end);
+  const candidateReceipts = completeReceipts(8, start, end);
+  candidateReceipts.forEach((receipt, index) => {
+    receipt.source_id = baselineReceipts[index].source_id;
+  });
+
+  const paired = buildCostQualityDelta({
+    baseline: run({ id: "baseline-run", periodStart: start, periodEnd: end, passes: 4, receipts: baselineReceipts }),
+    candidate: run({ id: "candidate-run", periodStart: start, periodEnd: end, passes: 4, receipts: candidateReceipts }),
+  });
+  assert.equal(paired.comparison.status, "comparable");
+  assert.equal(paired.overall.status, "measured");
+
+  const reused = buildCostQualityDelta({
+    baseline: run({ id: "baseline-run", periodStart: start, periodEnd: end, passes: 4, receipts: baselineReceipts }),
+    candidate: run({ id: "candidate-run", periodStart: start, periodEnd: end, passes: 4, receipts: structuredClone(baselineReceipts) }),
+  });
+  assert.equal(reused.comparison.status, "unknown");
+  assert.equal(reused.comparison.reason, "receipt_identity_reused");
+  assert.equal(reused.overall.status, "unknown");
+  assert.equal(reused.overall.reason, "receipt_identity_reused");
 });
