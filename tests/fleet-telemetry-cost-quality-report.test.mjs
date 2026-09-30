@@ -36,7 +36,7 @@ function run({ id, periodStart, periodEnd, passes, receipts, completed = 10, hol
 }
 
 function completeReceipts(amount, periodStart, periodEnd) {
-  return BILLABLE_LANES.map((lane, index) => actual(lane, amount + index, periodStart, periodEnd, `${lane}-${amount}-fixture`));
+  return BILLABLE_LANES.map((lane, index) => actual(lane, amount + index, periodStart, periodEnd, `${lane}-${amount}-${periodStart.slice(0, 10)}-fixture`));
 }
 
 test("reports lane-separated actual cost per quality pass and comparable delta", () => {
