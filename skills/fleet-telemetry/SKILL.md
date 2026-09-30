@@ -63,7 +63,12 @@ calls. Each subscription, API, AWS gross, Make, GitHub Actions, Depot, Copilot, 
 observability lane stays separate. AWS credit offsets are reported separately and are excluded from
 gross cost. Only a dated USD `actual_charge` receipt can become a dollar cost. Token counts, platform
 usage units, credits, estimates, missing receipts, duplicate receipts, and unmatched periods remain
-unknown. Before/after deltas require the same holdout ID, evaluator identity and version, completed
+unknown. Treat `receipt_id` as the durable identity of one cohort-specific allocation; it must be
+unique across the combined baseline and candidate receipt sets. Reusing a receipt ID makes the
+comparison unknown. `source_id` identifies the supporting invoice or source document and may be
+shared by distinct receipt allocations. If a source total cannot be allocated separately to each
+cohort, do not submit it as an actual charge for both cohorts; the affected comparison stays unknown.
+Before/after deltas require the same holdout ID, evaluator identity and version, completed
 task denominator, holdout task count, and equal-length windows. The normalized input rejects fields
 outside its evidence contract, and report output omits run, holdout, evaluator, receipt, and source
 identifiers. Missing lanes keep the overall cost per quality-passing task unknown. Synthetic fixtures
