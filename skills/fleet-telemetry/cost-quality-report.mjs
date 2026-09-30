@@ -220,8 +220,12 @@ export function buildCostQualityDelta(input) {
     ? BigInt(candidate.qualityPassingTasks) * BigInt(baseline.completedTasks) >=
       BigInt(baseline.qualityPassingTasks) * BigInt(candidate.completedTasks)
     : null;
+  // receipt_id identifies an individual allocation; a source invoice may back multiple allocations.
+  const receiptIds = [...baseline.receipts, ...candidate.receipts].map((receipt) => receipt.receiptId);
+  const receiptIdentityReused = new Set(receiptIds).size !== receiptIds.length;
   const comparable = equalWindowDuration && sameHoldout && sameQualitySource && sameQualitySourceVersion &&
-    sameSampleDenominator && sameHoldoutTaskCount && baselineSampleComplete && candidateSampleComplete;
+    sameSampleDenominator && sameHoldoutTaskCount && baselineSampleComplete && candidateSampleComplete &&
+    !receiptIdentityReused;
   const comparisonReason = comparable ? null :
     !sameHoldout ? "holdout_id_mismatch" :
     !sameQualitySource ? "quality_source_mismatch" :
@@ -229,6 +233,7 @@ export function buildCostQualityDelta(input) {
     !baselineSampleComplete || !candidateSampleComplete ? "sample_incomplete" :
     !sameSampleDenominator ? "sample_denominator_mismatch" :
     !sameHoldoutTaskCount ? "holdout_task_count_mismatch" :
+    receiptIdentityReused ? "receipt_identity_reused" :
     "window_duration_mismatch";
 
   const lanes = Object.fromEntries(BILLABLE_LANES.map((lane) => {
