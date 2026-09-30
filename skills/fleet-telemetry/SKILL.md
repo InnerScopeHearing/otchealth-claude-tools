@@ -55,6 +55,27 @@ Cache analysis may sum only `cache_read_tokens` and `cache_write_tokens` from th
 `agent_session` cohort. Do not use legacy pseudo-generation rows or transcript-derived dollar
 estimates for current routing, cache, or cost decisions.
 
+## Cost per quality-passing task report
+
+`cost-quality-report.mjs` is a pure adapter for already-normalized, content-free billing receipts and
+fixed quality-holdout summaries. It makes no account, provider, telemetry, filesystem, or network
+calls. Each subscription, API, AWS gross, Make, GitHub Actions, Depot, Copilot, Greptile, and
+observability lane stays separate. AWS credit offsets are reported separately and are excluded from
+gross cost. Only a dated USD `actual_charge` receipt can become a dollar cost. Token counts, platform
+usage units, credits, estimates, missing receipts, duplicate receipts, and unmatched periods remain
+unknown. Treat `receipt_id` as the durable identity of one cohort-specific allocation; it must be
+unique across the combined baseline and candidate receipt sets. Reusing a receipt ID makes the
+comparison unknown. `source_id` identifies the supporting invoice or source document and may be
+shared by distinct receipt allocations. If a source total cannot be allocated separately to each
+cohort, do not submit it as an actual charge for both cohorts; the affected comparison stays unknown.
+Before/after deltas require the same holdout ID, evaluator identity and version, completed
+task denominator, holdout task count, and equal-length windows. The normalized input rejects fields
+outside its evidence contract, and report output omits run, holdout, evaluator, receipt, and source
+identifiers. Missing lanes keep the overall cost per quality-passing task unknown. Synthetic fixtures
+test these rules. Each completed-task count must equal its run's holdout task count. Overall savings
+are withheld when candidate quality pass rate falls below baseline. This report does not claim a live
+vendor delta until accepted account receipts and quality results are supplied.
+
 `callsite_id` is the join key against `agent-evals`' `eval_result.callsite_id` (same default: the agent
 role). It supports quality-versus-token analysis by callsite. Actual dollar cost must come from the
 provider's billing artifact, not be inferred from subscription transcript tokens.
