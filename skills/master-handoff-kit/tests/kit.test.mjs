@@ -14,7 +14,7 @@ const BODY = "This is a perfectly ordinary design note with enough prose to clea
 function fakeDeps(over = {}) {
   const registry = "# Credential Registry (x)\n\n## Apple (1)\n\n| SSM parameter name | Type | Ring | Env | Added |\n|---|---|---|---|---|\n| `asc-key-id` | config non-secret | non-PHI | prod | 2026-08-13 |\n\n[vault-registry] 1 credentials, 1 services (0 PHI-BAA).\n";
   return {
-    loadNeedles: async () => [],
+    loadNeedles: async () => ["zz-test-needle-not-a-secret-value-0001"],
     readLedger: async () => ({ rows: [
       { id: "L1", ts: "2026-09-01T00:00:00Z", type: "decision", text: "ship the kit" },
       { id: "L2", ts: "2026-09-02T00:00:00Z", type: "fact", text: `leaked ${fakeAwsKey()} here` },
@@ -209,4 +209,11 @@ test("kitFolderName stays consistent with what assembleKit writes", async () => 
   const res = await assembleKit({ role: "cto", date: "2026-01-02", includes: [], repos: [] }, fakeDeps());
   assert.equal(res.summary.folder, kitFolderName("cto", "2026-01-02"));
   assert.ok(res.manifest.kit === res.summary.folder);
+});
+
+test("assembleKit fails closed when the live secret needle set is empty", async () => {
+  await assert.rejects(
+    assembleKit({ role: "developer", sessionId: "none", cwd: "/nonexistent", repos: [], includes: [] }, fakeDeps({ loadNeedles: async () => [] })),
+    (e) => e.exit === 2 && /0 live secret needles/.test(e.message),
+  );
 });

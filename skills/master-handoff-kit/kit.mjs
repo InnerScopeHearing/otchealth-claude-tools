@@ -186,6 +186,10 @@ export async function assembleKit(opts, deps) {
   const date = opts.date || todayStamp();
   const generatedAt = (opts.now || new Date()).toISOString();
   const needles = await deps.loadNeedles();
+  if (!Array.isArray(needles) || needles.length === 0) {
+    // Fail closed: an empty live-secret set means layer B is off, and a kit would ship pattern-checked only.
+    throw Object.assign(new Error("secret gate has 0 live secret needles (SSM unavailable or empty); refusing to build an unverified kit"), { exit: 2 });
+  }
   const builder = new KitBuilder({ role, date });
   const sensitive = isSensitiveRole(role);
 
