@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   kitFolderName, kitZipName, normalizeRole, safeKitPath, relPreserve, isSensitiveRole, exportLedger, KitBuilder, gateText, gateBinary,
-  binaryDecision, classifyFile, buildManifest, renderManifestMd, sanitizeRegistryOutput, assertNamesOnly, collectRepoDocs, parseRepoDocs,
+  binaryDecision, classifyFile, buildManifest, renderManifestMd, mdCell, sanitizeRegistryOutput, assertNamesOnly, collectRepoDocs, parseRepoDocs,
   globToRegExp, renderMediaIndex, verifyKitDir, writeKitDir, zipFolder, unzipTo, renderReadme, MAX_IMAGE_BYTES, sha256,
 } from "../lib.mjs";
 
@@ -258,4 +258,18 @@ test("zip round trip + verifyKitDir: manifest matches, tampering and an injected
     assert.ok(bad.problems.some((p) => /secret gate tripped on extra\.md/.test(p)));
     assert.equal(readFileSync(join(out, folder, "memories", "cto-ledger.md"), "utf8"), "beta content");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("markdown table cells escape backslashes before pipes (a trailing backslash cannot swallow the escape)", () => {
+  assert.equal(mdCell("a|b"), "a\\|b");
+  assert.equal(mdCell("C:\\dir\\"), "C:\\\\dir\\\\");
+  assert.equal(mdCell("x\\|y"), "x\\\\\\|y"); // backslash doubled, then the pipe escaped
+  assert.equal(mdCell("l1\nl2"), "l1 l2");
+  const b = new KitBuilder({ role: "cto", date: "2026-10-03" });
+  b.add({ section: "core", path: "01-x.md", source: "C:\\a\\b|c\\", content: "x" });
+  b.exclude({ section: "core", source: "D:\\e|f\\", reason: "r|s\\" });
+  const md = renderManifestMd(buildManifest({ role: "cto", date: "2026-10-03", builder: b }));
+  assert.ok(md.includes("C:\\\\a\\\\b\\|c\\\\"));
+  assert.ok(md.includes("D:\\\\e\\|f\\\\"));
+  assert.ok(md.includes("r\\|s\\\\"));
 });

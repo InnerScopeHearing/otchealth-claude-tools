@@ -205,7 +205,7 @@ export async function assembleKit(opts, deps) {
   const led = await deps.readLedger(role);
   const rows = led && Array.isArray(led.rows) ? led.rows : null;
   if (led && led.warning) builder.note(led.warning);
-  let ledgerInfo = { sensitive };
+  let ledgerInfo;
   if (rows) {
     builder.scanned.entries = sensitive ? 0 : rows.length;
     // Fast path: if the whole ledger text is secret-clean, per-entry secret findings are all empty (ring still runs per entry).

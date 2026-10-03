@@ -474,6 +474,12 @@ export function buildManifest({ role, date, builder, meta = {} }) {
   return json;
 }
 
+/** Escape text for a Markdown table cell: backslash FIRST (so an existing backslash cannot swallow the next
+ *  escape), then the pipe, then newlines. */
+export function mdCell(v) {
+  return String(v == null ? "" : v).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
 export function renderManifestMd(m) {
   const L = [];
   L.push(`# MANIFEST: ${m.kit}`);
@@ -487,7 +493,7 @@ export function renderManifestMd(m) {
   L.push("");
   L.push("| Kit path | Section | Source | sha256 | Bytes |");
   L.push("|---|---|---|---|---|");
-  for (const f of m.files) L.push(`| \`${f.path}\` | ${f.section} | ${String(f.source).replace(/\|/g, "\\|")} | \`${f.sha256}\` | ${f.bytes} |`);
+  for (const f of m.files) L.push(`| \`${f.path}\` | ${f.section} | ${mdCell(f.source)} | \`${f.sha256}\` | ${f.bytes} |`);
   L.push("");
   L.push("## Excluded (nothing is dropped silently)");
   L.push("");
@@ -495,7 +501,7 @@ export function renderManifestMd(m) {
   else {
     L.push("| Section | Source | Reason |");
     L.push("|---|---|---|");
-    for (const e of m.excluded) L.push(`| ${e.section} | ${String(e.source).replace(/\|/g, "\\|")} | ${String(e.reason).replace(/\|/g, "\\|")} |`);
+    for (const e of m.excluded) L.push(`| ${e.section} | ${mdCell(e.source)} | ${mdCell(e.reason)} |`);
   }
   L.push("");
   L.push("## Ledger entries withheld by the gates");
