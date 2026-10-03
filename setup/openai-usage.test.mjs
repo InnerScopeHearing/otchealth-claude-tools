@@ -229,6 +229,16 @@ test("recordOpenAIUsage: records only response-derived metadata and usage in the
   assert.doesNotMatch(lines[0], /SENSITIVE_TEST_RESPONSE_SENTINEL|SENSITIVE_TEST_USER_SENTINEL|caller-supplied-model|9999|costUsd|caller/);
 });
 
+test("recordOpenAIUsage: long Unicode provider identifiers are preserved verbatim", () => {
+  const responseId = `resp_${"界🙂".repeat(90)}`;
+  const requestId = `req_${"é/雪".repeat(75)}`;
+  recordUsage({ id: responseId, response: mockResponse({ status: 200, requestId }), model: "gpt-4o", usage: { prompt_tokens: 3 } });
+  const rec = _peekBufferForTests()[0];
+  assert.equal(rec.responseId, responseId);
+  assert.equal(rec.requestId, requestId);
+  assert.equal(JSON.parse(readFileSync(join(tmpDir, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`), "utf8").trim()).responseId, responseId);
+});
+
 test("recordOpenAIUsage: missing response and usage fields stay omitted while provider-reported zero stays zero", () => {
   recordUsage({
     response: mockResponse(),
@@ -354,6 +364,26 @@ test("awaitBatch: one provider response receipt is recorded per output line with
   assert.equal(serialized.includes("SENSITIVE_TEST_CUSTOM_ID_SENTINEL"), false);
 });
 
+test("awaitBatch: usage from missing and empty custom_id output lines is retained without result keys", async () => {
+  const lines = [
+    { response: { status_code: 200, request_id: "req_missing", body: { id: "resp_missing", model: "gpt-4o", usage: { prompt_tokens: 11 } } } },
+    { custom_id: "", response: { status_code: 200, request_id: "req_empty", body: { id: "resp_empty", model: "gpt-4o", usage: { prompt_tokens: 13 } } } },
+    { custom_id: "valid", response: { status_code: 200, request_id: "req_valid", body: { id: "resp_valid", model: "gpt-4o", choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 17, completion_tokens: 2 } } } },
+  ];
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/batches/batch_missing_ids")) return { ok: true, status: 200, json: async () => ({ status: "completed", output_file_id: "file_missing_ids" }) };
+    if (url.endsWith("/files/file_missing_ids/content")) return { ok: true, status: 200, text: async () => lines.map((line) => JSON.stringify(line)).join("\n") + "\n" };
+    throw new Error(`unexpected mocked URL: ${url}`);
+  };
+  const { results } = await awaitBatch("batch_missing_ids", { apiKey: "unit-test-key", timeoutMs: 1000, pollIntervalMs: 0, sleepFn: async () => {}, fetchImpl });
+  assert.deepEqual([...results.keys()], ["valid"]);
+  assert.equal(results.get("valid").content, "ok");
+  assert.equal(_bufferLengthForTests(), 3);
+  assert.deepEqual(_peekBufferForTests().map((record) => record.usage.prompt_tokens), [11, 13, 17]);
+  const serialized = readFileSync(join(tmpDir, `usage-${new Date().toISOString().slice(0, 10)}.jsonl`), "utf8");
+  assert.equal(serialized.includes('"custom_id"'), false);
+});
+
 test("recordOpenAIUsage: a missing local ledger directory is created on demand", () => {
   const nested = join(tmpDir, "does", "not", "exist", "yet");
   _setLedgerDirForTests(nested);
@@ -459,3 +489,4 @@ test("installAutoFlushOnExit(): idempotent -- calling it repeatedly installs at 
   const after = process.listenerCount("beforeExit");
   assert.ok(after - before <= 1, "at most one new beforeExit listener, regardless of call count");
 });
+

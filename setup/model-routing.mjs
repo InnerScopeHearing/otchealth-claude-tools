@@ -685,11 +685,11 @@ export async function awaitBatch(batchId, { apiKey, timeoutMs = OPENAI_BATCH_TIM
   if (batch.output_file_id) {
     for (const line of await downloadBatchJsonl(batch.output_file_id, apiKey, fetchImpl)) {
       const customId = line.custom_id;
-      if (!customId) continue;
       const respBody = line.response?.body;
-      // Capture provider usage before validating visible content because a completed response can
-      // still be truncated or otherwise unusable to the caller.
+      // Record provider usage for every response line, even when a missing/empty custom_id makes it
+      // impossible to associate the response with a caller result. Never invent a Map key for it.
       recordOpenAIUsage({ kind: 'batch', response: line.response, body: respBody });
+      if (typeof customId !== 'string' || customId.length === 0) continue;
       const choice = respBody?.choices?.[0];
       const content = choice?.message?.content;
       if (line.error || !respBody || content == null) {
@@ -765,3 +765,4 @@ export default {
   OPENAI_BATCH_POLL_MS,
   OPENAI_BATCH_TIMEOUT_MS,
 };
+

@@ -21,9 +21,9 @@
 # routes run.mjs back through the original azure-foundry-*/legacy path, which would then also need its
 # own credential plumbing restored here.
 #
-# Scope (job-level `if`): only DRAFT PRs, or PRs from claude/* branches (the autonomous runner's + the
-# fleet-dispatch --spawn safety-net branches). A normal non-draft feature PR triggers the workflow but
-# the single job is SKIPPED, so there is zero model spend on ordinary PRs.
+# Cost hold: paid inference is paused until a controlling gross budget and bounded allowance
+# are approved. Keep the PR event types and report-only job; native toolkit tests and independent
+# source reviews remain required. Re-enable this job through a reviewed source change after approval.
 #
 # Posture: continue-on-error at the job AND every step (phase-1, matching promptcheck.yml). It is never a
 # required status check and never blocks a merge; it posts a sticky PR comment with the verdict. run.mjs
@@ -45,8 +45,8 @@ concurrency:
 jobs:
   auto-critic:
     name: auto critic pass (report-only)
-    # Only autonomous / draft PRs. Ordinary non-draft PRs skip this job entirely (no model spend).
-    if: github.event.pull_request.draft == true || startsWith(github.head_ref, 'claude/')
+    # Explicit cost hold. Neither draft synchronization nor ready-for-review can spend on a critic.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true

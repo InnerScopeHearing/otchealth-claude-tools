@@ -204,11 +204,11 @@ function flushThreshold() {
   return Number.isFinite(n) && n > 0 ? n : 200;
 }
 
-function safeIdentifier(value, maxLength = 128) {
-  if (typeof value !== "string") return undefined;
-  const text = value.trim();
-  if (!text || text.length > maxLength || !/^[A-Za-z0-9][A-Za-z0-9._:/_-]*$/.test(text)) return undefined;
-  return text;
+function safeIdentifier(value) {
+  // Provider identifiers are opaque: retain every non-empty string exactly as returned rather than
+  // imposing a guessed character set or length cap that can silently discard valid request IDs.
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  return value;
 }
 
 function responseHeader(response, name) {
@@ -462,3 +462,4 @@ export default {
   flush,
   installAutoFlushOnExit,
 };
+
