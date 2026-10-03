@@ -17,6 +17,7 @@
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { recordOpenAIUsage } from '../../../setup/openai-usage.mjs';
 import {
     loadCredentials, requireCredential, resolveBrand, ensureOutputDir,
     writeMeta, reportCost, parseArgs, brandPromptPrefix,
@@ -85,7 +86,9 @@ if (!res.ok) {
     console.error(`OpenAI error ${res.status}: ${await res.text()}`);
     process.exit(2);
 }
-const { data } = await res.json();
+const imageResponse = await res.json();
+recordOpenAIUsage({ kind: 'image', response: res, body: imageResponse });
+const { data } = imageResponse;
 const masterBuf = Buffer.from(data[0].b64_json, 'base64');
 
 const root = ensureOutputDir(brand, 'app-icons');

@@ -18,7 +18,7 @@
 //
 // fetchOpenAIWithFlexRetry() below is the other exception (it always was -- it makes the actual
 // network call): it is instrumented with recordOpenAIUsage() (see setup/openai-usage.mjs) so every
-// caller that routes through this shared helper gets fleet cost visibility for free. That import adds
+// caller that routes through this shared helper gets provider-usage receipts for free. That import adds
 // no network I/O or secret reads of its own at call time -- see openai-usage.mjs's own header for its
 // safety contract.
 import { recordOpenAIUsage } from './openai-usage.mjs';
@@ -464,17 +464,13 @@ export async function fetchOpenAIWithFlexRetry({ apiKey, deployment, messages, m
     }
     if (!r.ok) throw new Error(`chat ${r.status}: ${(await r.text()).slice(0, 160)}`);
     const j = await r.json();
-    // Record on every SUCCESSFUL (HTTP 200) response, including a truncated-empty one below -- OpenAI
-    // bills for tokens actually consumed (hidden reasoning tokens included) whether or not the call
-    // ultimately surfaces usable content, so this must not be gated on the truncatedEmpty()/return
-    // branches that follow. See setup/openai-usage.mjs's own header for the full contract.
+    // Record only provider-returned usage, including a truncated-empty response. Keep this before
+    // the truncatedEmpty()/return branches so consumed usage is not lost. The recorder stores only
+    // response metadata and numeric usage fields, never the response content.
     recordOpenAIUsage({
-      model: deployment,
       kind: 'chat',
-      promptTokens: j.usage?.prompt_tokens || 0,
-      completionTokens: j.usage?.completion_tokens || 0,
-      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-      caller: caller || 'model-routing',
+      response: r,
+      body: j,
     });
     const choice = j.choices?.[0];
     if (truncatedEmpty(choice)) {
@@ -689,8 +685,11 @@ export async function awaitBatch(batchId, { apiKey, timeoutMs = OPENAI_BATCH_TIM
   if (batch.output_file_id) {
     for (const line of await downloadBatchJsonl(batch.output_file_id, apiKey, fetchImpl)) {
       const customId = line.custom_id;
-      if (!customId) continue;
       const respBody = line.response?.body;
+      // Record provider usage for every response line, even when a missing/empty custom_id makes it
+      // impossible to associate the response with a caller result. Never invent a Map key for it.
+      recordOpenAIUsage({ kind: 'batch', response: line.response, body: respBody });
+      if (typeof customId !== 'string' || customId.length === 0) continue;
       const choice = respBody?.choices?.[0];
       const content = choice?.message?.content;
       if (line.error || !respBody || content == null) {
@@ -766,3 +765,4 @@ export default {
   OPENAI_BATCH_POLL_MS,
   OPENAI_BATCH_TIMEOUT_MS,
 };
+

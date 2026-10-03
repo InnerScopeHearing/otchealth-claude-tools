@@ -14,6 +14,7 @@
 //         Path is printed to stdout for the caller to pick up.
 
 import { writeFileSync, readFileSync } from 'node:fs';
+import { recordOpenAIUsage } from '../../../setup/openai-usage.mjs';
 import {
     loadCredentials, requireCredential, resolveBrand, pickOutputPath,
     writeMeta, reportCost, parseArgs, brandPromptPrefix,
@@ -102,6 +103,7 @@ async function callOpenAIImage({ prompt, size, n, useProvider }) {
         throw new Error(`${useProvider} image API ${res.status}: ${await res.text()}`);
     }
     const data = await res.json();
+    if (useProvider === 'openai') recordOpenAIUsage({ kind: 'image', response: res, body: data });
     return Promise.all((data.data || []).map(async (d) => {
         if (d.b64_json) return Buffer.from(d.b64_json, 'base64');
         const img = await fetch(d.url);

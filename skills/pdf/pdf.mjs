@@ -126,12 +126,9 @@ async function visionOCRImage(pngPath){
     const j = await r.json();
     if (r.ok) {
       recordOpenAIUsage({
-        model: process.env.PDF_OCR_MODEL || "gpt-4o",
         kind: "chat",
-        promptTokens: j.usage?.prompt_tokens || 0,
-        completionTokens: j.usage?.completion_tokens || 0,
-        cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-        caller: "pdf-ocr",
+        response: r,
+        body: j,
       });
     }
     if (j.choices?.[0]?.message?.content != null) return j.choices[0].message.content;

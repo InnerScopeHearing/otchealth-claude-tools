@@ -83,12 +83,9 @@ export async function ask(system, user, maxTokens = 700) {
     const j = await r.json();
     if (openai) {
       recordOpenAIUsage({
-        model: DEP,
         kind: "chat",
-        promptTokens: j.usage?.prompt_tokens || 0,
-        completionTokens: j.usage?.completion_tokens || 0,
-        cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-        caller: "shark-tank",
+        response: r,
+        body: j,
       });
     }
     return j.choices[0].message.content;

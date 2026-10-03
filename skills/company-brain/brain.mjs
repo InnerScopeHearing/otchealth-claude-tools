@@ -316,12 +316,9 @@ export async function callChat(p, system, user, tries) {
     const j = await r.json();
     if (p.kind === "openai") {
       recordOpenAIUsage({
-        model: p.dep,
         kind: "chat",
-        promptTokens: j.usage?.prompt_tokens || 0,
-        completionTokens: j.usage?.completion_tokens || 0,
-        cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-        caller: "company-brain",
+        response: r,
+        body: j,
       });
     }
     const choice = j.choices[0];

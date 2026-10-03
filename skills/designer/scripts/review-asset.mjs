@@ -117,12 +117,9 @@ async function callVision(useProvider) {
     const j = await res.json();
     if (useProvider === 'openai') {
         recordOpenAIUsage({
-            model,
             kind: 'chat',
-            promptTokens: j.usage?.prompt_tokens || 0,
-            completionTokens: j.usage?.completion_tokens || 0,
-            cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-            caller: 'designer-review-asset',
+            response: res,
+            body: j,
         });
     }
     return j;

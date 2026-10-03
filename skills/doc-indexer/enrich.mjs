@@ -504,12 +504,9 @@ async function chatJson(messages, max_tokens) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error("chat " + r.status + " " + JSON.stringify(j).slice(0, 160));
     recordOpenAIUsage({
-      model: MODEL,
       kind: "chat",
-      promptTokens: j.usage?.prompt_tokens || 0,
-      completionTokens: j.usage?.completion_tokens || 0,
-      cachedTokens: j.usage?.prompt_tokens_details?.cached_tokens || 0,
-      caller: "doc-indexer-enrich",
+      response: r,
+      body: j,
     });
     return { text: j.choices?.[0]?.message?.content || "", usage: j.usage || {} };
   }
