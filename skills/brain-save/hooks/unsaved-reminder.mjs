@@ -88,7 +88,7 @@ export function scanFolder(root, { maxDepth = 4, limit = MAX_FILES } = {}) {
   return out;
 }
 
-function gitChanged(repo, timeoutMs = 300) {
+export function gitChanged(repo, timeoutMs = 300) {
   return new Promise((res) => {
     execFile("git", ["-C", repo, "status", "--porcelain", "--untracked-files=all"], { timeout: timeoutMs }, (err, stdout) => {
       if (err) return res([]);
