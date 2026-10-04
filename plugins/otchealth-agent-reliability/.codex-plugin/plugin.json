@@ -1,6 +1,6 @@
 {
   "name": "otchealth-agent-reliability",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Original OTCHealth reliability workflows with exact evidence and bounded repairs.",
   "author": {
     "name": "Matthew Moore"

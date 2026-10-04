@@ -1,0 +1,6 @@
+interface:
+  display_name: "SWARM"
+  short_description: "Bounded parallel coordination with cloud proof"
+  default_prompt: "Use $swarm to coordinate bounded parallel work, project-linked cloud chats, protected data boundaries, and independently verified completion evidence."
+policy:
+  allow_implicit_invocation: true
