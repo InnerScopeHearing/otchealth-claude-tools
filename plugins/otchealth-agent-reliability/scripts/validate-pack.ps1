@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 param([string]$PackRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
-$ExpectedNames = @('capability-preflight','brain-memory-readback','context-continuity','bounded-repair','vendor-access-proof','release-evidence','skill-distribution','source-grounding')
+$ExpectedNames = @('capability-preflight','brain-memory-readback','context-continuity','bounded-repair','vendor-access-proof','release-evidence','skill-distribution','source-grounding','refresh-toolkit')
 $PackRoot = [IO.Path]::GetFullPath($PackRoot)
 $Manifest = Get-Content -Raw -LiteralPath (Join-Path $PackRoot 'plugin.json') | ConvertFrom-Json
 $Overlay = Get-Content -Raw -LiteralPath (Join-Path $PackRoot '.codex-plugin/plugin.json') | ConvertFrom-Json

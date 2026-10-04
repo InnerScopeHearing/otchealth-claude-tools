@@ -9,7 +9,7 @@ $Target = Join-Path $TestRoot '.agents/skills'
 $First = & $Installer -PackRoot $PackRoot -DestinationRoot $Target | ConvertFrom-Json
 $Again = & $Installer -PackRoot $PackRoot -DestinationRoot $Target | ConvertFrom-Json
 $ExpectedFiles = @(Get-ChildItem -LiteralPath (Join-Path $PackRoot 'skills') -File -Recurse).Count
-if ($First.files_copied -ne $ExpectedFiles -or $Again.files_copied -ne 0 -or $First.skill_count -ne 8) { throw 'Install/idempotence failed' }
+if ($First.files_copied -ne $ExpectedFiles -or $Again.files_copied -ne 0 -or $First.skill_count -ne 9) { throw 'Install/idempotence failed' }
 $Conflict = Join-Path $Target 'brain-memory-readback/SKILL.md'
 [IO.File]::WriteAllText($Conflict,'synthetic owner content')
 $Before = (Get-FileHash -LiteralPath $Conflict).Hash
