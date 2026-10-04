@@ -1,0 +1,18 @@
+{
+  "name": "otchealth-agent-reliability",
+  "version": "0.1.0",
+  "description": "Original OTCHealth reliability workflows with exact evidence and bounded repairs.",
+  "author": {
+    "name": "Matthew Moore"
+  },
+  "skills": "./skills",
+  "interface": {
+    "displayName": "OTCHealth Agent Reliability",
+    "shortDescription": "Memory, repairs and proof",
+    "longDescription": "Eight original instruction skills for exact memory, capability checks, continuity, bounded repairs, vendor proof, releases, source grounding and distribution. Adds no credentials, grants or paid jobs.",
+    "developerName": "Matthew Moore",
+    "category": "Productivity",
+    "defaultPrompt": "Use the relevant OTCHealth reliability skill to complete my authorized task, verify the result and preserve remaining gates.",
+    "capabilities": []
+  }
+}

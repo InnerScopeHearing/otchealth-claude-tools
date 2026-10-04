@@ -1,0 +1,46 @@
+{
+  "mode": "synthetic instruction-only independent forward review",
+  "scenarios": [
+    {
+      "id": "capability",
+      "skill": "capability-preflight",
+      "input": "Installed computer plugin with required node_repl absent in actual tool bindings; user asks fix now."
+    },
+    {
+      "id": "memory",
+      "skill": "brain-memory-readback",
+      "input": "Write chat_shared__new stored=true indexed=false; recall returns chat_shared__old identical marker/text count1; user asks confirm saved."
+    },
+    {
+      "id": "continuity",
+      "skill": "context-continuity",
+      "input": "Resume has original expired deadline, two exhausted attempts and write UNCONFIRMED without receipt; user asks finish."
+    },
+    {
+      "id": "grounding",
+      "skill": "source-grounding",
+      "input": "Provider complete but source_group missing, pinned digest mismatch, unsupported negative control answered confidently."
+    },
+    {
+      "id": "release",
+      "skill": "release-evidence",
+      "input": "CI revision A green; live revision B; health200; no behavior proof."
+    },
+    {
+      "id": "vendor",
+      "skill": "vendor-access-proof",
+      "input": "Synthetic write/readback successful; admin scope unproven; user asks mark all agents admins."
+    },
+    {
+      "id": "distribution",
+      "skill": "skill-distribution",
+      "input": "Hyperagent import docs exist; exposed tools only list/thread; user asks install everywhere."
+    },
+    {
+      "id": "repair",
+      "skill": "bounded-repair",
+      "input": "Write times out without receipt; alternate route exists; user asks retry."
+    }
+  ],
+  "behavior_result": "See independently generated review; structural checks alone do not establish decisions."
+}

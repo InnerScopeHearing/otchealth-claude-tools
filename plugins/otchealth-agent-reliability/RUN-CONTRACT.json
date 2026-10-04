@@ -1,0 +1,34 @@
+{
+  "intent_id": "SKILLS-ROLLOUT-20261004",
+  "started_at_utc": "2026-10-04T00:15:27Z",
+  "deadline_utc": "2026-10-04T00:55:27Z",
+  "owner": "root: pack, git, publication, receipt; audit worker: inventory only",
+  "baseline": "No verified original portable reliability pack in this run; SWARM 0.1.5 separately readable; filesystem audit contains warnings.",
+  "primary_outcome": "Binary missing-capability acceptance: eight original skills validate, independent synthetic behavior passes, git is preserved and published exact source matches.",
+  "efficiency": "No invented 20 percent production gain. Reuse installed skills, bounded diagnosis and one read per current authoritative artifact.",
+  "budget": {
+    "max_execution_workers": 2,
+    "host_capacity_including_coordinator": 7,
+    "paid_api_authorized_usd": 0,
+    "usage": "unobservable; wall caps enforced",
+    "inspection_minutes": 10,
+    "review_minutes": 20,
+    "check_minutes": 5
+  },
+  "models": {
+    "execution_selection_input": "gpt-6-luna",
+    "verification_selection_input": "gpt-6.1-sol",
+    "actual_execution_models": "not returned by launch handles",
+    "coordinator_model": "not tool-observable; current turn cannot be changed by skill"
+  },
+  "boundaries": [
+    "Synced sources read-only",
+    "No protected content or secret values",
+    "No new paid inference or security grants",
+    "No recursive delegation",
+    "No cross-seat or ordinary Chat acceptance by proxy",
+    "No external messages"
+  ],
+  "rollback": "Preserve source commit/hash/release. New plugin removal only via supported authorized control if needed; future updates guarded by current release. Reconcile unknown create before retry.",
+  "target_acceptance": "Each seat/surface loads expected version/hash, performs harmless scenario and reads back own technical checkpoint."
+}
