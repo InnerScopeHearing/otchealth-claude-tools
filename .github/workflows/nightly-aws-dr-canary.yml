@@ -79,7 +79,6 @@ jobs:
 
       - name: "Heartbeat: mark this workflow's schedule as alive"
         if: always()
-        continue-on-error: true
         run: |
-          timeout 20 node setup/heartbeat.mjs beat nightly-aws-dr-canary ok \
-            || echo "::warning::heartbeat beat did not land (heartbeat.mjs's Azure Blob backend has not been ported to AWS yet -- this workflow's own pass/fail above is unaffected)"
+          timeout 20 node setup/heartbeat.mjs beat nightly-aws-dr-canary ok
+
