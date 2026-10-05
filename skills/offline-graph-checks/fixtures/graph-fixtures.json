@@ -1,0 +1,123 @@
+{
+  "fixtureSet": "typed-graph-and-artifact-reuse-v1",
+  "dataClassification": "invented_ids_only_no_source_text",
+  "graphFixtures": [
+    {
+      "caseId": "supported-three-hop-path",
+      "query": { "from": "node-a", "to": "node-d", "maxHops": 3, "asOf": "2026-01-01" },
+      "nodes": ["node-a", "node-b", "node-c", "node-d"],
+      "edges": [
+        { "id": "edge-ab", "from": "node-a", "to": "node-b", "type": "depends_on", "sourceId": "source-ab", "sourceVersion": 1, "evidenceId": "evidence-ab", "validFrom": "2025-01-01", "status": "supported" },
+        { "id": "edge-bc", "from": "node-b", "to": "node-c", "type": "references", "sourceId": "source-bc", "sourceVersion": 2, "evidenceId": "evidence-bc", "validFrom": "2025-02-01", "status": "supported" },
+        { "id": "edge-cd", "from": "node-c", "to": "node-d", "type": "causes", "sourceId": "source-cd", "sourceVersion": 1, "evidenceId": "evidence-cd", "validFrom": "2025-03-01", "status": "supported" }
+      ],
+      "expected": { "supported": true, "status": "supported", "reasonCodes": [], "pathEdgeIds": ["edge-ab", "edge-bc", "edge-cd"], "citedEdgeIds": ["edge-ab", "edge-bc", "edge-cd"], "citedRecordIds": [], "opposingRecordIds": [] }
+    },
+    {
+      "caseId": "cycle-terminates-with-supported-simple-path",
+      "query": { "from": "node-a", "to": "node-d", "maxHops": 4 },
+      "nodes": ["node-a", "node-b", "node-c", "node-d"],
+      "edges": [
+        { "id": "edge-ab", "from": "node-a", "to": "node-b", "type": "links_to", "sourceId": "source-ab", "sourceVersion": 1, "evidenceId": "evidence-ab" },
+        { "id": "edge-bc", "from": "node-b", "to": "node-c", "type": "links_to", "sourceId": "source-bc", "sourceVersion": 1, "evidenceId": "evidence-bc" },
+        { "id": "edge-ca", "from": "node-c", "to": "node-a", "type": "links_to", "sourceId": "source-ca", "sourceVersion": 1, "evidenceId": "evidence-ca" },
+        { "id": "edge-cd", "from": "node-c", "to": "node-d", "type": "links_to", "sourceId": "source-cd", "sourceVersion": 1, "evidenceId": "evidence-cd" }
+      ],
+      "expected": { "supported": true, "status": "supported", "reasonCodes": ["cycle_pruned"], "pathEdgeIds": ["edge-ab", "edge-bc", "edge-cd"], "citedEdgeIds": ["edge-ab", "edge-bc", "edge-cd"], "citedRecordIds": [], "opposingRecordIds": [] }
+    },
+    {
+      "caseId": "missing-link-abstains",
+      "query": { "from": "node-a", "to": "node-c", "maxHops": 3 },
+      "nodes": ["node-a", "node-b", "node-c"],
+      "edges": [{ "id": "edge-ab", "from": "node-a", "to": "node-b", "type": "links_to", "sourceId": "source-ab", "sourceVersion": 1, "evidenceId": "evidence-ab" }],
+      "expected": { "supported": false, "status": "abstain", "reasonCodes": ["missing_link"], "pathEdgeIds": [], "citedEdgeIds": ["edge-ab"], "citedRecordIds": [], "opposingRecordIds": [] }
+    },
+    {
+      "caseId": "hop-limit-abstains",
+      "query": { "from": "node-a", "to": "node-d", "maxHops": 2 },
+      "nodes": ["node-a", "node-b", "node-c", "node-d"],
+      "edges": [
+        { "id": "edge-ab", "from": "node-a", "to": "node-b", "type": "links_to", "sourceId": "source-ab", "sourceVersion": 1, "evidenceId": "evidence-ab" },
+        { "id": "edge-bc", "from": "node-b", "to": "node-c", "type": "links_to", "sourceId": "source-bc", "sourceVersion": 1, "evidenceId": "evidence-bc" },
+        { "id": "edge-cd", "from": "node-c", "to": "node-d", "type": "links_to", "sourceId": "source-cd", "sourceVersion": 1, "evidenceId": "evidence-cd" }
+      ],
+      "expected": { "supported": false, "status": "abstain", "reasonCodes": ["hop_limit_exceeded"], "pathEdgeIds": [], "citedEdgeIds": ["edge-ab", "edge-bc"], "citedRecordIds": [], "opposingRecordIds": [] }
+    },
+    {
+      "caseId": "same-name-distinct-identity-refused",
+      "query": { "entityId": "Morgan Vale", "aliases": [{ "value": "Morgan Vale" }], "predicate": "reviewed" },
+      "nodes": [
+        { "id": "person-17", "canonicalName": "Morgan Vale", "aliases": [] },
+        { "id": "person-92", "canonicalName": "Morgan Vale", "aliases": [] }
+      ],
+      "edges": [],
+      "records": [
+        { "id": "record-17", "subjectEntityId": "person-17", "predicate": "reviewed", "label": "finding", "sourceId": "source-17", "sourceVersion": 1, "validAt": "2025-04-01" },
+        { "id": "record-92", "subjectEntityId": "person-92", "predicate": "reviewed", "label": "finding", "sourceId": "source-92", "sourceVersion": 1, "validAt": "2025-04-02" }
+      ],
+      "expected": { "supported": false, "status": "abstain", "reasonCodes": ["ambiguous_entity_identity"], "citedRecordIds": [], "opposingRecordIds": [], "resolvedEntityId": null, "claims": [], "opposingEvidence": [] }
+    },
+    {
+      "caseId": "allegation-is-not-finding",
+      "query": { "entityId": "entity-3", "aliases": [{ "value": "Entity Three", "entityId": "entity-3" }], "predicate": "violated_rule" },
+      "nodes": [{ "id": "entity-3", "canonicalName": "Entity Three", "aliases": [] }],
+      "edges": [],
+      "records": [{ "id": "allegation-1", "subjectEntityId": "entity-3", "predicate": "violated_rule", "label": "allegation", "sourceId": "source-allegation", "sourceVersion": 1, "validAt": "2025-05-01" }],
+      "expected": { "supported": false, "status": "abstain", "reasonCodes": ["allegation_not_finding"], "citedRecordIds": [], "opposingRecordIds": [], "resolvedEntityId": "entity-3", "claims": [{ "recordId": "allegation-1", "predicate": "violated_rule", "label": "allegation", "sourceId": "source-allegation", "sourceVersion": 1, "validAt": "2025-05-01", "status": "unknown", "opposes": null }], "opposingEvidence": [] }
+    },
+    {
+      "caseId": "conflicting-findings-retain-both-sides",
+      "query": { "entityId": "entity-4", "aliases": [{ "value": "Entity Four", "entityId": "entity-4" }], "predicate": "approved" },
+      "nodes": [{ "id": "entity-4", "canonicalName": "Entity Four", "aliases": [] }],
+      "edges": [],
+      "records": [
+        { "id": "finding-approve", "subjectEntityId": "entity-4", "predicate": "approved", "label": "finding", "sourceId": "source-board-a", "sourceVersion": 2, "validAt": "2025-06-01", "status": "adverse" },
+        { "id": "finding-defer", "subjectEntityId": "entity-4", "predicate": "deferred", "label": "finding", "sourceId": "source-board-b", "sourceVersion": 1, "validAt": "2025-06-01", "status": "opposing", "opposes": "finding-approve" }
+      ],
+      "expected": { "supported": false, "status": "conflicting", "reasonCodes": ["conflicting_findings"], "citedRecordIds": ["finding-approve", "finding-defer"], "opposingRecordIds": ["finding-defer"], "resolvedEntityId": "entity-4", "claims": [{ "recordId": "finding-approve", "predicate": "approved", "label": "finding", "sourceId": "source-board-a", "sourceVersion": 2, "validAt": "2025-06-01", "status": "adverse", "opposes": null }, { "recordId": "finding-defer", "predicate": "deferred", "label": "finding", "sourceId": "source-board-b", "sourceVersion": 1, "validAt": "2025-06-01", "status": "opposing", "opposes": "finding-approve" }], "opposingEvidence": [{ "recordId": "finding-approve", "predicate": "approved", "label": "finding", "sourceId": "source-board-a", "sourceVersion": 2, "validAt": "2025-06-01", "status": "adverse", "opposes": null }, { "recordId": "finding-defer", "predicate": "deferred", "label": "finding", "sourceId": "source-board-b", "sourceVersion": 1, "validAt": "2025-06-01", "status": "opposing", "opposes": "finding-approve" }] }
+    },
+    {
+      "caseId": "stale-and-deleted-source-edges-abstain",
+      "query": { "from": "node-a", "to": "node-c", "maxHops": 2 },
+      "nodes": ["node-a", "node-b", "node-c"],
+      "edges": [
+        { "id": "edge-ab-old", "from": "node-a", "to": "node-b", "type": "links_to", "sourceId": "source-ab", "sourceVersion": 1, "expectedSourceVersion": 2, "evidenceId": "evidence-ab", "status": "stale" },
+        { "id": "edge-bc-deleted", "from": "node-b", "to": "node-c", "type": "links_to", "sourceId": "source-bc", "sourceVersion": 1, "evidenceId": "evidence-bc", "status": "deleted" }
+      ],
+      "expected": { "supported": false, "status": "abstain", "reasonCodes": ["stale_source_version", "deleted_source"], "pathEdgeIds": [], "citedEdgeIds": [], "citedRecordIds": [], "opposingRecordIds": [] }
+    }
+  ],
+  "artifactReuseFixtures": [
+    {
+      "caseId": "immutable-artifact-exact-match-reusable",
+      "candidate": { "artifactType": "embedding", "immutable": true, "current": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": "embedding-4" }, "cached": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": "embedding-4" } },
+      "expected": { "reusable": true, "reasonCodes": [] }
+    },
+    {
+      "caseId": "changed-source-version-invalidates",
+      "candidate": { "artifactType": "document", "immutable": true, "current": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": null }, "cached": { "sourceVersion": 3, "sourceHash": "hash-v3", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": null } },
+      "expected": { "reusable": false, "reasonCodes": ["stale_source_version"] }
+    },
+    {
+      "caseId": "deleted-source-invalidates",
+      "candidate": { "artifactType": "retrieval", "immutable": true, "current": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": true, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": "embedding-4" }, "cached": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": "embedding-4" } },
+      "expected": { "reusable": false, "reasonCodes": ["deleted_source"] }
+    },
+    {
+      "caseId": "changed-authorization-scope-invalidates",
+      "candidate": { "artifactType": "retrieval", "immutable": true, "current": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-new", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": "embedding-4" }, "cached": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-old", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": "embedding-4" } },
+      "expected": { "reusable": false, "reasonCodes": ["scope_fingerprint_mismatch"] }
+    },
+    {
+      "caseId": "changed-entity-identity-invalidates",
+      "candidate": { "artifactType": "document", "immutable": true, "current": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-new", "retrievalRelease": "release-4", "embeddingDigest": null }, "cached": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-old", "retrievalRelease": "release-4", "embeddingDigest": null } },
+      "expected": { "reusable": false, "reasonCodes": ["identity_fingerprint_mismatch"] }
+    },
+    {
+      "caseId": "generated-answer-never-reusable",
+      "candidate": { "artifactType": "generated_answer", "immutable": true, "generatedAnswer": true, "current": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": null }, "cached": { "sourceVersion": 4, "sourceHash": "hash-v4", "deleted": false, "scopeFingerprint": "scope-a", "identityFingerprint": "identity-4", "retrievalRelease": "release-4", "embeddingDigest": null } },
+      "expected": { "reusable": false, "reasonCodes": ["generated_answer_not_reusable"] }
+    }
+  ],
+  "passRule": "Every case must match its expected status, reason codes, path or retained evidence, and reuse decision exactly; unsupported positive claims or stale/generated-answer reuse fail."
+}
