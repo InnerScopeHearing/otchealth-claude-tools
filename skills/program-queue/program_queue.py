@@ -356,6 +356,27 @@ def load_json(path: Path) -> Any:
         raise QueueError(f"cannot read valid JSON: {exc}") from exc
 
 
+def _guard_output_path(state_path: Path, output_path: Path) -> None:
+    """Reject output paths that resolve to, or share an inode with, the input."""
+    try:
+        if output_path.resolve() == state_path.resolve():
+            raise QueueError("output must differ from the input queue state")
+        input_stat = state_path.stat()
+    except QueueError:
+        raise
+    except (OSError, RuntimeError) as exc:
+        raise QueueError("cannot safely verify input/output paths") from exc
+
+    try:
+        output_stat = output_path.stat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise QueueError("cannot safely verify input/output paths") from exc
+    if (input_stat.st_dev, input_stat.st_ino) == (output_stat.st_dev, output_stat.st_ino):
+        raise QueueError("output must not alias the input queue state")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("state", type=Path, help="local JSON queue state")
@@ -363,15 +384,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, help="write plan JSON; stdout when omitted")
     args = parser.parse_args(argv)
     try:
-        if args.output and args.output.resolve() == args.state.resolve():
-            raise QueueError("output must differ from the input queue state")
+        if args.output:
+            _guard_output_path(args.state, args.output)
         result = plan(load_json(args.state), args.now)
     except QueueError as exc:
         print(json.dumps({"error": str(exc), "fail_closed": True}), file=sys.stderr)
         return 2
     rendered = json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if args.output:
-        args.output.write_text(rendered, encoding="utf-8")
+        try:
+            args.output.write_text(rendered, encoding="utf-8")
+        except OSError:
+            print(json.dumps({"error": "cannot write output plan", "fail_closed": True}), file=sys.stderr)
+            return 2
     else:
         sys.stdout.write(rendered)
     return 0
