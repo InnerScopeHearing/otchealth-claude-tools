@@ -400,3 +400,15 @@ test("pickIosIpaArtifact: a /g RegExp does not carry lastIndex between artifacts
   assert.equal(pickIosIpaArtifact(artifacts, g).id, 1);
   assert.equal(pickIosIpaArtifact([{ id: 3, name: "aware-c" }], g).id, 3);
 });
+
+// Regression: `all` passes app.displayName ("Hey Millie") to its sub-steps, which then call
+// resolveApp again. Before the fix this threw 'unknown --app "Hey Millie"' at step 1 and the
+// whole real-device walkthrough never ran.
+test("resolveApp: accepts the display name, not only the registry key", () => {
+  assert.equal(resolveApp("Hey Millie").displayName, "Hey Millie");
+  assert.equal(resolveApp("hey millie"), resolveApp("HeyMillie"));
+  for (const k of ["AWARE", "iHEARtest", "HeyMillie"]) {
+    assert.equal(resolveApp(resolveApp(k).displayName), resolveApp(k));
+  }
+  assert.throws(() => resolveApp("Hey Mille"), /unknown --app/);
+});
