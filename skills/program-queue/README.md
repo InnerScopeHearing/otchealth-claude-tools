@@ -17,7 +17,8 @@ python3 ~/.claude/skills/program-queue/program_queue.py state.json --now 2026-10
 ```
 
 Print the plan to stdout by default; `--output plan.json` writes only that local
-report and rejects the input-state path. Preserve original owner, acceptance,
+report and rejects the input-state path, symlink aliases, and hard links to the
+input. Preserve original owner, acceptance,
 rank, attempt receipts and history. Completed items stay completed; previously
 expired blockers stay at the absolute tail. Use the queue's explicit deadline
 and estimates to select the next stage. A past deadline produces no new starts.

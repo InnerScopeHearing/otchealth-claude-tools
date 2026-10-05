@@ -221,6 +221,62 @@ class ProgramQueueTests(unittest.TestCase):
             self.assertIn("output must differ", result.stderr)
             self.assertEqual(path.read_text(), original)
 
+    def test_cli_rejects_hardlink_output_and_preserves_input_hash(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "state.json"
+            alias = Path(tmp) / "state-hardlink.json"
+            source.write_text(json.dumps(state([task("A", 1)])))
+            alias.hardlink_to(source)
+            before = hashlib.sha256(source.read_bytes()).hexdigest()
+            result = subprocess.run([sys.executable, q.__file__, str(source), "--now", NOW,
+                                     "--output", str(alias)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("output must not alias", result.stderr)
+            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), before)
+
+    def test_cli_rejects_symlink_output_to_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "state.json"
+            alias = Path(tmp) / "state-symlink.json"
+            original = json.dumps(state([task("A", 1)]))
+            source.write_text(original)
+            try:
+                alias.symlink_to(source)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are unavailable")
+            result = subprocess.run([sys.executable, q.__file__, str(source), "--now", NOW,
+                                     "--output", str(alias)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("output must differ", result.stderr)
+            self.assertEqual(source.read_text(), original)
+
+    def test_cli_writes_new_output_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "state.json"
+            output = Path(tmp) / "plan.json"
+            source.write_text(json.dumps(state([task("A", 1)])))
+            result = subprocess.run([sys.executable, q.__file__, str(source), "--now", NOW,
+                                     "--output", str(output)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(output.read_text())["next_ready_stage"][0]["id"], "A")
+
+    def test_cli_reports_output_path_lookup_failure_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "state.json"
+            loop = Path(tmp) / "loop"
+            source.write_text(json.dumps(state([task("A", 1)])))
+            try:
+                loop.symlink_to(loop)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are unavailable")
+            result = subprocess.run([sys.executable, q.__file__, str(source), "--now", NOW,
+                                     "--output", str(loop)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stderr.strip(), json.dumps({
+                "error": "cannot safely verify input/output paths", "fail_closed": True
+            }))
+
     def test_cli_handles_88_rows_and_preserves_owner_criteria_history_and_tail(self):
         tasks = [task(f"ITEM-{i:03d}", i) for i in range(88)]
         tasks[0]["expired_to_tail"] = True
