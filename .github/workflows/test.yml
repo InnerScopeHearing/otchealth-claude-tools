@@ -33,9 +33,14 @@ jobs:
           node-version: 22
 
       # ad-studio renders real (tiny, synthetic) clips with ffmpeg in its tests; the hosted runner
-      # image does not ship it. Installed here rather than skipping those tests when it is missing.
+      # image may already ship it. Install only when missing; never skip the media tests.
       - name: Install ffmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null && ffmpeg -version | head -1
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg >/dev/null
+          fi
+          ffmpeg -version | head -1
 
       - name: run-tests.sh
         run: bash run-tests.sh
