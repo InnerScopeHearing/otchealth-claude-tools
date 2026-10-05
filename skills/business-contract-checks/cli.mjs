@@ -10,7 +10,8 @@ function syntheticOnly(value, path = '$') {
     if (/^(name|email|phone|address|body|content|message|prompt|customer|patient|order|refund)$/i.test(key)) return [`${path}.${key}: disallowed field`];
     return syntheticOnly(item, `${path}.${key}`);
   });
-  if (typeof value === 'string' && value !== '' && !/(?:synthetic)/i.test(value) && !enums.has(value) && !/^\d{4}-\d\d-\d\d(?:T.*(?:Z|[+-]\d\d:\d\d))?$/.test(value)) return [`${path}: values must be synthetic markers, timestamps, or enumerated metadata`];
+  const marker = typeof value === 'string' && value.length <= 80 && (/^(?:synthetic(?:-[a-z0-9]+){0,6}|(?:[a-z0-9]+-){0,5}synthetic(?:-[a-z0-9]+){0,3})$/i.test(value) || /^synthetic:\/\/(?:[a-z0-9-]+\/){1,3}[a-z0-9-]+$/i.test(value));
+  if (typeof value === 'string' && value !== '' && !marker && !enums.has(value) && !/^\d{4}-\d\d-\d\d(?:T.*(?:Z|[+-]\d\d:\d\d))?$/.test(value)) return [`${path}: values must be bounded synthetic markers, timestamps, or enumerated metadata`];
   return [];
 }
 function main() {
@@ -21,12 +22,17 @@ function main() {
   let result;
   if (safetyErrors.length) result = { kind: 'draft_validation', live_authorization: false, status: 'hold', errors: safetyErrors };
   else if (input.workflow === 'N08') {
+    try {
     const selected = selectEntitlement(input.purchase, input.packs, input.now);
-    const followUp = input.follow_up ? validateFollowUp(input.follow_up, { ...input.context, purchase: input.purchase, selected: selected.selection, pack: input.packs.find((p) => p.pack_id === selected.selection?.pack_id) }, input.now) : null;
+    const followUp = input.follow_up ? validateFollowUp(input.follow_up, { ...(input.context || {}), purchase: input.purchase, selected: selected.selection, pack: Array.isArray(input.packs) ? input.packs.find((p) => p.pack_id === selected.selection?.pack_id) : null }, input.now) : null;
     result = { kind: 'draft_validation', live_authorization: false, status: selected.status === 'eligible' && (!followUp || followUp.status === 'ready') ? 'ready' : 'hold', entitlement: selected, follow_up: followUp };
+    } catch {
+      result = { kind: 'draft_validation', live_authorization: false, status: 'hold', errors: ['VALIDATION_ERROR'] };
+    }
   } else {
     const { handoff, context, now } = input;
-    result = { kind: 'draft_validation', live_authorization: false, ...evaluateGrowthAdmission(handoff, context, now) };
+    try { result = { kind: 'draft_validation', live_authorization: false, ...evaluateGrowthAdmission(handoff, context, now) }; }
+    catch { result = { kind: 'draft_validation', live_authorization: false, status: 'hold', errors: ['VALIDATION_ERROR'] }; }
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
   process.exitCode = result.status === 'ready' ? 0 : 1;

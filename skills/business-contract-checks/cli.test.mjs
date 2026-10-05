@@ -32,3 +32,19 @@ test('CLI rejects free-text and missing draft-only declarations', () => {
   assert.equal(missingFlag.status, 1);
   assert.match(missingFlag.stdout, /live_authorization=false/);
 });
+
+test('CLI contains malformed N08 follow-up input in the draft-only hold envelope', () => {
+  const malformed = run({ draft_validation: true, live_authorization: false, workflow: 'N08', purchase: {}, packs: null, follow_up: {} });
+  assert.equal(malformed.status, 1);
+  const output = JSON.parse(malformed.stdout);
+  assert.equal(output.kind, 'draft_validation');
+  assert.equal(output.status, 'hold');
+  assert.equal(output.live_authorization, false);
+  assert.ok(!malformed.stdout.includes('"packs":null'));
+});
+
+test('CLI rejects arbitrary strings that merely contain the word synthetic', () => {
+  const arbitrary = run({ ...n08, memo: 'customer-synthetic-please-refund-my-order-today' });
+  assert.equal(arbitrary.status, 1);
+  assert.match(arbitrary.stdout, /bounded synthetic markers/);
+});
