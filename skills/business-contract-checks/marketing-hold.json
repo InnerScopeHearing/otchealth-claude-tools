@@ -1,0 +1,41 @@
+{
+  "draft_validation": true,
+  "live_authorization": false,
+  "workflow": "N11",
+  "now": "2026-10-06T03:55:00.000Z",
+  "marketing_draft": {
+    "draft_id": "synthetic-marketing-draft-b",
+    "purpose": "marketing",
+    "version": "synthetic-draft-v4",
+    "channel": "synthetic-email-channel",
+    "scope": { "entity": "synthetic-entity-a", "audience": "synthetic-audience-a" },
+    "consent_ref": "synthetic-consent-receipt-b",
+    "consent": {
+      "status": "revoked",
+      "channel": "synthetic-email-channel",
+      "scope": { "entity": "synthetic-entity-a", "audience": "synthetic-audience-a" },
+      "effective_at": "2026-01-01T00:00:00.000Z",
+      "expires_at": "2027-01-01T00:00:00.000Z",
+      "native_receipt": "synthetic-consent-receipt-b",
+      "source_version": "synthetic-consent-source-v2"
+    },
+    "claims": [
+      { "claim_id": "synthetic-claim-b", "source_id": "synthetic-source-b", "source_version": "synthetic-source-v1" }
+    ],
+    "reviewer_ack": {
+      "acknowledged": true,
+      "role": "supplied_reviewer_role",
+      "draft_version": "synthetic-draft-v3",
+      "acknowledged_at": "2026-10-06T03:50:00.000Z",
+      "reviewer_ref": "synthetic-reviewer-ref-b",
+      "native_receipt": "synthetic-review-receipt-b",
+      "outcome_ref": "synthetic-review-outcome-b"
+    }
+  },
+  "context": {
+    "scope_keys": ["entity", "audience"],
+    "required_reviewer_roles": ["supplied_reviewer_role"],
+    "approved_claims": [],
+    "sources": []
+  }
+}
