@@ -2,6 +2,9 @@
 import { readFileSync } from 'node:fs';
 import { selectEntitlement, validateFollowUp } from './entitlement.mjs';
 import { evaluateGrowthAdmission } from './handoff.mjs';
+import { validateCommerceFreshness } from './commerce.mjs';
+import { validateMarketingDraft } from './marketing.mjs';
+import { metadataErrors } from './metadata-only.mjs';
 
 const enums = new Set(['UNKNOWN','approved','open','closed','held','acknowledged','eligible','routine','late','missing','rejected','capacity_shortfall','demand_to_procurement','receiving_to_stock','stock_to_channels','wholesale_po_to_cash','physical_return_to_disposition','synthetic','N08','N10','case','physical_usable_capacity','physical_capacity','accepted_available_stock','available_stock','draft_purchase_order','proposal','received','inspected','not_requested','proposed','completed','resolved','held','week','each','unit']);
 function syntheticOnly(value, path = '$') {
@@ -16,12 +19,23 @@ function syntheticOnly(value, path = '$') {
 }
 function main() {
   let input;
-  try { input = JSON.parse(readFileSync(0, 'utf8')); } catch { process.stderr.write('Input must be one JSON object on stdin.\n'); process.exit(2); }
-  const safetyErrors = syntheticOnly(input);
-  if (!input || input.draft_validation !== true || input.live_authorization !== false || !['N08','N10'].includes(input.workflow)) safetyErrors.push('$: require draft_validation=true, live_authorization=false, workflow N08 or N10');
+  try { const raw = readFileSync(0, 'utf8'); if (Buffer.byteLength(raw) > 65536) throw new Error('INPUT_LIMIT'); input = JSON.parse(raw); } catch { process.stderr.write('Input must be one JSON object on stdin.\n'); process.exit(2); }
+  const subcommand = process.argv[2];
+  if (subcommand && !({ commerce: 'N09', marketing: 'N11' })[subcommand] || subcommand && ({ commerce: 'N09', marketing: 'N11' })[subcommand] !== input?.workflow) {
+    process.stderr.write('Usage: node cli.mjs [commerce|marketing] < draft-metadata.json\n'); process.exit(2);
+  }
+  const nativeDraft = ['N09', 'N11'].includes(input?.workflow);
+  const safetyErrors = nativeDraft ? metadataErrors(input) : syntheticOnly(input);
+  if (!input || input.draft_validation !== true || input.live_authorization !== false || !['N08','N09','N10','N11'].includes(input.workflow)) safetyErrors.push('$: require draft_validation=true, live_authorization=false, workflow N08, N09, N10, or N11');
   let result;
   if (safetyErrors.length) result = { kind: 'draft_validation', live_authorization: false, status: 'hold', errors: safetyErrors };
-  else if (input.workflow === 'N08') {
+  else if (input.workflow === 'N09') {
+    try { result = { kind: 'draft_validation', live_authorization: false, ...validateCommerceFreshness(input) }; }
+    catch { result = { kind: 'draft_validation', live_authorization: false, status: 'hold', errors: ['VALIDATION_ERROR'] }; }
+  } else if (input.workflow === 'N11') {
+    try { result = { kind: 'draft_validation', live_authorization: false, ...validateMarketingDraft(input.marketing_draft, input.context, input.now) }; }
+    catch { result = { kind: 'draft_validation', live_authorization: false, status: 'hold', errors: ['VALIDATION_ERROR'] }; }
+  } else if (input.workflow === 'N08') {
     try {
     const selected = selectEntitlement(input.purchase, input.packs, input.now);
     const followUp = input.follow_up ? validateFollowUp(input.follow_up, { ...(input.context || {}), purchase: input.purchase, selected: selected.selection, pack: Array.isArray(input.packs) ? input.packs.find((p) => p.pack_id === selected.selection?.pack_id) : null }, input.now) : null;
@@ -34,6 +48,7 @@ function main() {
     try { result = { kind: 'draft_validation', live_authorization: false, ...evaluateGrowthAdmission(handoff, context, now) }; }
     catch { result = { kind: 'draft_validation', live_authorization: false, status: 'hold', errors: ['VALIDATION_ERROR'] }; }
   }
+  if (nativeDraft) result = { ...result, readiness_scope: 'draft_review_only', activation: 'disabled', live_authorization: false };
   process.stdout.write(`${JSON.stringify(result)}\n`);
   process.exitCode = result.status === 'ready' ? 0 : 1;
 }

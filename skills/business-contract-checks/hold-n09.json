@@ -1,0 +1,170 @@
+{
+  "draft_validation": true,
+  "live_authorization": false,
+  "workflow": "N09",
+  "context": {
+    "now": "2026-10-06T04:00:00.000Z",
+    "requested_quantity": 2,
+    "scope": {
+      "sku": "catalog:SKU-948",
+      "location_id": "warehouse:WH-07",
+      "channel": "storefront:web"
+    },
+    "freshness_thresholds_ms": {
+      "stock": 300000,
+      "payment": 300000
+    },
+    "current_source_versions": {
+      "stock": "version:stock:17",
+      "payment": "version:payment:17",
+      "promise": "version:promise:17",
+      "capacity": "version:capacity:17"
+    },
+    "current_promise_version": "promise:revision:4",
+    "immutable_native_records": [
+      {
+        "kind": "stock",
+        "source": {
+          "system_id": "native:stock:system",
+          "reference_id": "native:stock:reference-948",
+          "evidence_ref": "native:stock:snapshot-231",
+          "source_version": "version:stock:17",
+          "as_of": "2026-10-06T03:59:00.000Z",
+          "scope": {
+            "sku": "catalog:SKU-948",
+            "location_id": "warehouse:WH-07",
+            "channel": "storefront:web"
+          }
+        },
+        "facts": {
+          "available_quantity": 5
+        }
+      },
+      {
+        "kind": "payment",
+        "source": {
+          "system_id": "native:payment:system",
+          "reference_id": "native:payment:reference-948",
+          "evidence_ref": "native:payment:snapshot-231",
+          "source_version": "version:payment:17",
+          "as_of": "2026-10-06T03:59:00.000Z",
+          "scope": {
+            "sku": "catalog:SKU-948",
+            "location_id": "warehouse:WH-07",
+            "channel": "storefront:web"
+          }
+        },
+        "facts": {
+          "status": "settled",
+          "payment_ref": "native:payment:receipt-72"
+        }
+      },
+      {
+        "kind": "promise",
+        "source": {
+          "system_id": "native:promise:system",
+          "reference_id": "native:promise:reference-948",
+          "evidence_ref": "native:promise:snapshot-231",
+          "source_version": "version:promise:17",
+          "as_of": "2026-10-06T03:59:00.000Z",
+          "scope": {
+            "sku": "catalog:SKU-948",
+            "location_id": "warehouse:WH-07",
+            "channel": "storefront:web"
+          }
+        },
+        "facts": {
+          "version": "promise:revision:4"
+        }
+      },
+      {
+        "kind": "capacity",
+        "source": {
+          "system_id": "native:capacity:system",
+          "reference_id": "native:capacity:reference-948",
+          "evidence_ref": "native:capacity:snapshot-231",
+          "source_version": "version:capacity:17",
+          "as_of": "2026-10-06T03:59:00.000Z",
+          "scope": {
+            "sku": "catalog:SKU-948",
+            "location_id": "warehouse:WH-07",
+            "channel": "storefront:web"
+          }
+        },
+        "facts": {
+          "available_quantity": 5
+        }
+      }
+    ],
+    "accepted_owner_ids": [
+      "actor:fulfillment:owner-1"
+    ],
+    "accepted_payment_states": [
+      "settled"
+    ]
+  },
+  "stock": {
+    "available_quantity": 5,
+    "source": {
+      "system_id": "native:stock:system",
+      "reference_id": "native:stock:reference-948",
+      "evidence_ref": "native:stock:snapshot-231",
+      "source_version": "version:stock:17",
+      "as_of": "2026-10-06T03:59:00.000Z",
+      "scope": {
+        "sku": "catalog:SKU-948",
+        "location_id": "warehouse:WH-07",
+        "channel": "storefront:web"
+      }
+    }
+  },
+  "payment": {
+    "status": "disputed",
+    "payment_ref": "native:payment:receipt-72",
+    "source": {
+      "system_id": "native:payment:system",
+      "reference_id": "native:payment:reference-948",
+      "evidence_ref": "native:payment:snapshot-231",
+      "source_version": "version:payment:17",
+      "as_of": "2026-10-06T03:59:00.000Z",
+      "scope": {
+        "sku": "catalog:SKU-948",
+        "location_id": "warehouse:WH-07",
+        "channel": "storefront:web"
+      }
+    }
+  },
+  "promise": {
+    "version": "promise:revision:4",
+    "source": {
+      "system_id": "native:promise:system",
+      "reference_id": "native:promise:reference-948",
+      "evidence_ref": "native:promise:snapshot-231",
+      "source_version": "version:promise:17",
+      "as_of": "2026-10-06T03:59:00.000Z",
+      "scope": {
+        "sku": "catalog:SKU-948",
+        "location_id": "warehouse:WH-07",
+        "channel": "storefront:web"
+      }
+    }
+  },
+  "fulfillment": {
+    "capacity": {
+      "available_quantity": 5,
+      "source": {
+        "system_id": "native:capacity:system",
+        "reference_id": "native:capacity:reference-948",
+        "evidence_ref": "native:capacity:snapshot-231",
+        "source_version": "version:capacity:17",
+        "as_of": "2026-10-06T03:59:00.000Z",
+        "scope": {
+          "sku": "catalog:SKU-948",
+          "location_id": "warehouse:WH-07",
+          "channel": "storefront:web"
+        }
+      }
+    },
+    "exceptions": []
+  }
+}
