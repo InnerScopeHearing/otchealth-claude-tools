@@ -22,15 +22,12 @@
 # job) can resolve its Key Vault creds (azure-commons-storage-account/key) via kvSecret()'s az-CLI/OIDC
 # fallback path, the same way every other nightly monitor already does. The freshness check above still
 # needs none of it.
+# RETIRED 2026-10-07: this Azure-only monitor is no longer scheduled and is no longer watched. Its schedule block
+# was removed rather than left commented out; setup/heartbeat-registry.json keeps a _retired_ row with the reason
+# and what a revival needs. workflow_dispatch stays so it can be run by hand while it is ported.
 name: Nightly Continuity Canary
 
 on:
-  # SCHEDULE DISARMED 2026-08-27: this workflow authenticates to / exercises the Azure estate
-  # on subscription 55c84f6b, which was PERMANENTLY DELETED 2026-08-13 -- every scheduled run
-  # since then has failed or produced noise against dead resources. workflow_dispatch is kept.
-  # Re-arm only as part of an AWS-native rebuild (see the 2026-08-27 migration-audit report).
-  # schedule:
-  #   - cron: '35 8 * * *'   # daily 08:35 UTC (after nightly-azure-canary at 08:20, same paging convention)
   workflow_dispatch: {}
 
 permissions:
