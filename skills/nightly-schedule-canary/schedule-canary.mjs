@@ -42,7 +42,10 @@ export const BEAT_BUCKET = "otchealth-brain-dr-55c84f6b";
 export const BEAT_KEY_PREFIX = "otchealthcommons/company-journal/";
 export const MIN_STALE_FLOOR_MIN = 360;
 export const UNREGISTERED_MAX_AGE_MIN = 4320;
-const FAILED_CONCLUSIONS = new Set(["failure", "timed_out"]);
+// startup_failure is what GitHub records when a run dies before any job starts (a policy-blocked or malformed workflow,
+// for example an unpinned action under the SHA-pinning policy). The cron fired, so without it here the GitHub witness
+// reads LIVE for a workflow that has not actually run in days. cancelled and skipped stay out: neither is a verdict.
+const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
 // Every state that makes the run exit 1 under --strict. LIVE, PENDING and UNREGISTERED (a recent beat with no
 // registry row yet) are the only states that do not page.
 export const ANOMALY_STATES = new Set(["STALE", "NO-DATA", "UNWITNESSED", "FAILING", "UNREADABLE", "UNREGISTERED-STALE", "RETIRED-BEATING"]);
