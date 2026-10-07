@@ -73,6 +73,8 @@
 import { kvSecret } from "./azure-secret.mjs";
 import { ssmSecret } from "./aws-secret.mjs";
 import { osFetch, osSearch, osGetMapping, osRefresh, osCount } from "../doc-indexer/opensearch-client.mjs";
+// The deny-by-default rule for the OPEN room (commons-company-journal). Pure, no I/O: pushDocs() below runs it FIRST.
+import { assertOpenRoomWritable } from "../doc-indexer/push-rules.mjs";
 // embedOpenAI() below is the ONE shared embedding call every fleet embedder (company-brain,
 // doc-indexer/indexer.mjs, kb-memory/index-one.mjs, semantic.mjs, ring-memory-index, embedding-drift-
 // monitor) ultimately reaches, so instrumenting it here gives fleet-wide embedding usage receipts
