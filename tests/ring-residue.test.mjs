@@ -50,6 +50,8 @@ test("aws-dr-canary ring residue: zero chunks is OK; any chunk is a LEAK anomaly
   assert.equal(leak.status, "LEAK");
   assert.match(leak.detail, /132 chunk\(s\).*_MEMORY\/ 87, _HANDOFF\/ 28, _JOURNAL\/ 17/);
   assert.ok(!/_DISPATCH/.test(leak.detail), "zero-count prefixes are not listed as leaks");
+  assert.match(leak.detail, /recovery console.*operation=purge-ring-residue.*apply=false/, "the remediation points at the otchealth-cto recovery console operation, dry run first");
+  assert.ok(!/node skills\/doc-indexer\/purge-ring-residue/.test(leak.detail), "the canary no longer tells a runner to execute the purge from a local shell");
   assert.ok(ANOMALY_STATUSES.includes("LEAK"));
   assert.equal(pageExitCode([{ name: "commons-ring-residue", ...leak }], true), 1);
   assert.equal(pageExitCode([{ name: "commons-ring-residue", ...leak }], false), 0, "report-only without --strict");
