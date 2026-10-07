@@ -8,7 +8,8 @@
 # silence monitor watches THIS workflow (setup/heartbeat-registry.json row "sentinel-watchdog"), so the two cannot both
 # go quiet unseen.
 #
-# It needs nothing beyond the job's own GITHUB_TOKEN: no AWS role (no id-token), no stored secret, no cross-repo read.
+# It needs nothing beyond the job's own GITHUB_TOKEN: no AWS role (no id-token), no cross-repo read, and no secret of its own
+# (the page step only passes on the same optional PostHog key the other [FLEET-ALERT] workflows pass).
 # The cron is offset from the monitor's 05:20 UTC on purpose. GitHub starts scheduled runs hours late (observed 5-9h),
 # so the monitor normally runs about 10:30-14:30 UTC and this workflow about 19:00-23:10 UTC, when the monitor's run of
 # the same day is 4-13 hours old; the 26 hour limit pages on a whole missed day, never on ordinary lateness.
