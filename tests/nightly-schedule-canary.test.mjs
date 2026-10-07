@@ -159,6 +159,13 @@ test("evaluateSilence: the GitHub witness catches failing, silent and absent sch
   assert.equal(state(verdict(GOOD, { nightly: sched() }), "nightly"), "STALE");
 });
 
+test("a scheduled run that died at startup is FAILING, never LIVE (a workflow GitHub refuses to start has not run)", () => {
+  const dead = verdict(GOOD, { nightly: sched(run(300, "startup_failure"), run(1700, "startup_failure"), run(3100)) });
+  assert.equal(state(dead, "nightly"), "FAILING");
+  assert.match(row(dead, "nightly").detail, /concluded startup_failure; 2 consecutive failed scheduled run\(s\) \(run 300\)$/);
+  assert.equal(ANOMALY_STATES.has("FAILING"), true);
+});
+
 test("UNWITNESSED replaces UNVERIFIABLE: neither witness can speak, it pages, and it names the fix", () => {
   assert.equal(ANOMALY_STATES.has("UNWITNESSED"), true);
   assert.equal(ANOMALY_STATES.has("UNVERIFIABLE"), false);
