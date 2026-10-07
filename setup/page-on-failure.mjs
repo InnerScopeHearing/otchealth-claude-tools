@@ -52,6 +52,11 @@
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { kvSecret } from "../skills/kb-memory/azure-secret.mjs";
+// 2026-10-07: opt-in GitHub-issue channel (--github-issue "<title>" [--github-mention @handle]). It needs only the job's
+// own GITHUB_TOKEN (permission issues: write), so it still pages when the job's least-privilege role cannot read the
+// SSM parameters the email and PostHog channels need (the silent-pager failure of the Nightly AWS DR Canary). The
+// script now exits 0 if ANY channel delivered the page and 1 only when every channel that was tried failed.
+import { deliverIssueChannel, issueConfigFromArgv, startDiagCapture } from "./alert-issue.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, def) => { const i = argv.indexOf(name); return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : def; };
@@ -241,7 +246,7 @@ async function sendPageEmail(subject, body) {
  *  claim was not actually independent until this credential could come from somewhere off-Azure too. */
 async function emitPosthogFallback(props, eventName) {
   const key = process.env.POSTHOG_FLEET_INGEST_KEY || await kvSecret("posthog-fleet-ingest-key");
-  if (!key) throw new Error("posthog-fleet-ingest-key unavailable (checked POSTHOG_FLEET_INGEST_KEY env and Key Vault)");
+  if (!key) throw new Error("posthog-fleet-ingest-key unavailable (checked POSTHOG_FLEET_INGEST_KEY env and AWS SSM /otchealth/posthog-fleet-ingest-key)");
   const host = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
   const r = await timedFetch(`${host}/capture/`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -252,6 +257,8 @@ async function emitPosthogFallback(props, eventName) {
 }
 
 async function main() {
+  const diag = startDiagCapture();
+  const issueCfg = issueConfigFromArgv(argv, process.env);
   const url = runUrl();
   const logSections = LOG_PATHS.length ? LOG_PATHS.map((p) => tailFile(p, TAIL_LINES)) : ["(no --log path supplied)"];
   const subject = pageSubject(WORKFLOW, TEST_MODE, SEVERITY);
@@ -280,13 +287,29 @@ async function main() {
     }
   }
 
+  // GitHub-issue channel (the guaranteed pager): needs only the job's own GITHUB_TOKEN and `issues: write`, so it
+  // still lands when this job's least-privilege role cannot read the SSM parameters the two channels above need.
+  // It runs LAST so the issue can say what happened to them. Opt-in per workflow via --github-issue.
+  const delivery = [
+    emailed ? `email: sent to ${RECIPIENT}` : `email: FAILED (${emailErr})`,
+    emailed ? "posthog: not attempted (the email page was delivered)" : posted ? `posthog: sent as '${eventName}'` : `posthog: FAILED (${postErr})`,
+  ];
+  const { issued, error: issueErr } = await deliverIssueChannel({
+    cfg: issueCfg, workflow: WORKFLOW, runUrl: url, testMode: TEST_MODE, severity: SEVERITY, message: MESSAGE, delivery, diag: diag.lines, logSections,
+  });
+  if (issueErr) console.error(`[page-on-failure] GitHub issue page failed: ${issueErr}`);
+  diag.stop();
+
   const modeTag = TEST_MODE ? " [SELF-TEST]" : "";
+  if (issued) console.log(`[page-on-failure]${modeTag} GitHub issue ${issued.action}: #${issued.number} ${issued.url}`);
   if (emailed) {
     console.log(`[page-on-failure]${modeTag} paged via graph_send_email to ${RECIPIENT}.`);
   } else if (posted) {
     console.log(`[page-on-failure]${modeTag} email path unavailable (${emailErr}); paged via PostHog '${eventName}' event fallback instead.`);
+  } else if (issued) {
+    console.warn(`::warning::[page-on-failure]${modeTag} the email page (${emailErr}) and the PostHog fallback (${postErr}) did NOT land; this page was delivered by the GitHub issue channel only. The issue names the degraded channels and the fix.`);
   } else {
-    console.error(`::error::[page-on-failure]${modeTag} BOTH the email page (${emailErr}) and the PostHog fallback (${postErr}) failed — this red run left NO durable page. Check oauth-lane-cto-*/posthog-fleet-ingest-key in Key Vault and gateway reachability.`);
+    console.error(`::error::[page-on-failure]${modeTag} ALL page channels failed: email (${emailErr}), PostHog (${postErr}), GitHub issue (${issueCfg.title ? issueErr : "not configured for this workflow (--github-issue)"}). This red run left NO durable page. Email and PostHog read oauth-lane-cto-id/-secret and posthog-fleet-ingest-key from AWS SSM: check this job's role can ssm:GetParameter them (or set POSTHOG_FLEET_INGEST_KEY in the environment). For the issue channel check env GITHUB_TOKEN and the workflow permission issues: write.`);
     process.exitCode = 1;
   }
 }
