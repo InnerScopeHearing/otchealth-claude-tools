@@ -58,9 +58,31 @@ async function ensureConfigured() {
     process.exit(78);
   }
 }
-async function getJson(file) {
+// ABSENT KEY vs PREFIX-SCOPED GRANT (silence-monitor review, 2026-10-07). S3 answers a GET of a key that does not
+// exist with 404 ONLY when the caller holds a bucket-level s3:ListBucket that applies to that GET; otherwise it
+// answers 403 AccessDenied, which looks exactly like a real denial. The roles that read and write this store are
+// granted s3:ListBucket only under a prefix condition (s3:prefix StringLike otchealthcommons/company-journal/
+// _HEARTBEAT/*), and a GET request carries no s3:prefix, so that grant never applies to a GET: "this job has not
+// beaten yet" arrives as `s3 get 403`. s3-blob.mjs is right to refuse to read a 403 as "missing" and that contract
+// stays; absence is decided here from the LISTING, which the prefix grant does allow:
+//   - `check` never GETs a key the listing did not show (there is nothing there to read), so one job with no beat
+//     can no longer abort the whole sweep and turn every other row UNREADABLE;
+//   - `beat`, which must read before it merges, treats a 403 as "no beat yet" only when a fresh listing also lacks
+//     the key. A listed key that answers 403 is a real denial and stays loud, and so does a listing that fails.
+export const isForbiddenGet = (e) => /\bs3 get 403\b/.test(String((e && e.message) || e));
+export async function readBeat(job, { get = cGet, list = listBeats } = {}) {
+  const file = `${job}.json`;
   let text;
-  try { text = await cGet(`${PREFIX}${file}`); } catch (e) { throw new Error("get " + e.message); }
+  try {
+    text = await get(`${PREFIX}${file}`);
+  } catch (e) {
+    const denied = new Error("get " + e.message);
+    if (!isForbiddenGet(e)) throw denied;
+    let listed;
+    try { listed = await list(); } catch { throw denied; }
+    if (listed.includes(file)) throw denied;
+    return null;
+  }
   if (text == null) return null;
   try { return JSON.parse(text); } catch { return null; }
 }
@@ -143,7 +165,7 @@ if (isMain)
     if (!job || !["start", "ok", "fail"].includes(event)) { console.error("usage: heartbeat.mjs beat <job> <start|ok|fail> [--detail ...]"); process.exit(2); }
     await ensureConfigured();
     const now = new Date().toISOString();
-    const cur = (await getJson(`${job}.json`)) || { job };
+    const cur = (await readBeat(job)) || { job };
     cur.last_event = event; cur.updated = now; cur.detail = takeVal("--detail") || cur.detail || "";
     if (event === "start") cur.last_start = now;
     if (event === "ok") { cur.last_ok = now; cur.consecutive_fail = 0; }
@@ -161,7 +183,7 @@ if (isMain)
     const now = Date.now();
     const rows = [];
     for (const job of jobs) {
-      const hb = (await getJson(`${job}.json`)) || {};
+      const hb = (seen.has(job) ? await readBeat(job) : null) || {};   // an unlisted job has no beat to read (see readBeat)
       const intervalMin = (reg[job] && reg[job].interval_min) || null;
       const lastOk = hb.last_ok ? Date.parse(hb.last_ok) : null;
       const ageMin = lastOk ? Math.round((now - lastOk) / 60000) : null;

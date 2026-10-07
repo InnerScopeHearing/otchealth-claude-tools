@@ -1,0 +1,75 @@
+# WHO WATCHES THE WATCHER: the silence monitor's own silence must page.
+#
+# nightly-fleet-sentinels.yml (skills/nightly-schedule-canary/schedule-canary.mjs) pages when any registered job goes
+# quiet, but a monitor cannot report that its own cron stopped firing: no run exists to go red. This workflow is the
+# independent second watcher. Once a day it asks the GitHub Actions API whether nightly-fleet-sentinels.yml completed a
+# run inside the last 26 hours (skills/nightly-schedule-canary/sentinel-watchdog.mjs) and, if not, opens or comments on
+# the GitHub issue "[FLEET-ALERT] sentinel-watchdog" through setup/page-on-failure.mjs, mentioning the owner. In turn the
+# silence monitor watches THIS workflow (setup/heartbeat-registry.json row "sentinel-watchdog"), so the two cannot both
+# go quiet unseen.
+#
+# It needs nothing beyond the job's own GITHUB_TOKEN: no AWS role (no id-token), no cross-repo read, and no secret of its own
+# (the page step only passes on the same optional PostHog key the other [FLEET-ALERT] workflows pass).
+# The cron is offset from the monitor's 05:20 UTC on purpose. GitHub starts scheduled runs hours late (observed 5-9h),
+# so the monitor normally runs about 10:30-14:30 UTC and this workflow about 19:00-23:10 UTC, when the monitor's run of
+# the same day is 4-13 hours old; the 26 hour limit pages on a whole missed day, never on ordinary lateness.
+#
+# Pager, same recipe as the other [FLEET-ALERT] workflows: the issue channel is the guaranteed one (GITHUB_TOKEN plus
+# issues: write). PAGE_GITHUB_MENTION defaults to the owner, and an unset repo variable FLEET_ALERT_MENTION must stay
+# harmless: the value needs a leading at sign (a bare login is dropped by setup/alert-issue.mjs's parseMentions).
+# tests/nightly-schedule-canary.test.mjs and tests/sentinel-watchdog.test.mjs pin this file.
+name: Sentinel Watchdog
+
+on:
+  schedule:
+    - cron: '50 13 * * *'   # daily 13:50 UTC, offset from nightly-fleet-sentinels' 05:20 UTC (see the timing note above)
+  workflow_dispatch: {}
+
+permissions:
+  actions: read     # run history of nightly-fleet-sentinels.yml (GITHUB_TOKEN)
+  issues: write     # the pager: setup/page-on-failure.mjs --github-issue
+  contents: read
+
+concurrency:
+  group: sentinel-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    name: has the silence monitor completed a run in the last 26h
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: "Watchdog: newest completed nightly-fleet-sentinels run against 26h"
+        id: watchdog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail   # a pipeline's exit code is tee's unless pipefail is set: without this line the watchdog cannot fail
+          timeout 120 node skills/nightly-schedule-canary/sentinel-watchdog.mjs 2>&1 | tee "${GITHUB_WORKSPACE}/sentinel-watchdog.log"
+
+      - name: Upload watchdog log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sentinel-watchdog-log
+          path: sentinel-watchdog.log
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Page on failure (GitHub issue, email and PostHog fallback)
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
+          PAGE_GITHUB_MENTION: ${{ vars.FLEET_ALERT_MENTION || '@GBGolfMatt' }}
+          PAGE_STEP_OUTCOMES: "watchdog=${{ steps.watchdog.outcome }}"
+        run: timeout 120 node setup/page-on-failure.mjs --workflow "Sentinel Watchdog" --github-issue "[FLEET-ALERT] sentinel-watchdog" --tail-lines 60 --log "${GITHUB_WORKSPACE}/sentinel-watchdog.log"

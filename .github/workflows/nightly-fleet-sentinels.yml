@@ -4,16 +4,22 @@
 # One checker, skills/nightly-schedule-canary/schedule-canary.mjs, judges the AGE of every registered job's
 # proof of life (setup/heartbeat-registry.json) against its cadence: the heartbeat store via
 # setup/heartbeat.mjs, plus the GitHub Actions schedule history for rows carrying "gh_workflow". Stale,
-# never-ran, failing and unverifiable jobs make it exit 1 (--strict), and the page step below opens or
-# comments on the [FLEET-ALERT] nightly-fleet-sentinels issue through setup/page-on-failure.mjs.
+# never-ran, failing, unwitnessed and unreadable jobs make it exit 1 (--strict), and the page step below opens or
+# comments on the [FLEET-ALERT] nightly-fleet-sentinels issue through setup/page-on-failure.mjs, mentioning the
+# owner. PAGE_GITHUB_MENTION defaults to @GBGolfMatt; the at sign matters, because setup/alert-issue.mjs's
+# parseMentions drops a bare login without a word and nobody would be notified.
 #
-# A monitor cannot watch its own silence: an external watcher on this workflow's newest scheduled run is an
-# open follow-up (see the _retired_nightly-fleet-sentinels row in the registry).
+# A monitor cannot watch its own silence, so .github/workflows/sentinel-watchdog.yml does: it pages when this
+# workflow has not completed a run for 26 hours, and this checker in turn watches the watchdog (registry row
+# "sentinel-watchdog").
 #
 # Reading the heartbeat store needs, for the assumed role: s3:ListBucket on the commons bucket (prefix
 # condition on the _HEARTBEAT/ folder) and s3:GetObject on that folder. If it lacks them the monitor says so
-# and pages; it never passes silently. Cross-repo rows need the repo secret FLEET_WATCH_GH_TOKEN (read-only,
-# Actions: read on otchealth-mcp-server and otchealth-cto).
+# and pages; it never passes silently. Rows that live in another repo need NO new token: they are read with
+# this job's own GITHUB_TOKEN and then anonymously, which answers for a public repo (otchealth-mcp-server). A
+# private repo (otchealth-cto) is witnessed by the job's own beat instead, and a row neither witness can see is
+# reported UNWITNESSED with the fix named, never skipped. The repo secret FLEET_WATCH_GH_TOKEN (read-only,
+# Actions: read) stays an OPTIONAL fallback and is never required.
 name: Nightly Fleet Sentinels
 
 on:
@@ -80,6 +86,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
-          PAGE_GITHUB_MENTION: ${{ vars.FLEET_ALERT_MENTION }}
+          PAGE_GITHUB_MENTION: ${{ vars.FLEET_ALERT_MENTION || '@GBGolfMatt' }}
           PAGE_STEP_OUTCOMES: "aws=${{ steps.aws.outcome }} monitor=${{ steps.monitor.outcome }}"
         run: timeout 120 node setup/page-on-failure.mjs --workflow "Nightly Fleet Sentinels" --github-issue "[FLEET-ALERT] nightly-fleet-sentinels" --tail-lines 120 --log "${GITHUB_WORKSPACE}/silence-monitor.log"
