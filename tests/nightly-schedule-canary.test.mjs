@@ -394,7 +394,7 @@ test("the checker workflow pages through the GitHub-issue pager and carries no A
 });
 
 test("paging mentions the owner by default: every GitHub-issue pager defaults to a handle GitHub will notify", () => {
-  // The task text said 'GBGolfMatt', but setup/alert-issue.mjs's parseMentions keeps only handles with a leading at sign, so a bare
+  // The obvious default is the bare login 'GBGolfMatt', but setup/alert-issue.mjs's parseMentions keeps only handles with a leading at sign, so a bare
   // login is dropped in silence and the page notifies nobody. The default therefore carries the at sign.
   assert.equal(parseMentions("@GBGolfMatt"), "@GBGolfMatt");
   assert.equal(parseMentions("GBGolfMatt"), "", "a bare login is dropped, which is why the default has the at sign");
