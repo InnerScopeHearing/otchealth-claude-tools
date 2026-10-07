@@ -257,6 +257,8 @@ async function emitPosthogFallback(props, eventName) {
 }
 
 async function main() {
+  const diag = startDiagCapture();
+  const issueCfg = issueConfigFromArgv(argv, process.env);
   const url = runUrl();
   const logSections = LOG_PATHS.length ? LOG_PATHS.map((p) => tailFile(p, TAIL_LINES)) : ["(no --log path supplied)"];
   const subject = pageSubject(WORKFLOW, TEST_MODE, SEVERITY);
