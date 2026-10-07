@@ -14,8 +14,9 @@
 # now the LAST step (so it also reports a failed heartbeat) and it opens/comments on ONE tracking issue titled
 # "[FLEET-ALERT] nightly-aws-dr-canary" with the job's own GITHUB_TOKEN (permission issues: write), a channel that needs
 # nothing from the role. Email and PostHog stay as extra channels; the issue names whichever of them did not land.
-# Set the repo variable FLEET_ALERT_MENTION (for example "@handle") so GitHub itself emails/pushes the owner on every
-# alert; set the repo secret POSTHOG_FLEET_INGEST_KEY to light up the PostHog channel without widening the role.
+# Every alert mentions the owner so GitHub itself emails/pushes them: PAGE_GITHUB_MENTION defaults to @GBGolfMatt and the
+# repo variable FLEET_ALERT_MENTION overrides it (it needs the leading at sign: setup/alert-issue.mjs's parseMentions drops
+# a bare login). Set the repo secret POSTHOG_FLEET_INGEST_KEY to light up the PostHog channel without widening the role.
 #
 # The Heartbeat step stays fatal on purpose (tests/nightly-aws-dr-heartbeat.test.mjs): a denied heartbeat write must be
 # visible, never swallowed. tests/nightly-aws-dr-pager.test.mjs pins the pager wiring below.
@@ -95,6 +96,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           POSTHOG_FLEET_INGEST_KEY: ${{ secrets.POSTHOG_FLEET_INGEST_KEY }}
-          PAGE_GITHUB_MENTION: ${{ vars.FLEET_ALERT_MENTION }}
+          PAGE_GITHUB_MENTION: ${{ vars.FLEET_ALERT_MENTION || '@GBGolfMatt' }}
           PAGE_STEP_OUTCOMES: "aws=${{ steps.aws.outcome }} canary=${{ steps.canary.outcome }} heartbeat=${{ steps.heartbeat.outcome }}"
         run: timeout 120 node setup/page-on-failure.mjs --workflow "Nightly AWS DR Canary" --github-issue "[FLEET-ALERT] nightly-aws-dr-canary" --log "${GITHUB_WORKSPACE}/aws-dr-canary.log" --log "${RUNNER_TEMP}/aws-dr-heartbeat.log"
