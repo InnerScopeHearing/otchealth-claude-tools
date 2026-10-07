@@ -47,8 +47,9 @@ export const COMMONS_PUSH_ALLOWED_PREFIXES = Object.freeze(["_KNOWLEDGE/", "_DAI
  *  research; an unscoped push would embed all of it (adjudication round 2: only nightly.sh guarded
  *  this, `indexer.mjs push-search --profile commons` itself pushed every row). Pure. */
 export const COMMONS_ROOM = "commons-company-journal";
+// (2026-10-07) The index test is isOpenRoomIndex (below): the room itself or a versioned/derived physical name of it.
 export function isCommonsTarget(profile, index = "") {
-  return String(profile || "").toLowerCase() === "commons" || String(index || "").toLowerCase() === COMMONS_ROOM;
+  return String(profile || "").toLowerCase() === "commons" || isOpenRoomIndex(index);
 }
 export function unscopedPushRefusal(profile, scope, index = "") {
   if (!isCommonsTarget(profile, index)) return "";
