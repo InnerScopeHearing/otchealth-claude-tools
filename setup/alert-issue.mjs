@@ -13,7 +13,10 @@
 // job's own GITHUB_TOKEN (plus `permissions: issues: write` in the workflow). It opens ONE issue per workflow
 // (exact title match among OPEN issues) and comments on it for every later alert; closing the issue is the
 // acknowledgement, and the next red run opens a fresh one. The CTO reads these through github_issue_list /
-// github_issue_get, and an optional @mention (PAGE_GITHUB_MENTION) makes GitHub itself email/push the owner.
+// github_issue_get, and an optional @mention (PAGE_GITHUB_MENTION) makes GitHub itself email/push the owner. The mention
+// is written into NEW content every time (the body of a new issue, or a NEW comment on the open one; an issue or comment is
+// never edited), because GitHub notifies on a new mention, not on one that appears inside an edited body. The workflows
+// default it to the owner and need the leading at sign: parseMentions drops a bare login.
 //
 // SECRET HYGIENE. The body carries check names, statuses, reason strings and log tails only. Every string that
 // goes into it passes through redactSecrets() (the same credential SHAPES skills/kb-memory/azure-secret.mjs's
@@ -72,6 +75,13 @@ export function parseStepOutcomes(raw) {
   return out;
 }
 
+// Shown in the issue when the configured mention parsed to nothing. No literal handle on purpose: a handle written here
+// would itself notify whoever owns it.
+export const MENTION_NOTE =
+  "NOTE: nobody was mentioned, so GitHub sent no notification for this alert. The configured mention (PAGE_GITHUB_MENTION, " +
+  "set from the repo variable FLEET_ALERT_MENTION) holds no valid handle. A GitHub login must start with an at sign: put the " +
+  "owner's login after an at sign in that variable, or delete the variable to use the workflow default.";
+
 const CHECK_LINE_RE = /^\[(STALE|ERROR|LEAK)\s*\]\s+(.*)$/;
 /** The anomaly rows of a canary-style log table ("[STALE   ] name   detail"), whitespace-collapsed. Pure. */
 export function extractFailedChecks(sections) {
@@ -93,7 +103,7 @@ function fence(text) {
  *  says so first, so a self-test comment can never be mistaken for an incident. */
 export function buildAlertBody({
   workflow, runUrl, testMode = false, severity = "red", message = null, stepOutcomes = "",
-  delivery = [], diag = [], logSections = [], mention = "", now = new Date(),
+  delivery = [], diag = [], logSections = [], mention = "", mentionNote = "", now = new Date(),
 } = {}) {
   const outcomes = parseStepOutcomes(stepOutcomes);
   const failedSteps = outcomes.filter(([, v]) => v === "failure").map(([k]) => k);
@@ -137,6 +147,7 @@ export function buildAlertBody({
     for (const s of logs) L.push(fence(s));
   }
   if (mention && !testMode) L.push("", `cc ${mention}`);
+  if (mentionNote && !testMode) L.push("", mentionNote);
   L.push("", "Source: setup/page-on-failure.mjs, GitHub issue channel (fires only from the workflow's own failure step). Close this issue to acknowledge; the next red run opens a fresh one.");
   return L.join("\n").slice(0, MAX_BODY_CHARS);
 }
@@ -227,11 +238,17 @@ export function issueConfigFromArgv(argv, env = process.env) {
     const i = argv.indexOf(name);
     return i >= 0 && argv[i + 1] !== undefined && !String(argv[i + 1]).startsWith("--") ? String(argv[i + 1]) : "";
   };
-  return {
+  const rawMention = val("--github-mention") || env.PAGE_GITHUB_MENTION || "";
+  const cfg = {
     title: (val("--github-issue") || env.PAGE_GITHUB_ISSUE_TITLE || "").trim(),
-    mention: parseMentions(val("--github-mention") || env.PAGE_GITHUB_MENTION || ""),
+    mention: parseMentions(rawMention),
     stepOutcomes: env.PAGE_STEP_OUTCOMES || "",
   };
+  // A mention that parses to nothing (typically a bare login without the leading at sign) used to vanish in silence:
+  // the page went out and nobody was notified. Say so in the issue itself. Not set when no mention was configured, and
+  // never "fixed" by guessing an at sign: a stray value such as "none" would then mention a real GitHub user.
+  if (!cfg.mention && String(rawMention).trim()) cfg.mentionNote = MENTION_NOTE;
+  return cfg;
 }
 
 /** Run the channel for one page. Never throws. Returns { issued, error }: issued is the upsert result or null. */
@@ -241,7 +258,7 @@ export async function deliverIssueChannel({
 } = {}) {
   if (!cfg || !cfg.title) return { issued: null, error: null };
   const body = buildAlertBody({
-    workflow, runUrl, testMode, severity, message, stepOutcomes: cfg.stepOutcomes, delivery, diag, logSections, mention: cfg.mention,
+    workflow, runUrl, testMode, severity, message, stepOutcomes: cfg.stepOutcomes, delivery, diag, logSections, mention: cfg.mention, mentionNote: cfg.mentionNote,
   });
   let timer;
   try {
