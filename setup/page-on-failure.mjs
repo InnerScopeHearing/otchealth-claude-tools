@@ -306,8 +306,10 @@ async function main() {
     console.log(`[page-on-failure]${modeTag} paged via graph_send_email to ${RECIPIENT}.`);
   } else if (posted) {
     console.log(`[page-on-failure]${modeTag} email path unavailable (${emailErr}); paged via PostHog '${eventName}' event fallback instead.`);
+  } else if (issued) {
+    console.warn(`::warning::[page-on-failure]${modeTag} the email page (${emailErr}) and the PostHog fallback (${postErr}) did NOT land; this page was delivered by the GitHub issue channel only. The issue names the degraded channels and the fix.`);
   } else {
-    console.error(`::error::[page-on-failure]${modeTag} BOTH the email page (${emailErr}) and the PostHog fallback (${postErr}) failed — this red run left NO durable page. Check oauth-lane-cto-*/posthog-fleet-ingest-key in Key Vault and gateway reachability.`);
+    console.error(`::error::[page-on-failure]${modeTag} ALL page channels failed: email (${emailErr}), PostHog (${postErr}), GitHub issue (${issueCfg.title ? issueErr : "not configured for this workflow (--github-issue)"}). This red run left NO durable page. Email and PostHog read oauth-lane-cto-id/-secret and posthog-fleet-ingest-key from AWS SSM: check this job's role can ssm:GetParameter them (or set POSTHOG_FLEET_INGEST_KEY in the environment). For the issue channel check env GITHUB_TOKEN and the workflow permission issues: write.`);
     process.exitCode = 1;
   }
 }
