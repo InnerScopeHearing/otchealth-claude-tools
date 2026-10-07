@@ -110,14 +110,20 @@ export function commonsPrefixRefusal(prefixes) {
  *  sneak back in). Rows under SKIP_PREFIXES are always excluded (normalized + case-folded, see
  *  isSkippedPath), scoped or not. The allow-list itself matches the path AS STORED, case-sensitively:
  *  a row whose spelling only matches after normalization (`/_KNOWLEDGE/x`, `_knowledge/x`) is not
- *  selected. Pure. */
-export function selectPushRows(rows, prefixes) {
+ *  selected.
+ *
+ *  `opts.openRoom` (2026-10-07) is set when the target is the OPEN room (commons-company-journal): every row
+ *  must then ALSO pass openRoomKeyVerdict, so "unscoped" means "the reviewed allow-set", never "every row that
+ *  is not on the deny-list". Without `opts` the behavior is exactly what it was. Pure. */
+export function selectPushRows(rows, prefixes, opts = {}) {
   const list = Array.isArray(rows) ? rows : [];
   const base = list.filter((r) => r && r.path && !isSkippedPath(r.path));
-  if (prefixes == null) return base;
-  const allow = parsePrefixList(prefixes);
-  if (!allow.length) return [];
-  return base.filter((r) => allow.some((p) => r.path.startsWith(p)) && normalizeRelPath(r.path) === r.path);
+  let out = base;
+  if (prefixes != null) {
+    const allow = parsePrefixList(prefixes);
+    out = allow.length ? base.filter((r) => allow.some((p) => r.path.startsWith(p)) && normalizeRelPath(r.path) === r.path) : [];
+  }
+  return opts && opts.openRoom ? out.filter((r) => openRoomKeyVerdict(r.path).ok) : out;
 }
 
 /** Pull `--prefixes` / `--prefix` (space or `=` form) out of an argv WITHOUT swallowing the next flag
