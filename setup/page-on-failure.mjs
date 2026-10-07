@@ -52,6 +52,11 @@
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { kvSecret } from "../skills/kb-memory/azure-secret.mjs";
+// 2026-10-07: opt-in GitHub-issue channel (--github-issue "<title>" [--github-mention @handle]). It needs only the job's
+// own GITHUB_TOKEN (permission issues: write), so it still pages when the job's least-privilege role cannot read the
+// SSM parameters the email and PostHog channels need (the silent-pager failure of the Nightly AWS DR Canary). The
+// script now exits 0 if ANY channel delivered the page and 1 only when every channel that was tried failed.
+import { deliverIssueChannel, issueConfigFromArgv, startDiagCapture } from "./alert-issue.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, def) => { const i = argv.indexOf(name); return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : def; };
