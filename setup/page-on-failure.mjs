@@ -287,7 +287,21 @@ async function main() {
     }
   }
 
+  // GitHub-issue channel (the guaranteed pager): needs only the job's own GITHUB_TOKEN and `issues: write`, so it
+  // still lands when this job's least-privilege role cannot read the SSM parameters the two channels above need.
+  // It runs LAST so the issue can say what happened to them. Opt-in per workflow via --github-issue.
+  const delivery = [
+    emailed ? `email: sent to ${RECIPIENT}` : `email: FAILED (${emailErr})`,
+    emailed ? "posthog: not attempted (the email page was delivered)" : posted ? `posthog: sent as '${eventName}'` : `posthog: FAILED (${postErr})`,
+  ];
+  const { issued, error: issueErr } = await deliverIssueChannel({
+    cfg: issueCfg, workflow: WORKFLOW, runUrl: url, testMode: TEST_MODE, severity: SEVERITY, message: MESSAGE, delivery, diag: diag.lines, logSections,
+  });
+  if (issueErr) console.error(`[page-on-failure] GitHub issue page failed: ${issueErr}`);
+  diag.stop();
+
   const modeTag = TEST_MODE ? " [SELF-TEST]" : "";
+  if (issued) console.log(`[page-on-failure]${modeTag} GitHub issue ${issued.action}: #${issued.number} ${issued.url}`);
   if (emailed) {
     console.log(`[page-on-failure]${modeTag} paged via graph_send_email to ${RECIPIENT}.`);
   } else if (posted) {
