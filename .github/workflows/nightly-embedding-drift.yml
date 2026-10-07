@@ -15,15 +15,12 @@
 # the az login this step establishes. History: GCP retired -> this workflow first wired the dead
 # GCP_CLAUDE_DRIVER_SA_JSON (silently dead), then AZURE_SP_* secrets that this repo never sets (still
 # dead, PostHog 493944 had zero events) -> now OIDC. Regression-ledger tag: monitor-azure-auth-oidc.
+# RETIRED 2026-10-07: this Azure-only monitor is no longer scheduled and is no longer watched. Its schedule block
+# was removed rather than left commented out; setup/heartbeat-registry.json keeps a _retired_ row with the reason
+# and what a revival needs. workflow_dispatch stays so it can be run by hand while it is ported.
 name: Nightly Embedding Drift Monitor
 
 on:
-  # SCHEDULE DISARMED 2026-08-27: this workflow authenticates to / exercises the Azure estate
-  # on subscription 55c84f6b, which was PERMANENTLY DELETED 2026-08-13 -- every scheduled run
-  # since then has failed or produced noise against dead resources. workflow_dispatch is kept.
-  # Re-arm only as part of an AWS-native rebuild (see the 2026-08-27 migration-audit report).
-  # schedule:
-  #   - cron: '45 6 * * *'   # daily 06:45 UTC, just after nightly-eval.yml's 06:30 UTC run
   workflow_dispatch: {}     # manual trigger for testing
 
 permissions:
