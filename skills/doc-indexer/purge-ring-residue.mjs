@@ -20,10 +20,12 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolveOpenSearchConfig, deleteDocs, refresh } from "../kb-memory/opensearch-write.mjs";
 import { osSearch, osCount } from "./opensearch-client.mjs";
-import { RING_PRIVATE_PREFIXES, parsePrefixList, pathPrefixQuery } from "./push-rules.mjs";
+import { RING_PRIVATE_PREFIXES, COMMONS_ROOM, COMMONS_ROOM_PATH_PREFIX, parsePrefixList, pathPrefixQuery } from "./push-rules.mjs";
 
-export const ROOM = "commons-company-journal";
-export const ROOM_PATH_PREFIX = "otchealthcommons/company-journal/";
+// ONE definition of the room (push-rules.mjs), shared with the write guard and the canary's prefix list, re-exported under the
+// names this tool and its tests already use.
+export const ROOM = COMMONS_ROOM;
+export const ROOM_PATH_PREFIX = COMMONS_ROOM_PATH_PREFIX;
 
 /** Pure: the prefixes to purge. A --prefixes list may only NARROW the reviewed set, never widen it. */
 export function purgePrefixes(raw) {
