@@ -14,7 +14,8 @@
     "_MEMORY": "ledger",
     "_HANDOFF": "ledger",
     "_DISPATCH": "ledger",
-    "_JOURNAL": "ledger"
+    "_JOURNAL": "ledger",
+    "_VAULT": "ledger"
   },
   "pathSubstrings": {
     "CFO Outgoing": "finance",
