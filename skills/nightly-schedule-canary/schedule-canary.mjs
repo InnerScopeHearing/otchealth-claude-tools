@@ -5,18 +5,27 @@
 // July 2026 family of silent monitors (registered, trusted, never scheduled) is exactly that. This script
 // reads setup/heartbeat-registry.json and, for every registered job, judges the AGE of its last proof of
 // life against its cadence (max_age_min, else 3x interval_min with a 6h floor), NOT the last reported
-// status. It pages (non-zero exit under --strict, wired to the GitHub-issue pager in
+// status. It exits non-zero under --strict (wired to the GitHub-issue pager in
 // .github/workflows/nightly-fleet-sentinels.yml) when a registered job is STALE, has NO-DATA, is FAILING,
-// or cannot be verified at all.
+// is UNWITNESSED, or its beat store cannot be read (UNREADABLE). PENDING, a job inside the grace window of
+// its first armed days, is the only non-LIVE state that does not page.
 //
-// TWO WITNESSES per job, because the nightly GitHub workflows' least-privilege AWS roles may not be able
-// to write a beat (s3:PutObject on the commons _HEARTBEAT/ folder), and cross-repo jobs cannot beat:
-//   1. the heartbeat store, read via `setup/heartbeat.mjs check --json` (the only _HEARTBEAT reader);
-//   2. for rows carrying "gh_workflow": the GitHub Actions API, the last SCHEDULED runs of that workflow
-//      (cron firing + last conclusion). IAM-free; needs actions:read (cross-repo: secret FLEET_WATCH_GH_TOKEN).
-// Unregistered beat files that are stale are attention items (heartbeat.mjs alone reads them as LIVE),
-// and a "_retired_*" job that is beating again is flagged too. If the heartbeat store cannot be read the
-// result is UNREADABLE with the exact missing permission, never a silent pass.
+// TWO WITNESSES per job, and the beat decides first:
+//   1. BEAT: the heartbeat store, read via `setup/heartbeat.mjs check --json` (the only _HEARTBEAT reader).
+//      A job writes it with `setup/heartbeat.mjs beat <job> ok`, which needs s3:PutObject on its own object.
+//   2. GITHUB: for rows carrying "gh_workflow", the Actions API's last SCHEDULED runs of that workflow (did
+//      the cron fire, how did the last run conclude). It needs no IAM and NO new token: the job's own
+//      GITHUB_TOKEN reads its own repo, and for another repo the same token is tried and then an anonymous
+//      read (a public repo answers both). Only a private repo needs the OPTIONAL secret
+//      FLEET_WATCH_GH_TOKEN; without it the row reports UNWITNESSED, which names the fix and pages. A row
+//      the monitor cannot see is never silent.
+// Unregistered beat files that are stale are attention items (heartbeat.mjs alone reads them as LIVE), and a
+// "_retired_*" job that is beating again is flagged too. If the heartbeat store cannot be read the result is
+// UNREADABLE with the exact missing permission, never a silent pass.
+//
+// WHO WATCHES THE WATCHER: this script cannot report its own silence. skills/nightly-schedule-canary/
+// sentinel-watchdog.mjs (workflow sentinel-watchdog.yml) pages when nightly-fleet-sentinels.yml has not
+// completed a run for 26h, and the watchdog is itself a registry row judged here.
 //
 // Usage: node skills/nightly-schedule-canary/schedule-canary.mjs [--json] [--strict]
 import { readFileSync } from "node:fs";
@@ -34,8 +43,11 @@ export const BEAT_KEY_PREFIX = "otchealthcommons/company-journal/";
 export const MIN_STALE_FLOOR_MIN = 360;
 export const UNREGISTERED_MAX_AGE_MIN = 4320;
 const FAILED_CONCLUSIONS = new Set(["failure", "timed_out"]);
-const ANOMALY_STATES = new Set(["STALE", "NO-DATA", "UNVERIFIABLE", "FAILING", "UNREADABLE", "UNREGISTERED-STALE", "RETIRED-BEATING"]);
-const TAG = { FAILING: "ERROR", UNVERIFIABLE: "ERROR", UNREADABLE: "ERROR" }; // everything else is a STALE-class finding
+// Every state that makes the run exit 1 under --strict. LIVE, PENDING and UNREGISTERED (a recent beat with no
+// registry row yet) are the only states that do not page.
+export const ANOMALY_STATES = new Set(["STALE", "NO-DATA", "UNWITNESSED", "FAILING", "UNREADABLE", "UNREGISTERED-STALE", "RETIRED-BEATING"]);
+const TAG = { FAILING: "ERROR", UNWITNESSED: "ERROR", UNREADABLE: "ERROR" }; // everything else is a STALE-class finding
+const STATE_ORDER = ["LIVE", "PENDING", "STALE", "NO-DATA", "FAILING", "UNWITNESSED", "UNREADABLE", "UNREGISTERED-STALE", "RETIRED-BEATING", "UNREGISTERED"];
 
 const argv = process.argv.slice(2);
 const STRICT = argv.includes("--strict") || process.env.NIGHTLY_SCHEDULE_CANARY_STRICT === "1";
@@ -89,6 +101,13 @@ export function fmtAge(min) {
   return `${(min / 1440).toFixed(1)}d`;
 }
 
+/** PURE: "https://github.com/o/r/actions/runs/123" -> "run 123". The pager redacts a 40+ char path with capitals, which
+ *  would turn the URL into "https://github.[redacted]"; the run id plus the row's workflow is enough to find it. */
+export function runRef(url) {
+  const m = /\/actions\/runs\/(\d+)/.exec(String(url || ""));
+  return m ? `run ${m[1]}` : "";
+}
+
 /** PURE: reduce GitHub workflow-run objects (event=schedule) to what the verdict needs. */
 export function summarizeScheduledRuns(runs, nowMs = Date.now()) {
   const list = (runs || []).filter((r) => r && r.created_at).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
@@ -108,38 +127,60 @@ export function summarizeScheduledRuns(runs, nowMs = Date.now()) {
   };
 }
 
-/** PURE: same repo -> the job's own GITHUB_TOKEN; any other repo -> the read-only FLEET_WATCH_GH_TOKEN. */
+/** PURE: which token reads the Actions runs of `ref`. The job's own GITHUB_TOKEN is the default for every repo:
+ *  it reads its own repo, and a PUBLIC repo answers it (or an anonymous call, see fetchWorkflowRuns) for any
+ *  other. The optional read-only FLEET_WATCH_GH_TOKEN wins for a repo other than this one, because it is the
+ *  only credential that can read a PRIVATE one. Returns "" when neither is set (an anonymous read). */
 export function tokenForRepo(ref, env = process.env) {
+  const own = env.GITHUB_TOKEN || "";
+  const pat = env.FLEET_WATCH_GH_TOKEN || "";
   const here = (env.GITHUB_REPOSITORY || "").toLowerCase();
-  if (!here) return env.FLEET_WATCH_GH_TOKEN || env.GITHUB_TOKEN || ""; // local run
-  if (here === `${ref.owner}/${ref.repo}`.toLowerCase()) return env.GITHUB_TOKEN || env.FLEET_WATCH_GH_TOKEN || "";
-  return env.FLEET_WATCH_GH_TOKEN || "";
+  if (here && here === `${ref.owner}/${ref.repo}`.toLowerCase()) return own || pat;
+  return pat || own;
 }
 
-/** Last 10 scheduled runs of one workflow. fetchImpl is injectable. Errors never include the token. */
-export async function fetchScheduledRuns(ref, token, fetchImpl = globalThis.fetch, timeoutMs = 20_000) {
-  const name = `${ref.owner}/${ref.repo}/${ref.file}`;
-  if (!token) return { ok: false, error: `no GitHub token to read ${ref.owner}/${ref.repo} Actions runs (add the repo secret FLEET_WATCH_GH_TOKEN, read-only, Actions: read on that repo)` };
-  const url = `https://api.github.com/repos/${ref.owner}/${ref.repo}/actions/workflows/${ref.file}/runs?event=schedule&per_page=10`;
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    const res = await fetchImpl(url, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "otchealth-silence-monitor" },
-      signal: ctl.signal,
-    });
-    if (!res.ok) {
-      const hint = [401, 403, 404].includes(res.status) ? " (the token lacks Actions: read on that repo, or the workflow file does not exist there)" : "";
-      return { ok: false, error: `GitHub API HTTP ${res.status} reading ${name}${hint}` };
+/** Recent runs of one workflow (optionally one event). fetchImpl is injectable. With a token the call is
+ *  authenticated; on 401/403/404 and anonymousFallback it is retried WITHOUT credentials, which is what makes a
+ *  public repo readable with no token at all (a stale, revoked or wrong-repo token cannot break it). With no
+ *  token it is one anonymous call. Errors never include the token. */
+export async function fetchWorkflowRuns(ref, token, { event = "", perPage = 10, fetchImpl = globalThis.fetch, timeoutMs = 20_000, anonymousFallback = false } = {}) {
+  const name = `${ref.repo}/${ref.file}`; // no owner: "InnerScopeHearing/..." is a 40+ char run the pager would redact
+  const query = [event ? `event=${encodeURIComponent(event)}` : "", `per_page=${perPage}`].filter(Boolean).join("&");
+  const url = `https://api.github.com/repos/${ref.owner}/${ref.repo}/actions/workflows/${ref.file}/runs?${query}`;
+  const scrub = (m) => (token ? String(m).split(token).join("***") : String(m));
+  const tries = token ? (anonymousFallback ? [token, ""] : [token]) : [""];
+  const attempted = [];
+  let status = null;
+  let limited = false;
+  for (const tok of tries) {
+    attempted.push(tok ? "a token" : "anonymous");
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const headers = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "otchealth-silence-monitor" };
+      if (tok) headers.Authorization = `Bearer ${tok}`;
+      const res = await fetchImpl(url, { headers, signal: ctl.signal });
+      if (res.ok) {
+        const body = await res.json();
+        return { ok: true, runs: Array.isArray(body && body.workflow_runs) ? body.workflow_runs : [], via: tok ? "token" : "anonymous" };
+      }
+      status = res.status;
+      limited = limited || (res.headers && typeof res.headers.get === "function" && res.headers.get("x-ratelimit-remaining") === "0");
+      if (![401, 403, 404].includes(res.status)) break; // only an auth-class refusal is worth the anonymous retry
+    } catch (e) {
+      const msg = e && e.name === "AbortError" ? "timeout" : scrub((e && e.message) || e).slice(0, 160);
+      return { ok: false, error: `GitHub API call failed for ${name}: ${msg}` };
+    } finally {
+      clearTimeout(timer);
     }
-    const body = await res.json();
-    return { ok: true, runs: Array.isArray(body && body.workflow_runs) ? body.workflow_runs : [] };
-  } catch (e) {
-    const msg = e && e.name === "AbortError" ? "timeout" : String((e && e.message) || e).split(token).join("***").slice(0, 160);
-    return { ok: false, error: `GitHub API call failed for ${name}: ${msg}` };
-  } finally {
-    clearTimeout(timer);
   }
+  const hint = limited ? "; rate limited, the next run retries" : [401, 403, 404].includes(status) ? "; private repo or no such file" : "";
+  return { ok: false, error: `GitHub HTTP ${status} for ${name} (tried ${attempted.join(", then ")}${hint})` };
+}
+
+/** Last 10 scheduled runs of one workflow, with the anonymous fallback on. */
+export async function fetchScheduledRuns(ref, token, fetchImpl = globalThis.fetch, timeoutMs = 20_000) {
+  return fetchWorkflowRuns(ref, token, { event: "schedule", perPage: 10, fetchImpl, timeoutMs, anonymousFallback: true });
 }
 
 /** PURE: turn a heartbeat.mjs failure into one sentence that names the exact fix. Built from short tokens so
@@ -155,9 +196,46 @@ export function diagnoseBeatStoreFailure(raw) {
   return `the heartbeat store could not be read: ${t.slice(0, 200)}`;
 }
 
+/** PURE: the remedy an UNWITNESSED row carries. Neither fix needs a new token: the job beats (it needs s3:PutObject on its
+ *  own beat object), or the OPTIONAL read-only secret lets this monitor read a private repo's Actions runs. Kept short and
+ *  worded for setup/alert-issue.mjs's redactSecrets (no "token" directly before a colon, no 40+ char run with capitals) and
+ *  its 500 char cap per failed-check line. */
+export function unwitnessedFix(job) {
+  return `Fix, no new token needed: have the job beat (setup/heartbeat.mjs beat ${job} ok, needs s3:PutObject on _HEARTBEAT/${job}.json in bucket ${BEAT_BUCKET}) or set the optional secret FLEET_WATCH_GH_TOKEN.`;
+}
+
+/** PURE: can the beat alone decide this row? "fresh" = a recent ok beat (LIVE, or FAILING when the last runs
+ *  reported fail); "never-ok-failing" = it has only ever reported fail. null = the beat cannot vouch, so the
+ *  GitHub witness is consulted. */
+function beatDecides(beat, beatError, limitMin) {
+  if (beatError || !beat) return null;
+  const age = beat.ageMin != null ? beat.ageMin : null;
+  if (age != null && age <= limitMin) return "fresh";
+  if (age == null && (beat.consecutive_fail || 0) > 0) return "never-ok-failing";
+  return null;
+}
+
+/** PURE: does this row need the GitHub witness at all? Only a row carrying "gh_workflow" whose beat cannot
+ *  decide, so a healthy beat costs no API call (and no rate-limit exposure). */
+export function needsScheduleWitness(entry, beatRow, beatError = null) {
+  if (!entry || !entry.gh_workflow) return false;
+  return beatDecides(beatRow, beatError, staleAfterMin(entry)) === null;
+}
+
+/** PURE: while a newly armed job is inside its first grace window (armed: "YYYY-MM-DD" plus its own limit) and
+ *  has shown no proof of life yet, it is PENDING, not STALE. Returns the end of the window (ms) or 0. */
+function armedGraceUntil(entry, limitMin, nowMs) {
+  if (!entry || !/^\d{4}-\d{2}-\d{2}$/.test(String(entry.armed || ""))) return 0;
+  const t = Date.parse(`${entry.armed}T00:00:00Z`);
+  if (!Number.isFinite(t)) return 0;
+  const until = t + limitMin * 60000;
+  return nowMs < until ? until : 0;
+}
+
 /** PURE: the verdict. beatRows = heartbeat.mjs `check --json` rows (null when the store was unreadable),
- *  beatError = diagnosis string or null, schedule = { job: {ok, summary|error} } for rows with gh_workflow. */
-export function evaluateSilence({ registry, beatRows, beatError = null, schedule = {}, unregisteredMaxAgeMin = UNREGISTERED_MAX_AGE_MIN }) {
+ *  beatError = diagnosis string or null, schedule = { job: {ok, summary|error} } for rows with gh_workflow,
+ *  nowMs only matters for a row's "armed" grace window. */
+export function evaluateSilence({ registry, beatRows, beatError = null, schedule = {}, unregisteredMaxAgeMin = UNREGISTERED_MAX_AGE_MIN, nowMs = Date.now() }) {
   const byJob = new Map((beatRows || []).filter((r) => r && r.job).map((r) => [r.job, r]));
   const results = [];
   const add = (job, state, detail, extra = {}) => results.push({ job, state, detail, ...extra });
@@ -167,27 +245,44 @@ export function evaluateSilence({ registry, beatRows, beatError = null, schedule
     const limit = staleAfterMin(entry);
     const beat = byJob.get(job);
     const age = beat && beat.ageMin != null ? beat.ageMin : null;
+    const fails = (beat && beat.consecutive_fail) || 0;
     const meta = { owner: entry.owner || "", ageMin: age, limitMin: limit };
-    const beatNote = beatError ? "beat store unreadable" : age == null ? "never beat" : `last ok beat ${fmtAge(age)} ago`;
-    if (age != null && age <= limit) {
-      const fails = (beat && beat.consecutive_fail) || 0;
-      if (fails > 0) add(job, "FAILING", `beat is fresh (${fmtAge(age)}) but the last ${fails} run(s) reported fail`, meta);
-      else add(job, "LIVE", `last ok beat ${fmtAge(age)} ago (limit ${fmtAge(limit)})`, meta);
-    } else if (entry.gh_workflow) {
+    const decided = beatDecides(beat, beatError, limit);
+    if (decided === "fresh") {
+      if (fails > 0) add(job, "FAILING", `beat is fresh (${fmtAge(age)}) but the last ${fails} run(s) reported fail`, { ...meta, witness: "beat" });
+      else add(job, "LIVE", `last ok beat ${fmtAge(age)} ago (limit ${fmtAge(limit)})`, { ...meta, witness: "beat" });
+      continue;
+    }
+    if (decided === "never-ok-failing") {
+      add(job, "FAILING", `${fails} run(s) reported fail and none has ever reported ok`, { ...meta, witness: "beat" });
+      continue;
+    }
+    const beatNote = beatError ? "beat store unreadable" : age == null ? "never beat ok" : `last ok beat ${fmtAge(age)} ago`;
+    const grace = armedGraceUntil(entry, limit, nowMs);
+    const pending = () => add(job, "PENDING", `armed ${entry.armed}: no proof of life yet, the first is due by ${new Date(grace).toISOString().slice(0, 16)}Z`, meta);
+    if (entry.gh_workflow) {
       const s = schedule[job];
-      if (!s || !s.ok) {
-        add(job, "UNVERIFIABLE", `${beatNote}, and the GitHub schedule witness is unavailable: ${s ? s.error : "not fetched"}`, meta);
-      } else if (s.summary.count === 0 || s.summary.lastAgeMin == null || s.summary.lastAgeMin > limit) {
-        add(job, "STALE", `no scheduled run inside ${fmtAge(limit)} (${s.summary.count ? `last scheduled run ${fmtAge(s.summary.lastAgeMin)} ago` : "none on record"}): the cron is not firing`, meta);
-      } else if (FAILED_CONCLUSIONS.has(s.summary.lastConclusion)) {
-        add(job, "FAILING", `last scheduled run ${fmtAge(s.summary.lastAgeMin)} ago concluded ${s.summary.lastConclusion}; ${s.summary.consecutiveFailures} consecutive failed scheduled run(s)${s.summary.lastRunUrl ? ` ${s.summary.lastRunUrl}` : ""}`, meta);
+      if (s && s.ok) {
+        const sum = s.summary;
+        if (sum.count === 0 || sum.lastAgeMin == null || sum.lastAgeMin > limit) {
+          if (grace) pending();
+          else add(job, "STALE", `no scheduled run inside ${fmtAge(limit)} (${sum.count ? `last scheduled run ${fmtAge(sum.lastAgeMin)} ago` : "none on record"}): the cron is not firing; ${beatNote}`, { ...meta, witness: "github" });
+        } else if (FAILED_CONCLUSIONS.has(sum.lastConclusion)) {
+          add(job, "FAILING", `last scheduled run ${fmtAge(sum.lastAgeMin)} ago concluded ${sum.lastConclusion}; ${sum.consecutiveFailures} consecutive failed scheduled run(s)${runRef(sum.lastRunUrl) ? ` (${runRef(sum.lastRunUrl)})` : ""}`, { ...meta, witness: "github" });
+        } else {
+          add(job, "LIVE", `scheduled run ${fmtAge(sum.lastAgeMin)} ago (${sum.lastConclusion}); ${beatNote}`, { ...meta, witness: "github" });
+        }
+      } else if (age != null) {
+        // A stale beat is still evidence of silence; the unavailable GitHub witness is why it cannot be overruled.
+        add(job, "STALE", `last ok beat ${fmtAge(age)} ago, limit ${fmtAge(limit)}; the GitHub witness could not show a newer run (${s ? s.error : "not fetched"})`, meta);
       } else {
-        add(job, "LIVE", `scheduled run ${fmtAge(s.summary.lastAgeMin)} ago (${s.summary.lastConclusion}); ${beatNote}`, { ...meta, witnessed: "github" });
+        add(job, "UNWITNESSED", `${beatNote}; GitHub witness unavailable (${s ? s.error : "not fetched"}). ${unwitnessedFix(job)}`, meta);
       }
     } else if (beatError) {
       add(job, "UNREADABLE", beatError, meta);
     } else if (age == null) {
-      add(job, "NO-DATA", "registered but has never beaten ok: a monitor that never ran", meta);
+      if (grace) pending();
+      else add(job, "NO-DATA", "registered but has never beaten ok: a monitor that never ran", meta);
     } else {
       add(job, "STALE", `last ok beat ${fmtAge(age)} ago, limit ${fmtAge(limit)}`, meta);
     }
@@ -207,6 +302,13 @@ export function evaluateSilence({ registry, beatRows, beatError = null, schedule
   }
   const anomalies = results.filter((r) => ANOMALY_STATES.has(r.state));
   return { ok: anomalies.length === 0, results, anomalies };
+}
+
+/** PURE: "LIVE 4, PENDING 1, UNREADABLE 23" in a fixed order, zero counts left out. */
+export function summarizeStates(results) {
+  const n = new Map();
+  for (const r of results || []) n.set(r.state, (n.get(r.state) || 0) + 1);
+  return STATE_ORDER.filter((s) => n.has(s)).map((s) => `${s} ${n.get(s)}`).join(", ");
 }
 
 /** PURE: the lines setup/alert-issue.mjs extracts into the pager issue ("[STALE   ] ..." / "[ERROR   ] ..."). */
@@ -250,9 +352,10 @@ async function main() {
   const hb = runHeartbeatCheck();
   const role = process.env.FLEET_SENTINELS_ROLE_ARN ? ` (role ${process.env.FLEET_SENTINELS_ROLE_ARN})` : "";
   const beatError = hb.ok ? null : `${diagnoseBeatStoreFailure(hb.error)}${role}`;
+  const beatByJob = new Map((hb.ok ? hb.rows : []).filter((r) => r && r.job).map((r) => [r.job, r]));
   const schedule = {};
   await Promise.all(
-    watched.filter((j) => registry[j].gh_workflow).map(async (job) => {
+    watched.filter((j) => needsScheduleWitness(registry[j], beatByJob.get(j), beatError)).map(async (job) => {
       const ref = parseWorkflowRef(registry[job].gh_workflow);
       if (!ref) {
         schedule[job] = { ok: false, error: `unparseable gh_workflow "${registry[job].gh_workflow}"` };
@@ -266,8 +369,8 @@ async function main() {
   if (JSONOUT) {
     console.log(JSON.stringify(verdict, null, 2));
   } else {
-    console.log(`[silence-monitor] ${watched.length} registered job(s) checked, ${verdict.anomalies.length} needing attention`);
-    for (const r of verdict.results) console.log(`  ${r.state.padEnd(19)} ${r.job.padEnd(30)} ${r.state === "UNREADABLE" ? "beat store unreadable (reason under ATTENTION)" : r.detail}`);
+    console.log(`[silence-monitor] ${watched.length} registered job(s) checked, ${verdict.anomalies.length} needing attention (${summarizeStates(verdict.results)})`);
+    for (const r of verdict.results) console.log(`  ${r.state.padEnd(19)} ${r.job.padEnd(30)} ${r.state === "UNREADABLE" ? "beat store unreadable (reason under ATTENTION)" : r.detail}${r.witness ? ` [${r.witness}]` : ""}`);
     const att = renderAttention(verdict.anomalies);
     if (att.length) {
       console.log("\nATTENTION");
