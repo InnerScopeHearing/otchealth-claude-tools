@@ -30,7 +30,7 @@ export const ROUTES = Object.freeze({
   "legal-personal": "CLO-personal seat only: `legal_blob_put` container `personal` via the clo-personal lane (writes currently need Matt's IAM grant). Never commons, never another lane.",
   phi: "Do not save. PHI stays inside the MedReview BAA environment. Save a PHI-free summary instead.",
   "innd-mnpi": "INND MNPI / investor-facing material: CLO seat + counsel + Matt (Reg FD). Never the commons room.",
-  ledger: "Lane-private ledger prefix (_MEMORY/_HANDOFF/_DISPATCH/_JOURNAL): these are ring-scoped by design; use kb-memory (`mem.mjs`) or the owning lane's tooling, never the commons room.",
+  ledger: "Lane-private ledger prefix (_MEMORY/_HANDOFF/_DISPATCH/_JOURNAL/_VAULT): these are ring-scoped by design; use kb-memory (`mem.mjs`) or the owning lane's tooling, never the commons room.",
   restricted: "This document DECLARES a ring, classification or audience the commons room cannot honor (anything other than commons / public / internal / fleet ...). Remove the declaration if the content is genuinely commons-safe, or route it to the owning lane's own store; the commons room is readable by every lane, external connectors included.",
   secret: "Remove the value and reference the SSM parameter NAME (`/otchealth/<name>`), then re-run.",
 });

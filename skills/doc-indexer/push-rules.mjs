@@ -47,8 +47,9 @@ export const COMMONS_PUSH_ALLOWED_PREFIXES = Object.freeze(["_KNOWLEDGE/", "_DAI
  *  research; an unscoped push would embed all of it (adjudication round 2: only nightly.sh guarded
  *  this, `indexer.mjs push-search --profile commons` itself pushed every row). Pure. */
 export const COMMONS_ROOM = "commons-company-journal";
+// (2026-10-07) The index test is isOpenRoomIndex (below): the room itself or a versioned/derived physical name of it.
 export function isCommonsTarget(profile, index = "") {
-  return String(profile || "").toLowerCase() === "commons" || String(index || "").toLowerCase() === COMMONS_ROOM;
+  return String(profile || "").toLowerCase() === "commons" || isOpenRoomIndex(index);
 }
 export function unscopedPushRefusal(profile, scope, index = "") {
   if (!isCommonsTarget(profile, index)) return "";
@@ -110,14 +111,20 @@ export function commonsPrefixRefusal(prefixes) {
  *  sneak back in). Rows under SKIP_PREFIXES are always excluded (normalized + case-folded, see
  *  isSkippedPath), scoped or not. The allow-list itself matches the path AS STORED, case-sensitively:
  *  a row whose spelling only matches after normalization (`/_KNOWLEDGE/x`, `_knowledge/x`) is not
- *  selected. Pure. */
-export function selectPushRows(rows, prefixes) {
+ *  selected.
+ *
+ *  `opts.openRoom` (2026-10-07) is set when the target is the OPEN room (commons-company-journal): every row
+ *  must then ALSO pass openRoomKeyVerdict, so "unscoped" means "the reviewed allow-set", never "every row that
+ *  is not on the deny-list". Without `opts` the behavior is exactly what it was. Pure. */
+export function selectPushRows(rows, prefixes, opts = {}) {
   const list = Array.isArray(rows) ? rows : [];
   const base = list.filter((r) => r && r.path && !isSkippedPath(r.path));
-  if (prefixes == null) return base;
-  const allow = parsePrefixList(prefixes);
-  if (!allow.length) return [];
-  return base.filter((r) => allow.some((p) => r.path.startsWith(p)) && normalizeRelPath(r.path) === r.path);
+  let out = base;
+  if (prefixes != null) {
+    const allow = parsePrefixList(prefixes);
+    out = allow.length ? base.filter((r) => allow.some((p) => r.path.startsWith(p)) && normalizeRelPath(r.path) === r.path) : [];
+  }
+  return opts && opts.openRoom ? out.filter((r) => openRoomKeyVerdict(r.path).ok) : out;
 }
 
 /** Pull `--prefixes` / `--prefix` (space or `=` form) out of an argv WITHOUT swallowing the next flag
@@ -156,4 +163,119 @@ export function extractScopeArgs(argv) {
  *  paths are written from a normalized catalog path, so they should not occur. Pure. */
 export function pathPrefixQuery(fullPrefix) {
   return { prefix: { "path.keyword": { value: String(fullPrefix), case_insensitive: true } } };
+}
+
+// ============================ OPEN-ROOM WRITE POLICY: DENY BY DEFAULT (2026-10-07) ============================
+// REGRESSION-LEDGER tag `indexer-skip-prefixes-recurring-gap`: the room every gateway lane (external connectors
+// included) can read, commons-company-journal, was guarded only by a hand-maintained DENY-LIST (SKIP_PREFIXES),
+// applied when the catalog is crawled and when push rows are selected. A deny-list is exposed for every ring-private
+// lane that exists but is not listed yet, and it failed that way again: _JOURNAL/ and _VAULT/ were listed only on
+// 2026-09-29, after 137 + 10 chunks of them were found in the room (the canary has flagged them every night since,
+// and nothing has deleted them).
+//
+// Two structural changes, both defined HERE so there is ONE rule and ONE implementation:
+//   1. ALLOW-SET, not deny-list. A key may enter the open room only if it is in canonical form, is not on the
+//      deny-list, AND sits under a reviewed prefix (COMMONS_PUSH_ALLOWED_PREFIXES). A ring lane nobody has listed
+//      yet (`_BOARD/`, `_LEGAL-HOLD/`) is refused on its first day, not after its first leak.
+//   2. ENFORCED AT THE WRITE. assertOpenRoomWritable() runs inside OS.pushDocs (skills/kb-memory/opensearch-write.mjs),
+//      the one function every indexer and brain-save upsert goes through, and throws BEFORE any credential lookup or
+//      network call. A caller that skipped row selection, or an entry point added next year that never heard of
+//      SKIP_PREFIXES, still cannot put a ring-private chunk in the room.
+// Widening the allow-set is COMMONS_PUSH_ALLOWED_PREFIXES above: a reviewed code change, nothing else.
+
+export const COMMONS_ACCOUNT = "otchealthcommons";
+export const COMMONS_CONTAINER = "company-journal";
+/** The `path` prefix every chunk of the commons container carries in the room: `<account>/<container>/<key>`. */
+export const COMMONS_ROOM_PATH_PREFIX = `${COMMONS_ACCOUNT}/${COMMONS_CONTAINER}/`;
+
+/** True for the open room and for any physical or versioned name derived from it (`commons-company-journal-v2`,
+ *  `commons-company-journal_restore`): an index swap or a restore must not become a way around the guard.
+ *  Case-folded (OpenSearch index names are lower-case anyway). Pure. */
+export function isOpenRoomIndex(index) {
+  const s = String(index == null ? "" : index).trim().toLowerCase();
+  return s === COMMONS_ROOM || s.startsWith(`${COMMONS_ROOM}-`) || s.startsWith(`${COMMONS_ROOM}_`) || s.startsWith(`${COMMONS_ROOM}.`);
+}
+
+const RING_PRIVATE_FOLDED = RING_PRIVATE_PREFIXES.map((p) => p.toLowerCase());
+/** True when `name` (a path relative to the container root, in ANY spelling) lies inside a ring-private lane.
+ *  Same normalization and case-folding as isSkippedPath, restricted to RING_PRIVATE_PREFIXES, so a refusal can
+ *  say "ring-private" and the purge/canary share one list. Pure. */
+export function isRingPrivatePath(name) {
+  const s = normalizeRelPath(name).toLowerCase();
+  return RING_PRIVATE_FOLDED.some((p) => s.startsWith(p));
+}
+
+/** The container-relative key of a room doc `path`: the `<account>/<container>/` prefix is stripped when present
+ *  (case-insensitively); a flat room's `path` is already container-relative and is returned unchanged. Anything
+ *  stranger (a doubled slash, a backslash, a foreign account) is returned as is and therefore fails the allow-set
+ *  in openRoomKeyVerdict. Pure. */
+export function commonsKeyOf(path) {
+  const p = String(path == null ? "" : path);
+  return p.toLowerCase().startsWith(COMMONS_ROOM_PATH_PREFIX) ? p.slice(COMMONS_ROOM_PATH_PREFIX.length) : p;
+}
+
+/** THE open-room verdict for one container-relative key: { ok, code, reason }. ok only when the key is non-empty,
+ *  not ring-private, not skip-listed, in canonical form (normalizeRelPath(key) === key: no `//`, `./`, `..`, `\`, leading
+ *  `/`) AND under COMMONS_PUSH_ALLOWED_PREFIXES (exact, case-sensitive). Every other key is refused, including keys
+ *  nobody has thought of yet: that is the deny-by-default. Codes: NO_KEY, RING_PRIVATE, SKIP_LISTED, NON_CANONICAL,
+ *  NOT_ALLOWLISTED. Pure. */
+export function openRoomKeyVerdict(key) {
+  const raw = typeof key === "string" ? key : "";
+  if (!raw.trim()) return { ok: false, code: "NO_KEY", reason: "no source key" };
+  if (isRingPrivatePath(raw)) return { ok: false, code: "RING_PRIVATE", reason: "inside a ring-private lane" };
+  if (isSkippedPath(raw)) return { ok: false, code: "SKIP_LISTED", reason: "inside a skip-listed prefix" };
+  if (normalizeRelPath(raw) !== raw) return { ok: false, code: "NON_CANONICAL", reason: "not a canonical container-relative key" };
+  if (!COMMONS_PUSH_ALLOWED_PREFIXES.some((p) => raw.startsWith(p))) return { ok: false, code: "NOT_ALLOWLISTED", reason: "outside the reviewed allow-set" };
+  return { ok: true, code: "OK", reason: "" };
+}
+
+/** The same verdict for one room DOCUMENT (a chunk or a flat doc): its `path` must yield an allowed key, and its
+ *  `source_path` (the key's directory), when present, must not name a ring-private lane. A doc with no string
+ *  `path` cannot be attributed to a source and is refused. Returns { ok, code, reason, key }. Pure. */
+export function openRoomDocVerdict(doc) {
+  const p = doc && typeof doc === "object" ? doc.path : undefined;
+  if (typeof p !== "string" || !p) return { ok: false, code: "NO_PATH", reason: "document carries no source path", key: "" };
+  const key = commonsKeyOf(p);
+  const v = openRoomKeyVerdict(key);
+  if (!v.ok) return { ...v, key };
+  const sp = doc.source_path;
+  if (typeof sp === "string" && sp && isRingPrivatePath(`${commonsKeyOf(sp)}/`)) return { ok: false, code: "RING_PRIVATE", reason: "source_path is inside a ring-private lane", key };
+  return { ok: true, code: "OK", reason: "", key };
+}
+
+// The top-level folder of a key and nothing else: refusals are logged with ids, codes and this, never content or a full key.
+function keyPrefixOf(key) {
+  const parts = String(key == null ? "" : key).replace(/\\/g, "/").split("/").filter(Boolean);
+  if (!parts.length) return "";
+  return parts.length > 1 ? `${parts[0].slice(0, 40)}/` : "(root file)";
+}
+
+/** Thrown by assertOpenRoomWritable. `refusals` is [{ id, code, prefix }]: the doc id, the reason code and the key's
+ *  top-level folder, never document content. */
+export class OpenRoomWriteRefused extends Error {
+  constructor(index, refusals, total) {
+    const groups = new Map();
+    for (const r of refusals) { const k = `${r.code}${r.prefix ? ` ${r.prefix}` : ""}`; groups.set(k, (groups.get(k) || 0) + 1); }
+    const summary = [...groups.entries()].map(([k, n]) => `${k} x${n}`).join(", ");
+    const ids = refusals.slice(0, 5).map((r) => r.id).filter(Boolean).join(", ");
+    super(`refusing to write ${refusals.length} of ${total} document(s) to the OPEN room ${index} (readable by every lane): ${summary}${ids ? `; ids ${ids}${refusals.length > 5 ? ", ..." : ""}` : ""}. Only keys under the reviewed allow-set [${COMMONS_PUSH_ALLOWED_PREFIXES.join(", ")}] may enter it (push-rules.mjs openRoomKeyVerdict); nothing was written.`);
+    this.name = "OpenRoomWriteRefused";
+    this.code = "OPEN_ROOM_WRITE_REFUSED";
+    this.index = index;
+    this.refusals = refusals;
+  }
+}
+
+/** The defensive assertion at the write choke point. For an OPEN-room index, throws OpenRoomWriteRefused when ANY doc
+ *  in the batch is refused by openRoomDocVerdict (the whole batch is refused: nothing is half-written); a no-op for
+ *  every other index. Pure and synchronous, so a caller runs it before resolving credentials or touching the network. */
+export function assertOpenRoomWritable(index, docs) {
+  if (!isOpenRoomIndex(index)) return;
+  const list = Array.isArray(docs) ? docs : [];
+  const refusals = [];
+  for (const d of list) {
+    const v = openRoomDocVerdict(d);
+    if (!v.ok) refusals.push({ id: d && typeof d === "object" ? String(d.id ?? d.chunk_id ?? "") : "", code: v.code, prefix: keyPrefixOf(v.key) });
+  }
+  if (refusals.length) throw new OpenRoomWriteRefused(String(index), refusals, list.length);
 }

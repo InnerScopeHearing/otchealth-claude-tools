@@ -275,6 +275,14 @@ node skills/doc-indexer/indexer.mjs push-search   --profile <p> [--s3|--azure|--
 node skills/doc-indexer/indexer.mjs cloud-search "<query>" --profile <p> [--s3|--azure|--gcs] [--limit n] [--search-backend opensearch|azure]  # hybrid (BM25+kNN, RRF-merged)
 ```
 
+**The open room is deny-by-default.** `commons-company-journal` is readable by every lane (external connectors included), so it is
+the one room whose writes are allow-listed, not deny-listed (`push-rules.mjs`: `openRoomKeyVerdict`). A commons push must be scoped
+(`--prefixes _KNOWLEDGE/,_DAILY/`), only keys under those reviewed prefixes are ever selected, and `OS.pushDocs` throws
+`OpenRoomWriteRefused`, before any I/O, for a batch containing any other key. A ring-private or never-listed lane (`_JOURNAL/`, `_VAULT/`,
+`_MEMORY/`, `_HANDOFF/`, `_DISPATCH/`, or one created next year) cannot be pushed by any entry point. Residue written before the guard
+existed is removed with `purge-ring-residue.mjs` (dry run by default; `--commit` deletes the derived chunks only, never the S3 sources);
+the nightly aws-dr-canary counts it per ring-private prefix.
+
 ## Profiles (storage + taxonomy)
 - **finance** (CFO): Azure `otchealthcfodata`/`cfo-source-docs` (key `azure-cfo-storage-key`) or the
   GCS bucket `otchealth-cfo-source-docs`. Audit taxonomy 00-15 + entity (INND/HearingAssist/iHEAR/

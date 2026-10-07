@@ -650,7 +650,7 @@ export function assessRingResidue(counts) {
   const leaks = (counts || []).filter((c) => Number(c.count) > 0);
   if (!leaks.length) return { status: "OK", detail: `0 chunks under ${(counts || []).length} ring-private prefix(es) (${(counts || []).map((c) => c.prefix).join(" ")}) in ${RING_RESIDUE_ROOM.index}` };
   const total = leaks.reduce((a, c) => a + Number(c.count), 0);
-  return { status: "LEAK", detail: `${total} chunk(s) of ring-private content in the OPEN room ${RING_RESIDUE_ROOM.index}: ${leaks.map((c) => `${c.prefix} ${c.count}`).join(", ")} -- purge with \`node skills/doc-indexer/purge-ring-residue.mjs --commit\` (S3 sources are untouched)` };
+  return { status: "LEAK", detail: `${total} chunk(s) of ring-private content in the OPEN room ${RING_RESIDUE_ROOM.index}: ${leaks.map((c) => `${c.prefix} ${c.count}`).join(", ")} -- purge via the otchealth-cto recovery console, operation=purge-ring-residue (dispatch apply=false first: counts only, deletes nothing; apply=true runs from main only; S3 sources are untouched)` };
 }
 
 async function checkCommonsRingResidue() {

@@ -148,10 +148,16 @@ function pushScope() {
   if (PREFIX) return [PREFIX];
   return null;
 }
-/** Apply the scope + the live-object check to catalog rows, before any embedding. */
+/** Apply the scope + the live-object check to catalog rows, before any embedding. For the OPEN room (the commons profile, or
+ *  any target that is commons-company-journal or a derived name of it: see isCommonsTarget) selection is DENY BY DEFAULT:
+ *  besides the deny-list a row must sit under the reviewed allow-set (push-rules.mjs openRoomKeyVerdict), so even a run with
+ *  no usable scope selects only reviewed prefixes. The write itself is re-checked in OS.pushDocs. */
 async function scopePushRows(rows) {
   const scope = pushScope();
-  let out = selectPushRows(rows, scope);
+  let target = IDXNAME || "";
+  if (!target) { try { target = computeIndexName(); } catch { /* resolved later; the profile check below still applies */ } }
+  const openRoom = isCommonsTarget(PROFILE, target);
+  let out = selectPushRows(rows, scope, { openRoom });
   if (scope != null) console.error(`[push-search] scoped to prefixes [${scope.join(", ") || "(none -> nothing selected)"}]: ${out.length} of ${rows.length} catalog row(s) eligible`);
   return out;
 }

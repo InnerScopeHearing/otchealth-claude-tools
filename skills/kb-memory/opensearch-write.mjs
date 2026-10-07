@@ -73,6 +73,8 @@
 import { kvSecret } from "./azure-secret.mjs";
 import { ssmSecret } from "./aws-secret.mjs";
 import { osFetch, osSearch, osGetMapping, osRefresh, osCount } from "../doc-indexer/opensearch-client.mjs";
+// The deny-by-default rule for the OPEN room (commons-company-journal). Pure, no I/O: pushDocs() below runs it FIRST.
+import { assertOpenRoomWritable } from "../doc-indexer/push-rules.mjs";
 // embedOpenAI() below is the ONE shared embedding call every fleet embedder (company-brain,
 // doc-indexer/indexer.mjs, kb-memory/index-one.mjs, semantic.mjs, ring-memory-index, embedding-drift-
 // monitor) ultimately reaches, so instrumenting it here gives fleet-wide embedding usage receipts
@@ -332,8 +334,16 @@ export async function refresh(index) {
  *  opensearch-client.mjs's osBulkUpdate's return shape and per-item error handling exactly (that function
  *  broadcasts ONE shared doc to MANY ids — the right fit for the retraction-refresh case, so callers use
  *  osBulkUpdate directly for that; this one is for the general reindex/ring-ledger case where every row's
- *  content differs). */
+ *  content differs).
+ *
+ *  OPEN-ROOM GUARD (2026-10-07, REGRESSION-LEDGER tag indexer-skip-prefixes-recurring-gap): this is the ONE function
+ *  every upsert into a chunked room goes through (indexer.mjs push-search, brain-save, any future caller), so it is
+ *  where the rule is enforced. For commons-company-journal -- the room EVERY lane can read -- a batch is written only
+ *  if every doc's source key is canonical, not ring-private, and under the reviewed allow-set; otherwise
+ *  assertOpenRoomWritable() throws OpenRoomWriteRefused BEFORE any config, credential or network work, so nothing from
+ *  the batch is written. A no-op for every other index. See skills/doc-indexer/push-rules.mjs. */
 export async function pushDocs(index, docs) {
+  assertOpenRoomWritable(index, docs);
   if (!docs.length) return { ok: true, ids: [], errors: [] };
   const cfg = await resolveOpenSearchConfig();
   const lines = [];
