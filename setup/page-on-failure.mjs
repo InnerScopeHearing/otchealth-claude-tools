@@ -246,7 +246,7 @@ async function sendPageEmail(subject, body) {
  *  claim was not actually independent until this credential could come from somewhere off-Azure too. */
 async function emitPosthogFallback(props, eventName) {
   const key = process.env.POSTHOG_FLEET_INGEST_KEY || await kvSecret("posthog-fleet-ingest-key");
-  if (!key) throw new Error("posthog-fleet-ingest-key unavailable (checked POSTHOG_FLEET_INGEST_KEY env and Key Vault)");
+  if (!key) throw new Error("posthog-fleet-ingest-key unavailable (checked POSTHOG_FLEET_INGEST_KEY env and AWS SSM /otchealth/posthog-fleet-ingest-key)");
   const host = process.env.POSTHOG_HOST || "https://us.i.posthog.com";
   const r = await timedFetch(`${host}/capture/`, {
     method: "POST", headers: { "Content-Type": "application/json" },
