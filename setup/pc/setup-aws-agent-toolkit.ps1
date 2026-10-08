@@ -35,7 +35,7 @@ param(
 # Settings (everything that is decided in advance lives here)
 # ======================================================================================
 $script:Cfg = @{
-    ScriptVersion  = '2026-10-08.1'
+    ScriptVersion  = '2026-10-08.2'
     ProfileName    = 'otchealth'
     Region         = 'us-east-1'
     ToolkitRegion  = 'us-east-1'      # setup.md Steps 5 and 6: the toolkit service is us-east-1 only
