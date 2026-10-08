@@ -47,7 +47,10 @@
  *   node os-snapshot.mjs register [--role-arn <arn>] [--repo <name>] [--lane personal-legal|finance-legal]
  *   node os-snapshot.mjs create-policy [--repo <name>] [--policy-name <name>] [--lane ...]
  *   node os-snapshot.mjs status [--repo <name>] [--json]
- *   node os-snapshot.mjs restore-drill [--index <name>] [--repo <name>]
+ *   node os-snapshot.mjs restore-drill [--index <name>] [--repo <name>] [--dry-run]
+ *     --dry-run is READ-ONLY: it picks the drill index and the newest SUCCESS snapshot, resolves that
+ *     snapshot BY ID (the same colon-bearing name the restore addresses), checks the index is inside it,
+ *     and stops. Nothing is restored, created or deleted.
  *
  * ENV (non-secret; an OpenSearch domain name/region/bucket are not sensitive):
  *   OS_DOMAIN_NAME (default otchealth-brain), OS_REGION / AWS_REGION (default us-east-1)
@@ -128,6 +131,13 @@ async function domainCfg() {
   return { ...creds, host };
 }
 
+// PATH CONTRACT. `path` is an ARRAY of RAW segments (e.g. ["_snapshot", repo, snapshotId, "_restore"]), never a
+// string that contains encodeURIComponent()-ed pieces. osFetch() percent-encodes every segment EXACTLY ONCE
+// (and signs the double-encoded canonical form AWS requires), so a caller that pre-encodes gets a double-encoded
+// wire path. A Snapshot Management snapshot id carries ':' ("otchealth-brain-nightly-2026-10-04t07:00:58-h9xm48sl");
+// pre-encoded to %3A and then encoded again by osFetch it reached OpenSearch as %253A, which the server decoded
+// once to the literal text "...t07%3A00%3A58..." and answered "snapshot does not exist". That is why the weekly
+// restore drill failed on 2026-09-06 and 2026-10-04 (osFetch's one-pass contract landed 2026-09-02, #529/#532).
 async function osJsonCall(cfg, method, path, bodyObj, query) {
   // `query` MUST be passed separately, never embedded in `path`: osFetch signs the query string
   // through SigV4 canonicalization, so a literal "?format=json" inside `path` gets signed as part
@@ -178,7 +188,7 @@ async function cmdRegister(argv) {
 
   console.log(`[os-snapshot] registering repo "${repo}" -> s3://${bucket}/${BASE_PATH_DEFAULT} (role ${roleArn})...`);
   const cfg = await domainCfg();
-  const r = await osJsonCall(cfg, "PUT", `/_snapshot/${encodeURIComponent(repo)}`, {
+  const r = await osJsonCall(cfg, "PUT", ["_snapshot", repo], {
     type: "s3",
     settings: { bucket, base_path: BASE_PATH_DEFAULT, region: REGION, role_arn: roleArn, server_side_encryption: true },
   });
@@ -207,7 +217,7 @@ async function cmdCreatePolicy(argv) {
 
   const cfg = await domainCfg();
   console.log(`[os-snapshot] creating/updating SM policy "${policyName}" on repo "${repo}" (indices: ${indicesPattern})...`);
-  const r = await osJsonCall(cfg, "POST", `/_plugins/_sm/policies/${encodeURIComponent(policyName)}`, {
+  const r = await osJsonCall(cfg, "POST", ["_plugins", "_sm", "policies", policyName], {
     description: "nightly DR snapshot to S3 (non-privileged lane)",
     creation: { schedule: { cron: { expression: "0 7 * * *", timezone: "UTC" } } },
     deletion: { schedule: { cron: { expression: "30 8 * * *", timezone: "UTC" } }, condition: { max_age: "14d", max_count: 21, min_count: 7 } },
@@ -239,9 +249,9 @@ export function newestSuccessfulSnapshot(rows) {
  *  own CLI formatting getting mixed in when called as a plain function instead of via the CLI. */
 async function fetchSnapshotStatus(repo) {
   const cfg = await domainCfg();
-  const repoInfo = await osJsonCall(cfg, "GET", `/_snapshot/${encodeURIComponent(repo)}`);
+  const repoInfo = await osJsonCall(cfg, "GET", ["_snapshot", repo]);
   const registered = repoInfo.ok;
-  const snaps = await osJsonCall(cfg, "GET", `/_cat/snapshots/${encodeURIComponent(repo)}`, undefined, { format: "json" });
+  const snaps = await osJsonCall(cfg, "GET", ["_cat", "snapshots", repo], undefined, { format: "json" });
   // Fail LOUD on a non-ok listing: the old `snaps.ok ? ... : []` fallback turned a signing/authz
   // failure into "0 snapshots", which reads exactly like a broken backup chain (and, worse, would
   // read as a fine-but-empty one to anything only checking exit codes). Same silent-success class
@@ -260,22 +270,56 @@ async function cmdStatus(argv) {
   return out;
 }
 
-async function cmdRestoreDrill(argv) {
+const DRILL_INDEX_PREFIX = "drill-";
+
+/** Pure: the index the restore drill restores and compares, or null when there is none. The smallest
+ *  NON-EMPTY non-privileged index: an empty index proves nothing about restored data and has no 95%
+ *  tolerance to compute (the 2026-08-30 drill failed with `live index "cs-knowledge" reports 0 docs`
+ *  for exactly that reason), and a leftover `drill-*` copy from an earlier drill is never a source.
+ *  A closed index reports no docs.count and is skipped the same way. Ties break by name so the pick is
+ *  stable. Exported for tests/os-snapshot-restore-drill.test.mjs. */
+export function pickDrillIndex(rows) {
+  const candidates = (rows || [])
+    .filter((r) => r.lane === "non-privileged" && !String(r.index).startsWith(DRILL_INDEX_PREFIX) && Number(r.docs) > 0)
+    .sort((a, b) => Number(a.docs) - Number(b.docs) || (a.index < b.index ? -1 : a.index > b.index ? 1 : 0));
+  return candidates.length ? candidates[0].index : null;
+}
+
+/** Read-only: resolve ONE snapshot by id, addressing it exactly the way the restore does (the id as a RAW
+ *  path segment, so a Snapshot Management name containing ':' is encoded once). Returns the snapshot info, or
+ *  throws with the HTTP status when the id that _cat/snapshots listed does not resolve, so a naming or
+ *  encoding mismatch is reported as that BEFORE any restore is attempted. */
+async function lookupSnapshotById(cfg, repo, id) {
+  const r = await osJsonCall(cfg, "GET", ["_snapshot", repo, id]);
+  const hit = r.ok && Array.isArray(r.json?.snapshots) ? r.json.snapshots.find((s) => s.snapshot === id) : null;
+  if (!hit) throw new Error(`snapshot "${id}" (as listed by _cat/snapshots) does not resolve by id in repo "${repo}": HTTP ${r.status} ${r.text.slice(0, 300)}`);
+  return hit;
+}
+
+export async function cmdRestoreDrill(argv) {
   const repo = optVal(argv, "--repo", REPO_DEFAULT);
+  const dryRun = argv.includes("--dry-run");
   const cfg = await domainCfg();
   let indexName = optVal(argv, "--index", null);
   if (!indexName) {
-    const rows = await fetchIndexRows();
-    const nonPriv = rows.filter((r) => r.lane === "non-privileged").sort((a, b) => Number(a.docs || 0) - Number(b.docs || 0));
-    if (!nonPriv.length) throw new Error("no non-privileged index found to drill against");
-    indexName = nonPriv[0].index;
+    indexName = pickDrillIndex(await fetchIndexRows());
+    if (!indexName) throw new Error("no non-empty non-privileged index found to drill against");
   }
   const status = await fetchSnapshotStatus(repo);
   if (!status.newestSuccessful) throw new Error(`no SUCCESSFUL snapshot in repo "${repo}" to drill against`);
-  const drillIndex = `drill-${indexName}`;
-  console.log(`[os-snapshot] restoring "${indexName}" from snapshot "${status.newestSuccessful.id}" as "${drillIndex}"...`);
-  const restore = await osJsonCall(cfg, "POST", `/_snapshot/${encodeURIComponent(repo)}/${encodeURIComponent(status.newestSuccessful.id)}/_restore`, {
-    indices: indexName, rename_pattern: "(.+)", rename_replacement: "drill-$1", include_global_state: false,
+  const snapshotId = status.newestSuccessful.id;
+  const drillIndex = `${DRILL_INDEX_PREFIX}${indexName}`;
+  const snapshot = await lookupSnapshotById(cfg, repo, snapshotId);
+  if (Array.isArray(snapshot.indices) && !snapshot.indices.includes(indexName)) {
+    throw new Error(`index "${indexName}" is not in snapshot "${snapshotId}" (created after it was taken?), so there is nothing to restore it from`);
+  }
+  if (dryRun) {
+    console.log(`[os-snapshot] DRY RUN: snapshot "${snapshotId}" resolves by id in repo "${repo}" and contains "${indexName}"; the drill would restore it as "${drillIndex}". Nothing was restored, created or deleted.`);
+    return;
+  }
+  console.log(`[os-snapshot] restoring "${indexName}" from snapshot "${snapshotId}" as "${drillIndex}"...`);
+  const restore = await osJsonCall(cfg, "POST", ["_snapshot", repo, snapshotId, "_restore"], {
+    indices: indexName, rename_pattern: "(.+)", rename_replacement: `${DRILL_INDEX_PREFIX}$1`, include_global_state: false,
   });
   if (!restore.ok) throw new Error(`restore call failed: HTTP ${restore.status} ${restore.text.slice(0, 300)}`);
 
@@ -283,19 +327,19 @@ async function cmdRestoreDrill(argv) {
   let recovered = false;
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 2000));
-    const health = await osJsonCall(cfg, "GET", `/_cluster/health/${encodeURIComponent(drillIndex)}`);
+    const health = await osJsonCall(cfg, "GET", ["_cluster", "health", drillIndex]);
     if (health.ok && (health.json?.status === "green" || health.json?.status === "yellow")) { recovered = true; break; }
   }
   if (!recovered) throw new Error(`drill index "${drillIndex}" did not reach a healthy status within 60s of the restore call`);
 
   const [drillCount, liveCount] = await Promise.all([
-    osJsonCall(cfg, "POST", `/${encodeURIComponent(drillIndex)}/_count`, {}),
-    osJsonCall(cfg, "POST", `/${encodeURIComponent(indexName)}/_count`, {}),
+    osJsonCall(cfg, "POST", [drillIndex, "_count"], {}),
+    osJsonCall(cfg, "POST", [indexName, "_count"], {}),
   ]);
   const drillN = drillCount.json?.count ?? -1;
   const liveN = liveCount.json?.count ?? -1;
   // Cleanup FIRST, verify SECOND -- a failed assertion below must not leave a leftover drill index.
-  await osJsonCall(cfg, "DELETE", `/${encodeURIComponent(drillIndex)}`);
+  await osJsonCall(cfg, "DELETE", [drillIndex]);
   console.log(`[os-snapshot] drill: ${drillIndex}=${drillN} docs, live ${indexName}=${liveN} docs (snapshot is up to 24h older; tolerance >= 95%).`);
   if (liveN <= 0) throw new Error(`live index "${indexName}" reports ${liveN} docs -- cannot compute a meaningful tolerance`);
   if (drillN < liveN * 0.95) {
