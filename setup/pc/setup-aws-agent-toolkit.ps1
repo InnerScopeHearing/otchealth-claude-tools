@@ -2884,16 +2884,26 @@ function Show-FinalSummary {
 
 function Start-SetupLog {
     # Starts the transcript next to the script (or in a fallback folder). Returns the log path, or ''.
+    # The empty log file is created first, as a test of the folder: Windows PowerShell 5.1 starts a transcript WITHOUT any
+    # error even when the file cannot be created there (a folder that does not exist, or one that cannot be written to),
+    # and the closing screen would then point at a log file that is not there.
     param([string]$ScriptDir, [string]$Stamp, [string]$UserHome)
     $name = 'aws-toolkit-setup-log-' + $Stamp + '.txt'
     foreach ($d in @($ScriptDir, [System.IO.Path]::GetTempPath(), $UserHome)) {
         if (-not $d) { continue }
         $p = Join-Path $d $name
+        $created = $false
         try {
+            if (-not [System.IO.File]::Exists($p)) {
+                [System.IO.File]::WriteAllText($p, '')
+                $created = $true
+            }
             Start-Transcript -Path $p -ErrorAction Stop | Out-Null
             return $p
         }
-        catch { }
+        catch {
+            if ($created) { try { [System.IO.File]::Delete($p) } catch { } }
+        }
     }
     return ''
 }
