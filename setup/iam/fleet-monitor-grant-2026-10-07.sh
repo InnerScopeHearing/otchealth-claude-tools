@@ -8,8 +8,10 @@
 #        - list and read the heartbeat folder only
 #              s3://otchealth-brain-dr-55c84f6b/otchealthcommons/company-journal/_HEARTBEAT/
 #        - write ONLY its own heartbeat file  .../_HEARTBEAT/nightly-aws-dr-canary.json
-#   B. Role otchealth-github-recovery-console (used by the hourly AWS health monitor in otchealth-cto)
-#      gets ONE policy, otchealth-fleet-heartbeat-aws-health-monitor-2026-10-07:
+#   B. The hourly AWS health monitor in otchealth-cto signs in with role otchealth-github-recovery-console
+#      when that role is configured for it, otherwise with the escrowed IAM user cto-hyperagent (the
+#      recovery console ran as that user on 2026-10-08). Whichever of the two exists gets ONE policy,
+#      otchealth-fleet-heartbeat-aws-health-monitor-2026-10-07:
 #        - read and write ONLY  .../_HEARTBEAT/aws-health-monitor.json
 #   If the bucket is encrypted with a customer-managed KMS key, both policies also allow
 #   kms:Decrypt and kms:GenerateDataKey on that one key, and only when the call comes through S3.
@@ -41,13 +43,15 @@ CANARY_POLICY="otchealth-fleet-monitor-read-2026-10-07"
 CANARY_BEAT="nightly-aws-dr-canary.json"
 
 CONSOLE_ROLE="otchealth-github-recovery-console"
-CONSOLE_POLICY="otchealth-fleet-heartbeat-aws-health-monitor-2026-10-07"
+HEALTH_USER="cto-hyperagent"
+HEALTH_POLICY="otchealth-fleet-heartbeat-aws-health-monitor-2026-10-07"
 HEALTH_BEAT="aws-health-monitor.json"
 
 BUCKET_ARN="arn:aws:s3:::${BUCKET}"
 BEAT_ARN="${BUCKET_ARN}/${BEAT_FOLDER}"
 CANARY_ARN=""
 CONSOLE_ARN=""
+USER_ARN=""
 
 WORK_DIR="$(mktemp -d)"
 cleanup() { rm -rf "$WORK_DIR"; }
@@ -147,25 +151,26 @@ look_not_allowed() {
   fi
 }
 
-# save_policy ROLE NAME FILE: inline role policy; if the role's inline space is full (LimitExceeded),
-# a customer-managed policy with the same name is created or updated and attached instead.
+# save_policy KIND WHO NAME FILE (KIND is role or user): inline policy; if the inline space is full
+# (LimitExceeded), a customer-managed policy with the same name is created or updated and attached.
 # Every command is guarded with `|| return 1` because errexit is suspended inside `if ! save_policy`.
 save_policy() {
-  local role="$1" name="$2" file="$3" out arn n old
-  if out="$(aws iam put-role-policy --role-name "$role" --policy-name "$name" --policy-document "file://$file" 2>&1)"; then
-    ROLLBACKS+=("aws iam delete-role-policy --role-name $role --policy-name $name")
-    if ! aws iam get-role-policy --role-name "$role" --policy-name "$name" --query PolicyName --output text >/dev/null; then
-      echo "  Saved inline policy $name on role $role, but reading it back failed."
+  local kind="$1" who="$2" name="$3" file="$4" out arn n old flag
+  flag="--${kind}-name"
+  if out="$(aws iam "put-${kind}-policy" "$flag" "$who" --policy-name "$name" --policy-document "file://$file" 2>&1)"; then
+    ROLLBACKS+=("aws iam delete-${kind}-policy $flag $who --policy-name $name")
+    if ! aws iam "get-${kind}-policy" "$flag" "$who" --policy-name "$name" --query PolicyName --output text >/dev/null; then
+      echo "  Saved inline policy $name on $kind $who, but reading it back failed."
       return 1
     fi
-    echo "  Saved and read back: inline policy $name on role $role."
+    echo "  Saved and read back: inline policy $name on $kind $who."
     return 0
   fi
   case "$out" in
     *LimitExceeded*) ;;
     *) printf '%s\n' "$out"; return 1 ;;
   esac
-  echo "  The role's inline policy space is full, so this grant is saved as a managed policy with the same name."
+  echo "  The $kind's inline policy space is full, so this grant is saved as a managed policy with the same name."
   arn="arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${name}"
   if aws iam get-policy --policy-arn "$arn" >/dev/null 2>&1; then
     n="$(aws iam list-policy-versions --policy-arn "$arn" --query 'length(Versions)' --output text)" || return 1
@@ -177,10 +182,10 @@ save_policy() {
   else
     aws iam create-policy --policy-name "$name" --policy-document "file://$file" >/dev/null || return 1
   fi
-  aws iam attach-role-policy --role-name "$role" --policy-arn "$arn" || return 1
-  echo "  Saved: managed policy $name, attached to role $role."
-  ROLLBACKS+=("aws iam detach-role-policy --role-name $role --policy-arn $arn")
-  NOTES+=("after detaching, delete the managed policy $name in the IAM console (Policies page).")
+  aws iam "attach-${kind}-policy" "$flag" "$who" --policy-arn "$arn" || return 1
+  echo "  Saved: managed policy $name, attached to $kind $who."
+  ROLLBACKS+=("aws iam detach-${kind}-policy $flag $who --policy-arn $arn")
+  NOTES+=("after detaching everywhere, delete the managed policy $name in the IAM console (Policies page).")
   return 0
 }
 
@@ -218,7 +223,7 @@ fi
 echo "OK: account $ACCOUNT is the OTCHealth account."
 
 # ---------------------------------------------------------------------------------------------
-section "1. The two roles today"
+section "1. Who gets the permissions (current state)"
 echo "Role $CANARY_ROLE:"
 show_role "$CANARY_ROLE" CANARY_ARN
 CONSOLE_PRESENT="yes"
@@ -227,8 +232,24 @@ if aws iam get-role --role-name "$CONSOLE_ROLE" >/dev/null 2>&1; then
   show_role "$CONSOLE_ROLE" CONSOLE_ARN
 else
   CONSOLE_PRESENT="no"
+  echo "  Role $CONSOLE_ROLE was not found (part B uses the user below instead)."
+fi
+USER_PRESENT="yes"
+if USER_ARN="$(aws iam get-user --user-name "$HEALTH_USER" --query User.Arn --output text 2>/dev/null)"; then
+  echo "User $HEALTH_USER:"
+  echo "  User ARN : $USER_ARN"
+  echo "  Inline policies:"
+  aws iam list-user-policies --user-name "$HEALTH_USER" --query 'PolicyNames' --output text | tr '\t' '\n' | show_list
+  echo "  Attached (managed) policies:"
+  aws iam list-attached-user-policies --user-name "$HEALTH_USER" --query 'AttachedPolicies[].PolicyName' --output text | tr '\t' '\n' | show_list
+else
+  USER_PRESENT="no"
+  USER_ARN=""
+  echo "  User $HEALTH_USER was not found."
+fi
+if [ "$CONSOLE_PRESENT" = "no" ] && [ "$USER_PRESENT" = "no" ]; then
   FAILED=$((FAILED + 1))
-  echo "  FAIL  role $CONSOLE_ROLE was not found, so part B is skipped. Tell the CTO."
+  echo "  FAIL  neither $CONSOLE_ROLE nor $HEALTH_USER exists, so part B is skipped. Tell the CTO."
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -334,15 +355,15 @@ EOF
 if command -v python3 >/dev/null 2>&1; then python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$CANARY_FILE"; fi
 cat "$CANARY_FILE"
 echo ""
-if ! save_policy "$CANARY_ROLE" "$CANARY_POLICY" "$CANARY_FILE"; then
+if ! save_policy role "$CANARY_ROLE" "$CANARY_POLICY" "$CANARY_FILE"; then
   stop "part A could not be saved or read back (the message above says why). Usual cause: this sign-in may not change IAM. Sign in as the account owner or an administrator and run again."
 fi
 
 # ---------------------------------------------------------------------------------------------
-section "4. Part B: policy $CONSOLE_POLICY on role $CONSOLE_ROLE"
-if [ "$CONSOLE_PRESENT" = "yes" ]; then
-  CONSOLE_FILE="$WORK_DIR/console-policy.json"
-  cat > "$CONSOLE_FILE" <<EOF
+section "4. Part B: policy $HEALTH_POLICY for the hourly health monitor"
+if [ "$CONSOLE_PRESENT" = "yes" ] || [ "$USER_PRESENT" = "yes" ]; then
+  HEALTH_FILE="$WORK_DIR/health-policy.json"
+  cat > "$HEALTH_FILE" <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -355,14 +376,21 @@ if [ "$CONSOLE_PRESENT" = "yes" ]; then
   ]
 }
 EOF
-  if command -v python3 >/dev/null 2>&1; then python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$CONSOLE_FILE"; fi
-  cat "$CONSOLE_FILE"
+  if command -v python3 >/dev/null 2>&1; then python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$HEALTH_FILE"; fi
+  cat "$HEALTH_FILE"
   echo ""
-  if ! save_policy "$CONSOLE_ROLE" "$CONSOLE_POLICY" "$CONSOLE_FILE"; then
-    stop "part B could not be saved or read back (the message above says why). Part A is already saved. Copy this screen and send it to the CTO."
+  if [ "$CONSOLE_PRESENT" = "yes" ]; then
+    if ! save_policy role "$CONSOLE_ROLE" "$HEALTH_POLICY" "$HEALTH_FILE"; then
+      stop "part B could not be saved on role $CONSOLE_ROLE (the message above says why). Part A is already saved. Copy this screen and send it to the CTO."
+    fi
+  fi
+  if [ "$USER_PRESENT" = "yes" ]; then
+    if ! save_policy user "$HEALTH_USER" "$HEALTH_POLICY" "$HEALTH_FILE"; then
+      stop "part B could not be saved on user $HEALTH_USER (the message above says why). Part A is already saved. Copy this screen and send it to the CTO."
+    fi
   fi
 else
-  echo "  Skipped (role not found)."
+  echo "  Skipped (no role or user to attach it to)."
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -376,14 +404,21 @@ expect_allowed "A  s3:GetObject   ${BEAT_FOLDER}/${CANARY_BEAT}" "$CANARY_ARN" "
 expect_allowed "A  s3:GetObject   ${BEAT_FOLDER}/${HEALTH_BEAT}" "$CANARY_ARN" "s3:GetObject" "${BEAT_ARN}/${HEALTH_BEAT}"
 expect_allowed "A  s3:PutObject   ${BEAT_FOLDER}/${CANARY_BEAT}" "$CANARY_ARN" "s3:PutObject" "${BEAT_ARN}/${CANARY_BEAT}"
 if [ "$CONSOLE_PRESENT" = "yes" ]; then
-  expect_allowed "B  s3:GetObject   ${BEAT_FOLDER}/${HEALTH_BEAT}" "$CONSOLE_ARN" "s3:GetObject" "${BEAT_ARN}/${HEALTH_BEAT}"
-  expect_allowed "B  s3:PutObject   ${BEAT_FOLDER}/${HEALTH_BEAT}" "$CONSOLE_ARN" "s3:PutObject" "${BEAT_ARN}/${HEALTH_BEAT}"
+  expect_allowed "B  role: s3:GetObject ${BEAT_FOLDER}/${HEALTH_BEAT}" "$CONSOLE_ARN" "s3:GetObject" "${BEAT_ARN}/${HEALTH_BEAT}"
+  expect_allowed "B  role: s3:PutObject ${BEAT_FOLDER}/${HEALTH_BEAT}" "$CONSOLE_ARN" "s3:PutObject" "${BEAT_ARN}/${HEALTH_BEAT}"
+fi
+if [ "$USER_PRESENT" = "yes" ]; then
+  expect_allowed "B  user: s3:GetObject ${BEAT_FOLDER}/${HEALTH_BEAT}" "$USER_ARN" "s3:GetObject" "${BEAT_ARN}/${HEALTH_BEAT}"
+  expect_allowed "B  user: s3:PutObject ${BEAT_FOLDER}/${HEALTH_BEAT}" "$USER_ARN" "s3:PutObject" "${BEAT_ARN}/${HEALTH_BEAT}"
 fi
 if [ -n "$KMS_KEY_ARN" ]; then
   VIA_CTX="[{\"ContextKeyName\":\"kms:ViaService\",\"ContextKeyValues\":[\"s3.${REGION}.amazonaws.com\"],\"ContextKeyType\":\"string\"}]"
   expect_allowed "A  kms:Decrypt     bucket key, through S3" "$CANARY_ARN" "kms:Decrypt" "$KMS_KEY_ARN" "$VIA_CTX"
   if [ "$CONSOLE_PRESENT" = "yes" ]; then
-    expect_allowed "B  kms:GenerateDataKey bucket key, through S3" "$CONSOLE_ARN" "kms:GenerateDataKey" "$KMS_KEY_ARN" "$VIA_CTX"
+    expect_allowed "B  role: kms:GenerateDataKey through S3" "$CONSOLE_ARN" "kms:GenerateDataKey" "$KMS_KEY_ARN" "$VIA_CTX"
+  fi
+  if [ "$USER_PRESENT" = "yes" ]; then
+    expect_allowed "B  user: kms:GenerateDataKey through S3" "$USER_ARN" "kms:GenerateDataKey" "$KMS_KEY_ARN" "$VIA_CTX"
   fi
 fi
 echo "Least-privilege look (information only, not counted):"
