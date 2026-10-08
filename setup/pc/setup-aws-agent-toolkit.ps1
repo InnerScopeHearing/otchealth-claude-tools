@@ -2407,4 +2407,595 @@ function Invoke-Step5Preflight {
         if (-not $agentOn) { continue }
         $backupList.Add($t.Path)
         if (Test-EngineOff 'json') { continue }   # the self-check of the JSON reader failed: back up only, no analysis
-#@@W3-CHUNK-CONTINUES@@
+        $info = Get-JsonServerInfo -Text $f.Text -ParentKey 'mcpServers' -Server $cfg.ServerName -EnvKey 'env' -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName
+        if ($info.State -eq 'Invalid' -or ($info.State -eq 'Refused' -and -not $info.HasEnv)) {
+            Stop-Setup ('The settings file {0} is not in the expected format ({1}), and the AWS wizard would stop on it. Nothing was changed. Send the log file to the CTO.' -f $t.Path, $info.Reason)
+        }
+    }
+
+    if ($names -contains 'OpenCode') {
+        $f = Read-TextFile $ctx.OpenCodeJson
+        if ($f.Exists) {
+            if (-not $f.Ok) { Stop-Setup ('The settings file {0} {1}, and the AWS wizard would stop on it. Nothing was changed.' -f $ctx.OpenCodeJson, $f.Error) }
+            $backupList.Add($ctx.OpenCodeJson)
+            if (-not (Test-EngineOff 'json')) {
+                $info = Get-JsonServerInfo -Text $f.Text -ParentKey 'mcp' -Server $cfg.ServerName -EnvKey 'environment' -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName
+                if ($info.State -eq 'Invalid' -or ($info.State -eq 'Refused' -and -not $info.HasEnv)) {
+                    Stop-Setup ('The settings file {0} is not in the expected format ({1}), and the AWS wizard would stop on it. Nothing was changed.' -f $ctx.OpenCodeJson, $info.Reason)
+                }
+            }
+        }
+    }
+
+    if ($names -contains 'Codex') {
+        $f = Read-TextFile $ctx.CodexConfig
+        if (-not $f.Ok) { Stop-Setup ('Codex''s settings file {0} {1}. Nothing was changed. Send the log file to the CTO.' -f $ctx.CodexConfig, $f.Error) }
+        $cliCheck = $true
+        if ($f.Exists -and (Test-EngineOff 'toml')) {
+            $backupList.Add($ctx.CodexConfig)   # the self-check of the Codex settings reader failed: back up only, no analysis
+        }
+        elseif ($f.Exists) {
+            $backupList.Add($ctx.CodexConfig)
+            $info = Get-TomlServerInfo -Text $f.Text -Server $cfg.ServerName -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName
+            if ($info.State -eq 'Ready' -or $info.State -eq 'AlreadyOk') {
+                # An "aws-mcp" entry exists already. Only the plain one from AWS may be completed automatically.
+                if (-not $info.Looks) {
+                    Stop-Setup ('Codex already has an "aws-mcp" entry that is not the plain one from AWS (for example it has extra settings). Per AWS''s instructions, ask the CTO how to reconcile it, so nothing was changed. File: {0}' -f $ctx.CodexConfig)
+                }
+                $cliCheck = $false
+            }
+            elseif ($info.State -eq 'Refused' -and -not $info.Reason.StartsWith('the file could not be read safely', [StringComparison]::Ordinal)) {
+                Stop-Setup ('Codex''s settings file already has an "aws-mcp" entry that needs a person to look at it. Reason: {0}. Nothing was changed. Ask the CTO how to reconcile it. File: {1}' -f $info.Reason, $ctx.CodexConfig)
+            }
+            elseif ($info.State -eq 'Refused') {
+                Add-Result 'NOTE' 'Step 5' ('This script could not fully read Codex''s settings file ({0}). The AWS wizard will still run, but the otchealth setting may need a hand edit afterwards.' -f $info.Reason)
+            }
+        }
+        if ($cliCheck -and $ctx.CodexExe) {
+            $l = Invoke-ProcessCapture -FilePath $ctx.CodexExe -Arguments @('mcp', 'list') -TimeoutSec 60
+            if ($l.ExitCode -eq 0 -and ([string]$l.StdOut) -match '(?m)(^|\s)aws-mcp(\s|$)') {
+                Stop-Setup 'Codex reports an "aws-mcp" server that is not in its settings file (it may come from a plugin or a project). Adding the AWS entry could clash with it, so nothing was changed. Ask the CTO how to reconcile it.'
+            }
+            if ($l.ExitCode -ne 0) {
+                Add-Result 'NOTE' 'Step 5' 'Could not ask Codex for its list of MCP servers (the "codex mcp list" check). Continuing.'
+            }
+        }
+    }
+    return $backupList.ToArray()
+}
+
+function Invoke-Step5Wizard {
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    Out-Say '  Running the AWS Agent Toolkit wizard. It installs the default AWS skills and adds the AWS MCP server. This can take a few minutes...'
+    # For Codex the wizard runs "codex mcp add" and crashes if that command fails. So "codex" is hidden from the wizard's
+    # PATH for this one command: the wizard then skips Codex (as it does on a PC without Codex), and this script adds the
+    # standard entry afterwards, in a checked way (see Invoke-Step5PatchCodex).
+    $wizardEnv = $null
+    $hide = Get-PathWithoutProgram -Name 'codex' -PathValue ([Environment]::GetEnvironmentVariable('PATH'))
+    if (@($hide.Removed).Count -gt 0) {
+        $wizardEnv = @{ PATH = $hide.Path }
+        $ctx.CodexHidden = $true
+        Add-Detail ('codex hidden from the wizard (these folders were left out of its PATH): ' + (@($hide.Removed) -join '; '))
+        Out-Say '  (The "codex" command is hidden from the wizard for this one step, so it cannot fail halfway through. This script adds the AWS entry to Codex''s settings itself afterwards.)'
+    }
+    $r = Invoke-ProcessCapture -FilePath $ctx.AwsExe -Arguments @('configure', 'agent-toolkit', '--yes', '--region', $cfg.ToolkitRegion, '--profile', $cfg.ProfileName) -TimeoutSec 900 -Heartbeat -ExtraEnv $wizardEnv
+    if ($r.Error) { Stop-Setup ('The AWS wizard could not start: ' + $r.Error) }
+    if ($r.TimedOut) { Stop-Setup 'The AWS wizard took too long (more than 15 minutes). Run this script again.' }
+    $text = ([string]$r.StdOut).TrimEnd()
+    if ($text) { Out-Say $text }
+    $err = ([string]$r.StdErr).Trim()
+    if ($err) { Out-Say (Get-Excerpt $err 10) 'Warn' }
+    if ($r.ExitCode -ne 0) {
+        Stop-Setup ('The AWS wizard stopped with an error (exit code {0}). {1} If it mentions credentials or an expired session, run: aws login --profile {2}  and then run this script again.' -f $r.ExitCode, (Get-Excerpt ($err + [Environment]::NewLine + $text) 6), $cfg.ProfileName)
+    }
+    $count = ''
+    $m = [regex]::Match($text, 'Installing (\d+) default AWS skills')
+    if ($m.Success) { $count = $m.Groups[1].Value }
+    if ($count) { Add-Result 'OK' 'Step 5' ('AWS Agent Toolkit wizard finished. {0} default AWS skills installed.' -f $count) }
+    else { Add-Result 'OK' 'Step 5' 'AWS Agent Toolkit wizard finished.' }
+    return $r
+}
+
+function Get-JsonEngineOffHandEdit {
+    # Used when the JSON reader failed its self-check on this PC: a file is not edited by the script at all.
+    param([string]$Path, [string]$ProfileName = 'otchealth')
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('This file was not changed by the script. If it has an "aws-mcp" entry, do the following:')
+    $l.Add((Get-JsonEnvHandEdit $Path $ProfileName))
+    return (Join-Lines $l.ToArray())
+}
+
+function Invoke-Step5PatchJson {
+    param($Detected = $null)
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    if (Test-EngineOff 'json') {
+        # The JSON reader did not pass its self-check on this PC: no JSON file is edited by the script.
+        $names = @($Detected | ForEach-Object { $_.Name })
+        foreach ($t in $ctx.JsonTargets) {
+            if ($null -ne $Detected -and $names -notcontains $t.Name) { continue }
+            $f = Read-TextFile $t.Path
+            if (-not $f.Exists) { continue }
+            Add-Manual $t.Path 'the script''s own check of the JSON settings editor did not pass on this PC, so the file was not edited' (Get-JsonEngineOffHandEdit $t.Path $cfg.ProfileName)
+        }
+        return
+    }
+    foreach ($t in $ctx.JsonTargets) {
+        $f = Read-TextFile $t.Path
+        if (-not $f.Exists -or -not $f.Ok) { continue }
+        $info = Get-JsonServerInfo -Text $f.Text -ParentKey 'mcpServers' -Server $cfg.ServerName -EnvKey 'env' -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName
+        if ($info.State -eq 'NotFound' -or $info.State -eq 'Invalid') { continue }
+        if ($info.State -eq 'Ready' -and -not $info.Looks) {
+            Add-Manual $t.Path 'an existing aws-mcp entry is not the standard AWS one; AWS says to ask how to reconcile it' (Get-JsonEnvHandEdit $t.Path $cfg.ProfileName)
+            continue
+        }
+        $r = Add-ProfileEnv -Path $t.Path -ParentKey 'mcpServers' -Server $cfg.ServerName -EnvKey 'env' -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName
+        if ($r.State -eq 'Patched') {
+            Add-Result 'OK' 'Step 5' ('{0}: added the {1} profile to the aws-mcp entry in {2}' -f $t.Name, $cfg.ProfileName, $t.Path)
+            Add-Detail ('{0}: env added ({1}); backup {2}' -f $t.Name, $t.Path, $r.Backup)
+        }
+        elseif ($r.State -eq 'AlreadyOk') {
+            Add-Result 'OK' 'Step 5' ('{0}: the aws-mcp entry already uses the {1} profile ({2})' -f $t.Name, $cfg.ProfileName, $t.Path)
+        }
+        elseif ($r.State -eq 'Refused' -or $r.State -eq 'Invalid') {
+            Add-Manual $t.Path $r.Reason (Get-JsonEnvHandEdit $t.Path $cfg.ProfileName)
+        }
+    }
+}
+
+function Invoke-Step5PatchOpenCode {
+    param($Detected = $null)
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    $f = Read-TextFile $ctx.OpenCodeJson
+    if (-not $f.Exists -or -not $f.Ok) { return }
+    if (Test-EngineOff 'json') {
+        $names = @($Detected | ForEach-Object { $_.Name })
+        if ($null -eq $Detected -or $names -contains 'OpenCode') {
+            Add-Manual $ctx.OpenCodeJson 'the script''s own check of the JSON settings editor did not pass on this PC, so the file was not edited' (Get-OpenCodeHandEdit $ctx.OpenCodeJson $cfg.ProfileName)
+        }
+        return
+    }
+    $info = Get-JsonServerInfo -Text $f.Text -ParentKey 'mcp' -Server $cfg.ServerName -EnvKey 'environment' -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName
+    if ($info.State -eq 'NotFound' -or $info.State -eq 'Invalid') { return }
+    if ($info.State -eq 'AlreadyOk') {
+        Add-Result 'OK' 'Step 5' ('OpenCode: the aws-mcp entry already uses the {0} profile' -f $cfg.ProfileName)
+        return
+    }
+    Add-Manual $ctx.OpenCodeJson 'OpenCode uses its own settings format, so this one is left for a hand edit' (Get-OpenCodeHandEdit $ctx.OpenCodeJson $cfg.ProfileName)
+}
+
+function Test-CodexEnvViaCli {
+    # Asks Codex itself what it will pass to the aws-mcp server. Returns 'yes', 'no' or 'unknown'.
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    if (-not $ctx.CodexExe) { return 'unknown' }
+    $r = Invoke-ProcessCapture -FilePath $ctx.CodexExe -Arguments @('mcp', 'get', $cfg.ServerName, '--json') -TimeoutSec 60
+    if ($r.ExitCode -ne 0) { return 'unknown' }
+    try { $j = ([string]$r.StdOut) | ConvertFrom-Json } catch { return 'unknown' }
+    try {
+        $v = $j.transport.env.($cfg.EnvName)
+        if ($null -eq $v) { return 'no' }
+        $tokens = @(([string]$v) -split '\s+' | Where-Object { $_.Length -gt 0 })
+        if ($tokens -ccontains $cfg.ProfileName) { return 'yes' }
+        return 'no'
+    }
+    catch { return 'unknown' }
+}
+
+function Get-CodexEitherHandEdit {
+    # Hand edit for the case where the script did not look into config.toml at all (so it does not know whether an
+    # aws-mcp entry exists): one text for each possibility.
+    param([string]$ConfigPath, [string]$ProfileName = 'otchealth')
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('This file was not changed by the script. First look in it for a line that says [mcp_servers.aws-mcp].')
+    $l.Add('IF THERE IS NO SUCH LINE:')
+    $l.Add((Get-CodexFullHandEdit $ConfigPath $ProfileName))
+    $l.Add('IF THERE IS SUCH A LINE:')
+    $l.Add((Get-CodexEnvHandEdit $ConfigPath $ProfileName))
+    return (Join-Lines $l.ToArray())
+}
+
+function Invoke-Step5PatchCodex {
+    param($Detected)
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    $names = @($Detected | ForEach-Object { $_.Name })
+    if ($names -notcontains 'Codex') { return }
+    if (Test-EngineOff 'toml') {
+        # The reader for Codex's settings file did not pass its self-check on this PC: the file is not edited by the script.
+        Add-Manual $ctx.CodexConfig 'the script''s own check of the Codex settings editor did not pass on this PC, so the file was not edited' (Get-CodexEitherHandEdit $ctx.CodexConfig $cfg.ProfileName)
+        return
+    }
+    $r = Update-CodexConfigEnv -Path $ctx.CodexConfig -Server $cfg.ServerName -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName
+    if ($r.State -eq 'Patched') {
+        $ctx.CodexPatched = $true
+        Add-Result 'OK' 'Step 5' ('Codex: added the {0} profile to the aws-mcp entry in {1}' -f $cfg.ProfileName, $ctx.CodexConfig)
+        Add-Detail ('Codex config: env added ({0}); backup {1}' -f $ctx.CodexConfig, $r.Backup)
+    }
+    elseif ($r.State -eq 'AlreadyOk') {
+        $ctx.CodexPatched = $true
+        Add-Result 'OK' 'Step 5' ('Codex: the aws-mcp entry already uses the {0} profile' -f $cfg.ProfileName)
+    }
+    elseif ($r.State -eq 'NotFound') {
+        # The wizard wrote no entry for Codex ("codex" was hidden from it, or is not installed). Add the same standard
+        # entry ourselves, with the profile (insert only, then read back and checked).
+        $a = Add-CodexEntryToFile -Path $ctx.CodexConfig -Server $cfg.ServerName -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName -McpUrl $cfg.McpUrl -ProxyPackage $cfg.ProxyPackage
+        if ($a.State -ne 'Added') {
+            Add-Manual $ctx.CodexConfig ('the AWS wizard does not write Codex''s entry in this setup, and the entry could not be added safely by this script: ' + $a.Reason) (Get-CodexFullHandEdit $ctx.CodexConfig $cfg.ProfileName)
+            return
+        }
+        $ctx.CodexPatched = $true
+        $howDone = 'added to the existing file'
+        if ($a.Created) { $howDone = 'created as a new file' }
+        $because = 'The AWS wizard did not write it (the "codex" command was not found, so the wizard skipped Codex).'
+        if ($ctx.CodexHidden) { $because = 'The AWS wizard was kept away from Codex on purpose (so that it cannot fail halfway).' }
+        Add-Result 'OK' 'Step 5' ('Codex: added the standard AWS entry, with the {0} profile, to {1}. {2} This script wrote the same entry itself.' -f $cfg.ProfileName, $ctx.CodexConfig, $because)
+        $detail = ('Codex config: aws-mcp entry {0} ({1})' -f $howDone, $ctx.CodexConfig)
+        if ($a.Backup) { $detail = $detail + '; backup ' + $a.Backup }
+        Add-Detail $detail
+    }
+    else {
+        Add-Manual $ctx.CodexConfig $r.Reason (Get-CodexEnvHandEdit $ctx.CodexConfig $cfg.ProfileName)
+        return
+    }
+    if (-not $ctx.CodexExe) { return }
+    $viaCli = Test-CodexEnvViaCli
+    if ($viaCli -eq 'yes') { Add-Result 'OK' 'Step 5' 'Codex itself reports the otchealth profile for aws-mcp ("codex mcp get").' }
+    elseif ($viaCli -eq 'no') { Add-Result 'ACTION' 'Step 5' 'The settings file looks right, but "codex mcp get aws-mcp" does not show the otchealth profile. Please send the log file to the CTO.' }
+    else { Add-Result 'NOTE' 'Step 5' 'Could not double-check with "codex mcp get" (this is only an extra check).' }
+}
+
+function Invoke-Step5Prewarm {
+    # The first start of the AWS MCP proxy downloads it and can take longer than Codex waits (10 seconds),
+    # so run it once now. Never fatal.
+    $uvx = Resolve-Exe 'uvx'
+    if (-not $uvx) {
+        Add-Result 'NOTE' 'Step 5' 'Could not find "uvx" on the PATH of this window. Close and reopen Codex after this finishes (if it still cannot start the AWS tool, sign out of Windows and back in).'
+        return
+    }
+    Out-Say '  Warming up the AWS MCP proxy once, so Codex does not time out the first time it starts it (up to a minute)...'
+    $r = Invoke-ProcessCapture -FilePath $uvx -Arguments @('mcp-proxy-for-aws@latest', '--help') -TimeoutSec 300 -Heartbeat
+    if ($r.ExitCode -eq 0) { Add-Result 'OK' 'Step 5' 'The AWS MCP proxy is downloaded and ready.' }
+    else { Add-Result 'NOTE' 'Step 5' ('The warm-up of the AWS MCP proxy did not finish ({0}). The first start inside Codex may be slow.' -f (Get-Excerpt (([string]$r.StdErr) + ([string]$r.Error)) 3)) }
+}
+
+function Invoke-Step5Toolkit {
+    Show-StepHeader 5 'Setting up the Agent Toolkit (AWS skills and AWS MCP server)'
+    $ctx = $script:Ctx
+    $detected = @(Get-DetectedAgents)
+    if ($detected.Count -eq 0) {
+        Stop-Setup ('No supported AI tool settings folder was found in {0} (for example .codex). The AWS wizard needs at least one, so nothing was changed. Send the log file to the CTO.' -f $ctx.UserHome)
+    }
+    Out-Say ('  The wizard will set up: {0}' -f ((@($detected | ForEach-Object { $_.Name })) -join ', '))
+    Add-Detail ('Agents detected: {0}' -f ((@($detected | ForEach-Object { $_.Name })) -join ', '))
+    $running = @(Get-RunningAgentApps)
+    if ($running.Count -gt 0) {
+        Out-Say ('  These apps are open right now: {0}. Please close them if you can; they can overwrite the settings this script writes.' -f ($running -join ', ')) 'Warn'
+    }
+    $ctx.CodexExe = Resolve-Exe 'codex'
+    $namesNow = @($detected | ForEach-Object { $_.Name })
+    if (($namesNow -contains 'Codex') -and -not $ctx.CodexExe) {
+        Add-Result 'NOTE' 'Step 5' 'The "codex" command was not found on this PC''s PATH, so the AWS wizard will skip Codex (it will say so). This script will add the AWS tool to Codex''s settings file itself afterwards.'
+    }
+    elseif (($namesNow -contains 'Codex') -and $ctx.CodexExe) {
+        Add-Result 'NOTE' 'Step 5' ('The "codex" command was found ({0}). It is hidden from the AWS wizard for this one step, and this script adds the AWS tool to Codex''s settings file itself afterwards.' -f $ctx.CodexExe)
+    }
+
+    $toBackup = @(Invoke-Step5Preflight $detected)
+    foreach ($p in $toBackup) {
+        $b = New-BackupCopy -Path $p -Tag 'bak'
+        Out-Say ('  Backed up {0}' -f $p)
+        Add-Detail ('backup: {0}' -f $b)
+    }
+
+    [void](Invoke-Step5Wizard)
+    Invoke-Step5PatchJson $detected
+    Invoke-Step5PatchOpenCode $detected
+    Invoke-Step5PatchCodex $detected
+    Invoke-Step5Prewarm
+    # Accepted risk (recorded for the CTO): the entry that AWS's wizard writes runs "uvx mcp-proxy-for-aws@latest", which is
+    # not pinned to one version. setup.md says the generated arguments must not be changed, so it is kept as AWS writes it.
+    Add-Detail 'Accepted risk: the AWS MCP entry runs "uvx mcp-proxy-for-aws@latest" (not pinned to one version) with the otchealth sign-in every time Codex starts. This is exactly what AWS''s own wizard writes, and setup.md says not to change the generated arguments.'
+    Out-Say ''
+    Out-Say 'To use another AWS account later: run  aws login --profile <name>,  add that profile name to the space-separated AWS_MCP_PROXY_PROFILES list in each MCP configuration file, and restart your AI tool.' 'Plain'
+}
+
+# ======================================================================================
+# Steps 6 and 7 (setup.md): check the skill catalog, add the AWS rules
+# ======================================================================================
+function Invoke-Step6Verify {
+    Show-StepHeader 6 'Checking the AWS skill catalog'
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    $r = Invoke-ProcessCapture -FilePath $ctx.AwsExe -Arguments @('agent-toolkit', 'list-available-skills', '--region', $cfg.ToolkitRegion, '--profile', $cfg.ProfileName) -TimeoutSec 120
+    if ($r.Error -or $r.TimedOut -or $r.ExitCode -ne 0) {
+        $why = (Get-Excerpt (([string]$r.StdErr) + [Environment]::NewLine + ([string]$r.StdOut) + [Environment]::NewLine + ([string]$r.Error)) 5)
+        Add-Result 'ACTION' 'Step 6' ('Could not read the AWS skill catalog. {0} If it says the session expired, run: aws login --profile {1}  (then run this script again). If it says "invalid choice", the AWS CLI is too old.' -f $why, $cfg.ProfileName)
+        return
+    }
+    $skills = $null
+    try {
+        $j = ([string]$r.StdOut) | ConvertFrom-Json
+        if ($null -ne $j -and $j.PSObject.Properties['skills']) { $skills = @($j.skills) }
+        elseif ($j -is [array]) { $skills = @($j) }
+    }
+    catch { $skills = $null }
+    if ($null -eq $skills) {
+        Add-Result 'NOTE' 'Step 6' 'The AWS skill catalog answered, but its answer could not be counted. That is fine.'
+        return
+    }
+    $names = @($skills | Select-Object -First 5 | ForEach-Object { [string]$_.name })
+    Add-Result 'OK' 'Step 6' ('The AWS skill catalog is reachable: {0} skills available (for example: {1}).' -f $skills.Count, ($names -join ', '))
+}
+
+function Get-RulesHandEdit {
+    param([string]$Path, [string]$Why)
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('Open this file in Notepad: ' + $Path)
+    $l.Add('The AWS rules block could not be added automatically (' + $Why + ').')
+    $l.Add('Make sure the file has exactly one line  ' + $script:Cfg.BeginMarker + '  followed later by exactly one line  ' + $script:Cfg.EndMarker + '  (or neither).')
+    $l.Add('Then run this script again, or ask the CTO to do it.')
+    return (Join-Lines $l.ToArray())
+}
+
+function Invoke-Step7Rules {
+    Show-StepHeader 7 'Adding the AWS rules for your AI tools'
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    foreach ($e in @('sha256', 'rules')) {
+        if (Test-EngineOff $e) {
+            Add-Result 'ACTION' 'Step 7' ('The AWS rules were NOT added: the script''s own check of {0} did not pass on this PC. Please ask the CTO to add them.' -f (Get-EngineLabel $e))
+            return
+        }
+    }
+    $rules = Get-PinnedRules
+    if (-not $rules.Ok) {
+        Add-Result 'ACTION' 'Step 7' ('The AWS rules were NOT added: {0}. Run this script again later, or ask the CTO.' -f $rules.Error)
+        return
+    }
+    Add-Detail ('Rules: aws/agent-toolkit-for-aws commit {0}, rules/aws-agent-rules.md, sha256 {1}' -f $cfg.RulesCommit, $rules.Sha256)
+    $targets = New-Object 'System.Collections.Generic.List[object]'
+    if (Test-Path -LiteralPath $ctx.CodexDir -PathType Container) {
+        $targets.Add([pscustomobject]@{ Name = 'Codex'; Path = $ctx.CodexAgents; IsCodex = $true })
+    }
+    if (Test-Path -LiteralPath $ctx.ClaudeDir -PathType Container) {
+        $targets.Add([pscustomobject]@{ Name = 'Claude Code'; Path = $ctx.ClaudeMd; IsCodex = $false })
+    }
+    if ($targets.Count -eq 0) {
+        Add-Result 'NOTE' 'Step 7' 'Neither a Codex nor a Claude Code settings folder exists, so there was nowhere to put the AWS rules.'
+        return
+    }
+    foreach ($t in $targets) {
+        $r = Update-RulesFile -Path $t.Path -Rules $rules.Text -Begin $cfg.BeginMarker -End $cfg.EndMarker -Note $cfg.PrecedenceNote
+        if ($r.State -eq 'Created') {
+            Add-Result 'OK' 'Step 7' ('{0}: created {1} with the AWS rules.' -f $t.Name, $t.Path)
+            $ctx.RulesApplied = $true
+        }
+        elseif ($r.State -eq 'Appended') {
+            Add-Result 'OK' 'Step 7' ('{0}: added the AWS rules block to the end of {1}. Your existing text was kept.' -f $t.Name, $t.Path)
+            $ctx.RulesApplied = $true
+        }
+        elseif ($r.State -eq 'Replaced') {
+            Add-Result 'OK' 'Step 7' ('{0}: refreshed the AWS rules block in {1}. Only the text between the marker lines changed.' -f $t.Name, $t.Path)
+            $ctx.RulesApplied = $true
+        }
+        elseif ($r.State -eq 'Unchanged') {
+            Add-Result 'OK' 'Step 7' ('{0}: the AWS rules in {1} are already up to date.' -f $t.Name, $t.Path)
+            $ctx.RulesApplied = $true
+        }
+        else {
+            Add-Manual $t.Path ('AWS rules not added: ' + $r.Reason) (Get-RulesHandEdit $t.Path $r.Reason)
+            continue
+        }
+        if ($r.Backup) { Add-Detail ('backup: {0}' -f $r.Backup) }
+        if ($r.Bytes -gt 32768 -and $t.IsCodex) {
+            Add-Result 'NOTE' 'Step 7' 'AGENTS.md is now larger than 32 KiB. Codex stops reading instructions at 32 KiB by default, so the end of the file may be ignored.'
+        }
+    }
+    $ov = Read-TextFile $ctx.CodexOverride
+    if ($ov.Ok -and $ov.Exists -and $ov.Text.Trim().Length -gt 0) {
+        Add-Result 'ACTION' 'Step 7' ('Codex reads {0} instead of AGENTS.md whenever that file has text in it, so the AWS rules in AGENTS.md will be ignored by Codex. Please tell the CTO.' -f $ctx.CodexOverride)
+    }
+}
+
+# ======================================================================================
+# The ending: plain-English summary, log handling and the main flow
+# ======================================================================================
+function Get-DetailBlockText {
+    # Everything the CTO may want to see (no secrets). It goes into the log file only, not onto the closing screen.
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    $outcome = 'complete'
+    if ($ctx.Fatal) { $outcome = 'did not finish' }
+    elseif (@($ctx.Results | Where-Object { $_.Level -eq 'ACTION' -or $_.Level -eq 'FAIL' }).Count -gt 0 -or $ctx.Manual.Count -gt 0) { $outcome = 'finished, but some items need attention' }
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('==================== DETAILS FOR THE CTO (no secrets) ====================')
+    $l.Add(('script version {0}; rules commit {1}; outcome: {2}' -f $cfg.ScriptVersion, $cfg.RulesCommit, $outcome))
+    if ($ctx.Fatal) { $l.Add('What stopped the setup: ' + $ctx.FatalText) }
+    foreach ($d in $ctx.Details) { $l.Add($d) }
+    if ($ctx.Backups.Count -gt 0) {
+        $l.Add('Backups of every file that was changed (to undo a change, copy the backup over the file):')
+        foreach ($b in $ctx.Backups) { $l.Add('  ' + $b) }
+    }
+    else { $l.Add('No existing file needed a backup.') }
+    if ($ctx.Manual.Count -gt 0) {
+        $l.Add('Hand edits still to do (exact steps):')
+        $n = 0
+        foreach ($m in $ctx.Manual) {
+            $n++
+            $l.Add(('  {0}. {1}' -f $n, $m.File))
+            $l.Add(('     Why: {0}' -f $m.Why))
+            foreach ($line in ($m.Fix -split "\r?\n")) { $l.Add('     ' + $line) }
+        }
+    }
+    $l.Add('Results of every step:')
+    foreach ($res in $ctx.Results) { $l.Add(('  [{0}] {1}: {2}' -f $res.Level, $res.Step, $res.Text)) }
+    return (Join-Lines $l.ToArray())
+}
+
+function Show-FinalSummary {
+    # The closing screen is kept SHORT, so that the banner is the last thing that scrolls by: the banner, two or three
+    # plain instructions, and the log file name. The details for the CTO are written to the log file instead
+    # (see Invoke-Main). Only when no log file could be written are they shown here, ABOVE the banner.
+    $ctx = $script:Ctx
+    $attention = @($ctx.Results | Where-Object { $_.Level -eq 'ACTION' -or $_.Level -eq 'FAIL' })
+    if (-not $ctx.LogPath) {
+        Out-Say ''
+        Out-Say 'No log file could be written (the folder was not writable), so the details for the CTO are shown here:' 'Warn'
+        Out-Say (Get-DetailBlockText) 'Info'
+    }
+    Out-Say ''
+    Out-Say '==================================================================' 'Head'
+    if ($ctx.Fatal) {
+        Out-Say ' SETUP DID NOT FINISH' 'Bad'
+        Out-Say '==================================================================' 'Head'
+        Out-Say 'What stopped it:' 'Plain'
+        Out-Say ('  ' + (Get-ShortText $ctx.FatalText 500)) 'Bad'
+        Out-Say 'What to do: run this script again. If it stops the same way, send the log file named below (and a screenshot of this window) to the CTO.' 'Plain'
+    }
+    elseif ($attention.Count -gt 0 -or $ctx.Manual.Count -gt 0) {
+        Out-Say ' SETUP FINISHED, BUT SOME ITEMS NEED ATTENTION' 'Warn'
+        Out-Say '==================================================================' 'Head'
+        Out-Say 'Most of the work is done. These items need a person:' 'Plain'
+        $shown = 0
+        foreach ($a in $attention) {
+            if ($shown -ge 5) { break }
+            Out-Say ('  * ' + (Get-ShortText $a.Text 300)) 'Warn'
+            $shown++
+        }
+        $more = $attention.Count - $shown
+        if ($more -gt 0) { Out-Say ('  ... and {0} more (they are in the log file).' -f $more) 'Warn' }
+        Out-Say '1. Send the log file named below to the CTO. It holds the exact steps for each item.' 'Plain'
+        Out-Say '2. Close Codex completely and open it again (and any other AI tool that was open), so that it picks up what was installed.' 'Plain'
+    }
+    else {
+        Out-Say ' SETUP IS COMPLETE' 'Good'
+        Out-Say '==================================================================' 'Head'
+        Out-Say '1. Close Codex completely and open it again (and any other AI tool that was open).' 'Plain'
+        Out-Say '2. Then ask it this safe first question (it only reads):  "List the AWS skills you have, then tell me which AWS account and user you are connected as."' 'Plain'
+        if ($ctx.UvJustInstalled) {
+            Out-Say '3. The uv tool was installed during this run. If Codex says it cannot start the AWS tool, sign out of Windows and sign back in once, then open Codex again.' 'Plain'
+        }
+    }
+    if ($ctx.LogPath) { Out-Say ('Log file (send it to the CTO if something went wrong): {0}' -f $ctx.LogPath) 'Plain' }
+}
+
+function Start-SetupLog {
+    # Starts the transcript next to the script (or in a fallback folder). Returns the log path, or ''.
+    param([string]$ScriptDir, [string]$Stamp, [string]$UserHome)
+    $name = 'aws-toolkit-setup-log-' + $Stamp + '.txt'
+    foreach ($d in @($ScriptDir, [System.IO.Path]::GetTempPath(), $UserHome)) {
+        if (-not $d) { continue }
+        $p = Join-Path $d $name
+        try {
+            Start-Transcript -Path $p -ErrorAction Stop | Out-Null
+            return $p
+        }
+        catch { }
+    }
+    return ''
+}
+
+function Invoke-SetupStep {
+    param([string]$Name, [string]$Function, [bool]$Fatal)
+    try {
+        & $Function
+    }
+    catch {
+        $msg = $_.Exception.Message
+        $unexpected = -not ($_.Exception -is [System.InvalidOperationException])
+        if ($unexpected -and $_.InvocationInfo) { $msg = '{0} (script line {1})' -f $msg, $_.InvocationInfo.ScriptLineNumber }
+        Add-Result 'FAIL' $Name $msg
+        if ($Fatal) { $script:Ctx.Fatal = $true; $script:Ctx.FatalText = $msg }
+    }
+}
+
+function Invoke-Main {
+    param([string]$ScriptDir, [switch]$NoPause)
+    $script:NoPauseMode = [bool]$NoPause
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+    $userHome = $env:USERPROFILE
+    if (-not $userHome) { $userHome = $HOME }
+    $script:Ctx = New-SetupContext -UserHome $userHome -ScriptDir $ScriptDir -ClaudeConfigDir ([string]$env:CLAUDE_CONFIG_DIR) -CodexHome ([string]$env:CODEX_HOME) -AwsConfigFile ([string]$env:AWS_CONFIG_FILE) -AwsCredentialsFile ([string]$env:AWS_SHARED_CREDENTIALS_FILE) -IsTest:$script:TestModeFlag
+    $ctx = $script:Ctx
+    $exitCode = 0
+    $ctx.LogPath = Start-SetupLog -ScriptDir $ScriptDir -Stamp $ctx.Stamp -UserHome $userHome
+    try {
+        Out-Say '==================================================================' 'Head'
+        Out-Say ' AWS Agent Toolkit setup for OTCHealth' 'Head'
+        Out-Say ('   AWS profile: {0}    Region: {1}    Account: {2}' -f $script:Cfg.ProfileName, $script:Cfg.Region, $script:Cfg.AccountId) 'Head'
+        Out-Say '==================================================================' 'Head'
+        Out-Say ''
+        Out-Say 'This sets up the AWS tools for your AI assistant (Codex). It takes about 5 to 10 minutes.' 'Plain'
+        Out-Say 'It opens your web browser once, so you can sign in to AWS as the IAM user otchealth-ai-reader.' 'Plain'
+        Out-Say 'Have ready: that user''s password and its security code (MFA) device. You type them in the browser only.' 'Warn'
+        Out-Say 'You never type an AWS key or password into this window.' 'Plain'
+        Out-Say 'Every file it changes is backed up first, and a log file is saved next to this script.' 'Plain'
+        Out-Say ''
+        Out-Say 'Please close Codex now (and Claude, Cursor or similar apps if they are open).' 'Warn'
+        [void](Read-Answer 'Press Enter to start')
+
+        $steps = @(
+            @{ Name = 'Step 1'; Function = 'Invoke-Step1Environment'; Fatal = $true },
+            @{ Name = 'Step 2'; Function = 'Invoke-Step2AwsCli'; Fatal = $true },
+            @{ Name = 'Step 3'; Function = 'Invoke-Step3Login'; Fatal = $true },
+            @{ Name = 'Step 4'; Function = 'Invoke-Step4Identity'; Fatal = $true },
+            @{ Name = 'Step 5'; Function = 'Invoke-Step5Toolkit'; Fatal = $true },
+            @{ Name = 'Step 6'; Function = 'Invoke-Step6Verify'; Fatal = $false },
+            @{ Name = 'Step 7'; Function = 'Invoke-Step7Rules'; Fatal = $false }
+        )
+        foreach ($s in $steps) {
+            if ($ctx.Fatal) { break }
+            Invoke-SetupStep -Name $s.Name -Function $s.Function -Fatal $s.Fatal
+        }
+    }
+    catch {
+        $ctx.Fatal = $true
+        $ctx.FatalText = 'Unexpected error: ' + $_.Exception.Message
+        Add-Result 'FAIL' 'script' $ctx.FatalText
+    }
+    try { Show-FinalSummary }
+    catch { Write-Host ('Could not print the summary: ' + $_.Exception.Message) }
+    finally {
+        if ($ctx.LogPath) { try { Stop-Transcript | Out-Null } catch { } }
+    }
+    # The details for the CTO are written to the end of the log file (the closing screen above stays short).
+    if ($ctx.LogPath) {
+        $detailText = ''
+        try { $detailText = Get-DetailBlockText }
+        catch { $detailText = 'Could not build the details block: ' + $_.Exception.Message }
+        $saved = Add-LogText -Path $ctx.LogPath -Text ([Environment]::NewLine + $detailText + [Environment]::NewLine)
+        if (-not $saved) {
+            Out-Say ''
+            Out-Say 'The details for the CTO could not be added to the log file, so they are shown here instead:' 'Warn'
+            Out-Say $detailText 'Info'
+        }
+    }
+    if ($ctx.Fatal) { $exitCode = 1 }
+    elseif (@($ctx.Results | Where-Object { $_.Level -eq 'ACTION' -or $_.Level -eq 'FAIL' }).Count -gt 0 -or $ctx.Manual.Count -gt 0) { $exitCode = 2 }
+    if (-not $NoPause) { [void](Read-Host 'Press Enter to close') }
+    return [int]$exitCode
+}
+
+# ======================================================================================
+# Start (skipped when the file is loaded with -TestMode, which only defines the functions)
+# ======================================================================================
+if (-not $TestMode) {
+    $here = $PSScriptRoot
+    if (-not $here) { $here = (Get-Location).Path }
+    $rc = 1
+    try { $rc = @(Invoke-Main -ScriptDir $here -NoPause:$NoPause)[-1] }
+    catch {
+        # Last line of defence: whatever goes wrong, the window must stay open long enough to be read.
+        Write-Host ''
+        Write-Host ('The setup script hit an unexpected problem and stopped: ' + $_.Exception.Message) -ForegroundColor Red
+        Write-Host 'Please send a screenshot of this window to the CTO.'
+        if (-not $NoPause) { [void](Read-Host 'Press Enter to close') }
+    }
+    if ($rc -isnot [int]) { $rc = 1 }
+    exit $rc
+}
