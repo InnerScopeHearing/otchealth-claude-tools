@@ -5,27 +5,26 @@
 # WHAT IT DOES (nothing is deleted, nothing is switched off):
 #   A. Role otchealth-aws-dr-canary (used by the nightly DR canary and the nightly fleet silence
 #      monitor in otchealth-claude-tools) gets ONE policy, otchealth-fleet-monitor-read-2026-10-07:
-#        - list and read the heartbeat folder
+#        - list and read the heartbeat folder only
 #              s3://otchealth-brain-dr-55c84f6b/otchealthcommons/company-journal/_HEARTBEAT/
 #        - write ONLY its own heartbeat file  .../_HEARTBEAT/nightly-aws-dr-canary.json
-#        - send ONE kind of request to the shared journal search index:
-#              POST commons-company-journal/_search  (OpenSearch domain otchealth-brain)
 #   B. Role otchealth-github-recovery-console (used by the hourly AWS health monitor in otchealth-cto)
 #      gets ONE policy, otchealth-fleet-heartbeat-aws-health-monitor-2026-10-07:
 #        - read and write ONLY  .../_HEARTBEAT/aws-health-monitor.json
 #   If the bucket is encrypted with a customer-managed KMS key, both policies also allow
 #   kms:Decrypt and kms:GenerateDataKey on that one key, and only when the call comes through S3.
+#   NOT granted on purpose: any OpenSearch access (the canary's freshness check moves to _count, which
+#   the role already has), SSM parameters (paging is a GitHub issue @mention), any other S3 path.
 #
+# HOW TO RUN: download this file and run it with bash (do not paste its body into the shell).
 # SAFE TO RE-RUN: the same policy names are used every time; a re-run rewrites them identically.
 # RUN IN:  AWS CloudShell, region us-east-1, signed in as the account owner or an administrator.
-# UNDO:    the script prints one ROLLBACK line per change at the end.
+# UNDO:    the script prints one ROLLBACK line per change.
 # SECRETS: none in this file, none printed.
 #
-# Evidence (otchealth-claude-tools, 2026-10-07): DR canary run 37646729668 (heartbeat s3 put 403;
-# OpenSearch _search 403 "no identity-based policy allows es:ESHttpPost"); silence-monitor run
-# 37669544722 / issue 621 (beat store unreadable: s3:ListBucket and s3:GetObject on _HEARTBEAT/).
-# Deliberately NOT granted: SSM parameters (paging uses a GitHub issue @mention), any other S3 path,
-# any OpenSearch write, any IAM change beyond these two policies.
+# Evidence (otchealth-claude-tools, 2026-10-07): DR canary run 37646729668 (heartbeat s3 put 403);
+# silence-monitor run 37669544722 / issue 621 (beat store unreadable: s3:ListBucket and s3:GetObject
+# on _HEARTBEAT/).
 # =============================================================================================
 set -euo pipefail
 export AWS_PAGER=""
@@ -36,8 +35,6 @@ EXPECTED_ACCOUNT="900915535335"
 REGION="us-east-1"
 BUCKET="otchealth-brain-dr-55c84f6b"
 BEAT_FOLDER="otchealthcommons/company-journal/_HEARTBEAT"
-OS_DOMAIN="otchealth-brain"
-OS_INDEX="commons-company-journal"
 
 CANARY_ROLE="otchealth-aws-dr-canary"
 CANARY_POLICY="otchealth-fleet-monitor-read-2026-10-07"
@@ -49,28 +46,51 @@ HEALTH_BEAT="aws-health-monitor.json"
 
 BUCKET_ARN="arn:aws:s3:::${BUCKET}"
 BEAT_ARN="${BUCKET_ARN}/${BEAT_FOLDER}"
-OS_ARN="arn:aws:es:${REGION}:${EXPECTED_ACCOUNT}:domain/${OS_DOMAIN}"
-CANARY_ARN="arn:aws:iam::${EXPECTED_ACCOUNT}:role/${CANARY_ROLE}"
-CONSOLE_ARN="arn:aws:iam::${EXPECTED_ACCOUNT}:role/${CONSOLE_ROLE}"
+CANARY_ARN=""
+CONSOLE_ARN=""
 
 WORK_DIR="$(mktemp -d)"
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
+
+PASSED=0
+FAILED=0
+ROLLBACKS=()
+NOTES=()
+
+section() { printf '\n==== %s ====\n' "$1"; }
+
+print_rollbacks() {
+  echo ""
+  echo " ROLLBACK (only if the CTO asks; each line undoes one change):"
+  if [ "${#ROLLBACKS[@]}" -gt 0 ]; then
+    for r in "${ROLLBACKS[@]}"; do echo "   $r"; done
+  else
+    echo "   (nothing was changed)"
+  fi
+  if [ "${#NOTES[@]}" -gt 0 ]; then
+    for r in "${NOTES[@]}"; do echo "   Note: $r"; done
+  fi
+  echo ""
+}
+
 set -o errtrace
 on_error() {
   local rc=$?
   echo ""
   echo "STOPPED: a step failed (see the message above). Nothing after that step was changed."
   echo "Copy everything on this screen and send it to the CTO. It is safe to run the script again."
+  print_rollbacks
   exit "$rc"
 }
 trap on_error ERR
 
-PASSED=0
-FAILED=0
-ROLLBACKS=()
-
-section() { printf '\n==== %s ====\n' "$1"; }
+stop() {
+  echo ""
+  echo "STOP: $1"
+  print_rollbacks
+  exit 1
+}
 
 show_list() {
   local n=0 line
@@ -129,12 +149,16 @@ look_not_allowed() {
 
 # save_policy ROLE NAME FILE: inline role policy; if the role's inline space is full (LimitExceeded),
 # a customer-managed policy with the same name is created or updated and attached instead.
+# Every command is guarded with `|| return 1` because errexit is suspended inside `if ! save_policy`.
 save_policy() {
   local role="$1" name="$2" file="$3" out arn n old
   if out="$(aws iam put-role-policy --role-name "$role" --policy-name "$name" --policy-document "file://$file" 2>&1)"; then
-    aws iam get-role-policy --role-name "$role" --policy-name "$name" --query PolicyName --output text >/dev/null || return 1
-    echo "  Saved and read back: inline policy $name on role $role."
     ROLLBACKS+=("aws iam delete-role-policy --role-name $role --policy-name $name")
+    if ! aws iam get-role-policy --role-name "$role" --policy-name "$name" --query PolicyName --output text >/dev/null; then
+      echo "  Saved inline policy $name on role $role, but reading it back failed."
+      return 1
+    fi
+    echo "  Saved and read back: inline policy $name on role $role."
     return 0
   fi
   case "$out" in
@@ -155,21 +179,26 @@ save_policy() {
   fi
   aws iam attach-role-policy --role-name "$role" --policy-arn "$arn" || return 1
   echo "  Saved: managed policy $name, attached to role $role."
-  ROLLBACKS+=("aws iam detach-role-policy --role-name $role --policy-arn $arn   (then delete policy $name in the IAM console)")
+  ROLLBACKS+=("aws iam detach-role-policy --role-name $role --policy-arn $arn")
+  NOTES+=("after detaching, delete the managed policy $name in the IAM console (Policies page).")
   return 0
 }
 
+# show_role ROLE VAR: prints the role's current state and stores its real ARN (path included) in VAR.
 show_role() {
-  local role="$1" info r_arn r_created r_boundary
+  local role="$1" var="$2" info r_arn r_created r_boundary
   info="$(aws iam get-role --role-name "$role" --query 'Role.[Arn,CreateDate,PermissionsBoundary.PermissionsBoundaryArn]' --output text)"
   read -r r_arn r_created r_boundary <<<"$info"
+  printf -v "$var" '%s' "$r_arn"
   echo "  Role ARN : $r_arn"
   echo "  Created  : $r_created"
   if [ "$r_boundary" = "None" ] || [ -z "$r_boundary" ]; then
     echo "  Boundary : none"
   else
-    echo "  Boundary : $r_boundary   (the simulator below takes it into account)"
+    echo "  Boundary : $r_boundary"
   fi
+  echo "  Who may use this role (trust conditions):"
+  aws iam get-role --role-name "$role" --query 'Role.AssumeRolePolicyDocument.Statement[].Condition' --output json | sed 's/^/    /'
   echo "  Inline policies:"
   aws iam list-role-policies --role-name "$role" --query 'PolicyNames' --output text | tr '\t' '\n' | show_list
   echo "  Attached (managed) policies:"
@@ -179,29 +208,27 @@ show_role() {
 # ---------------------------------------------------------------------------------------------
 section "0. Who is running this"
 if ! command -v aws >/dev/null 2>&1; then
-  echo "STOP: the aws command was not found. Open AWS CloudShell (the >_ icon at the top of the console)."
-  exit 1
+  stop "the aws command was not found. Open AWS CloudShell (the >_ icon at the top of the console)."
 fi
 aws sts get-caller-identity --output json
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 if [ "$ACCOUNT" != "$EXPECTED_ACCOUNT" ]; then
-  echo "STOP: you are signed in to account $ACCOUNT, not $EXPECTED_ACCOUNT. Nothing was changed."
-  echo "Sign in to the OTCHealth account and run this again."
-  exit 1
+  stop "you are signed in to account $ACCOUNT, not $EXPECTED_ACCOUNT. Nothing was changed. Sign in to the OTCHealth account and run this again."
 fi
 echo "OK: account $ACCOUNT is the OTCHealth account."
 
 # ---------------------------------------------------------------------------------------------
 section "1. The two roles today"
 echo "Role $CANARY_ROLE:"
-show_role "$CANARY_ROLE"
+show_role "$CANARY_ROLE" CANARY_ARN
 CONSOLE_PRESENT="yes"
 if aws iam get-role --role-name "$CONSOLE_ROLE" >/dev/null 2>&1; then
   echo "Role $CONSOLE_ROLE:"
-  show_role "$CONSOLE_ROLE"
+  show_role "$CONSOLE_ROLE" CONSOLE_ARN
 else
   CONSOLE_PRESENT="no"
-  echo "NOTE: role $CONSOLE_ROLE was not found, so part B is skipped. Tell the CTO."
+  FAILED=$((FAILED + 1))
+  echo "  FAIL  role $CONSOLE_ROLE was not found, so part B is skipped. Tell the CTO."
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -225,19 +252,18 @@ case "$ENC_ALGO" in
       elif [ "$K_MGR" = "AWS" ]; then
         echo "  Bucket encryption: $ENC_ALGO with an AWS-managed key. No extra key permission is needed."
       else
-        echo "  WARNING: the bucket uses KMS key $ENC_KEY, which this sign-in could not read."
-        echo "  If the monitors still get AccessDenied after this, tell the CTO."
+        FAILED=$((FAILED + 1))
+        echo "  FAIL  the bucket uses KMS key $ENC_KEY, which this sign-in could not read. Tell the CTO."
       fi
     fi ;;
   *)
-    echo "  Bucket encryption: $ENC_ALGO (not a problem for this change)." ;;
+    echo "  Bucket encryption could not be read ($ENC_ALGO). The grant still goes ahead; if the monitors"
+    echo "  still report AccessDenied afterwards, tell the CTO." ;;
 esac
 
-BP="$(aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text 2>/dev/null || true)"
-if [ -z "$BP" ] || [ "$BP" = "None" ]; then
-  echo "  Bucket policy: none (the role policies decide)."
-elif command -v python3 >/dev/null 2>&1; then
-  printf '%s' "$BP" | python3 -c '
+if BP="$(aws s3api get-bucket-policy --bucket "$BUCKET" --query Policy --output text 2>&1)"; then
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$BP" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 st = d.get("Statement", [])
@@ -249,19 +275,15 @@ for s in deny:
     print("    Deny sid=%s action=%s" % (s.get("Sid", "-"), s.get("Action")))
 if deny:
     print("  NOTE: a Deny in the bucket policy can still block a role even when the simulator says allowed.")
-' || echo "  (the bucket policy text could not be parsed; skipped)"
-else
-  echo "  Bucket policy exists; python3 not found, so the Deny scan was skipped."
-fi
-
-if DOM_ARN_NOW="$(aws opensearch describe-domain --domain-name "$OS_DOMAIN" --region "$REGION" --query 'DomainStatus.ARN' --output text 2>/dev/null)"; then
-  if [ "$DOM_ARN_NOW" = "$OS_ARN" ]; then
-    echo "  OpenSearch domain ARN matches the policy: $DOM_ARN_NOW"
+' || echo "  Bucket policy exists but could not be parsed; skipped."
   else
-    echo "  WARNING: the domain ARN is $DOM_ARN_NOW but the policy uses $OS_ARN. Tell the CTO."
+    echo "  Bucket policy exists; python3 not found, so the Deny scan was skipped."
   fi
 else
-  echo "  OpenSearch domain could not be read with this sign-in. Not a problem for this change."
+  case "$BP" in
+    *NoSuchBucketPolicy*) echo "  Bucket policy: none (the role policies decide)." ;;
+    *) echo "  Bucket policy could not be read with this sign-in. The grant still goes ahead." ;;
+  esac
 fi
 
 KMS_STMT=""
@@ -305,12 +327,6 @@ cat > "$CANARY_FILE" <<EOF
       "Effect": "Allow",
       "Action": "s3:PutObject",
       "Resource": "${BEAT_ARN}/${CANARY_BEAT}"
-    },
-    {
-      "Sid": "CommonsJournalFreshnessSearch",
-      "Effect": "Allow",
-      "Action": "es:ESHttpPost",
-      "Resource": "${OS_ARN}/${OS_INDEX}/_search"
     }${KMS_STMT}
   ]
 }
@@ -319,10 +335,7 @@ if command -v python3 >/dev/null 2>&1; then python3 -c 'import json, sys; json.l
 cat "$CANARY_FILE"
 echo ""
 if ! save_policy "$CANARY_ROLE" "$CANARY_POLICY" "$CANARY_FILE"; then
-  echo ""
-  echo "STOP: AWS refused to save part A (the message above says why). Nothing else was changed."
-  echo "Usual cause: this sign-in may not change IAM. Sign in as the account owner or an administrator and run again."
-  exit 1
+  stop "part A could not be saved or read back (the message above says why). Usual cause: this sign-in may not change IAM. Sign in as the account owner or an administrator and run again."
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -346,10 +359,7 @@ EOF
   cat "$CONSOLE_FILE"
   echo ""
   if ! save_policy "$CONSOLE_ROLE" "$CONSOLE_POLICY" "$CONSOLE_FILE"; then
-    echo ""
-    echo "STOP: AWS refused to save part B (the message above says why). Part A is already saved and working."
-    echo "Copy this screen and send it to the CTO."
-    exit 1
+    stop "part B could not be saved or read back (the message above says why). Part A is already saved. Copy this screen and send it to the CTO."
   fi
 else
   echo "  Skipped (role not found)."
@@ -357,13 +367,14 @@ fi
 
 # ---------------------------------------------------------------------------------------------
 section "5. Checking with the IAM policy simulator"
+echo "  (The simulator checks the role's own policies, boundary and organization rules. It cannot see the"
+echo "   bucket policy or the KMS key policy; the first real monitor run after this is the final proof.)"
 sleep 3
 PREFIX_CTX="[{\"ContextKeyName\":\"s3:prefix\",\"ContextKeyValues\":[\"${BEAT_FOLDER}/\"],\"ContextKeyType\":\"string\"}]"
 expect_allowed "A  s3:ListBucket  $BUCKET, folder ${BEAT_FOLDER}/" "$CANARY_ARN" "s3:ListBucket" "$BUCKET_ARN" "$PREFIX_CTX"
 expect_allowed "A  s3:GetObject   ${BEAT_FOLDER}/${CANARY_BEAT}" "$CANARY_ARN" "s3:GetObject" "${BEAT_ARN}/${CANARY_BEAT}"
 expect_allowed "A  s3:GetObject   ${BEAT_FOLDER}/${HEALTH_BEAT}" "$CANARY_ARN" "s3:GetObject" "${BEAT_ARN}/${HEALTH_BEAT}"
 expect_allowed "A  s3:PutObject   ${BEAT_FOLDER}/${CANARY_BEAT}" "$CANARY_ARN" "s3:PutObject" "${BEAT_ARN}/${CANARY_BEAT}"
-expect_allowed "A  es:ESHttpPost  ${OS_DOMAIN}/${OS_INDEX}/_search" "$CANARY_ARN" "es:ESHttpPost" "${OS_ARN}/${OS_INDEX}/_search"
 if [ "$CONSOLE_PRESENT" = "yes" ]; then
   expect_allowed "B  s3:GetObject   ${BEAT_FOLDER}/${HEALTH_BEAT}" "$CONSOLE_ARN" "s3:GetObject" "${BEAT_ARN}/${HEALTH_BEAT}"
   expect_allowed "B  s3:PutObject   ${BEAT_FOLDER}/${HEALTH_BEAT}" "$CONSOLE_ARN" "s3:PutObject" "${BEAT_ARN}/${HEALTH_BEAT}"
@@ -377,30 +388,9 @@ if [ -n "$KMS_KEY_ARN" ]; then
 fi
 echo "Least-privilege look (information only, not counted):"
 look_not_allowed "A  s3:PutObject on the health monitor's beat" "$CANARY_ARN" "s3:PutObject" "${BEAT_ARN}/${HEALTH_BEAT}"
-look_not_allowed "A  es:ESHttpPost on ${OS_INDEX}/_delete_by_query" "$CANARY_ARN" "es:ESHttpPost" "${OS_ARN}/${OS_INDEX}/_delete_by_query"
+look_not_allowed "A  s3:GetObject outside the heartbeat folder" "$CANARY_ARN" "s3:GetObject" "${BUCKET_ARN}/otchealthcommons/company-journal/_JOURNAL/x.md"
 if [ "$CONSOLE_PRESENT" = "yes" ]; then
   look_not_allowed "B  s3:PutObject on the DR canary's beat" "$CONSOLE_ARN" "s3:PutObject" "${BEAT_ARN}/${CANARY_BEAT}"
-fi
-
-# ---------------------------------------------------------------------------------------------
-# SECTION C (read only): OpenSearch fine-grained access control. Looks and prints; never changes OpenSearch.
-section "6. OpenSearch access-control check (read only)"
-FGAC_FOLLOWUP="no"
-if DOM="$(aws opensearch describe-domain --domain-name "$OS_DOMAIN" --region "$REGION" --query 'DomainStatus.AdvancedSecurityOptions.Enabled' --output text 2>/dev/null)"; then
-  case "$(printf '%s' "$DOM" | tr '[:upper:]' '[:lower:]')" in
-    true)
-      FGAC_FOLLOWUP="yes"
-      echo "  Fine-grained access control is ON. The canary role's existing _count calls already work, so it is"
-      echo "  probably mapped already. Only if the next canary run still shows a security_exception, the CTO"
-      echo "  will send one more small step."
-      ;;
-    false|none)
-      echo "  Fine-grained access control is OFF: the IAM policy alone is enough." ;;
-    *)
-      echo "  Access-control state is unclear ($DOM). Tell the CTO." ;;
-  esac
-else
-  echo "  Could not read the domain with this sign-in. Not a problem for the IAM change."
 fi
 
 # ---------------------------------------------------------------------------------------------
@@ -411,19 +401,10 @@ if [ "$FAILED" -eq 0 ]; then
   echo " RESULT: ALL CHECKS PASSED ($PASSED of $TOTAL)"
   echo "=============================================================="
   echo " Tell the CTO: grant applied."
-  if [ "$FGAC_FOLLOWUP" = "yes" ]; then echo " Also mention: section 6 said access control is ON."; fi
 else
   echo " RESULT: $FAILED of $TOTAL CHECKS FAILED"
   echo "=============================================================="
-  echo " The policies are saved but not everything checks out. Copy this whole screen and send it to the CTO."
-  echo " It is safe to run this script again."
+  echo " Copy this whole screen and send it to the CTO. It is safe to run this script again."
 fi
-echo ""
-echo " ROLLBACK (only if the CTO asks; each line undoes one change):"
-if [ "${#ROLLBACKS[@]}" -gt 0 ]; then
-  for r in "${ROLLBACKS[@]}"; do echo "   $r"; done
-else
-  echo "   (nothing was changed)"
-fi
-echo ""
+print_rollbacks
 if [ "$FAILED" -ne 0 ]; then exit 1; fi
