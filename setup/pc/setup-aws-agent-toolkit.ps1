@@ -926,4 +926,764 @@ function Get-TomlServerInfo {
         [string]$ProfileName = 'otchealth',
         [string]$ProxyPackage = 'mcp-proxy-for-aws'
     )
+    $info = [pscustomobject]@{
+        State = 'NotFound'; Reason = ''; InsertAt = -1; Nl = (Get-DominantNewline $Text)
+        Looks = $false; Keys = @(); HasEnv = $false; OtherEnv = $false; Command = ''; Args = ''; MainCount = 0
+    }
+    if ($Text.Length -gt 1000000) {
+        # A real Codex settings file is a few KB. Anything this big is not something to edit automatically.
+        $info.State = 'Refused'
+        $info.Reason = 'the file could not be read safely: it is unusually large (over 1 MB)'
+        return $info
+    }
+    $st = Read-TomlStructure $Text
+    if (-not $st.Ok) {
+        $info.State = 'Refused'
+        $info.Reason = 'the file could not be read safely: ' + $st.Error
+        return $info
+    }
+    $root = @('mcp_servers', $Server)
+    $envPath = @('mcp_servers', $Server, 'env')
+    $cur = @()
+    $curIsArray = $false
+    $mainCount = 0
+    $lastMain = $null
+    $keys = New-Object 'System.Collections.Generic.List[string]'
+    $envHeaders = 0
+    $subHeaders = 0
+    $weird = $false
+    $command = ''
+    $argsRaw = ''
+    $envVarRaw = $null
+    $inlineEnvRaw = $null
+    $dottedEnvRaw = $null
+    $dottedEnv = $false
+    $otherEnv = $false
+    foreach ($it in $st.Items) {
+        if ($it.Kind -eq 'table' -or $it.Kind -eq 'array') {
+            $cur = @($it.Path)
+            $curIsArray = ($it.Kind -eq 'array')
+            if (Test-PathEq $cur $root) {
+                if ($curIsArray) { $weird = $true } else { $mainCount++; $lastMain = $it }
+            }
+            elseif (Test-PathEq $cur $envPath) {
+                if ($curIsArray) { $weird = $true } else { $envHeaders++ }
+            }
+            elseif (Test-PathPrefix $cur $root) {
+                $subHeaders++
+                if ($curIsArray) { $weird = $true }
+            }
+            continue
+        }
+        if ((Test-PathEq $cur $root) -and -not $curIsArray) {
+            $k0 = [string]$it.Path[0]
+            $keys.Add($k0)
+            $lastMain = $it
+            if ($k0 -ceq 'command' -and $it.Path.Count -eq 1) { $command = $it.ValueText }
+            if ($k0 -ceq 'args' -and $it.Path.Count -eq 1) { $argsRaw = $it.ValueText }
+            if ($k0 -ceq 'env') {
+                if ($it.Path.Count -eq 1) { $inlineEnvRaw = $it.ValueText }
+                else {
+                    $dottedEnv = $true
+                    if ($it.Path.Count -eq 2 -and $it.Path[1] -ceq $EnvName) { $dottedEnvRaw = $it.ValueText }
+                    else { $otherEnv = $true }
+                }
+            }
+        }
+        elseif ((Test-PathEq $cur $envPath) -and -not $curIsArray) {
+            if ($it.Path.Count -eq 1 -and $it.Path[0] -ceq $EnvName) { $envVarRaw = $it.ValueText }
+            else { $otherEnv = $true }
+        }
+        elseif (-not (Test-PathPrefix $cur $root)) {
+            $full = @($cur) + @($it.Path)
+            if (Test-PathPrefix $full $root) { $weird = $true }
+        }
+    }
+    $info.MainCount = $mainCount
+    if ($weird) {
+        $info.State = 'Refused'
+        $info.Reason = 'the aws-mcp entry is written in an unusual way (inline table, dotted keys or an array of tables)'
+        return $info
+    }
+    if ($mainCount -gt 1) {
+        $info.State = 'Refused'
+        $info.Reason = 'there is more than one [mcp_servers.aws-mcp] section'
+        return $info
+    }
+    if ($mainCount -eq 0) {
+        if ($envHeaders -gt 0 -or $subHeaders -gt 0) {
+            $info.State = 'Refused'
+            $info.Reason = 'the file has settings for aws-mcp but no [mcp_servers.aws-mcp] section'
+        }
+        return $info
+    }
+    if ($envHeaders -gt 1) {
+        $info.State = 'Refused'
+        $info.Reason = 'there is more than one [mcp_servers.aws-mcp.env] section'
+        return $info
+    }
+    $info.Keys = @($keys | Sort-Object -Unique)
+    $info.Command = $command
+    $info.Args = $argsRaw
+    $extra = @($info.Keys | Where-Object { $_ -cne 'command' -and $_ -cne 'args' -and $_ -cne 'env' })
+    $cmdValue = Get-TomlStringValue $command
+    if ($null -ne $inlineEnvRaw) {
+        $stripped = [regex]::Replace($inlineEnvRaw, '(?:^|[{,\s])' + [regex]::Escape($EnvName) + '\s*=\s*("[^"\\]*"|''[^'']*'')', '')
+        if ($stripped.IndexOf([char]61) -ge 0) { $otherEnv = $true }
+    }
+    $info.OtherEnv = $otherEnv
+    $info.Looks = (($cmdValue -ceq 'uvx') -and ($argsRaw.IndexOf($ProxyPackage, [StringComparison]::Ordinal) -ge 0) -and ($extra.Count -eq 0) -and ($subHeaders -eq 0) -and (-not $otherEnv))
+    $hasEnv = (($envHeaders -gt 0) -or ($null -ne $inlineEnvRaw) -or $dottedEnv)
+    if ($hasEnv) {
+        $info.HasEnv = $true
+        $raw = $null
+        if ($null -ne $envVarRaw) { $raw = $envVarRaw }
+        elseif ($null -ne $dottedEnvRaw) { $raw = $dottedEnvRaw }
+        elseif ($null -ne $inlineEnvRaw) {
+            $m = [regex]::Match($inlineEnvRaw, '(?:^|[{,\s])' + [regex]::Escape($EnvName) + '\s*=\s*("[^"\\]*"|''[^'']*'')')
+            if ($m.Success) { $raw = $m.Groups[1].Value }
+        }
+        $val = $null
+        if ($null -ne $raw) { $val = Get-TomlStringValue $raw }
+        if ($null -ne $val) {
+            $tokens = @($val -split '\s+' | Where-Object { $_.Length -gt 0 })
+            if ($tokens -ccontains $ProfileName) { $info.State = 'AlreadyOk'; return $info }
+        }
+        $info.State = 'Refused'
+        if ($null -ne $val) { $info.Reason = ('the aws-mcp entry already sets {0} to "{1}"' -f $EnvName, $val) }
+        else { $info.Reason = ('the aws-mcp entry already has an env section without {0}' -f $EnvName) }
+        return $info
+    }
+    $info.State = 'Ready'
+    $info.InsertAt = [int]$lastMain.LineEnd
+    return $info
+}
+
+function Add-TomlMcpEnv {
+    # Pure text function: returns State (Patched | AlreadyOk | NotFound | Refused), the new Text and a Reason.
+    param(
+        [string]$Text,
+        [string]$Server = 'aws-mcp',
+        [string]$EnvName = 'AWS_MCP_PROXY_PROFILES',
+        [string]$ProfileName = 'otchealth'
+    )
+    $info = Get-TomlServerInfo -Text $Text -Server $Server -EnvName $EnvName -ProfileName $ProfileName
+    $res = [pscustomobject]@{ State = $info.State; Text = $Text; Reason = $info.Reason; Info = $info }
+    if ($info.State -ne 'Ready') { return $res }
+    $nl = $info.Nl
+    $ins = $nl + $nl + '[mcp_servers.' + $Server + '.env]' + $nl + $EnvName + ' = "' + $ProfileName + '"'
+    $new = $Text.Insert($info.InsertAt, $ins)
+    if ($new.Remove($info.InsertAt, $ins.Length) -cne $Text) {
+        $res.State = 'Refused'; $res.Reason = 'internal check failed (insertion)'; return $res
+    }
+    $again = Get-TomlServerInfo -Text $new -Server $Server -EnvName $EnvName -ProfileName $ProfileName
+    if ($again.State -ne 'AlreadyOk') {
+        $res.State = 'Refused'; $res.Reason = 'internal check failed (re-read: ' + $again.State + ' ' + $again.Reason + ')'; return $res
+    }
+    $res.State = 'Patched'
+    $res.Text = $new
+    return $res
+}
+
+function Update-CodexConfigEnv {
+    # File wrapper: backs up config.toml, inserts the env sub-table, re-reads the file to verify,
+    # and restores the backup if anything is off. State: Patched | AlreadyOk | NotFound | Refused.
+    param(
+        [string]$Path,
+        [string]$Server = 'aws-mcp',
+        [string]$EnvName = 'AWS_MCP_PROXY_PROFILES',
+        [string]$ProfileName = 'otchealth'
+    )
+    $out = [pscustomobject]@{ State = 'NotFound'; Reason = ''; Backup = $null; Info = $null }
+    $f = Read-TextFile $Path
+    if (-not $f.Ok) { $out.State = 'Refused'; $out.Reason = 'the file ' + $f.Error; return $out }
+    if (-not $f.Exists) { $out.Reason = 'the file does not exist'; return $out }
+    $r = Add-TomlMcpEnv -Text $f.Text -Server $Server -EnvName $EnvName -ProfileName $ProfileName
+    $out.Info = $r.Info
+    if ($r.State -ne 'Patched') { $out.State = $r.State; $out.Reason = $r.Reason; return $out }
+    $out.Backup = New-BackupCopy -Path $Path -Tag 'pre-env'
+    try {
+        Write-TextFile -Path $Path -Text $r.Text -Bom $f.HasBom
+        $chk = Read-TextFile $Path
+        if (-not $chk.Ok -or ($chk.Text -cne $r.Text)) { throw 'the saved file does not match what was intended' }
+        $again = Get-TomlServerInfo -Text $chk.Text -Server $Server -EnvName $EnvName -ProfileName $ProfileName
+        if ($again.State -ne 'AlreadyOk') { throw 'the saved file did not read back as expected' }
+    }
+    catch {
+        $why = $_.Exception.Message
+        try { Copy-Item -LiteralPath $out.Backup -Destination $Path -Force } catch { $why = $why + ' (and the restore failed: ' + $_.Exception.Message + ')' }
+        $out.State = 'Refused'
+        $out.Reason = 'verification failed, the original file was restored (' + $why + ')'
+        return $out
+    }
+    $out.State = 'Patched'
+    return $out
+}
+
+function Get-CodexEntryLines {
+    # The standard AWS entry for Codex with its env sub-table: the same content that AWS's wizard writes through
+    # "codex mcp add aws-mcp -- uvx mcp-proxy-for-aws@latest <url> --metadata INSTALL_SOURCE=aws-cli",
+    # plus the profile setting that setup.md asks for.
+    param([string]$Server, [string]$EnvName, [string]$ProfileName, [string]$McpUrl, [string]$ProxyPackage)
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('[mcp_servers.' + $Server + ']')
+    $l.Add('command = "uvx"')
+    $l.Add('args = ["' + $ProxyPackage + '@latest", "' + $McpUrl + '", "--metadata", "INSTALL_SOURCE=aws-cli"]')
+    $l.Add('')
+    $l.Add('[mcp_servers.' + $Server + '.env]')
+    $l.Add($EnvName + ' = "' + $ProfileName + '"')
+    return $l.ToArray()
+}
+
+function Add-TomlMcpEntry {
+    # Pure text function for the one case where config.toml has NO aws-mcp entry at all: the AWS wizard skips Codex
+    # when the "codex" command is not found. Appends the standard entry and its env sub-table at the END of the text
+    # and changes nothing else. State: Added | Refused (see Reason). Never used when an aws-mcp entry exists.
+    param(
+        [string]$Text,
+        [string]$Server = 'aws-mcp',
+        [string]$EnvName = 'AWS_MCP_PROXY_PROFILES',
+        [string]$ProfileName = 'otchealth',
+        [string]$McpUrl = 'https://aws-mcp.us-east-1.api.aws/mcp',
+        [string]$ProxyPackage = 'mcp-proxy-for-aws'
+    )
+    if ($null -eq $Text) { $Text = '' }
+    $res = [pscustomobject]@{ State = 'Refused'; Text = $Text; Reason = '' }
+    $info = Get-TomlServerInfo -Text $Text -Server $Server -EnvName $EnvName -ProfileName $ProfileName -ProxyPackage $ProxyPackage
+    if ($info.State -eq 'Ready' -or $info.State -eq 'AlreadyOk') { $res.Reason = 'an aws-mcp entry already exists'; return $res }
+    if ($info.State -ne 'NotFound') { $res.Reason = $info.Reason; return $res }
+    # A new [mcp_servers.aws-mcp] header would clash with a file that defines "mcp_servers" in another way.
+    $st = Read-TomlStructure $Text
+    if (-not $st.Ok) { $res.Reason = 'the file could not be read safely: ' + $st.Error; return $res }
+    $top = @('mcp_servers')
+    $cur = @()
+    foreach ($it in $st.Items) {
+        if ($it.Kind -eq 'table' -or $it.Kind -eq 'array') {
+            $cur = @($it.Path)
+            if ($it.Kind -eq 'array' -and (Test-PathEq $cur $top)) { $res.Reason = 'the file defines "mcp_servers" as an array of tables'; return $res }
+            continue
+        }
+        $full = @($cur) + @($it.Path)
+        if ((Test-PathPrefix $full $top) -and -not (Test-PathPrefix $cur $top)) {
+            $res.Reason = 'the file sets "mcp_servers" with a plain value or dotted keys outside its own section'
+            return $res
+        }
+    }
+    $nl = Get-DominantNewline $Text
+    $entry = ((Get-CodexEntryLines -Server $Server -EnvName $EnvName -ProfileName $ProfileName -McpUrl $McpUrl -ProxyPackage $ProxyPackage) -join $nl)
+    if ($Text.Length -eq 0) { $new = $entry + $nl }
+    else {
+        $lead = ''
+        if (-not $Text.EndsWith("`n", [StringComparison]::Ordinal)) { $lead = $nl }
+        if (($Text + $lead) -notmatch '(?:\r?\n)[ \t]*\r?\n\z') { $lead = $lead + $nl }
+        $new = $Text + $lead + $entry + $nl
+    }
+    if (-not $new.StartsWith($Text, [StringComparison]::Ordinal)) {
+        $res.Reason = 'internal check failed (the original text must stay in front)'
+        return $res
+    }
+    $again = Get-TomlServerInfo -Text $new -Server $Server -EnvName $EnvName -ProfileName $ProfileName -ProxyPackage $ProxyPackage
+    if ($again.State -ne 'AlreadyOk' -or -not $again.Looks -or $again.MainCount -ne 1) {
+        $res.Reason = 'internal check failed (re-read: ' + $again.State + ' ' + $again.Reason + ')'
+        return $res
+    }
+    $res.State = 'Added'
+    $res.Text = $new
+    return $res
+}
+
+function Add-CodexEntryToFile {
+    # File wrapper for Add-TomlMcpEntry: a missing config.toml is created, an existing one is backed up first, and the
+    # saved file is read back and checked. If anything is off the original is put back. State: Added | Refused.
+    param(
+        [string]$Path,
+        [string]$Server = 'aws-mcp',
+        [string]$EnvName = 'AWS_MCP_PROXY_PROFILES',
+        [string]$ProfileName = 'otchealth',
+        [string]$McpUrl = 'https://aws-mcp.us-east-1.api.aws/mcp',
+        [string]$ProxyPackage = 'mcp-proxy-for-aws'
+    )
+    $out = [pscustomobject]@{ State = 'Refused'; Reason = ''; Backup = $null; Created = $false }
+    $f = Read-TextFile $Path
+    if (-not $f.Ok) { $out.Reason = 'the file ' + $f.Error; return $out }
+    $text = ''
+    if ($f.Exists) { $text = $f.Text }
+    $r = Add-TomlMcpEntry -Text $text -Server $Server -EnvName $EnvName -ProfileName $ProfileName -McpUrl $McpUrl -ProxyPackage $ProxyPackage
+    if ($r.State -ne 'Added') { $out.Reason = $r.Reason; return $out }
+    if ($f.Exists) { $out.Backup = New-BackupCopy -Path $Path -Tag 'pre-entry' } else { $out.Created = $true }
+    try {
+        Write-TextFile -Path $Path -Text $r.Text -Bom $f.HasBom
+        $chk = Read-TextFile $Path
+        if (-not $chk.Ok -or ($chk.Text -cne $r.Text)) { throw 'the saved file does not match what was intended' }
+        $again = Get-TomlServerInfo -Text $chk.Text -Server $Server -EnvName $EnvName -ProfileName $ProfileName -ProxyPackage $ProxyPackage
+        if ($again.State -ne 'AlreadyOk' -or -not $again.Looks) { throw 'the saved file did not read back as expected' }
+    }
+    catch {
+        $why = $_.Exception.Message
+        try {
+            if ($out.Backup) { Copy-Item -LiteralPath $out.Backup -Destination $Path -Force }
+            else { Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue }
+        }
+        catch { $why = $why + ' (and the restore failed: ' + $_.Exception.Message + ')' }
+        $out.State = 'Refused'
+        $out.Reason = 'verification failed, the original file was put back (' + $why + ')'
+        return $out
+    }
+    $out.State = 'Added'
+    return $out
+}
+
+function Join-Lines {
+    # Joins lines with the Windows newline. (Build text with this instead of "@( 'a' + $x, 'b' )":
+    # in PowerShell the comma binds tighter than +, which silently mangles such lists.)
+    param([string[]]$Lines)
+    return ($Lines -join [Environment]::NewLine)
+}
+
+function Get-CodexEnvHandEdit {
+    # Exact words for a person who has to add the setting by hand.
+    param([string]$ConfigPath, [string]$ProfileName = 'otchealth')
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('Open this file in Notepad: ' + $ConfigPath)
+    $l.Add('Find the section that starts with [mcp_servers.aws-mcp].')
+    $l.Add('If there is already a section called [mcp_servers.aws-mcp.env], add this one line inside it:')
+    $l.Add('    AWS_MCP_PROXY_PROFILES = "' + $ProfileName + '"')
+    $l.Add('Otherwise add these two lines on a new line directly below the aws-mcp section (leave a blank line above):')
+    $l.Add('    [mcp_servers.aws-mcp.env]')
+    $l.Add('    AWS_MCP_PROXY_PROFILES = "' + $ProfileName + '"')
+    $l.Add('Save the file and restart Codex.')
+    $l.Add('Shortcut (replaces the whole aws-mcp entry): codex mcp add aws-mcp --env AWS_MCP_PROXY_PROFILES=' + $ProfileName + ' -- uvx mcp-proxy-for-aws@latest https://aws-mcp.us-east-1.api.aws/mcp --metadata INSTALL_SOURCE=aws-cli')
+    return (Join-Lines $l.ToArray())
+}
+
+function Get-CodexFullHandEdit {
+    # For the case where the aws-mcp entry does not exist in config.toml at all.
+    param([string]$ConfigPath, [string]$ProfileName = 'otchealth')
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('Open (or create) this file in Notepad: ' + $ConfigPath)
+    $l.Add('Add these lines at the end of the file (leave a blank line above them):')
+    $l.Add('    [mcp_servers.aws-mcp]')
+    $l.Add('    command = "uvx"')
+    $l.Add('    args = ["mcp-proxy-for-aws@latest", "https://aws-mcp.us-east-1.api.aws/mcp", "--metadata", "INSTALL_SOURCE=aws-cli"]')
+    $l.Add('')
+    $l.Add('    [mcp_servers.aws-mcp.env]')
+    $l.Add('    AWS_MCP_PROXY_PROFILES = "' + $ProfileName + '"')
+    $l.Add('Save the file and restart Codex.')
+    $l.Add('Or, once the codex command works in a PowerShell window, run: codex mcp add aws-mcp --env AWS_MCP_PROXY_PROFILES=' + $ProfileName + ' -- uvx mcp-proxy-for-aws@latest https://aws-mcp.us-east-1.api.aws/mcp --metadata INSTALL_SOURCE=aws-cli')
+    return (Join-Lines $l.ToArray())
+}
+
+# ======================================================================================
+# JSON settings files (Claude Code, Cline, Cursor, Gemini CLI, Kiro, Windsurf, OpenCode):
+# a position-aware reader and an insert-only editor. Only the new "env" block is inserted;
+# every other byte of the file stays exactly as it was. The result is verified before it is kept.
+# ======================================================================================
+# One regular expression finds every JSON token (string, number, true/false/null, { } [ ] : ,) natively and fast.
+# Anything between two tokens must be white space, otherwise the text is not valid JSON.
+$script:RegexTimeout = [TimeSpan]::FromSeconds(30)
+$script:JsonTokenRe = New-Object System.Text.RegularExpressions.Regex('"(?>[^"\\]+|\\.)*"|-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null|[{}\[\]:,]', [System.Text.RegularExpressions.RegexOptions]::Singleline, $script:RegexTimeout)
+# Skips one whole { ... } or [ ... ] value natively (balanced brackets, strings respected). Used for parts of a
+# file we do not need to look inside, such as the big "projects" section of a Claude Code settings file.
+$script:JsonSkipRe = New-Object System.Text.RegularExpressions.Regex('\G[{\[](?>(?:"(?>[^"\\]+|\\.)*"|[^"{}\[\]]+|[{\[](?<d>)|[}\]](?<-d>))*)[}\]](?(d)(?!))', [System.Text.RegularExpressions.RegexOptions]::Singleline, $script:RegexTimeout)
+# One quick pass that stops at the first quoted text that is never closed. Without this check, a damaged file with a
+# never-closed quote could make the token search very slow (it would retry from every later quote mark).
+$script:JsonQuoteRe = New-Object System.Text.RegularExpressions.Regex('\G(?>(?:"(?>[^"\\]+|\\.)*"|[^"]+))*', [System.Text.RegularExpressions.RegexOptions]::Singleline, $script:RegexTimeout)
+
+function Get-LineNumberAt {
+    param([string]$Text, [int]$Pos)
+    $line = 1
+    $upto = [Math]::Min($Pos, $Text.Length)
+    $i = $Text.IndexOf([char]10)
+    while ($i -ge 0 -and $i -lt $upto) {
+        $line++
+        $i = $Text.IndexOf([char]10, $i + 1)
+    }
+    return $line
+}
+
+function Set-JsonScanFail {
+    param($Out, [string]$Text, [int]$Pos, [string]$Msg)
+    $Out.Error = ('{0} (line {1})' -f $Msg, (Get-LineNumberAt $Text $Pos))
+    return $Out
+}
+
+function Read-JsonStructure {
+    # Reads a JSON text and returns where things are (see Read-JsonStructureCore). If the text is so odd that the
+    # search takes more than 30 seconds, the text is simply reported as unreadable instead of hanging the script.
+    param([string]$Text, [string[]]$GuideKeys = @())
+    try { return (Read-JsonStructureCore -Text $Text -GuideKeys $GuideKeys) }
+    catch [System.Text.RegularExpressions.RegexMatchTimeoutException] {
+        return [pscustomobject]@{ Ok = $false; Error = 'reading it took far too long, so the file is probably damaged'; Root = $null }
+    }
+}
+
+function Read-JsonStructureCore {
+    # Reads a JSON text and returns where things are: Root = Type, Start, End and, for objects, Members
+    # (Key, KeyStart, ValueStart, ValueEnd, Type, Value). Only the path named by $GuideKeys is read in detail
+    # (its keys at depth 1, 2, 3); every other nested value is skipped natively. Stray characters anywhere in the
+    # text (comments, single quotes, NaN ...) make the whole text invalid.
+    # (The loop uses plain arrays and integers on purpose: it is several times faster in PowerShell than objects.)
+    param([string]$Text, [string[]]$GuideKeys = @())
+    $out = [pscustomobject]@{ Ok = $false; Error = $null; Root = $null }
+    $re = $script:JsonTokenRe
+    $guideN = 0
+    if ($GuideKeys) { $guideN = $GuideKeys.Count }
+    $qm = $script:JsonQuoteRe.Match($Text, 0)
+    if ($qm.Length -lt $Text.Length) { return (Set-JsonScanFail $out $Text $qm.Length 'a quoted text is never closed') }
+    if ($re.Replace($Text, '') -match '[^ \t\r\n]') {
+        $prev = 0
+        $bad = -1
+        foreach ($tm in $re.Matches($Text)) {
+            if ($tm.Index -gt $prev) {
+                $gap = $Text.Substring($prev, $tm.Index - $prev)
+                $k = [regex]::Match($gap, '[^ \t\r\n]')
+                if ($k.Success) { $bad = $prev + $k.Index; break }
+            }
+            $prev = $tm.Index + $tm.Length
+        }
+        if ($bad -lt 0) {
+            $k = [regex]::Match($Text.Substring($prev), '[^ \t\r\n]')
+            if ($k.Success) { $bad = $prev + $k.Index }
+        }
+        if ($bad -lt 0) { $bad = 0 }
+        return (Set-JsonScanFail $out $Text $bad 'this is not valid JSON')
+    }
+    $ms = $re.Matches($Text)
+    $n = $ms.Count
+    # Frame = object[]: 0 isObject, 1 state, 2 start, 3 members, 4 current key, 5 current key start.
+    # States: object 0 KeyOrEnd, 1 Key, 2 Colon, 3 Value, 4 CommaOrEnd; array 5 ValueOrEnd, 6 Value, 7 CommaOrEnd.
+    $stack = New-Object 'System.Collections.Generic.List[object]'
+    $depth = 0
+    $f = $null
+    $fObj = $false
+    $fState = 0
+    $root = $null
+    $rootDone = $false
+    for ($i = 0; $i -lt $n; $i++) {
+        $m = $ms[$i]
+        $idx = $m.Index
+        $len = $m.Length
+        $c = [int]$Text[$idx]
+        if ($depth -eq 0) {
+            if ($rootDone) { return (Set-JsonScanFail $out $Text $idx 'unexpected text after the JSON') }
+            if ($c -eq 123 -or $c -eq 91) {
+                $mem = New-Object 'System.Collections.Generic.List[object]'
+                if ($c -eq 123) { $f = @($true, 0, $idx, $mem, '', 0) } else { $f = @($false, 5, $idx, $mem, '', 0) }
+                $stack.Add($f)
+                $depth = 1
+                $fObj = $f[0]
+                $fState = $f[1]
+                continue
+            }
+            if ($c -eq 125 -or $c -eq 93 -or $c -eq 58 -or $c -eq 44) { return (Set-JsonScanFail $out $Text $idx 'a value was expected') }
+            $st0 = 'number'
+            if ($c -eq 34) { $st0 = 'string' } elseif ($c -eq 116 -or $c -eq 102 -or $c -eq 110) { $st0 = 'literal' }
+            $root = [pscustomobject]@{ Type = $st0; Start = $idx; End = ($idx + $len); Members = $null }
+            $rootDone = $true
+            continue
+        }
+        if ($c -eq 125 -or $c -eq 93) {
+            if ($fObj -ne ($c -eq 125)) { return (Set-JsonScanFail $out $Text $idx 'a closing bracket does not match') }
+            if ($fState -ne 4 -and $fState -ne 0 -and $fState -ne 5 -and $fState -ne 7) { return (Set-JsonScanFail $out $Text $idx 'a value or name is missing before the closing bracket') }
+            $stack.RemoveAt($depth - 1)
+            $depth--
+            $typeName = 'array'
+            if ($fObj) { $typeName = 'object' }
+            if ($depth -eq 0) {
+                $root = [pscustomobject]@{ Type = $typeName; Start = $f[2]; End = ($idx + 1); Members = $f[3] }
+                $rootDone = $true
+                $f = $null
+            }
+            else {
+                $par = $stack[$depth - 1]
+                if ($par[0]) {
+                    $val = [pscustomobject]@{ Type = $typeName; Start = $f[2]; End = ($idx + 1); Members = $f[3] }
+                    $par[3].Add([pscustomobject]@{ Key = $par[4]; KeyStart = $par[5]; ValueStart = $f[2]; ValueEnd = ($idx + 1); Type = $typeName; Value = $val })
+                    $par[1] = 4
+                }
+                else { $par[1] = 7 }
+                $f = $par
+                $fObj = $par[0]
+                $fState = $par[1]
+            }
+            continue
+        }
+        $isOpen = ($c -eq 123 -or $c -eq 91)
+        if ($fObj) {
+            if ($fState -eq 0 -or $fState -eq 1) {
+                if ($c -ne 34) { return (Set-JsonScanFail $out $Text $idx 'a quoted name was expected') }
+                $f[4] = $Text.Substring($idx + 1, $len - 2)
+                $f[5] = $idx
+                $f[1] = 2
+                $fState = 2
+            }
+            elseif ($fState -eq 2) {
+                if ($c -ne 58) { return (Set-JsonScanFail $out $Text $idx 'a colon was expected') }
+                $f[1] = 3
+                $fState = 3
+            }
+            elseif ($fState -eq 3) {
+                if ($isOpen) {
+                    $descend = ($depth -le $guideN -and $f[4] -ceq $GuideKeys[$depth - 1])
+                    if ($descend) {
+                        $mem = New-Object 'System.Collections.Generic.List[object]'
+                        if ($c -eq 123) { $nf = @($true, 0, $idx, $mem, '', 0) } else { $nf = @($false, 5, $idx, $mem, '', 0) }
+                        $stack.Add($nf)
+                        $depth++
+                        $f = $nf
+                        $fObj = $f[0]
+                        $fState = $f[1]
+                    }
+                    else {
+                        $sm = $script:JsonSkipRe.Match($Text, $idx)
+                        if (-not $sm.Success) { return (Set-JsonScanFail $out $Text $idx 'a nested object or array is not closed') }
+                        $endPos = $idx + $sm.Length
+                        $tn = 'array'
+                        if ($c -eq 123) { $tn = 'object' }
+                        $val = [pscustomobject]@{ Type = $tn; Start = $idx; End = $endPos; Members = $null }
+                        $f[3].Add([pscustomobject]@{ Key = $f[4]; KeyStart = $f[5]; ValueStart = $idx; ValueEnd = $endPos; Type = $tn; Value = $val })
+                        $f[1] = 4
+                        $fState = 4
+                        $lo = $i + 1
+                        $hi = $n
+                        while ($lo -lt $hi) {
+                            $mid = ($lo + $hi) -shr 1
+                            if ($ms[$mid].Index -lt $endPos) { $lo = $mid + 1 } else { $hi = $mid }
+                        }
+                        $i = $lo - 1
+                    }
+                }
+                elseif ($c -eq 58 -or $c -eq 44) { return (Set-JsonScanFail $out $Text $idx 'a value was expected') }
+                else {
+                    $stype = 'number'
+                    if ($c -eq 34) { $stype = 'string' } elseif ($c -eq 116 -or $c -eq 102 -or $c -eq 110) { $stype = 'literal' }
+                    $f[3].Add([pscustomobject]@{ Key = $f[4]; KeyStart = $f[5]; ValueStart = $idx; ValueEnd = ($idx + $len); Type = $stype; Value = $null })
+                    $f[1] = 4
+                    $fState = 4
+                }
+            }
+            else {
+                if ($c -ne 44) { return (Set-JsonScanFail $out $Text $idx 'a comma or closing brace was expected') }
+                $f[1] = 1
+                $fState = 1
+            }
+        }
+        else {
+            if ($fState -eq 7) {
+                if ($c -ne 44) { return (Set-JsonScanFail $out $Text $idx 'a comma or closing bracket was expected') }
+                $f[1] = 6
+                $fState = 6
+            }
+            elseif ($isOpen) {
+                $sm = $script:JsonSkipRe.Match($Text, $idx)
+                if (-not $sm.Success) { return (Set-JsonScanFail $out $Text $idx 'a nested object or array is not closed') }
+                $endPos = $idx + $sm.Length
+                $f[1] = 7
+                $fState = 7
+                $lo = $i + 1
+                $hi = $n
+                while ($lo -lt $hi) {
+                    $mid = ($lo + $hi) -shr 1
+                    if ($ms[$mid].Index -lt $endPos) { $lo = $mid + 1 } else { $hi = $mid }
+                }
+                $i = $lo - 1
+            }
+            elseif ($c -eq 58 -or $c -eq 44) { return (Set-JsonScanFail $out $Text $idx 'a value was expected') }
+            else {
+                $f[1] = 7
+                $fState = 7
+            }
+        }
+    }
+    if ($depth -gt 0) { return (Set-JsonScanFail $out $Text $Text.Length 'an object or array is not closed') }
+    if (-not $rootDone) { return (Set-JsonScanFail $out $Text 0 'the file is empty') }
+    $out.Root = $root
+    $out.Ok = $true
+    return $out
+}
+
+function Get-JsonLineIndent {
+    # The spaces/tabs at the start of the line that contains position $Pos, or $null if other text comes first.
+    param([string]$Text, [int]$Pos)
+    $ls = $Text.LastIndexOf([char]10, $Pos) + 1
+    $lead = $Text.Substring($ls, $Pos - $ls)
+    if ($lead -match '^[ \t]*$') { return $lead }
+    return $null
+}
+
+function Get-JsonServerInfo {
+    # Looks at <ParentKey>.<Server> (for example mcpServers."aws-mcp") in a JSON text.
+    # State: Invalid | NotFound | Ready | AlreadyOk | Refused
+    param(
+        [string]$Text,
+        [string]$ParentKey = 'mcpServers',
+        [string]$Server = 'aws-mcp',
+        [string]$EnvKey = 'env',
+        [string]$EnvName = 'AWS_MCP_PROXY_PROFILES',
+        [string]$ProfileName = 'otchealth',
+        [string]$ProxyPackage = 'mcp-proxy-for-aws'
+    )
+    $info = [pscustomobject]@{
+        State = 'NotFound'; Reason = ''; InsertAt = -1; Insert = ''; Looks = $false
+        Keys = @(); Command = ''; Args = ''; HasEnv = $false
+    }
+    $st = Read-JsonStructure -Text $Text -GuideKeys @($ParentKey, $Server, $EnvKey)
+    if (-not $st.Ok) { $info.State = 'Invalid'; $info.Reason = 'it is not valid JSON: ' + $st.Error; return $info }
+    if ($st.Root.Type -ne 'object') { $info.State = 'Refused'; $info.Reason = 'the top level is not a JSON object'; return $info }
+    $parents = @($st.Root.Members | Where-Object { $_.Key -ceq $ParentKey })
+    if ($parents.Count -eq 0) { return $info }
+    if ($parents.Count -gt 1) { $info.State = 'Refused'; $info.Reason = ('"{0}" appears more than once' -f $ParentKey); return $info }
+    $parent = $parents[0]
+    if ($parent.Type -ne 'object') { $info.State = 'Refused'; $info.Reason = ('"{0}" is not an object' -f $ParentKey); return $info }
+    $servers = @($parent.Value.Members | Where-Object { $_.Key -ceq $Server })
+    if ($servers.Count -eq 0) { return $info }
+    if ($servers.Count -gt 1) { $info.State = 'Refused'; $info.Reason = ('"{0}" appears more than once' -f $Server); return $info }
+    $srv = $servers[0]
+    if ($srv.Type -ne 'object') { $info.State = 'Refused'; $info.Reason = ('"{0}" is not an object' -f $Server); return $info }
+    $members = $srv.Value.Members
+    if ($members.Count -eq 0) { $info.State = 'Refused'; $info.Reason = ('"{0}" is empty' -f $Server); return $info }
+    $info.Keys = @($members | ForEach-Object { $_.Key })
+    foreach ($m in $members) {
+        if ($m.Key -ceq 'command') { $info.Command = $Text.Substring($m.ValueStart, $m.ValueEnd - $m.ValueStart) }
+        if ($m.Key -ceq 'args') { $info.Args = $Text.Substring($m.ValueStart, $m.ValueEnd - $m.ValueStart) }
+    }
+    $allowed = @('command', 'args', 'timeout', 'transport', $EnvKey)
+    $extra = @($info.Keys | Where-Object { $allowed -cnotcontains $_ })
+    $info.Looks = (($info.Command -ceq '"uvx"') -and ($info.Args.IndexOf($ProxyPackage, [StringComparison]::Ordinal) -ge 0) -and ($extra.Count -eq 0))
+    $envMembers = @($members | Where-Object { $_.Key -ceq $EnvKey })
+    if ($envMembers.Count -gt 1) { $info.State = 'Refused'; $info.Reason = ('"{0}" appears more than once' -f $EnvKey); return $info }
+    if ($envMembers.Count -eq 1) {
+        $info.HasEnv = $true
+        $em = $envMembers[0]
+        $val = $null
+        if ($em.Type -eq 'object') {
+            $vars = @($em.Value.Members | Where-Object { $_.Key -ceq $EnvName })
+            if ($vars.Count -eq 1 -and $vars[0].Type -eq 'string') {
+                $raw = $Text.Substring($vars[0].ValueStart, $vars[0].ValueEnd - $vars[0].ValueStart)
+                $val = $raw.Substring(1, $raw.Length - 2)
+            }
+        }
+        if ($null -ne $val -and $val.IndexOf([char]92) -lt 0) {
+            $tokens = @($val -split '\s+' | Where-Object { $_.Length -gt 0 })
+            if ($tokens -ccontains $ProfileName) { $info.State = 'AlreadyOk'; return $info }
+        }
+        $info.State = 'Refused'
+        if ($null -ne $val) { $info.Reason = ('"{0}" already sets {1} to "{2}"' -f $EnvKey, $EnvName, $val) }
+        else { $info.Reason = ('"{0}" already exists without {1}' -f $EnvKey, $EnvName) }
+        return $info
+    }
+    # Work out the text to insert, in the same style as the file.
+    if ($ProfileName -notmatch '^[A-Za-z0-9_.-]+$' -or $EnvName -notmatch '^[A-Za-z0-9_]+$') {
+        $info.State = 'Refused'; $info.Reason = 'internal: unexpected characters in the setting names'; return $info
+    }
+    $nl = Get-DominantNewline $Text
+    $first = $members[0]
+    $last = $members[$members.Count - 1]
+    $between = $Text.Substring($srv.Value.Start + 1, $first.KeyStart - $srv.Value.Start - 1)
+    $memberIndent = $null
+    if ($between.IndexOf([char]10) -ge 0) { $memberIndent = Get-JsonLineIndent $Text $first.KeyStart }
+    if ($null -ne $memberIndent) {
+        $serverIndent = Get-JsonLineIndent $Text $srv.KeyStart
+        $unit = '  '
+        if ($null -ne $serverIndent -and $memberIndent.Length -gt $serverIndent.Length -and $memberIndent.StartsWith($serverIndent, [StringComparison]::Ordinal)) {
+            $unit = $memberIndent.Substring($serverIndent.Length)
+        }
+        $ins = ',' + $nl + $memberIndent + '"' + $EnvKey + '": {' + $nl + $memberIndent + $unit + '"' + $EnvName + '": "' + $ProfileName + '"' + $nl + $memberIndent + '}'
+    }
+    else {
+        $ins = ', "' + $EnvKey + '": {"' + $EnvName + '": "' + $ProfileName + '"}'
+    }
+    $info.State = 'Ready'
+    $info.InsertAt = [int]$last.ValueEnd
+    $info.Insert = $ins
+    return $info
+}
+
+function Add-JsonEnvToText {
+    # Pure text function: returns State (Patched | AlreadyOk | NotFound | Invalid | Refused), the new Text and a Reason.
+    param(
+        [string]$Text,
+        [string]$ParentKey = 'mcpServers',
+        [string]$Server = 'aws-mcp',
+        [string]$EnvKey = 'env',
+        [string]$EnvName = 'AWS_MCP_PROXY_PROFILES',
+        [string]$ProfileName = 'otchealth'
+    )
+    $info = Get-JsonServerInfo -Text $Text -ParentKey $ParentKey -Server $Server -EnvKey $EnvKey -EnvName $EnvName -ProfileName $ProfileName
+    $res = [pscustomobject]@{ State = $info.State; Text = $Text; Reason = $info.Reason; Info = $info }
+    if ($info.State -ne 'Ready') { return $res }
+    $new = $Text.Insert($info.InsertAt, $info.Insert)
+    if ($new.Remove($info.InsertAt, $info.Insert.Length) -cne $Text) {
+        $res.State = 'Refused'; $res.Reason = 'internal check failed (insertion)'; return $res
+    }
+    $again = Get-JsonServerInfo -Text $new -ParentKey $ParentKey -Server $Server -EnvKey $EnvKey -EnvName $EnvName -ProfileName $ProfileName
+    if ($again.State -ne 'AlreadyOk') {
+        $res.State = 'Refused'; $res.Reason = 'internal check failed (re-read: ' + $again.State + ' ' + $again.Reason + ')'; return $res
+    }
+    $res.State = 'Patched'
+    $res.Text = $new
+    return $res
+}
+
+function Test-PsJsonValue {
+    # Extra check with PowerShell's own JSON parser: does <ParentKey>.<Server>.<EnvKey>.<EnvName> equal $Expected?
+    # Returns 'yes', 'no' or 'unknown' (PowerShell could not parse the file at all).
+    param([string]$Text, [string]$ParentKey, [string]$Server, [string]$EnvKey, [string]$EnvName, [string]$Expected)
+    try { $obj = $Text | ConvertFrom-Json } catch { return 'unknown' }
+    try {
+        $v = $obj.$ParentKey.$Server.$EnvKey.$EnvName
+        if ([string]$v -ceq $Expected) { return 'yes' }
+        return 'no'
+    }
+    catch { return 'no' }
+}
+
+function Add-ProfileEnv {
+    # File wrapper. State: Patched | AlreadyOk | NoEntry | Invalid | Refused. Never leaves a half-edited file.
+    param(
+        [string]$Path,
+        [string]$ParentKey = 'mcpServers',
+        [string]$Server = 'aws-mcp',
+        [string]$EnvKey = 'env',
+        [string]$EnvName = 'AWS_MCP_PROXY_PROFILES',
+        [string]$ProfileName = 'otchealth'
+    )
+    $out = [pscustomobject]@{ State = 'NoEntry'; Reason = ''; Backup = $null; Info = $null }
+    $f = Read-TextFile $Path
+    if (-not $f.Ok) { $out.State = 'Refused'; $out.Reason = 'the file ' + $f.Error; return $out }
+    if (-not $f.Exists) { return $out }
+    if ($f.Text.Length -gt 3000000) { $out.State = 'Refused'; $out.Reason = 'the file is too large to edit safely'; return $out }
+    $r = Add-JsonEnvToText -Text $f.Text -ParentKey $ParentKey -Server $Server -EnvKey $EnvKey -EnvName $EnvName -ProfileName $ProfileName
+    $out.Info = $r.Info
+    if ($r.State -eq 'NotFound') { $out.State = 'NoEntry'; return $out }
+    if ($r.State -ne 'Patched') { $out.State = $r.State; $out.Reason = $r.Reason; return $out }
+    $origParses = ((Test-PsJsonValue $f.Text $ParentKey $Server $EnvKey $EnvName $ProfileName) -ne 'unknown')
+    $out.Backup = New-BackupCopy -Path $Path -Tag 'pre-env'
+    try {
+        Write-TextFile -Path $Path -Text $r.Text -Bom $f.HasBom
+        $chk = Read-TextFile $Path
+        if (-not $chk.Ok -or ($chk.Text -cne $r.Text)) { throw 'the saved file does not match what was intended' }
+        $again = Get-JsonServerInfo -Text $chk.Text -ParentKey $ParentKey -Server $Server -EnvKey $EnvKey -EnvName $EnvName -ProfileName $ProfileName
+        if ($again.State -ne 'AlreadyOk') { throw 'the saved file did not read back as expected' }
+        if ($origParses) {
+            $ps = Test-PsJsonValue $chk.Text $ParentKey $Server $EnvKey $EnvName $ProfileName
+            if ($ps -ne 'yes') { throw 'PowerShell could not confirm the new setting in the saved file' }
+        }
+    }
+    catch {
+        $why = $_.Exception.Message
+        try { Copy-Item -LiteralPath $out.Backup -Destination $Path -Force } catch { $why = $why + ' (and the restore failed: ' + $_.Exception.Message + ')' }
+        $out.State = 'Refused'
+        $out.Reason = 'verification failed, the original file was restored (' + $why + ')'
+        return $out
+    }
+    $out.State = 'Patched'
+    return $out
+}
+
+function Get-JsonEnvHandEdit {
+    param([string]$Path, [string]$ProfileName = 'otchealth')
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('Open this file in Notepad: ' + $Path)
+    $l.Add('Find "aws-mcp" inside the "mcpServers" section.')
 #@@W3-CHUNK-CONTINUES@@
