@@ -1686,4 +1686,725 @@ function Get-JsonEnvHandEdit {
     $l = New-Object 'System.Collections.Generic.List[string]'
     $l.Add('Open this file in Notepad: ' + $Path)
     $l.Add('Find "aws-mcp" inside the "mcpServers" section.')
+    $l.Add('Inside the aws-mcp braces, add this block (put a comma at the end of the line above it):')
+    $l.Add('    "env": { "AWS_MCP_PROXY_PROFILES": "' + $ProfileName + '" }')
+    $l.Add('If an "env" block is already there, add the line "AWS_MCP_PROXY_PROFILES": "' + $ProfileName + '" inside it instead.')
+    $l.Add('Do not change any other line. Save the file and restart the app.')
+    return (Join-Lines $l.ToArray())
+}
+
+function Get-OpenCodeHandEdit {
+    param([string]$Path, [string]$ProfileName = 'otchealth')
+    $l = New-Object 'System.Collections.Generic.List[string]'
+    $l.Add('Open this file in Notepad: ' + $Path)
+    $l.Add('Find "aws-mcp" inside the "mcp" section.')
+    $l.Add('Inside the aws-mcp braces, add this block (put a comma at the end of the line above it):')
+    $l.Add('    "environment": { "AWS_MCP_PROXY_PROFILES": "' + $ProfileName + '" }')
+    $l.Add('(OpenCode calls this setting "environment", not "env".)')
+    $l.Add('Do not change any other line. Save the file and restart OpenCode.')
+    return (Join-Lines $l.ToArray())
+}
+
+# ======================================================================================
+# Step 7: AWS agent rules inside a marked block of a global instructions file
+# (Codex: ~\.codex\AGENTS.md, Claude Code: ~\.claude\CLAUDE.md).
+# Only the text between the two marker lines is ever replaced; everything else is kept.
+# ======================================================================================
+function Get-RulesBlockText {
+    # BEGIN marker, one-line precedence note, blank line, the rules, END marker.
+    param([string]$Rules, [string]$Begin, [string]$End, [string]$Note, [string]$Nl)
+    $body = ($Rules -replace "`r`n", "`n").Trim([char]10, [char]13)
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $lines.Add($Begin)
+    $lines.Add($Note)
+    $lines.Add('')
+    foreach ($l in ($body -split "`n")) { $lines.Add($l) }
+    $lines.Add($End)
+    return ($lines -join $Nl)
+}
+
+function Get-MarkerMatches {
+    # The places where a marker stands ALONE on its line (only spaces or tabs around it). The same words in the middle
+    # of some other text are not a marker line and are ignored. Index is where the marker text itself starts.
+    param([string]$Text, [string]$Marker)
+    $pattern = '(?<=^[ \t]*)' + [regex]::Escape($Marker) + '(?=[ \t]*\r?$)'
+    return @([regex]::Matches($Text, $pattern, [System.Text.RegularExpressions.RegexOptions]::Multiline))
+}
+
+function Get-TextOutsideBlock {
+    # The text before the BEGIN marker line and after the END marker line (the first line of each).
+    param([string]$Text, [string]$Begin, [string]$End)
+    $bm = @(Get-MarkerMatches -Text $Text -Marker $Begin)
+    $em = @(Get-MarkerMatches -Text $Text -Marker $End)
+    if ($bm.Count -eq 0 -or $em.Count -eq 0) { return $null }
+    $bi = [int]$bm[0].Index
+    $ei = [int]$em[0].Index
+    if ($ei -lt $bi) { return $null }
+    return [pscustomobject]@{
+        Before = $Text.Substring(0, $bi)
+        After  = $Text.Substring($ei + $End.Length)
+        Block  = $Text.Substring($bi, $ei + $End.Length - $bi)
+    }
+}
+
+function Set-RulesBlock {
+    # Pure text function. State: Created | Appended | Replaced | Unchanged | Refused.
+    param([string]$Existing, [string]$Rules, [string]$Begin, [string]$End, [string]$Note)
+    $res = [pscustomobject]@{ State = ''; Text = ''; Reason = ''; Nl = ''; Block = '' }
+    if ($null -eq $Existing) { $Existing = '' }
+    $nl = Get-DominantNewline $Existing
+    $res.Nl = $nl
+    $block = Get-RulesBlockText -Rules $Rules -Begin $Begin -End $End -Note $Note -Nl $nl
+    $res.Block = $block
+    $bCount = @(Get-MarkerMatches -Text $Existing -Marker $Begin).Count
+    $eCount = @(Get-MarkerMatches -Text $Existing -Marker $End).Count
+    if ($bCount -eq 0 -and $eCount -eq 0) {
+        if ($Existing.Length -eq 0) {
+            $res.State = 'Created'
+            $res.Text = $block + $nl
+            return $res
+        }
+        $t = $Existing
+        if (-not $t.EndsWith("`n", [StringComparison]::Ordinal)) { $t = $t + $nl }
+        if ($t -notmatch '(?:\r?\n)[ \t]*\r?\n\z') { $t = $t + $nl }
+        $res.State = 'Appended'
+        $res.Text = $t + $block + $nl
+        return $res
+    }
+    if ($bCount -eq 1 -and $eCount -eq 1) {
+        $parts = Get-TextOutsideBlock -Text $Existing -Begin $Begin -End $End
+        if ($null -eq $parts) {
+            $res.State = 'Refused'
+            $res.Reason = 'the END marker comes before the BEGIN marker'
+            return $res
+        }
+        $new = $parts.Before + $block + $parts.After
+        if ($new -ceq $Existing) { $res.State = 'Unchanged' } else { $res.State = 'Replaced' }
+        $res.Text = $new
+        return $res
+    }
+    $res.State = 'Refused'
+    $res.Reason = ('the marker lines are unbalanced or repeated (BEGIN x{0}, END x{1})' -f $bCount, $eCount)
+    return $res
+}
+
+function Update-RulesFile {
+    # File wrapper: strict read, backup, write, re-read, verify that nothing outside the block moved.
+    # State: Created | Appended | Replaced | Unchanged | Refused.
+    param([string]$Path, [string]$Rules, [string]$Begin, [string]$End, [string]$Note)
+    $out = [pscustomobject]@{ State = 'Refused'; Reason = ''; Backup = $null; Bytes = 0 }
+    $f = Read-TextFile $Path
+    if (-not $f.Ok) { $out.Reason = 'the file ' + $f.Error; return $out }
+    $existing = ''
+    if ($f.Exists) { $existing = $f.Text }
+    $r = Set-RulesBlock -Existing $existing -Rules $Rules -Begin $Begin -End $End -Note $Note
+    if ($r.State -eq 'Refused') { $out.Reason = $r.Reason; return $out }
+    if ($r.State -eq 'Unchanged') { $out.State = 'Unchanged'; return $out }
+    if ($f.Exists) { $out.Backup = New-BackupCopy -Path $Path -Tag 'bak' }
+    try {
+        Write-TextFile -Path $Path -Text $r.Text -Bom $f.HasBom
+        $chk = Read-TextFile $Path
+        if (-not $chk.Ok -or ($chk.Text -cne $r.Text)) { throw 'the saved file does not match what was intended' }
+        $bCount = @(Get-MarkerMatches -Text $chk.Text -Marker $Begin).Count
+        $eCount = @(Get-MarkerMatches -Text $chk.Text -Marker $End).Count
+        if ($bCount -ne 1 -or $eCount -ne 1) { throw 'the saved file does not contain exactly one rules block' }
+        $newParts = Get-TextOutsideBlock -Text $chk.Text -Begin $Begin -End $End
+        if ($null -eq $newParts -or $newParts.Block -cne $r.Block) { throw 'the saved rules block is not the intended one' }
+        if ($f.Exists) {
+            if ($r.State -eq 'Replaced') {
+                $oldParts = Get-TextOutsideBlock -Text $existing -Begin $Begin -End $End
+                if ($newParts.Before -cne $oldParts.Before -or $newParts.After -cne $oldParts.After) { throw 'text outside the rules block changed' }
+            }
+            else {
+                if (-not $newParts.Before.StartsWith($existing, [StringComparison]::Ordinal)) { throw 'existing text was changed' }
+            }
+        }
+        $out.Bytes = ([System.Text.Encoding]::UTF8.GetByteCount($chk.Text))
+    }
+    catch {
+        $why = $_.Exception.Message
+        try {
+            if ($out.Backup) { Copy-Item -LiteralPath $out.Backup -Destination $Path -Force }
+            else { Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue }
+        }
+        catch { $why = $why + ' (and the restore failed: ' + $_.Exception.Message + ')' }
+        $out.State = 'Refused'
+        $out.Reason = 'verification failed, the original was restored (' + $why + ')'
+        return $out
+    }
+    $out.State = $r.State
+    return $out
+}
+
+function Get-PinnedRules {
+    # Downloads the pinned rules file and checks its SHA-256 BEFORE it is used. Returns Ok, Text, Sha256, Error.
+    $res = [pscustomobject]@{ Ok = $false; Text = ''; Sha256 = ''; Error = '' }
+    try { $bytes = Get-WebBytes $script:Cfg.RulesUrl }
+    catch { $res.Error = 'the download failed: ' + $_.Exception.Message; return $res }
+    $hash = Get-Sha256Hex $bytes
+    $res.Sha256 = $hash
+    if ($hash -cne $script:Cfg.RulesSha256) {
+        $res.Error = ('the downloaded file does not match the expected fingerprint (got {0}, expected {1})' -f $hash, $script:Cfg.RulesSha256)
+        return $res
+    }
+    try {
+        $enc = New-Object System.Text.UTF8Encoding($false, $true)
+        $text = $enc.GetString($bytes)
+    }
+    catch { $res.Error = 'the downloaded file is not valid UTF-8 text'; return $res }
+    if ($text.Length -gt 0 -and [int]$text[0] -eq 65279) { $text = $text.Substring(1) }
+    $res.Text = ($text -replace "`r`n", "`n")
+    $res.Ok = $true
+    return $res
+}
+
+# ======================================================================================
+# Steps 1 to 4 (setup.md): this PC, the AWS command line tool, sign in, who am I
+# ======================================================================================
+function Get-PowerShellExe {
+    $ps = Join-Path $PSHOME 'powershell.exe'
+    if (Test-Path -LiteralPath $ps) { return $ps }
+    return (Resolve-Exe 'powershell.exe')
+}
+
+function Find-UvTools {
+    # Finds uv and uvx, also in the folder the uv installer uses (it may not be on this window's PATH yet).
+    $uv = Resolve-Exe 'uv'
+    if (-not $uv) {
+        $dirs = @()
+        if ($env:UV_INSTALL_DIR) { $dirs += $env:UV_INSTALL_DIR }
+        $dirs += (Join-Rel $script:Ctx.UserHome '.local\bin')
+        foreach ($d in $dirs) {
+            if ((Test-Path -LiteralPath (Join-Path $d 'uv.exe')) -or (Test-Path -LiteralPath (Join-Path $d 'uv'))) {
+                Add-PathFirst $d
+                $uv = Resolve-Exe 'uv'
+                if ($uv) { break }
+            }
+        }
+    }
+    return $uv
+}
+
+function Install-Uv {
+    $ps = Get-PowerShellExe
+    if (-not $ps) { Stop-Setup 'Could not find powershell.exe to run the uv installer.' }
+    Out-Say '  uv is not installed yet. Installing it now (AWS tools need it). This can take a minute.'
+    $cmd = "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; irm '" + $script:Cfg.UvInstallUrl + "' | iex"
+    $r = Invoke-ProcessCapture -FilePath $ps -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd) -TimeoutSec 300 -Heartbeat
+    if ($r.Error) { Stop-Setup ('The uv installer could not start: ' + $r.Error) }
+    if ($r.TimedOut) { Stop-Setup 'The uv installer took too long (more than 5 minutes).' }
+    $text = (Get-Excerpt ($r.StdOut + [Environment]::NewLine + $r.StdErr) 6)
+    if ($text) { Out-Say $text }
+    if ($r.ExitCode -ne 0) { Stop-Setup ('The uv installer reported an error (exit code {0}). {1}' -f $r.ExitCode, $text) }
+    $script:Ctx.UvJustInstalled = $true
+    Update-SessionPath
+}
+
+function Get-NeededEngines {
+    # Which of the script's own building blocks THIS PC will really use, decided from the AI tool folders that exist.
+    # A part that this PC never uses is not even checked (a problem in it must not stop the run).
+    $ctx = $script:Ctx
+    $names = @(Get-DetectedAgents | ForEach-Object { $_.Name })
+    $need = New-Object 'System.Collections.Generic.List[string]'
+    if ($names -contains 'Codex') { $need.Add('toml') }
+    $jsonAgents = @($ctx.JsonTargets | ForEach-Object { $_.Name }) + @('OpenCode')
+    foreach ($n in $names) {
+        if ($jsonAgents -contains $n) { $need.Add('json'); break }
+    }
+    if ((Test-Path -LiteralPath $ctx.CodexDir -PathType Container) -or (Test-Path -LiteralPath $ctx.ClaudeDir -PathType Container)) {
+        $need.Add('rules')
+        $need.Add('sha256')
+    }
+    return $need.ToArray()
+}
+
+function Test-EngineOff {
+    # $true when a building block failed its self-check on this PC (so the script must not use it).
+    param([string]$Name)
+    return [bool]($script:Ctx -and $script:Ctx.EngineProblems.ContainsKey($Name))
+}
+
+function Get-EngineLabel {
+    param([string]$Name)
+    switch ($Name) {
+        'sha256' { return 'the fingerprint (SHA-256) calculation' }
+        'toml'   { return 'the editor for Codex''s settings file' }
+        'json'   { return 'the editor for JSON settings files' }
+        'rules'  { return 'the editor for the AWS rules block' }
+        default  { return $Name }
+    }
+}
+
+function Get-EngineEffect {
+    # What happens, in plain words, when a building block is switched off.
+    param([string]$Name)
+    switch ($Name) {
+        'toml'   { return 'The script will not edit Codex''s settings file itself; it will list the exact hand edit instead.' }
+        'json'   { return 'The script will not edit JSON settings files itself; it will list the exact hand edits instead.' }
+        default  { return 'The script will not add the AWS rules itself (Step 7); it will list what to do instead.' }
+    }
+}
+
+function Get-SelfCheckPrograms {
+    # Small programs that every Windows PC has, used to prove that this script can start a program and read what it
+    # prints. (A separate function so that the automated tests can replace it.)
+    $list = New-Object 'System.Collections.Generic.List[object]'
+    $comspec = [string]$env:ComSpec
+    if ($comspec -and (Test-Path -LiteralPath $comspec)) {
+        $list.Add([pscustomobject]@{ Name = 'cmd.exe'; File = $comspec; Args = @('/c', 'echo', 'selfcheck-ok') })
+    }
+    $ps = Get-PowerShellExe
+    if ($ps) {
+        $list.Add([pscustomobject]@{ Name = 'powershell.exe'; File = $ps; Args = @('-NoProfile', '-NonInteractive', '-Command', 'Write-Output selfcheck-ok') })
+    }
+    return $list.ToArray()
+}
+
+function Test-ProgramStartProbe {
+    # Every later step starts programs and reads their answers, so this is the one check that stops the run when it fails.
+    # It passes when ANY of the small test programs works (two independent tries), and is skipped when none exists.
+    $res = [pscustomobject]@{ Ok = $false; Skipped = $false; Detail = '' }
+    $progs = @(Get-SelfCheckPrograms)
+    if ($progs.Count -eq 0) { $res.Ok = $true; $res.Skipped = $true; return $res }
+    $notes = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($p in $progs) {
+        $r = Invoke-ProcessCapture -FilePath $p.File -Arguments $p.Args -TimeoutSec 60
+        if (-not $r.Error -and -not $r.TimedOut -and $r.ExitCode -eq 0 -and ([string]$r.StdOut).Trim() -ceq 'selfcheck-ok') {
+            $res.Ok = $true
+            return $res
+        }
+        $notes.Add(('{0}: {1}' -f $p.Name, (Get-ShortText (([string]$r.StdOut) + ' ' + ([string]$r.StdErr) + ' ' + ([string]$r.Error) + ' exit ' + [string]$r.ExitCode) 160)))
+    }
+    $res.Detail = ($notes -join '; ')
+    return $res
+}
+
+function Test-EngineSha256 {
+    $h = Get-Sha256Hex ([System.Text.Encoding]::ASCII.GetBytes('abc'))
+    if ($h -cne 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad') { return 'it gives a wrong answer' }
+    return ''
+}
+
+function Test-EngineToml {
+    $cfg = $script:Cfg
+    $sample = New-Object 'System.Collections.Generic.List[string]'
+    $sample.Add('model = "gpt-5"')
+    $sample.Add('note = """')
+    $sample.Add('[mcp_servers.aws-mcp]')
+    $sample.Add('"""')
+    $sample.Add('')
+    $sample.Add('[projects.''C:\Users\x'']')
+    $sample.Add('trust_level = "trusted"')
+    $sample.Add('')
+    $sample.Add('[mcp_servers.aws-mcp]')
+    $sample.Add('command = "uvx"')
+    $sample.Add('args = ["mcp-proxy-for-aws@latest", "' + $cfg.McpUrl + '"]')
+    $toml = (($sample.ToArray()) -join "`r`n") + "`r`n"
+    $t = Add-TomlMcpEnv -Text $toml -Server $cfg.ServerName -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName
+    $want = '[mcp_servers.aws-mcp.env]' + "`r`n" + $cfg.EnvName + ' = "' + $cfg.ProfileName + '"'
+    if ($t.State -ne 'Patched' -or $t.Text.IndexOf($want, [StringComparison]::Ordinal) -lt 0 -or $t.Text.IndexOf('[mcp_servers.aws-mcp.env]', [StringComparison]::Ordinal) -ne $t.Text.LastIndexOf('[mcp_servers.aws-mcp.env]', [StringComparison]::Ordinal)) {
+        return ('it gave an unexpected answer (' + $t.State + ' ' + $t.Reason + ')')
+    }
+    $e = Add-TomlMcpEntry -Text "model = `"gpt-5`"`r`n" -Server $cfg.ServerName -EnvName $cfg.EnvName -ProfileName $cfg.ProfileName -McpUrl $cfg.McpUrl -ProxyPackage $cfg.ProxyPackage
+    if ($e.State -ne 'Added' -or -not $e.Text.StartsWith("model = `"gpt-5`"`r`n", [StringComparison]::Ordinal)) {
+        return ('adding a whole entry gave an unexpected answer (' + $e.State + ' ' + $e.Reason + ')')
+    }
+    return ''
+}
+
+function Test-EngineJson {
+    $json = '{"projects":{"p":{"history":["a \"}\" b"],"mcpServers":{"aws-mcp":{"command":"node"}}}},"mcpServers":{"aws-mcp":{"command":"uvx","args":["mcp-proxy-for-aws@latest"]}}}'
+    $j = Add-JsonEnvToText -Text $json -ParentKey 'mcpServers' -EnvKey 'env'
+    $first = $j.Text.IndexOf('"env"', [StringComparison]::Ordinal)
+    if ($j.State -ne 'Patched' -or $first -lt 0 -or $first -ne $j.Text.LastIndexOf('"env"', [StringComparison]::Ordinal) -or $first -lt $j.Text.IndexOf('"mcpServers":{"aws-mcp":{"command":"uvx"', [StringComparison]::Ordinal)) {
+        return ('it gave an unexpected answer (' + $j.State + ' ' + $j.Reason + ')')
+    }
+    return ''
+}
+
+function Test-EngineRules {
+    $cfg = $script:Cfg
+    $b = Set-RulesBlock -Existing "keep`r`n" -Rules "rule one`nrule two" -Begin $cfg.BeginMarker -End $cfg.EndMarker -Note $cfg.PrecedenceNote
+    $b2 = Set-RulesBlock -Existing $b.Text -Rules "rule one`nrule two" -Begin $cfg.BeginMarker -End $cfg.EndMarker -Note $cfg.PrecedenceNote
+    if ($b.State -ne 'Appended' -or -not $b.Text.StartsWith("keep`r`n", [StringComparison]::Ordinal) -or $b2.State -ne 'Unchanged' -or (($b.Text -replace "`r`n", '') -match "[`r`n]")) {
+        return ('it gave an unexpected answer (' + $b.State + ' / ' + $b2.State + ')')
+    }
+    return ''
+}
+
+function Test-ScriptSelfCheck {
+    # Quick checks of the script's own building blocks on THIS PC, using small samples held in memory. Changes nothing.
+    # It exists because the script was tested on another kind of machine: if something behaves differently in this
+    # Windows PowerShell, it shows up here, before any real file is touched. Only the parts this PC will use are checked
+    # (-Need). Returns:
+    #   Fatal   problems that stop everything (the script cannot start a program and read its answer)
+    #   Failed  parts that did not pass (Engine, Problem). They are switched off and replaced by a hand edit; the run goes on.
+    #   Passed, Skipped  names of the parts that passed, and of the parts this PC does not use (not checked)
+    param([string[]]$Need = @('sha256', 'toml', 'json', 'rules'))
+    $fatal = New-Object 'System.Collections.Generic.List[string]'
+    $failed = New-Object 'System.Collections.Generic.List[object]'
+    $passed = New-Object 'System.Collections.Generic.List[string]'
+    $skipped = New-Object 'System.Collections.Generic.List[string]'
+    try {
+        $probe = Test-ProgramStartProbe
+        if (-not $probe.Ok) { $fatal.Add('the script could not start a small test program and read its answer (' + $probe.Detail + ')') }
+    }
+    catch { $fatal.Add('the script could not start a small test program: ' + $_.Exception.Message) }
+    foreach ($name in @('sha256', 'toml', 'json', 'rules')) {
+        if ($Need -notcontains $name) { $skipped.Add($name); continue }
+        $problem = ''
+        try {
+            switch ($name) {
+                'sha256' { $problem = [string](Test-EngineSha256) }
+                'toml'   { $problem = [string](Test-EngineToml) }
+                'json'   { $problem = [string](Test-EngineJson) }
+                'rules'  { $problem = [string](Test-EngineRules) }
+            }
+        }
+        catch { $problem = $_.Exception.Message }
+        if ($problem) { $failed.Add([pscustomobject]@{ Engine = $name; Problem = $problem }) }
+        else { $passed.Add($name) }
+    }
+    return [pscustomobject]@{ Fatal = $fatal.ToArray(); Failed = $failed.ToArray(); Passed = $passed.ToArray(); Skipped = $skipped.ToArray() }
+}
+
+function Invoke-Step1Environment {
+    Show-StepHeader 1 'Checking this PC'
+    $ctx = $script:Ctx
+    if (-not $ctx.IsTest) {
+        if ($env:OS -ne 'Windows_NT') { Stop-Setup 'This script is for Windows only.' }
+        if ($PSVersionTable.PSVersion.Major -ne 5) {
+            Stop-Setup ('This script must run in Windows PowerShell 5.1, but it is running in PowerShell {0}. Right-click the file and choose "Run with PowerShell".' -f $PSVersionTable.PSVersion)
+        }
+    }
+    if (-not $ctx.UserHome) { Stop-Setup 'Could not find your Windows user folder.' }
+    Add-Detail ('Windows: {0}; PowerShell {1}; user folder {2}' -f [Environment]::OSVersion.VersionString, $PSVersionTable.PSVersion, $ctx.UserHome)
+    Add-Result 'OK' 'Step 1' 'This is Windows PowerShell 5.1 on Windows.'
+
+    $self = Test-ScriptSelfCheck -Need @(Get-NeededEngines)
+    if (@($self.Fatal).Count -gt 0) {
+        Stop-Setup ('The script''s own check of how it starts programs failed on this PC, so nothing was changed. Please send the log file to the CTO. Details: ' + (@($self.Fatal) -join '; '))
+    }
+    foreach ($f in @($self.Failed)) {
+        $ctx.EngineProblems[[string]$f.Engine] = [string]$f.Problem
+        Add-Detail ('self-check FAILED for {0}: {1}' -f $f.Engine, $f.Problem)
+        Add-Result 'NOTE' 'Step 1' ('The script''s own check of {0} did not pass on this PC ({1}). {2} The rest of the setup carries on.' -f (Get-EngineLabel $f.Engine), $f.Problem, (Get-EngineEffect $f.Engine))
+    }
+    if (@($self.Failed).Count -eq 0) {
+        Add-Result 'OK' 'Step 1' 'The script''s own self-check passed (it can start programs and edit the settings files it needs, safely, on this PC).'
+    }
+    if (@($self.Skipped).Count -gt 0) { Add-Detail ('self-check skipped for parts this PC does not use: ' + (@($self.Skipped) -join ', ')) }
+
+    foreach ($h in @('awscli.amazonaws.com', 'raw.githubusercontent.com')) {
+        if (-not (Test-TcpPort $h 443 6000)) {
+            Add-Result 'NOTE' 'Step 1' ('Could not reach {0} directly. If a later step fails, check the internet connection, VPN or company proxy.' -f $h)
+        }
+    }
+
+    $uv = Find-UvTools
+    if (-not $uv) {
+        Install-Uv
+        $uv = Find-UvTools
+        if (-not $uv) { Stop-Setup 'uv was installed but this window cannot find it. Close this window and run the script again.' }
+    }
+    $ctx.UvExe = $uv
+    $v = Invoke-ProcessCapture -FilePath $uv -Arguments @('--version') -TimeoutSec 60
+    $uvVersion = ''
+    if ($v.ExitCode -eq 0) { $uvVersion = $v.StdOut.Trim() }
+    if (-not $uvVersion) { Stop-Setup ('uv was found at {0} but did not run correctly.' -f $uv) }
+    Add-Detail ('uv: {0} at {1}' -f $uvVersion, $uv)
+    Add-Result 'OK' 'Step 1' ('uv is ready ({0}).' -f $uvVersion)
+}
+
+function Get-AwsExeCandidates {
+    # Every aws.exe we can find: on PATH, in the per-user folder and in Program Files.
+    $found = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($c in @(Get-Command -Name 'aws' -All -CommandType Application -ErrorAction SilentlyContinue)) { $found.Add([string]$c.Source) }
+    $extra = @()
+    if ($env:LOCALAPPDATA) { $extra += (Join-Rel $env:LOCALAPPDATA 'Programs\Amazon\AWSCLIV2\aws.exe') }
+    if ($env:ProgramFiles) { $extra += (Join-Rel $env:ProgramFiles 'Amazon\AWSCLIV2\aws.exe') }
+    foreach ($e in $extra) { if (Test-Path -LiteralPath $e) { $found.Add($e) } }
+    $seen = @{}
+    $unique = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($p in $found) {
+        $k = $p.ToLowerInvariant()
+        if (-not $seen.ContainsKey($k)) { $seen[$k] = $true; $unique.Add($p) }
+    }
+    return $unique.ToArray()
+}
+
+function Get-AwsCliVersion {
+    param([string]$Exe)
+    $r = Invoke-ProcessCapture -FilePath $Exe -Arguments @('--version') -TimeoutSec 60
+    $raw = (([string]$r.StdOut) + ' ' + ([string]$r.StdErr))
+    $m = [regex]::Match($raw, 'aws-cli/(\d+\.\d+\.\d+)')
+    if ($m.Success) { return [version]$m.Groups[1].Value }
+    return $null
+}
+
+function Find-BestAwsCli {
+    # The newest AWS CLI among all copies on this PC.
+    $best = [pscustomobject]@{ Exe = $null; Version = $null }
+    foreach ($exe in (Get-AwsExeCandidates)) {
+        $v = Get-AwsCliVersion $exe
+        if ($null -eq $v) { continue }
+        if ($null -eq $best.Version -or $v -gt $best.Version) { $best.Exe = $exe; $best.Version = $v }
+    }
+    return $best
+}
+
+function Get-InstallerRunCommand {
+    # The command text for the child PowerShell that runs the (already signature-checked) AWS installer file.
+    # The installer runs in its own PowerShell. Tls12 is switched on there too (the installer downloads files itself),
+    # then the signed installer file is run by its full path and its exit code is passed on.
+    param([string]$InstallerPath)
+    return "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; & '" + ($InstallerPath -replace "'", "''") + "'; exit `$LASTEXITCODE"
+}
+
+function Install-AwsCli {
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('awscli-install-' + $script:Ctx.Stamp + '.ps1')
+    Out-Say '  Downloading the AWS installer from AWS...'
+    try { Get-WebFile $script:Cfg.InstallPs1Url $tmp }
+    catch { Stop-Setup ('Could not download the AWS installer from {0}: {1}' -f $script:Cfg.InstallPs1Url, $_.Exception.Message) }
+    $sig = Test-AwsInstallerSignature $tmp
+    if (-not $sig.Ok) {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        Stop-Setup ('The downloaded AWS installer did not pass the signature check (status: {0}). Nothing was installed.' -f $sig.Status)
+    }
+    Out-Say '  The installer is signed by Amazon Web Services. Running it (this can take a few minutes)...'
+    $ps = Get-PowerShellExe
+    if (-not $ps) { Stop-Setup 'Could not find powershell.exe to run the AWS installer.' }
+    $installCmd = Get-InstallerRunCommand $tmp
+    $r = Invoke-ProcessCapture -FilePath $ps -Arguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $installCmd) -TimeoutSec 900 -Heartbeat
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    if ($r.Error) { Stop-Setup ('The AWS installer could not start: ' + $r.Error) }
+    if ($r.TimedOut) { Stop-Setup 'The AWS installer took too long (more than 15 minutes).' }
+    $text = (Get-Excerpt ($r.StdOut + [Environment]::NewLine + $r.StdErr) 8)
+    if ($text) { Out-Say $text }
+    if ($r.ExitCode -ne 0) { Stop-Setup ('The AWS installer reported an error (exit code {0}). {1}' -f $r.ExitCode, $text) }
+    Update-SessionPath
+}
+
+function Invoke-Step2AwsCli {
+    Show-StepHeader 2 'Installing the AWS command line tool (AWS CLI)'
+    $ctx = $script:Ctx
+    $min = [version]$script:Cfg.MinAwsCli
+    $best = Find-BestAwsCli
+    if ($null -ne $best.Version -and $best.Version -ge $min) {
+        Add-Result 'OK' 'Step 2' ('AWS CLI {0} is already installed. Nothing to install.' -f $best.Version)
+    }
+    else {
+        if ($null -ne $best.Version) { Out-Say ('  Found AWS CLI {0}, which is older than the {1} that AWS requires. Updating it.' -f $best.Version, $min) }
+        else { Out-Say '  The AWS CLI is not installed yet. Installing it for your Windows user (no administrator rights needed).' }
+        Install-AwsCli
+        $best = Find-BestAwsCli
+        if ($null -eq $best.Version -or $best.Version -lt $min) {
+            Stop-Setup ('After installing, the newest AWS CLI found is {0} (needed {1} or newer). An older AWS CLI may be in the way; send the log file to the CTO.' -f $best.Version, $min)
+        }
+        Add-Result 'OK' 'Step 2' ('Installed AWS CLI {0}.' -f $best.Version)
+    }
+    $ctx.AwsExe = $best.Exe
+    $ctx.AwsVersion = [string]$best.Version
+    Add-Detail ('AWS CLI: {0} at {1}' -f $best.Version, $best.Exe)
+    $first = Resolve-Exe 'aws'
+    if ($first -and ($first -cne $best.Exe)) {
+        Add-Result 'NOTE' 'Step 2' ('Another (older) copy of the AWS CLI comes first on this PC at {0}. This script uses the newer one at {1}. If "aws --version" in a new window shows an old number, ask the CTO to remove the old copy.' -f $first, $best.Exe)
+    }
+}
+
+function Get-AwsConfigValue {
+    # "aws configure get <key>" for our profile. Returns the value, or $null when it is not set.
+    param([string]$Key)
+    $r = Invoke-ProcessCapture -FilePath $script:Ctx.AwsExe -Arguments @('configure', 'get', $Key, '--profile', $script:Cfg.ProfileName) -TimeoutSec 60
+    if ($r.ExitCode -eq 0 -and $r.StdOut.Trim().Length -gt 0) { return $r.StdOut.Trim() }
+    return $null
+}
+
+function Get-CallerIdentity {
+    # "aws sts get-caller-identity" for our profile, as an object (Ok, Arn, Account, Error).
+    $r = Invoke-ProcessCapture -FilePath $script:Ctx.AwsExe -Arguments @('sts', 'get-caller-identity', '--profile', $script:Cfg.ProfileName, '--region', $script:Cfg.Region, '--output', 'json') -TimeoutSec 90
+    $o = [pscustomobject]@{ Ok = $false; Arn = ''; Account = ''; Error = ''; ExitCode = $r.ExitCode }
+    if ($r.Error) { $o.Error = $r.Error; return $o }
+    if ($r.TimedOut) { $o.Error = 'The check took too long.'; return $o }
+    if ($r.ExitCode -ne 0) { $o.Error = (Get-Excerpt (([string]$r.StdErr) + [Environment]::NewLine + ([string]$r.StdOut)) 6); return $o }
+    try {
+        $j = $r.StdOut | ConvertFrom-Json
+        $o.Arn = [string]$j.Arn
+        $o.Account = [string]$j.Account
+        $o.Ok = ($o.Arn.Length -gt 0 -and $o.Account.Length -gt 0)
+        if (-not $o.Ok) { $o.Error = 'AWS gave an empty answer.' }
+    }
+    catch { $o.Error = 'AWS gave an answer that could not be read: ' + (Get-Excerpt $r.StdOut 3) }
+    return $o
+}
+
+function Backup-AwsFiles {
+    # Only the AWS config file is changed by the sign-in steps ("aws configure set" and "aws login"), so only that one
+    # is backed up. The credentials file is never touched, so it is not copied (a copy would only spread its contents).
+    $ctx = $script:Ctx
+    $f = $ctx.AwsConfig
+    if (Test-Path -LiteralPath $f -PathType Leaf) {
+        $b = New-BackupCopy -Path $f -Tag 'bak'
+        Out-Say ('  Backed up {0}' -f $f)
+        Add-Detail ('backup: {0}' -f $b)
+    }
+}
+
+function Invoke-Step3Login {
+    Show-StepHeader 3 'Signing in to AWS'
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    $aws = $ctx.AwsExe
+    Backup-AwsFiles
+
+    # "aws login" refuses a profile that already holds keys, SSO or assume-role settings. Say so clearly, change nothing.
+    $conflicts = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($key in @('aws_access_key_id', 'sso_session', 'sso_account_id', 'sso_role_name', 'sso_start_url', 'role_arn', 'credential_process', 'web_identity_token_file')) {
+        if ($null -ne (Get-AwsConfigValue $key)) { $conflicts.Add($key) }
+    }
+    if ($conflicts.Count -gt 0) {
+        Stop-Setup ('The AWS profile "{0}" on this PC already has other kinds of settings ({1}), and "aws login" will not use such a profile. Nothing was changed. Send the log file to the CTO.' -f $cfg.ProfileName, ($conflicts -join ', '))
+    }
+
+    # Already signed in from an earlier run? Then the browser step can be skipped.
+    $already = $false
+    if ($null -ne (Get-AwsConfigValue 'login_session')) {
+        $quick = Get-CallerIdentity
+        if ($quick.Ok -and $quick.Arn -ceq $cfg.ExpectedArn) {
+            $already = $true
+            Add-Result 'OK' 'Step 3' ('You are already signed in as {0}. Skipping the browser sign-in.' -f $cfg.ExpectedUser)
+        }
+    }
+
+    $r = Invoke-ProcessCapture -FilePath $aws -Arguments @('configure', 'set', 'region', $cfg.Region, '--profile', $cfg.ProfileName) -TimeoutSec 60
+    if ($r.ExitCode -ne 0) { Stop-Setup ('Could not save the Region setting. {0}' -f (Get-Excerpt (([string]$r.StdErr) + ([string]$r.StdOut)) 4)) }
+    Out-Say ('  Region for profile "{0}" set to {1}.' -f $cfg.ProfileName, $cfg.Region)
+    if ($already) { return }
+
+    Out-Say ''
+    Out-Say 'About the sign-in: AWS says these credentials are valid for 12 hours and can be renewed for 90 days without signing in through the browser again.' 'Plain'
+    Out-Say ('If a command says the session expired, run:  aws login --profile {0}' -f $cfg.ProfileName) 'Plain'
+    Out-Say ''
+    Out-Say ('Have ready now: the password and the security code (MFA) device of the IAM user {0}.' -f $cfg.ExpectedUser) 'Warn'
+    Out-Say 'A web browser window will open. Please:' 'Plain'
+    Out-Say '  1. Choose to sign in as an IAM user (NOT the root user).' 'Plain'
+    Out-Say ('  2. Account ID: {0}     IAM user name: {1}' -f $cfg.AccountId, $cfg.ExpectedUser) 'Plain'
+    Out-Say '  3. Enter that user''s password, finish any security code (MFA) prompt, then approve (Allow).' 'Plain'
+    Out-Say '  4. Come back to this window. It carries on by itself.' 'Plain'
+    Out-Say 'If this window asks (y/n) whether to overwrite an existing login session, type y and press Enter.' 'Plain'
+    Out-Say 'If the browser does not open or the sign-in fails, this window offers a no-browser method (you type R).' 'Plain'
+    Out-Say 'You never type an AWS key or password into this window.' 'Plain'
+    Out-Say ''
+
+    $loginEnv = @{ AWS_CLI_AGENT_TOOLKIT_HINT_DISABLED = 'true' }   # stops the CLI's own extra setup question during login
+    $attempt = 0
+    $useRemote = $false
+    $done = $false
+    while (-not $done -and $attempt -lt 3) {
+        $attempt++
+        $loginArgs = @('login', '--region', $cfg.Region, '--profile', $cfg.ProfileName)
+        if ($useRemote) { $loginArgs += '--remote' }
+        $code = Invoke-LiveCommand -FilePath $aws -Arguments $loginArgs -ExtraEnv $loginEnv
+        if ($code -eq 0) { $done = $true; break }
+        Out-Say ('  The sign-in did not finish (exit code {0}).' -f $code) 'Warn'
+        if ($script:NoPauseMode -or $attempt -ge 3) { break }
+        $ans = (Read-Answer 'Press Enter to try again, type R to try the no-browser method, or type Q to stop').Trim().ToUpperInvariant()
+        if ($ans -eq 'Q') { break }
+        if ($ans -eq 'R') { $useRemote = $true }
+    }
+    if (-not $done) {
+        Stop-Setup 'The AWS sign-in did not complete. The sign-in messages are not saved in the log file, so please send a screenshot of this window (and the log file) to the CTO. You can also run this script again and finish the sign-in in the browser.'
+    }
+    Add-Result 'OK' 'Step 3' 'Signed in to AWS.'
+}
+
+function Remove-LoginSession {
+    # Used when the wrong person signed in: "aws logout" for our profile, then a check that the sign-in is really gone.
+    # Removed is $true only when the logout worked AND the profile no longer gives an identity. Detail says what went wrong.
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    $res = [pscustomobject]@{ Removed = $false; Detail = '' }
+    $o = Invoke-ProcessCapture -FilePath $ctx.AwsExe -Arguments @('logout', '--profile', $cfg.ProfileName) -TimeoutSec 60
+    if ($o.Error) { $res.Detail = 'the logout command could not start: ' + $o.Error; return $res }
+    if ($o.TimedOut) { $res.Detail = 'the logout command took too long'; return $res }
+    if ($o.ExitCode -ne 0) {
+        $res.Detail = ('the logout command reported an error (exit code {0}) {1}' -f $o.ExitCode, (Get-ShortText (([string]$o.StdErr) + ' ' + ([string]$o.StdOut)) 200)).Trim()
+        return $res
+    }
+    $chk = Get-CallerIdentity
+    if ($chk.Ok) { $res.Detail = 'the logout command finished, but the profile still works'; return $res }
+    $res.Removed = $true
+    return $res
+}
+
+function Stop-AfterWrongIdentity {
+    # Every identity guard ends here: sign the wrong identity out again, check that it worked, and stop with words that
+    # say what really happened (never claiming a removal that did not happen).
+    param([string]$Why)
+    $cfg = $script:Cfg
+    $lo = Remove-LoginSession
+    $outcome = 'confirmed'
+    if (-not $lo.Removed) { $outcome = 'NOT confirmed (' + $lo.Detail + ')' }
+    Add-Detail ('identity guard: {0} Sign-out {1}' -f $Why, $outcome)
+    $again = ('Run this script again and sign in as the IAM user {0} (account ID {1}).' -f $cfg.ExpectedUser, $cfg.AccountId)
+    if ($lo.Removed) {
+        Stop-Setup ('{0} The sign-in was removed again. {1}' -f $Why, $again)
+    }
+    Stop-Setup ('{0} The sign-in could NOT be removed automatically ({1}). Please run this command now in a PowerShell window:  aws logout --profile {2}  and tell the CTO. {3}' -f $Why, $lo.Detail, $cfg.ProfileName, $again)
+}
+
+function Invoke-Step4Identity {
+    Show-StepHeader 4 'Checking who you are signed in as'
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    $id = Get-CallerIdentity
+    if (-not $id.Ok) {
+        Stop-Setup ('AWS did not accept the sign-in: {0} If it says the session expired or credentials are missing, run this script again.' -f $id.Error)
+    }
+    $ctx.Identity = $id
+    Add-Detail ('Signed in as {0} (account {1})' -f $id.Arn, $id.Account)
+    if ($id.Arn -like '*:root') {
+        Stop-AfterWrongIdentity 'You signed in as the ROOT user of the AWS account. That is not allowed here.'
+    }
+    if ($id.Account -cne $cfg.AccountId) {
+        Stop-AfterWrongIdentity ('You are signed in to AWS account {0}, but this setup is for account {1}.' -f $id.Account, $cfg.AccountId)
+    }
+    if ($id.Arn -cne $cfg.ExpectedArn) {
+        Stop-AfterWrongIdentity ('You are signed in as {0}, but this setup is only for the IAM user {1}.' -f $id.Arn, $cfg.ExpectedUser)
+    }
+    Add-Result 'OK' 'Step 4' ('Signed in as {0}. This is the right account and the right (non-root) user.' -f $id.Arn)
+}
+
+# ======================================================================================
+# Step 5 (setup.md): the Agent Toolkit wizard, then the "otchealth" profile for the AWS MCP server
+# ======================================================================================
+function Get-DetectedAgents {
+    # The AI tools whose settings folder exists (these are the ones the wizard configures).
+    $list = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($a in $script:Ctx.AgentFolders) {
+        if (Test-Path -LiteralPath $a.Path -PathType Container) { $list.Add($a) }
+    }
+    return $list.ToArray()
+}
+
+function Invoke-Step5Preflight {
+    # Looks at every file the wizard may touch BEFORE it runs. Stops (changing nothing) if the wizard would
+    # overwrite or choke on something. Returns the list of existing files to back up.
+    param($Detected)
+    $ctx = $script:Ctx
+    $cfg = $script:Cfg
+    $names = @($Detected | ForEach-Object { $_.Name })
+    $backupList = New-Object 'System.Collections.Generic.List[string]'
+
+    foreach ($t in $ctx.JsonTargets) {
+        $f = Read-TextFile $t.Path
+        if ($f.Ok -and -not $f.Exists) { continue }
+        $agentOn = ($names -contains $t.Name)
+        if (-not $f.Ok) {
+            if ($agentOn) { Stop-Setup ('The settings file {0} {1}, and the AWS wizard would stop on it. Nothing was changed. Send the log file to the CTO.' -f $t.Path, $f.Error) }
+            continue
+        }
+        if (-not $agentOn) { continue }
+        $backupList.Add($t.Path)
+        if (Test-EngineOff 'json') { continue }   # the self-check of the JSON reader failed: back up only, no analysis
 #@@W3-CHUNK-CONTINUES@@
