@@ -49,7 +49,7 @@ import { awsFetch } from "../../setup/aws-sigv4.mjs";
 import { s3Head, s3Get } from "../fleet-backup/s3-client.mjs";
 import { listBlobsMetaFromS3 } from "../kb-memory/s3-blob.mjs";
 import { resolveOpenSearchConfig } from "../kb-memory/opensearch-write.mjs";
-import { osCount, osSearch } from "../doc-indexer/opensearch-client.mjs";
+import { osCount } from "../doc-indexer/opensearch-client.mjs";
 import { classifyIndexLane } from "../fleet-backup/os-snapshot.mjs";
 import { RING_PRIVATE_PREFIXES, pathPrefixQuery } from "../doc-indexer/push-rules.mjs";
 
@@ -606,9 +606,52 @@ export async function checkOneBrainRoomFreshness(room) {
   return { name, status: v.state, detail: `newest source object "${newest.name}" (${ageH.toFixed(1)}h old, SLO ${sloHours}h) ${v.reason}` };
 }
 
-/** The allow-listed variant (see BRAIN_ROOMS.indexPrefixes): require chunks for the newest text object
- *  under the push allow-list that is already past the SLO. Same ERROR-vs-STALE discipline as the legacy
- *  path: anything that prevents the check from running is ERROR, never STALE. */
+// How many per-path `_count` probes the allow-listed variant below keeps in flight at once. The TOTAL number of
+// probes is already capped by pickDueObjects()'s own `limit` (the 200 newest due objects); this only bounds the burst.
+const DUE_COUNT_CONCURRENCY = 5;
+
+/** One exact-path `_count` probe: the same call and the same ERROR classification as the legacy newest-object path
+ *  in checkOneBrainRoomFreshness(). Resolves { count } or { error: <ready-to-report ERROR detail> } and never
+ *  throws; a reply that carries no numeric count is an error (strictCount), never read as 0. */
+async function countRoomPath(cfg, index, fullPath) {
+  let res;
+  try { res = await osCount(cfg, index, { term: { "path.keyword": fullPath } }); }
+  catch (e) { return { error: `cannot check (OpenSearch _count against "${index}" failed): ${String((e && e.message) || e).slice(0, 300)}` }; }
+  if (!res.ok) return { error: `cannot check (OpenSearch _count HTTP ${res.status} for index "${index}"): ${(res.text || "").slice(0, 200)}` };
+  try { return { count: strictCount(res, `OpenSearch _count against "${index}"`) }; }
+  catch (e) { return { error: `cannot check (${String((e && e.message) || e).slice(0, 300)})` }; }
+}
+
+/** Run `probe(item)` over `items` with at most `limit` in flight. After the first { error } no new probe is
+ *  started (the ones already in flight finish) and the whole run reports that error: a partial result is never
+ *  judged, because one failed probe means the room could not be checked. Resolves { results } (index-aligned with
+ *  `items`) or { error }. */
+async function probeBounded(items, limit, probe) {
+  const results = new Array(items.length);
+  let next = 0;
+  let error;
+  const worker = async () => {
+    while (error === undefined && next < items.length) {
+      const i = next++;
+      const r = await probe(items[i]);
+      if (r.error !== undefined) { if (error === undefined) error = r.error; return; }
+      results[i] = r;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return error === undefined ? { results } : { error };
+}
+
+/** The allow-listed variant (see BRAIN_ROOMS.indexPrefixes): require chunks for EVERY text object under the
+ *  push allow-list that is already past the SLO (the 200 newest). Same ERROR-vs-STALE discipline as the legacy
+ *  path: anything that prevents the check from running is ERROR, never STALE.
+ *
+ *  "Which of these due paths have chunks?" is answered with one exact `path.keyword` `_count` per due path
+ *  (bounded concurrency), never one `_search` + aggregation: the canary's IAM role (otchealth-aws-dr-canary)
+ *  holds es:ESHttpPost on <index>/_count only and is deliberately never granted <index>/_search, which can return
+ *  document text (this runs from a public repo, and the open commons room is not guaranteed free of ring-private
+ *  residue -- see check 8). A failed, non-2xx or non-numeric `_count` on ANY probed path makes the whole room
+ *  ERROR; counts that did come back are then never judged. */
 async function checkRoomByDueObject(room, name, blobs, prefixes, sloHours) {
   const { due, totalDue, newest, candidates } = pickDueObjects(blobs, prefixes, sloHours);
   const scope = `[${prefixes.join(", ")}]`;
@@ -619,15 +662,10 @@ async function checkRoomByDueObject(room, name, blobs, prefixes, sloHours) {
   try { cfg = await resolveOpenSearchConfig(); }
   catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch config/credentials unresolvable): ${String((e && e.message) || e).slice(0, 300)}` }; }
   const prefix = `${room.account}/${room.container}/`;
-  const paths = due.map((b) => `${prefix}${b.name}`);
-  let res;
-  // ONE terms query + a terms aggregation over path.keyword answers "which of these due paths have chunks".
-  try { res = await osSearch(cfg, room.index, { size: 0, query: { terms: { "path.keyword": paths } }, aggs: { present: { terms: { field: "path.keyword", size: paths.length } } } }); }
-  catch (e) { return { name, status: "ERROR", detail: `cannot check (OpenSearch _search against "${room.index}" failed): ${String((e && e.message) || e).slice(0, 300)}` }; }
-  if (!res.ok) return { name, status: "ERROR", detail: `cannot check (OpenSearch _search HTTP ${res.status} for index "${room.index}"): ${(res.text || "").slice(0, 200)}` };
-  const buckets = res.json && res.json.aggregations && res.json.aggregations.present && res.json.aggregations.present.buckets;
-  if (!Array.isArray(buckets)) return { name, status: "ERROR", detail: `cannot check (OpenSearch _search for "${room.index}" returned no aggregation buckets; refusing to read that as "nothing is indexed")` };
-  const v = assessDueObjects({ dueNames: due.map((b) => b.name), presentNames: buckets.map((x) => (String(x.key).startsWith(prefix) ? String(x.key).slice(prefix.length) : String(x.key))), totalDue, sloHours });
+  const probed = await probeBounded(due, DUE_COUNT_CONCURRENCY, (b) => countRoomPath(cfg, room.index, `${prefix}${b.name}`));
+  if (probed.error !== undefined) return { name, status: "ERROR", detail: probed.error };
+  const dueNames = due.map((b) => b.name);
+  const v = assessDueObjects({ dueNames, presentNames: dueNames.filter((_, i) => probed.results[i].count > 0), totalDue, sloHours });
   return { name, status: v.state, detail: `${v.reason}${info}` };
 }
 
