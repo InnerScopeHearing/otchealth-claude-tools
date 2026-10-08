@@ -463,17 +463,48 @@ try {
         }
         finally { Stop-Transcript | Out-Null }
         Assert-True (Test-Path -LiteralPath $first) 'the transcript file must exist'
-        # the first candidate is below a FILE, so it cannot be created: the temporary folder is used instead
+        # the first candidate is below a FILE, so it cannot be created: the temporary folder is used instead.
+        # (Windows PowerShell 5.1 starts a transcript there WITHOUT an error, found on a real Windows machine,
+        # which is why Start-SetupLog creates the log file first as a test.)
         $blocker = Join-Path $tmpRoot 'not-a-folder.txt'
         Save-Text $blocker 'x'
         $second = Start-SetupLog -ScriptDir (Join-Path $blocker 'sub') -Stamp 'unit-2' -UserHome $tmpRoot
         try {
             Assert-Eq $second (Join-Path ([System.IO.Path]::GetTempPath()) 'aws-toolkit-setup-log-unit-2.txt')
+            Assert-True (Test-Path -LiteralPath $second) 'the log file must exist where the closing screen says it is'
         }
         finally {
             if ($second) { Stop-Transcript | Out-Null }
             if ($second) { Remove-Item -LiteralPath $second -Force -ErrorAction SilentlyContinue }
         }
+        # a folder that does not exist: the same, and the missing folder is not created
+        $missing = Join-Path $tmpRoot 'no-such-folder'
+        $third = Start-SetupLog -ScriptDir $missing -Stamp 'unit-3' -UserHome $tmpRoot
+        try {
+            Assert-Eq $third (Join-Path ([System.IO.Path]::GetTempPath()) 'aws-toolkit-setup-log-unit-3.txt')
+            Assert-True (Test-Path -LiteralPath $third) 'the log file must exist where the closing screen says it is'
+        }
+        finally {
+            if ($third) { Stop-Transcript | Out-Null }
+            if ($third) { Remove-Item -LiteralPath $third -Force -ErrorAction SilentlyContinue }
+        }
+        Assert-True (-not (Test-Path -LiteralPath $missing)) 'a missing folder must not be created'
+    }
+
+    Test-Case 'Start-SetupLog: a folder that cannot take the log file is skipped even when Start-Transcript does not complain (as in Windows PowerShell 5.1)' {
+        $blocker2 = Join-Path $tmpRoot 'not-a-folder-2.txt'
+        Save-Text $blocker2 'x'
+        $expected = Join-Path ([System.IO.Path]::GetTempPath()) 'aws-toolkit-setup-log-unit-4.txt'
+        try {
+            $got = & {
+                # stands in for the 5.1 behaviour that was found on a real Windows machine: no error, and no file either
+                function Start-Transcript { [CmdletBinding()] param([string]$Path) }
+                Start-SetupLog -ScriptDir (Join-Path $blocker2 'sub') -Stamp 'unit-4' -UserHome $tmpRoot
+            }
+            Assert-Eq $got $expected
+            Assert-True (Test-Path -LiteralPath $expected) 'the log file must exist where the closing screen says it is'
+        }
+        finally { Remove-Item -LiteralPath $expected -Force -ErrorAction SilentlyContinue }
     }
 
     Test-Case 'Get-WebBytes: downloads to a temporary file, returns the bytes, and cleans up (also when the download fails)' {
