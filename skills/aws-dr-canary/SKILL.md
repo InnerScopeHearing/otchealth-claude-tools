@@ -52,10 +52,29 @@ probe added alongside the backup checks because the n8n host had no automated li
    live-service check, not a backup-freshness check, which is why it is its own row rather than folded
    into the AutoSnapshot check above.
 6. **Weekly restore-proof drill** (gated to one day of the week, `AWS_DR_CANARY_DRILL_DOW`, default
-   Sunday = 0): runs `os-snapshot.mjs restore-drill` for real (restores the smallest non-privileged
-   index into `drill-<name>`, compares counts, deletes the drill index) and decrypts the current SSM
+   Sunday = 0): runs `os-snapshot.mjs restore-drill` for real and decrypts the current SSM
    archive end to end via `secrets-dr-restore.mjs` using `SECRETS_DR_PASSPHRASE`, so the pipeline is
    proven **restorable**, not merely writable, on a regular cadence without doing it every single night.
+   The OpenSearch half resolves the newest SUCCESS snapshot BY ID first (its id carries `:`, which goes
+   out single-encoded; see `tests/os-snapshot-restore-drill.test.mjs`), restores ONE index from it into
+   `drill-<name>` with `include_aliases:false` (the copy never joins a live alias), compares doc counts
+   (restored must be at least 95% of live) and deletes the copy. **Which index:** the smallest
+   *eligible* index with at least 50 docs (on a tinier index a few new documents inside the snapshot's
+   up-to-24h lag already break the 95% rule); when none reaches 50, the largest eligible one, and the
+   run says so. *Eligible* = non-privileged (`classifyIndexLane` plus the aggregate privileged-ring
+   terms), not dot-prefixed (`.tasks`, `.ism-config`, `.ql-datasources`, `.ml-config` and every other
+   system or hidden index), not a `drill-` copy, non-empty, and present in that snapshot (an index
+   created after the snapshot is skipped, never an error). An explicit `--index` must pass the same
+   guard. **Cleanup is part of the contract:** a stale `drill-<name>` left by an earlier killed run is
+   deleted BEFORE the restore (a leftover otherwise fails every later drill with "an open index with
+   same name already exists"), the copy is deleted again on every path, and a delete that fails (for
+   example a 403) FAILS the drill; it can never print PASSED. The one path not covered is the canary's
+   own 90s kill (SIGTERM) landing mid-restore: the leftover copy is then removed by the next run's
+   pre-clean. The script is also dispatchable by hand through the `AWS DR OpenSearch Snapshot Admin`
+   workflow (`verb=restore-drill`); `extra_args=--dry-run` is read-only and proves the snapshot
+   resolves by id without restoring anything. `restore-drill` accepts only `--index`, `--repo` and
+   `--dry-run`, spelled exactly, and stops before any call on anything else (the workflow forwards
+   `extra_args` verbatim, so a mistyped `--dryrun` must never become a real restore).
 7. **Per-room brain freshness** (2026-08-29, closes `FND-20260828-3142`'s canary half — "docs added
    since 2026-08-13 unindexed ... add per-room newest-indexed_at-vs-newest-S3-object canary"): for each
    room in `BRAIN_ROOMS`, lists the room's S3 source prefix (`skills/kb-memory/s3-blob.mjs`'s MIRROR
