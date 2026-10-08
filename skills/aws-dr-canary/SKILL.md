@@ -169,8 +169,9 @@ This canary never reads document content, secret values, or personal/financial d
 timestamps, snapshot/instance/object status and metadata (name, size, `LastModified`), document/
 snapshot/chunk counts, and (for `n8n-healthz`) an HTTP status code from an unauthenticated
 `GET /healthz`. The weekly drill only ever targets a **non-privileged** OpenSearch index (via
-`os-snapshot.mjs`'s `classifyIndexLane`), so it never touches `legal-personal*` or `finance-cfo-*`
-content, and privileged-lane OpenSearch snapshot DR is a deliberately disarmed scaffold this canary
+`os-snapshot.mjs`'s `classifyIndexLane` and its `drillSourceRefusal` guard, which also refuses
+dot-prefixed system indices and any name the nightly snapshot pattern excludes), so it never touches
+`legal-personal*` or `finance-cfo-*` content, and privileged-lane OpenSearch snapshot DR is a deliberately disarmed scaffold this canary
 does not check at all (see `os-snapshot.mjs`'s header). The per-room brain-freshness check (2026-08-29)
 uses that exact same `classifyIndexLane()` — imported, never copy-pasted — to gate itself BEFORE any
 network call: `finance-cfo-source-docs`, `legal-company`, and `legal-personal` are reported `SKIPPED`
