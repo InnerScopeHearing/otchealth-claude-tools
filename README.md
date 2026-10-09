@@ -1,7 +1,7 @@
 # otchealth-claude-tools
 
-Portable Claude tooling for the OTCHealth Inc. portfolio. Commit once here, and
-every Claude Code (web) session across **any** project — AWARE, iHEARtest,
+Portable agent tooling for the OTCHealth Inc. portfolio. Commit once here, and
+every configured Claude Code or Codex Cloud session across **any** project — AWARE, iHEARtest,
 MedReview, OTCHealthMart, Companion, InnerEase — can install it on startup and
 re-hydrate credentials from environment secrets.
 
@@ -15,6 +15,8 @@ re-hydrate credentials from environment secrets.
 |---|---|
 | `skills/designer/` | Creative-director skill — Claude drives icon / illustration / app-icon / App Store screenshot / video / **talking avatar** / voiceover / **music** / **sound-effects** generation, plus **GPT-4o art-director review**. Brand-profile driven (works per project). Wraps OpenAI DALL·E 3 + GPT-image-1 + GPT-4o Vision, Vertex AI Imagen 4 (GA) + Veo 3.1 (native audio + lip-sync), ElevenLabs (voice + music + SFX). |
 | `setup/session-start.sh` | Idempotent installer: copies the skill into `~/.claude/skills/`, runs `npm install`, writes the GCP SA key, then fetches API keys from Secret Manager into `~/.designer/credentials.env`. |
+| `setup/codex-session-start.sh` | Minimal Codex Cloud installer: hydrates all repository skills and shared setup modules into `~/.agents/`, without fetching credentials or installing Claude-only hooks/plugins. |
+| `setup/hydrate-skills.sh` | Shared governed-skill hydrator for `~/.claude/` and `~/.agents/`; copies skills plus only the shared `setup/*.mjs` modules their relative imports require. |
 | `setup/fetch-secrets.mjs` | Pulls `openai-api-key` / `elevenlabs-api-key` (and optional `recraft-api-key`) from GCP Secret Manager using the SA key. No gcloud CLI needed. |
 | `setup/credentials.env.template` | Reference for the one env secret + the Secret Manager secret IDs. |
 | `.claude/settings.json` | SessionStart hook — runs the installer automatically when this repo is the project dir. |
@@ -113,6 +115,22 @@ bash /tmp/octools/setup/session-start.sh
 That's it. From then on, every Claude Code web session auto-installs the
 designer skill and hydrates credentials — no manual steps.
 
+### Codex Cloud
+
+Configure the Codex Cloud environment setup script to clone this repository and run:
+
+```bash
+rm -rf /tmp/octools 2>/dev/null
+git clone --depth 1 https://github.com/InnerScopeHearing/otchealth-claude-tools /tmp/octools
+bash /tmp/octools/setup/codex-session-start.sh
+```
+
+This installs the complete repository skill tree under `~/.agents/skills` and the
+shared JavaScript modules under `~/.agents/setup`, where skill-relative imports
+resolve. The existing Claude setup also hydrates this Codex root, and its live
+refresh updates both roots. The Codex entrypoint itself does not fetch or copy
+credentials, hooks, plugins, or Dream Team Claude agent files.
+
 ## Using the designer skill
 
 Once installed, just ask Claude in plain English. Trigger words: *design, icon,
@@ -137,9 +155,10 @@ a sibling `.meta.json` (prompt, model, cost, timestamp).
 
 ## Notes & limits
 
-- **Claude Code only.** Filesystem skills (`~/.claude/skills/`) are a Claude Code
-  feature. Claude Chat (claude.ai) uses a separate Skills upload that runs in a
-  sandbox without these credentials — this repo does not target Claude Chat.
+- **Filesystem skills.** Claude Code reads `~/.claude/skills/`; Codex reads
+  `~/.agents/skills/`. The session setup scripts hydrate both from this repo's
+  tracked skill tree. Claude Chat (claude.ai) uses a separate Skills upload that
+  runs in a sandbox without these credentials — this repo does not target Claude Chat.
 - **Video + avatars use Veo 3.1** (`veo-3.1-generate-001`) for native audio +
   lip-synced dialogue; Veo 2 stays available for plain silent B-roll. Imagen is
   the GA `imagen-4.0-generate-001`. Synthetic avatars only — never replicate a

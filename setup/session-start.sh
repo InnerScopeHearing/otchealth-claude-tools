@@ -55,31 +55,13 @@ case "$TOOLS_DIR" in
     ;;
 esac
 
-echo "[octools] Installing skills -> ${SKILLS_DST}"
-mkdir -p "$SKILLS_DST"
-for skdir in "${TOOLS_DIR}/skills/"*/; do
-  sk="$(basename "$skdir")"
-  rm -rf "${SKILLS_DST:?}/${sk}"
-  cp -R "$skdir" "${SKILLS_DST}/${sk}"
-done
-
-# ─── Install the SHARED setup modules -> ~/.claude/setup ────────────
-# Thirteen skills import shared helpers as "../../setup/<mod>.mjs" (aws-sigv4, model-routing,
-# openai-usage, prompt-shape). From the git tree that resolves, because skills/ and setup/ are
-# siblings. The loop above copies ONLY skills/, so at the installed path it resolved to
-# ~/.claude/setup/<mod>.mjs, which did not exist -- every one of those skills died with
-# ERR_MODULE_NOT_FOUND when invoked from ~/.claude/skills, including kb-memory (the fleet working
-# memory) and company-brain. They kept working when run from the /tmp/octools clone, which is why
-# this went unnoticed: the ECS jobs and any explicitly-pathed call were fine, and only the
-# installed path was dark. Mirroring the sibling layout restores it, and the shared modules'
-# own back-references ("../skills/kb-memory/aws-secret.mjs") then resolve too.
-# Copy *.mjs only: the shell entrypoints in setup/ are run from the clone, and installing a second
-# copy of session-start.sh next to the skills would just invite running the wrong one.
-SETUP_DST="${HOME}/.claude/setup"
-echo "[octools] Installing shared setup modules -> ${SETUP_DST}"
-mkdir -p "$SETUP_DST"
-cp -f "${TOOLS_DIR}/setup/"*.mjs "$SETUP_DST/" 2>/dev/null \
-  || echo "[octools] WARN: could not install shared setup modules — skills importing ../../setup/ will fail from ~/.claude/skills."
+# Hydrate both supported global skill roots from the same governed repository tree.
+# Codex scans ~/.agents/skills; Claude Code scans ~/.claude/skills. Shared setup
+# modules are installed beside each tree for skill-relative ../../setup imports.
+bash "${TOOLS_DIR}/setup/hydrate-skills.sh" "${HOME}/.claude" \
+  || echo "[octools] WARN: could not install Claude skills/shared modules."
+bash "${TOOLS_DIR}/setup/hydrate-skills.sh" "${HOME}/.agents" \
+  || echo "[octools] WARN: could not install Codex skills/shared modules."
 
 # ─── Governed-skills audit: surface "shadow-doctrine" skills ────────
 # The copy loop above (and octools-sync.sh's live-refresh equivalent) only ever copies FROM the git
