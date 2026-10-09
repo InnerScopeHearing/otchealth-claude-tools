@@ -7,7 +7,6 @@ import importlib.util
 import io
 import json
 import re
-import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace

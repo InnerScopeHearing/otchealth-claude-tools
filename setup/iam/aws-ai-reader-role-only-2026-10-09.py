@@ -336,7 +336,7 @@ class Provisioner:
         )
 
     def create_reader_role(self) -> None:
-        role_readback = lambda: self._reader_role_matches()
+        role_readback = self._reader_role_matches
         self.write_once(
             ["iam", "create-role", "--role-name", ROLE, "--assume-role-policy-document", json.dumps(TRUST_DOC, separators=(",", ":")),
              "--max-session-duration", str(MAX_SESSION), "--description", "Read-only AWS access for gateway AI bridge"],
