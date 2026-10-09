@@ -135,29 +135,14 @@ test("every ../../setup module a skill imports actually exists in setup/", () =>
 });
 
 // Both install paths matter and for different reasons. session-start.sh is the fresh-session
-// install; octools-sync.sh is the mid-session live refresh, so a skill that starts importing a NEW
-// shared module would break in every already-running session until restart if only the former
-// copied setup/.
+// install; octools-sync.sh is the mid-session live refresh. Both call the shared hydrator, which
+// keeps setup modules beside the installed skills for relative imports.
 for (const script of ["setup/session-start.sh", "setup/octools-sync.sh"]) {
-  test(`${script} installs the shared setup modules into ~/.claude/setup`, () => {
+  test(`${script} uses the shared hydrator for ~/.claude`, () => {
     const src = readFileSync(join(ROOT, script), "utf8");
-
-    // Expand the handful of shell variables that can stand in for the destination, so the assertion
-    // reads the effective path rather than whichever spelling the script happens to use.
-    let expanded = src;
-    for (const [, name, value] of src.matchAll(/^\s*([A-Z_]+)="([^"]*)"\s*$/gm)) {
-      expanded = expanded.split(`\${${name}}`).join(value).split(`$${name}`).join(value);
-    }
-    expanded = expanded.split("${HOME}").join("~").split("$HOME").join("~");
-
-    const copiesShared = expanded
-      .split("\n")
-      .filter((l) => !l.trim().startsWith("#"))
-      .some((l) => /setup\/"?\*\.mjs/.test(l) && /~\/\.claude\/setup/.test(l));
-
     assert.ok(
-      copiesShared,
-      `${script} must copy setup/*.mjs into ~/.claude/setup, or every skill importing ` +
+      /hydrate-skills\.sh/.test(src) && /\.claude/.test(src),
+      `${script} must hydrate setup/*.mjs into ~/.claude/setup, or every skill importing ` +
         `"../../setup/<mod>.mjs" fails with ERR_MODULE_NOT_FOUND when run from ~/.claude/skills.`,
     );
   });

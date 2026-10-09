@@ -31,26 +31,16 @@ case "$TOOLS_DIR" in
         remote="$(git -C "$TOOLS_DIR" rev-parse FETCH_HEAD 2>/dev/null || echo none)"
         installed="$(cat "$MARKER" 2>/dev/null || git -C "$TOOLS_DIR" rev-parse HEAD 2>/dev/null || echo none)"
         if [ "$remote" != "none" ] && [ "$remote" != "$installed" ] && git -C "$TOOLS_DIR" reset --hard --quiet FETCH_HEAD 2>/dev/null; then
-          if [ -d "$TOOLS_DIR/skills" ]; then
-            for skdir in "$TOOLS_DIR/skills/"*/; do
-              sk="$(basename "$skdir")"
-              rm -rf "${SKILLS_DST:?}/${sk}" 2>/dev/null || true
-              cp -R "$skdir" "${SKILLS_DST}/${sk}" 2>/dev/null || true
-            done
-          fi
-          # Keep the shared setup modules in step with the skills. skills/ and setup/ are siblings in
-          # the git tree, and thirteen skills import "../../setup/<mod>.mjs"; if only skills/ refreshes
-          # here, a skill that starts importing a NEW shared module mid-session breaks with
-          # ERR_MODULE_NOT_FOUND until the next fresh session. Same *.mjs-only rule as session-start.sh.
-          if [ -d "$TOOLS_DIR/setup" ]; then
-            mkdir -p "${HOME}/.claude/setup" 2>/dev/null || true
-            cp -f "$TOOLS_DIR/setup/"*.mjs "${HOME}/.claude/setup/" 2>/dev/null || true
-          fi
+          # Refresh both global skill roots. Codex and Claude share the same
+          # governed source while retaining their own host directories.
+          bash "$TOOLS_DIR/setup/hydrate-skills.sh" "${HOME}/.claude" >/dev/null 2>&1 || true
+          bash "$TOOLS_DIR/setup/hydrate-skills.sh" "${HOME}/.agents" >/dev/null 2>&1 || true
           # Re-wire user-scope hooks idempotently so a NEWLY-ADDED hook (e.g. kb-recall) reaches an
           # already-RUNNING session on its next refresh, not only on the next fresh session. Additive,
           # only writes when changed, always exits 0.
           [ -f "$TOOLS_DIR/setup/install-octools-hook.mjs" ] && node "$TOOLS_DIR/setup/install-octools-hook.mjs" >/dev/null 2>&1 || true
           git -C "$TOOLS_DIR" rev-parse HEAD > "$MARKER" 2>/dev/null || true
+          git -C "$TOOLS_DIR" rev-parse HEAD > "${HOME}/.agents/.octools-installed-commit" 2>/dev/null || true
           echo "[octools-sync] shared toolkit refreshed ${installed:0:7} -> ${remote:0:7} (live, no restart needed)."
         fi
       fi
