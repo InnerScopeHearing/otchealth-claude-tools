@@ -36,15 +36,17 @@
 #
 # KNOWN TRADE-OFF (kept on purpose): cloudtrail:LookupEvents and ecs:DescribeTasks stay ALLOWED.
 # CloudTrail events can show request parameters, and ECS task details can show per-run overrides, so
-# a plaintext secret passed that way would be visible. The gateway task definition takes all of its
-# tokens from SSM (secrets / valueFrom) and its plaintext environment has no secret-named keys, so
-# nothing secret is exposed today. If that ever changes, add those two actions to the deny policy
-# below and run this script again.
+# a plaintext secret passed that way would be visible. The repo's snapshot of the gateway task
+# definition takes all of its tokens from SSM (secrets / valueFrom). That was NOT re-verified against
+# the live task definition, so it is a claim to check, not a fact. If a plaintext secret is ever
+# found there, add those two actions to the deny policy below and run this script again.
 #
 # EXISTING IDENTITIES MUST BE EXACT: if the user or the role already exists, it may carry only what
 # this script puts on it. Any other managed policy, inline policy, group membership (user) or
 # permissions boundary is a FAIL, printed together with the command that removes it. A user that
-# fails this check never gets a console password.
+# fails this check never gets a console password. A role is checked BEFORE anything on it is
+# changed: if it fails, it is left completely alone (its trust policy is not rewritten, nothing is
+# attached to it, and the gateway task role is not given permission to use it).
 #
 # HOW TO RUN: download this file and run it with bash (do not paste its body into the shell).
 # SAFE TO RE-RUN: every name is fixed; a re-run changes nothing that is already correct and never
@@ -90,6 +92,8 @@ PW_CREATED="no"
 PW_EXISTING="no"
 PW_POLICY_JSON="{}"
 B_OK="no"
+ROLE_EXACT="yes"
+GRANT_OK="no"
 EXPECT_MANAGED=()
 EXPECT_INLINE=()
 EXACT_N=0
@@ -387,11 +391,12 @@ list_missing() {
 }
 
 # ---- "an existing user or role must be exactly what this script would have made" ------------------
-# safe_token TEXT: succeeds when TEXT holds only the characters that IAM names and ARNs normally use, so it
-# can be shown inside a command that someone copies. (An IAM path may legally hold other characters.)
+# safe_token TEXT: succeeds when TEXT holds only the characters that IAM names and ARNs normally use and does not
+# start with a dash (the AWS CLI would read a leading dash as the start of an option), so it can be shown inside a
+# command that someone copies. (An IAM path may legally hold other characters.)
 safe_token() {
   case "$1" in
-    "" | *[!A-Za-z0-9+=,.@_/:-]*) return 1 ;;
+    "" | -* | *[!A-Za-z0-9+=,.@_/:-]*) return 1 ;;
     *) return 0 ;;
   esac
 }
@@ -415,7 +420,7 @@ found_item() {
     printf '          remove it with:  %s\n' "$2"
     add_fix "$2"
   else
-    echo "          remove it in the IAM console (its name has unusual characters)"
+    echo "          remove it in the IAM console (its name starts with a dash or has unusual characters)"
   fi
 }
 
@@ -981,7 +986,7 @@ fi
 section "4. Part B: IAM role $READER_ROLE"
 CUR_PART="B"
 if [ -z "$TASK_ROLE_ARN" ]; then
-  fail "B  the gateway's task role was not found, so the role was not created ($B_PROBLEM)"
+  fail "B  the gateway's task role was not found, so the role was not created or changed ($B_PROBLEM)"
 else
   pass "B  gateway task role found: $TASK_ROLE_ARN"
   TRUST_FILE="$WORK_DIR/trust.json"
@@ -998,12 +1003,29 @@ else
   ]
 }
 EOF
-  echo "  Trust policy:"
+  echo "  Trust policy this script would write:"
   policy_summary "$TRUST_FILE" 2048 || stop "the trust policy text is invalid."
-  echo "  Only $TASK_ROLE_ARN may assume the role."
+  echo "  (When the role is written, only $TASK_ROLE_ARN may assume it.)"
   B_OK="yes"
+  ROLE_EXACT="yes"
   if [ -n "$ROLE_ARN" ]; then
-    echo "  Role exists: $ROLE_ARN (trust policy, session length and tags are set again below)"
+    # An existing role is checked BEFORE anything on it is changed. A role that holds anything this script did not
+    # add is left completely alone: no trust rewrite, nothing attached, and no permission for the gateway task role.
+    # (A same-account trust policy that names the task role is already enough for it to assume the role, so the
+    # trust policy is the thing that must never be written to a role that is not exact.)
+    echo "  Role exists: $ROLE_ARN. Checking that it holds nothing this script did not put there, BEFORE anything on it is changed:"
+    EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}")
+    EXPECT_INLINE=()
+    if ! exact_check role "$READER_ROLE"; then
+      ROLE_EXACT="no"
+      B_OK="no"
+      fail "B  the role has $EXACT_N item(s) this script did not add, or that could not be read: ${EXACT_LIST}. This run changed nothing on the role and gave the gateway task role no permission to use it. Do not let the gateway use the role until they are gone."
+    fi
+  fi
+  if [ "$ROLE_EXACT" = "no" ]; then
+    : # nothing is written to a role that is not exact; the FAIL above says so
+  elif [ -n "$ROLE_ARN" ]; then
+    echo "  Role is exact: $ROLE_ARN (trust policy, session length and tags are set again below)"
     if ! aws iam update-assume-role-policy --role-name "$READER_ROLE" --policy-document "file://$TRUST_FILE"; then B_OK="no"; fi
     if [ "$B_OK" = "yes" ] && ! aws iam update-role --role-name "$READER_ROLE" --description "$ROLE_DESCRIPTION" --max-session-duration "$SESSION_SECONDS"; then B_OK="no"; fi
     if [ "$B_OK" = "yes" ] && ! aws iam tag-role --role-name "$READER_ROLE" --tags "${TAG_ARGS[@]}"; then B_OK="no"; fi
@@ -1067,11 +1089,12 @@ EOF
 EOF
     echo "  Policy $ASSUME_POLICY on the gateway task role $TASK_ROLE_NAME:"
     if save_policy role "$TASK_ROLE_NAME" "$ASSUME_POLICY" "$ASSUME_FILE" 10240; then
+      GRANT_OK="yes"
       pass "B  the gateway task role may assume $READER_ROLE (one small policy, that role only)"
     else
       fail "B  the assume policy could not be saved on the gateway task role $TASK_ROLE_NAME"
     fi
-  else
+  elif [ "$ROLE_EXACT" = "yes" ]; then
     fail "B  role $READER_ROLE could not be created or set up (the message above says why)"
   fi
 fi
@@ -1131,6 +1154,8 @@ if [ -n "$TASK_ROLE_ARN" ] && [ -n "$ROLE_ARN" ] && [ "$B_OK" = "yes" ]; then
   check_identity "B" "$ROLE_ARN"
   expect_blocked "B  role cannot add an MFA device to the reader user (it does not get the user's MFA policy)" "$ROLE_ARN" iam:EnableMFADevice "$USER_ARN" any
   expect_allowed "B  gateway task role can assume $READER_ROLE (sts:AssumeRole)" "$TASK_ROLE_ARN" sts:AssumeRole "$ROLE_ARN"
+elif [ "$ROLE_EXACT" = "no" ]; then
+  info "skipped: the role was left exactly as it was, because it holds something this script did not add (see the FAIL in part B above)"
 else
   info "skipped: part B did not complete, so there is no role to check"
 fi
@@ -1225,8 +1250,18 @@ done
 echo ""
 echo "Identities:"
 echo "  User : ${USER_ARN:-not created}"
-echo "  Role : ${ROLE_ARN:-not created}"
-echo "  Gateway task role allowed to assume it: ${TASK_ROLE_ARN:-not found}"
+if [ "$ROLE_EXACT" = "no" ]; then
+  echo "  Role : $ROLE_ARN (it already existed; this run did not change it)"
+else
+  echo "  Role : ${ROLE_ARN:-not created}"
+fi
+if [ "$GRANT_OK" = "yes" ]; then
+  echo "  Gateway task role allowed to assume it: $TASK_ROLE_ARN"
+elif [ -n "$TASK_ROLE_ARN" ]; then
+  echo "  Gateway task role allowed to assume it: no (this run did not add that permission)"
+else
+  echo "  Gateway task role allowed to assume it: no (the gateway task role was not found)"
+fi
 TOTAL=$((PASSED + FAILED))
 echo ""
 echo "=============================================================="
