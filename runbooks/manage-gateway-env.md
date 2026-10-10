@@ -1,8 +1,27 @@
-# Runbook: editing otchealth-mcp-gateway environment variables
+# Runbook: editing otchealth-mcp-gateway environment variables (RETIRED 2026-10-09)
 
-**This is the ONE supported way to change an env var on the gateway (or any
-sibling Container App). Do not use inline `az containerapp update --set-env-vars
-"KEY=value"` anymore** — it has caused three separate production incidents
+> **RETIRED 2026-10-09 (security finding S-03). Do not follow the steps below.**
+> The workflow this page describes is now a disarmed stub that fails on purpose.
+> Azure was permanently deleted on 2026-08-13, so there is no Container App left
+> for it to edit, and its old body pasted free-text dispatch inputs into shell
+> lines in a job that could request a cloud token.
+>
+> **Where to go instead.** The gateway runs on AWS ECS (service
+> `otchealth-gateway`). An env change there is a task definition edit plus a
+> service rollout, with no image rebuild. Rollouts go through the
+> `aws-recovery-console` workflow in otchealth-cto. Secrets are not plain env
+> values: they live in AWS SSM Parameter Store under `/otchealth/` (see
+> `CLAUDE.md`, the 2026-08-27 correction).
+>
+> The rest of this page is kept as history of the Azure era. The rules it
+> records (keep secret bindings, diff every other key before and after, never
+> build a `KEY=value` shell string) are still a good checklist for any AWS-side
+> replacement, which should pass every input through `env:` and validate it
+> against a strict allowlist.
+
+**(Historical) This was the ONE supported way to change an env var on the gateway
+(or any sibling Container App). Do not use inline `az containerapp update
+--set-env-vars "KEY=value"`**. It caused three separate production incidents
 (emptied JSON array, clobbered secretRef, `@`-in-value failure).
 
 ## What replaces it
