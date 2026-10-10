@@ -306,8 +306,7 @@ discover_gateway() {
   if ! try_aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
       --query 'services[0].[status,desiredCount,runningCount,taskDefinition]' --output text; then
     if [[ "$ERRTXT" == *ClusterNotFoundException* ]]; then
-      GATEWAY_WHY="the ECS cluster $ECS_CLUSTER was not found"
-      return 0
+      gateway_stop "the gateway's ECS service was not found: the ECS cluster $ECS_CLUSTER does not exist in this account and region."
     fi
     show_err
     stop "could not read the ECS service (message above). Nothing was changed. Copy this screen and send it to the CTO."
