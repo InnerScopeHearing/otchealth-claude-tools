@@ -14,8 +14,13 @@
 #         otchealth-brain-writes-blocked         the brain refuses new writes
 #         otchealth-brain-low-storage            a brain data server has under 20 percent of its disk free
 #   The script finds the gateway load balancer and the brain disk size on its own (nothing is
-#   hard-coded). If it cannot find one of the two, or CloudWatch has no data for it yet, it says so
-#   (WARN) and installs only the other group.
+#   hard-coded). The gateway is the ECS service otchealth-gateway in cluster otchealth. If no ACTIVE
+#   service has that name, the one ACTIVE service in the cluster whose task definition family is
+#   otchealth-gateway is used. If there is none, or more than one, the script STOPS before it changes
+#   anything (FAIL); installing only the brain alarms in that case needs the explicit option
+#   --brain-only. If that service is found but the load balancer behind it cannot be found, or
+#   CloudWatch has no data for the gateway or for the brain yet, or the brain cannot be found, it says
+#   so (WARN) and installs only the other group.
 #   It never removes alarms an earlier run installed: if something it used to watch cannot be found
 #   now, it stops and asks you to tell the CTO.
 #   NOT touched on purpose: the AWS Budget, the ECS service, the load balancer, the OpenSearch
@@ -24,7 +29,10 @@
 # HOW TO RUN: download this file and run it with bash (do not paste its body into the shell):
 #       bash ops-alarms-2026-10-07.sh --email you@example.com
 #   --email is required: it is the address that receives the alarm emails. There is no default
-#   (no address is stored in this file) and no environment variable is read.
+#   (no address is stored in this file) and it is never read from the environment.
+#   --brain-only is optional, and only for when the CTO asks for it: it installs just the 3 brain
+#   alarms and does not look for the gateway at all.
+#   The environment variable ECS_SERVICE can name a different gateway service (rarely needed).
 # SAFE TO RE-RUN: it looks everything up again; the stack changes only if something is different.
 #   It does not repair an alarm that someone deleted or edited by hand: for that, delete the stack
 #   (the ROLLBACK line) and run the script again.
@@ -47,9 +55,13 @@ REGION="us-east-1"
 STACK="otchealth-ops-alarms"
 TOPIC_NAME="otchealth-ops-alerts"
 ALERT_EMAIL="" # set from --email below; never from the environment, never defaulted
+BRAIN_ONLY="no" # set to yes only by the --brain-only option
 
 ECS_CLUSTER="otchealth"
-ECS_SERVICE="otchealth"
+# The gateway's ECS service: the name infra/aws/ecs-gateway.tf (otchealth-mcp-server) gives it. The environment may
+# set ECS_SERVICE to use another one. If no ACTIVE service has the name, the service is found by its task
+# definition family instead (see resolve_gateway_service below).
+ECS_SERVICE="${ECS_SERVICE:-otchealth-gateway}"
 EXPECTED_TASK_FAMILY="otchealth-gateway"
 DOMAIN="otchealth-brain"
 LOW_STORAGE_PERCENT=20
@@ -143,10 +155,12 @@ refresh_stack_status() {
 
 # ---------------------------------------------------------------------------------------------
 # The one required option is --email ADDRESS: who receives the alarm emails. It has no default and
-# is never read from the environment. Everything here runs before the first AWS call.
+# is never read from the environment. The only other option is --brain-only (see the top of this file).
+# Everything here runs before the first AWS call.
 usage() {
   echo "Usage:  bash ops-alarms-2026-10-07.sh --email you@example.com"
   echo "  --email ADDRESS   the address that receives the alarm emails (required, no default)"
+  echo "  --brain-only      install only the 3 brain alarms and do not look for the gateway (only if the CTO says so)"
   echo "  --help            show this text"
 }
 EMAIL_GIVEN="no"
@@ -155,6 +169,9 @@ while [ "$#" -gt 0 ]; do
     -h|--help)
       usage
       exit 0 ;;
+    --brain-only)
+      BRAIN_ONLY="yes"
+      shift ;;
     --email|--email=*)
       if [ "$EMAIL_GIVEN" = "yes" ]; then
         stop "--email was given more than once. Nothing was changed. Run the script again with it once."
@@ -171,7 +188,7 @@ while [ "$#" -gt 0 ]; do
         shift
       fi ;;
     *)
-      stop "unknown option \"$1\". The only option is --email you@example.com   Nothing was changed." ;;
+      stop "unknown option \"$1\". The options are --email you@example.com and, only if the CTO says so, --brain-only.   Nothing was changed." ;;
   esac
 done
 if [ -z "$ALERT_EMAIL" ]; then
@@ -218,31 +235,99 @@ TG_DIM=""
 LB_DIM=""
 THRESHOLD_MB=0
 
+# gateway_stop FAIL_TEXT: the gateway's ECS service could not be pinned down. That is a FAIL and a STOP (nothing has been
+# written yet), never a quiet skip: a monitoring script that leaves the gateway out without anyone noticing is worse than
+# one that stops. Installing only the brain alarms has to be asked for with --brain-only.
+gateway_stop() {
+  fail "$1"
+  stop "the 3 gateway alarms cannot be set up, and this script does not install only the brain alarms unless you ask for that. Nothing was changed. Copy this screen and send it to the CTO. (Only if the CTO says so: run the script again with --brain-only.)"
+}
+
+# resolve_gateway_service: finds the gateway's ECS service in cluster $ECS_CLUSTER and leaves its name in ECS_SERVICE.
+#   1. The service named $ECS_SERVICE (default otchealth-gateway) is looked up first. If it is ACTIVE, that is the gateway.
+#   2. If no ACTIVE service has that name (it is missing, INACTIVE or DRAINING), the services of the cluster are listed and
+#      the ACTIVE ones are checked. The ONE whose task definition family is $EXPECTED_TASK_FAMILY is the gateway, and
+#      ECS_SERVICE is set to its name. ECS describes at most 10 services per call, so this reads them in batches of 10.
+#   No match, more than one match, or a cluster that is not there is a FAIL and a STOP (gateway_stop).
+resolve_gateway_service() {
+  local configured="$ECS_SERVICE" arn name td fam i total
+  local arns=() batch=() found=()
+  case "$ECS_SERVICE" in
+    "" | *[!A-Za-z0-9_-]*)
+      stop "the ECS service name \"$ECS_SERVICE\" is not valid (ECS service names hold only letters, numbers, dashes and underscores). Nothing was changed. Run the script again without setting ECS_SERVICE." ;;
+    *) ;;
+  esac
+  if try_aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+      --query "services[?status=='ACTIVE'].taskDefinition | [0]" --output text; then
+    if [ -n "$OUT" ] && [ "$OUT" != "None" ]; then
+      echo "  Service used   : $ECS_SERVICE (the configured name, ACTIVE)"
+      return 0
+    fi
+  elif [[ "$ERRTXT" == *ClusterNotFoundException* ]]; then
+    gateway_stop "the gateway's ECS service was not found: the ECS cluster $ECS_CLUSTER does not exist in this account and region."
+  else
+    show_err
+    stop "could not read the ECS service (message above). Nothing was changed. Copy this screen and send it to the CTO."
+  fi
+  echo "  There is no ACTIVE service named $configured in cluster $ECS_CLUSTER."
+  echo "  Looking for the ACTIVE service in the cluster whose task definition family is $EXPECTED_TASK_FAMILY:"
+  if ! try_aws ecs list-services --cluster "$ECS_CLUSTER" --query 'serviceArns[]' --output text; then
+    show_err
+    stop "could not list the services in cluster $ECS_CLUSTER (message above). Nothing was changed. Copy this screen and send it to the CTO."
+  fi
+  while IFS= read -r arn; do
+    if [ -n "$arn" ] && [ "$arn" != "None" ]; then arns+=("$arn"); fi
+  done < <(printf '%s\n' "$OUT" | tr '\t' '\n')
+  total="${#arns[@]}"
+  i=0
+  while [ "$i" -lt "$total" ]; do
+    batch=("${arns[@]:i:10}")
+    i=$((i + 10))
+    if ! try_aws ecs describe-services --cluster "$ECS_CLUSTER" --services "${batch[@]}" \
+        --query "services[?status=='ACTIVE'].[serviceName,taskDefinition]" --output text; then
+      show_err
+      stop "could not read the services in cluster $ECS_CLUSTER (message above). Nothing was changed. Copy this screen and send it to the CTO."
+    fi
+    while IFS=$'\t' read -r name td; do
+      if [ -z "$name" ] || [ "$name" = "None" ]; then continue; fi
+      fam="${td##*/}"
+      fam="${fam%%:*}"
+      if [ "$fam" = "$EXPECTED_TASK_FAMILY" ]; then found+=("$name"); fi
+    done <<<"$OUT"
+  done
+  if [ "${#found[@]}" -eq 0 ]; then
+    gateway_stop "the gateway's ECS service was not found: cluster $ECS_CLUSTER has no ACTIVE service named $configured, and none of the $total service(s) in it is an ACTIVE one with the task definition family $EXPECTED_TASK_FAMILY."
+  fi
+  if [ "${#found[@]}" -gt 1 ]; then
+    gateway_stop "more than one ACTIVE service in cluster $ECS_CLUSTER has the task definition family $EXPECTED_TASK_FAMILY (${found[*]}), and the script will not guess which one is the gateway."
+  fi
+  ECS_SERVICE="${found[0]}"
+  echo "  Service used   : $ECS_SERVICE (found by its task definition family; $configured is not an ACTIVE service)"
+}
+
 discover_gateway() {
   local status desired running taskdef family tg_arn tg_name lb_arn lb_name lb_type lb_state lb_scheme
   local s total healthy
   local tgs=() states=()
   echo "Gateway (ECS service $ECS_SERVICE in cluster $ECS_CLUSTER):"
+  resolve_gateway_service
   if ! try_aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
       --query 'services[0].[status,desiredCount,runningCount,taskDefinition]' --output text; then
     if [[ "$ERRTXT" == *ClusterNotFoundException* ]]; then
-      GATEWAY_WHY="the ECS cluster $ECS_CLUSTER was not found"
-      return 0
+      gateway_stop "the gateway's ECS service was not found: the ECS cluster $ECS_CLUSTER does not exist in this account and region."
     fi
     show_err
     stop "could not read the ECS service (message above). Nothing was changed. Copy this screen and send it to the CTO."
   fi
   read -r status desired running taskdef <<<"$OUT"
   if [ -z "$status" ] || [ "$status" = "None" ]; then
-    GATEWAY_WHY="the ECS service $ECS_SERVICE was not found in cluster $ECS_CLUSTER"
-    return 0
+    gateway_stop "the gateway's ECS service was not found: the ECS service $ECS_SERVICE is no longer in cluster $ECS_CLUSTER."
   fi
   family="${taskdef##*/}"
   echo "  Service        : $status, $running running of $desired wanted"
   echo "  Task definition: $family"
   if [ "$status" != "ACTIVE" ]; then
-    GATEWAY_WHY="the ECS service $ECS_SERVICE is $status, not ACTIVE"
-    return 0
+    gateway_stop "the gateway's ECS service is not running: the ECS service $ECS_SERVICE is $status, not ACTIVE."
   fi
   if [ "${family%%:*}" != "$EXPECTED_TASK_FAMILY" ]; then
     echo "  NOTE  the task family is not the expected $EXPECTED_TASK_FAMILY. The alarms follow the load balancer, so this does not stop anything."
@@ -381,7 +466,12 @@ discover_brain() {
   fi
 }
 
-discover_gateway
+if [ "$BRAIN_ONLY" = "yes" ]; then
+  echo "Gateway: not looked for, because --brain-only was given."
+  GATEWAY_WHY="you asked for --brain-only"
+else
+  discover_gateway
+fi
 echo ""
 discover_brain
 echo ""
@@ -408,6 +498,9 @@ else
   warn "the brain alarms are skipped because ${BRAIN_WHY:-the brain could not be found}. Tell the CTO."
 fi
 if [ "$GATEWAY_ON" != "yes" ] && [ "$BRAIN_ON" != "yes" ]; then
+  if [ "$BRAIN_ONLY" = "yes" ]; then
+    stop "--brain-only was given and the script could not find the brain, so there is nothing to watch. Nothing was changed. Copy this screen and send it to the CTO."
+  fi
   stop "the script could not find the gateway or the brain, so there is nothing to watch. Nothing was changed. Copy this screen and send it to the CTO."
 fi
 
@@ -455,7 +548,11 @@ for a in "${ALL_ALARMS[@]}"; do
   if [[ "$OWNED" == *" $a "* ]] && ! in_list "$a" "${WANT[@]}"; then REMOVE+=("$a"); fi
 done
 if [ "${#REMOVE[@]}" -gt 0 ]; then
-  echo "  These alarms were installed by an earlier run, but the script cannot find what they watch now:"
+  if [ "$BRAIN_ONLY" = "yes" ]; then
+    echo "  These alarms were installed by an earlier run, and --brain-only would leave them out:"
+  else
+    echo "  These alarms were installed by an earlier run, but the script cannot find what they watch now:"
+  fi
   for a in "${REMOVE[@]}"; do echo "    - $a"; done
   stop "the script will not remove existing alarms by itself. Nothing was changed. Copy this screen and send it to the CTO."
 fi
@@ -632,7 +729,7 @@ Resources:
       AlarmDescription: |-
         WHAT HAPPENED: The OTCHealth gateway has had no healthy servers for 3 minutes in a row (not one load balancer node can see a healthy gateway server), or CloudWatch has stopped getting health reports for it. While this lasts, the AI team may be unable to reach its tools or the company brain.
         WHAT TO DO: Forward this email to the CTO right away and write "gateway down". You do not need to log in to AWS or restart anything yourself.
-        FOR THE CTO: AWS console, ECS, cluster otchealth, service otchealth: check the tasks and why they stopped, then the target group health checks.
+        FOR THE CTO: AWS console, ECS, cluster otchealth, service otchealth-gateway: check the tasks and why they stopped, then the target group health checks.
       Namespace: AWS/ApplicationELB
       MetricName: HealthyHostCount
       Dimensions:
