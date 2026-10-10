@@ -70,7 +70,11 @@ DENY_POLICY="otchealth-ai-reader-deny"
 MFA_POLICY="otchealth-ai-reader-self-mfa"
 ASSUME_POLICY="otchealth-assume-ai-reader-2026-10-07"
 ECS_CLUSTER="otchealth"
-ECS_SERVICE="otchealth"
+# The gateway's ECS service: the name infra/aws/ecs-gateway.tf (otchealth-mcp-server) gives it. The environment may
+# set ECS_SERVICE to use another one. If no ACTIVE service has the name, the service is found by its task
+# definition family instead (see resolve_gateway_service below).
+ECS_SERVICE="${ECS_SERVICE:-otchealth-gateway}"
+EXPECTED_TASK_FAMILY="otchealth-gateway"
 SESSION_SECONDS="3600"
 ROLE_DESCRIPTION="Read-only AWS access for the OTCHealth gateway AI bridge (created 2026-10-07)"
 # One argument per tag, in the AWS CLI shorthand form Key=...,Value=... (the commas are part of the argument).
