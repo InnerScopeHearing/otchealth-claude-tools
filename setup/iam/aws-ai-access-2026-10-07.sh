@@ -423,6 +423,9 @@ list_missing() {
   printf '%s' "$out"
 }
 
+# list_has LIST ARN: succeeds when ARN is in the tab or newline separated LIST.
+list_has() { printf '%s\n' "$1" | tr '\t' '\n' | grep -Fxq -- "$2"; }
+
 # ---- "an existing user or role must be exactly what this script would have made" ------------------
 # safe_token TEXT: succeeds when TEXT holds only the characters that IAM names and ARNs normally use and does not
 # start with a dash (the AWS CLI would read a leading dash as the start of an option), so it can be shown inside a
