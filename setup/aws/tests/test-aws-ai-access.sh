@@ -232,7 +232,7 @@ BILLING_MANIFEST="$HERE/billing-read-actions.tsv"
 AUDIT_MANIFEST=""    # audit_catches uses this manifest instead of the real one while it is set
 BILLING_ARN_TEXT="arn:aws:iam::900915535335:policy/otchealth-ai-reader-billing"
 BILLING_SNAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/owner-tests.XXXXXX")" || { echo "test bug: could not make a temporary folder" >&2; exit 2; }
-SANDBOXES+=("$BILLING_SNAP_DIR")
+register_sandbox "$BILLING_SNAP_DIR"
 
 # Python that runs on the pretend account (the variable "world") when a scenario needs it changed. PY_PRELUDE always comes first.
 PY_PRELUDE='
