@@ -1306,6 +1306,20 @@ check_identity() {
   expect_blocked "$who  cannot change parameters (ssm:PutParameter is not allowed)" "$arn" ssm:PutParameter "arn:aws:ssm:${REGION}:${EXPECTED_ACCOUNT}:parameter/otchealth/example" any
   expect_blocked "$who  cannot change secrets (secretsmanager:PutSecretValue is not allowed)" "$arn" secretsmanager:PutSecretValue "arn:aws:secretsmanager:${REGION}:${EXPECTED_ACCOUNT}:secret:example" any
   expect_blocked "$who  cannot change ECS services (ecs:UpdateService is not allowed)" "$arn" ecs:UpdateService "$SVC_ARN" any
+  # Cost and billing (policy otchealth-ai-reader-billing): the reads work, and nothing that changes or buys does.
+  # look_allowed is used for the newest billing, invoice and recommendation actions, which a simulator may not know yet.
+  expect_allowed "$who  can read cost anomalies (ce:GetAnomalies)" "$arn" ce:GetAnomalies "*"
+  expect_allowed "$who  can read budget actions (budgets:DescribeBudgetActionsForAccount)" "$arn" budgets:DescribeBudgetActionsForAccount "*"
+  expect_allowed "$who  can read Savings Plans (savingsplans:DescribeSavingsPlans)" "$arn" savingsplans:DescribeSavingsPlans "*"
+  expect_allowed "$who  can read AWS prices (pricing:GetProducts)" "$arn" pricing:GetProducts "*"
+  expect_allowed "$who  can read right-sizing advice (compute-optimizer:GetEC2InstanceRecommendations)" "$arn" compute-optimizer:GetEC2InstanceRecommendations "*"
+  look_allowed "$who  can read cost savings advice (cost-optimization-hub:ListRecommendations)" "$arn" cost-optimization-hub:ListRecommendations "*"
+  look_allowed "$who  can read credits (billing:GetCredits)" "$arn" billing:GetCredits "*"
+  look_allowed "$who  can read invoice summaries (invoicing:ListInvoiceSummaries)" "$arn" invoicing:ListInvoiceSummaries "*"
+  look_allowed "$who  can read the bill in the console (billing:GetBillingData)" "$arn" billing:GetBillingData "*"
+  expect_blocked "$who  cannot change budgets (budgets:ModifyBudget is not allowed)" "$arn" budgets:ModifyBudget "*" any
+  expect_blocked "$who  cannot buy a Savings Plan (savingsplans:CreateSavingsPlan is not allowed)" "$arn" savingsplans:CreateSavingsPlan "*" any
+  expect_blocked "$who  cannot change account contact details (account:PutContactInformation is not allowed)" "$arn" account:PutContactInformation "*" any
 }
 
 CUR_PART="A"
