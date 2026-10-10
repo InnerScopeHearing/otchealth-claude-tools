@@ -108,6 +108,7 @@ async function send() {
     try {
       gate.assertPublicWriteAllowed(gate.entryForCli({
         lane: val("--lane", "") || val("--from", ""),
+        author: val("--from", ""),
         category: to,
         text: { task: text, repo: val("--repo", "otchealth-claude-tools") },
       }, gate.ambientIdentities()), "fleet-dispatch --spawn");
