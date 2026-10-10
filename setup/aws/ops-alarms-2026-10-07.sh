@@ -227,6 +227,76 @@ TG_DIM=""
 LB_DIM=""
 THRESHOLD_MB=0
 
+# gateway_stop FAIL_TEXT: the gateway's ECS service could not be pinned down. That is a FAIL and a STOP (nothing has been
+# written yet), never a quiet skip: a monitoring script that leaves the gateway out without anyone noticing is worse than
+# one that stops. Installing only the brain alarms has to be asked for with --brain-only.
+gateway_stop() {
+  fail "$1"
+  stop "the 3 gateway alarms cannot be set up, and this script does not install only the brain alarms unless you ask for that. Nothing was changed. Copy this screen and send it to the CTO. (Only if the CTO says so: run the script again with --brain-only.)"
+}
+
+# resolve_gateway_service: finds the gateway's ECS service in cluster $ECS_CLUSTER and leaves its name in ECS_SERVICE.
+#   1. The service named $ECS_SERVICE (default otchealth-gateway) is looked up first. If it is ACTIVE, that is the gateway.
+#   2. If no ACTIVE service has that name (it is missing, INACTIVE or DRAINING), the services of the cluster are listed and
+#      the ACTIVE ones are checked. The ONE whose task definition family is $EXPECTED_TASK_FAMILY is the gateway, and
+#      ECS_SERVICE is set to its name. ECS describes at most 10 services per call, so this reads them in batches of 10.
+#   No match, more than one match, or a cluster that is not there is a FAIL and a STOP (gateway_stop).
+resolve_gateway_service() {
+  local configured="$ECS_SERVICE" arn name td fam i total
+  local arns=() batch=() found=()
+  case "$ECS_SERVICE" in
+    "" | *[!A-Za-z0-9_-]*)
+      stop "the ECS service name \"$ECS_SERVICE\" is not valid (ECS service names hold only letters, numbers, dashes and underscores). Nothing was changed. Run the script again without setting ECS_SERVICE." ;;
+    *) ;;
+  esac
+  if try_aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+      --query "services[?status=='ACTIVE'].taskDefinition | [0]" --output text; then
+    if [ -n "$OUT" ] && [ "$OUT" != "None" ]; then
+      echo "  Service used   : $ECS_SERVICE (the configured name, ACTIVE)"
+      return 0
+    fi
+  elif [[ "$ERRTXT" == *ClusterNotFoundException* ]]; then
+    gateway_stop "the gateway's ECS service was not found: the ECS cluster $ECS_CLUSTER does not exist in this account and region."
+  else
+    show_err
+    stop "could not read the ECS service (message above). Nothing was changed. Copy this screen and send it to the CTO."
+  fi
+  echo "  There is no ACTIVE service named $configured in cluster $ECS_CLUSTER."
+  echo "  Looking for the ACTIVE service in the cluster whose task definition family is $EXPECTED_TASK_FAMILY:"
+  if ! try_aws ecs list-services --cluster "$ECS_CLUSTER" --query 'serviceArns[]' --output text; then
+    show_err
+    stop "could not list the services in cluster $ECS_CLUSTER (message above). Nothing was changed. Copy this screen and send it to the CTO."
+  fi
+  while IFS= read -r arn; do
+    if [ -n "$arn" ] && [ "$arn" != "None" ]; then arns+=("$arn"); fi
+  done < <(printf '%s\n' "$OUT" | tr '\t' '\n')
+  total="${#arns[@]}"
+  i=0
+  while [ "$i" -lt "$total" ]; do
+    batch=("${arns[@]:i:10}")
+    i=$((i + 10))
+    if ! try_aws ecs describe-services --cluster "$ECS_CLUSTER" --services "${batch[@]}" \
+        --query "services[?status=='ACTIVE'].[serviceName,taskDefinition]" --output text; then
+      show_err
+      stop "could not read the services in cluster $ECS_CLUSTER (message above). Nothing was changed. Copy this screen and send it to the CTO."
+    fi
+    while IFS=$'\t' read -r name td; do
+      if [ -z "$name" ] || [ "$name" = "None" ]; then continue; fi
+      fam="${td##*/}"
+      fam="${fam%%:*}"
+      if [ "$fam" = "$EXPECTED_TASK_FAMILY" ]; then found+=("$name"); fi
+    done <<<"$OUT"
+  done
+  if [ "${#found[@]}" -eq 0 ]; then
+    gateway_stop "the gateway's ECS service was not found: cluster $ECS_CLUSTER has no ACTIVE service named $configured, and none of the $total service(s) in it is an ACTIVE one with the task definition family $EXPECTED_TASK_FAMILY."
+  fi
+  if [ "${#found[@]}" -gt 1 ]; then
+    gateway_stop "more than one ACTIVE service in cluster $ECS_CLUSTER has the task definition family $EXPECTED_TASK_FAMILY (${found[*]}), and the script will not guess which one is the gateway."
+  fi
+  ECS_SERVICE="${found[0]}"
+  echo "  Service used   : $ECS_SERVICE (found by its task definition family; $configured is not an ACTIVE service)"
+}
+
 discover_gateway() {
   local status desired running taskdef family tg_arn tg_name lb_arn lb_name lb_type lb_state lb_scheme
   local s total healthy
