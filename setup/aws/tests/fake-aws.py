@@ -54,6 +54,13 @@ ALLOWED = {
     "ecs:DescribeServices", "cloudwatch:GetMetricData", "ce:GetCostAndUsage", "sts:GetCallerIdentity",
     "iam:ChangePassword", "signin:AuthorizeOAuth2Access", "signin:CreateOAuth2Token",
 }
+# Actions of these services are NOT answered from the fixed sets above. They are worked out from the customer managed
+# and inline policies that are really attached to the user or role in the pretend account (see evaluate below), so a
+# test fails when the billing policy is missing, is not attached, or a Deny statement blocks one of its actions.
+EVALUATED_SERVICES = {
+    "ce", "budgets", "cost-optimization-hub", "compute-optimizer", "savingsplans", "pricing", "billing", "account",
+    "consolidatedbilling", "invoicing", "payments", "tax", "freetier", "cur", "aws-portal",
+}
 
 
 class AwsError(Exception):
