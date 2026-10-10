@@ -592,6 +592,75 @@ look_allowed() {
   fi
 }
 
+# ---- the gateway's ECS service ---------------------------------------------------------------------------------
+# resolve_gateway_service: finds the gateway's ECS service in cluster $ECS_CLUSTER and leaves its task definition ARN in TD.
+#   1. The service named $ECS_SERVICE (default otchealth-gateway) is looked up first. If it is ACTIVE, that is the gateway.
+#   2. If no ACTIVE service has that name (it is missing, INACTIVE or DRAINING), the services of the cluster are listed and
+#      the ACTIVE ones are checked. The ONE whose task definition family is $EXPECTED_TASK_FAMILY is the gateway, and
+#      ECS_SERVICE is set to its name. ECS describes at most 10 services per call, so this reads them in batches of 10.
+#   No match, more than one match, or a cluster that is not there is a STOP: nothing has been written when this runs.
+#   Any other trouble reading ECS is left in B_PROBLEM: part B is then reported as FAILED and part A still goes ahead.
+resolve_gateway_service() {
+  local configured="$ECS_SERVICE" arn name td fam i total
+  local arns=() batch=() found=() found_td=()
+  case "$ECS_SERVICE" in
+    "" | *[!A-Za-z0-9_-]*)
+      stop "the ECS service name \"$ECS_SERVICE\" is not valid (ECS service names hold only letters, numbers, dashes and underscores). Nothing was changed. Run the script again without setting ECS_SERVICE." ;;
+    *) ;;
+  esac
+  if ! run_aws TD ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query "services[?status=='ACTIVE'].taskDefinition | [0]" --output text; then
+    if err_has ClusterNotFoundException; then
+      stop "the ECS cluster $ECS_CLUSTER was not found in this account and region, so the gateway's ECS service cannot be found. Nothing was changed. Tell the CTO."
+    fi
+    B_PROBLEM="the ECS service could not be read: $(err_text)"
+    return 0
+  fi
+  if [ -n "$TD" ] && [ "$TD" != "None" ]; then
+    echo "  Service used           : $ECS_SERVICE (the configured name, ACTIVE)"
+    return 0
+  fi
+  TD=""
+  echo "  There is no ACTIVE service named $configured in cluster $ECS_CLUSTER."
+  echo "  Looking for the ACTIVE service in the cluster whose task definition family is $EXPECTED_TASK_FAMILY:"
+  if ! run_aws SVC_LIST ecs list-services --cluster "$ECS_CLUSTER" --query 'serviceArns[]' --output text; then
+    B_PROBLEM="the services in cluster $ECS_CLUSTER could not be listed: $(err_text)"
+    return 0
+  fi
+  while IFS= read -r arn; do
+    if [ -n "$arn" ] && [ "$arn" != "None" ]; then arns+=("$arn"); fi
+  done < <(printf '%s\n' "$SVC_LIST" | tr '\t' '\n')
+  total="${#arns[@]}"
+  i=0
+  while [ "$i" -lt "$total" ]; do
+    batch=("${arns[@]:i:10}")
+    i=$((i + 10))
+    if ! run_aws SVC_ROWS ecs describe-services --cluster "$ECS_CLUSTER" --services "${batch[@]}" --query "services[?status=='ACTIVE'].[serviceName,taskDefinition]" --output text; then
+      B_PROBLEM="the services in cluster $ECS_CLUSTER could not be read: $(err_text)"
+      return 0
+    fi
+    while IFS=$'\t' read -r name td; do
+      if [ -z "$name" ] || [ "$name" = "None" ]; then continue; fi
+      fam="${td##*/}"
+      fam="${fam%%:*}"
+      if [ "$fam" = "$EXPECTED_TASK_FAMILY" ]; then
+        found+=("$name")
+        found_td+=("$td")
+      fi
+    done <<<"$SVC_ROWS"
+  done
+  case "${#found[@]}" in
+    0)
+      stop "the gateway's ECS service was not found: cluster $ECS_CLUSTER has no ACTIVE service named $configured, and none of the $total service(s) in it is an ACTIVE one with the task definition family $EXPECTED_TASK_FAMILY. Nothing was changed. Tell the CTO." ;;
+    1)
+      ECS_SERVICE="${found[0]}"
+      TD="${found_td[0]}"
+      echo "  Service used           : $ECS_SERVICE (found by its task definition family; $configured is not an ACTIVE service)" ;;
+    *)
+      stop "more than one ACTIVE service in cluster $ECS_CLUSTER has the task definition family $EXPECTED_TASK_FAMILY (${found[*]}), and the script will not guess which one is the gateway. Nothing was changed. Tell the CTO." ;;
+  esac
+  return 0
+}
+
 # ---------------------------------------------------------------------------------------------
 section "0. Who is running this"
 if ! command -v aws >/dev/null 2>&1; then
