@@ -14,26 +14,33 @@
 //   * the lane, the session identity, the author, the category or the tags carry a sensitive label
 //     (finance, legal, investor, deal, inside information, privileged, PHI, personal, or a confidential or
 //     restricted marker);
-//   * the free text names one of those classes;
+//   * the free text names one of those classes (read case insensitively, with snake_case, camelCase and
+//     hyphenated spellings treated as the same phrase, so "cap-table", "cap_table" and "CapTable" all match);
+//   * a path points into an owner handled directory, however it is spelled (./projects/x, projects\x, a/../projects/x,
+//     a percent encoded name), or carries a sensitive label;
 //   * the lane is missing, or the metadata cannot be read safely (fail closed, never fail open).
+// A few product and model names that contain a sensitive word by accident (a subscription billing SDK, a small
+// language model family) are read as ordinary technical words; the words around them are still checked.
 // A refusal prints a plain message that points to the private alternative (the gateway Postgres ledger:
 // memory_remember with type finding, or task_create), and the caller exits 2 without writing anything.
 //
 // HOW A WRITER USES IT.
 //   import { assertPublicWriteAllowed } from "../../setup/public-write-gate.mjs";
-//   const approval = assertPublicWriteAllowed({ lane, author, category, tags, text: { title, ... } }, "my writer");
+//   const approval = assertPublicWriteAllowed({ lane, author, category, tags, paths, text: { title, ... } }, "my writer");
 //   // throws PublicWriteRefused when refused; otherwise returns an approval that the write helper requires.
 // The approval is a capability: it lives in a module-private WeakSet, so a helper that demands one
 // (ledger.mjs putFile does) cannot be reached by a caller that skipped the gate.
 //
 // WORKFLOWS call the CLI before any git push step:
 //   node setup/public-write-gate.mjs files --lane cto --writer "<name>" <file>... || exit 1
+// The CLI also vets the file NAMES (and where a name resolves to), so a path into an owner handled area is
+// refused whatever way it is spelled, and it still runs when it is started through a symlink.
 //
 // Dependency-free (node builtins only) so it can live in setup/ and be hydrated next to the installed skills.
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** The only lanes allowed to write to a public repository. */
 export const ALLOWED_LANES = Object.freeze(["cto", "developer"]);
@@ -168,11 +175,32 @@ function foldText(s) {
     .replace(/\s+/g, " ");
 }
 
+// Product and model names that contain a sensitive word only by accident: the subscription billing SDK whose name
+// starts with a finance word, and the small language model family whose name is the health privacy acronym. Only
+// the name itself is removed, before any vocabulary check, never the words around it, so "RevenueCat revenue
+// report", "investorRevenueCat" and "Phi-3 patient records" are still refused. The SDK name is matched in its
+// camelCase, lower case and upper case spellings and may be part of an identifier (initRevenueCat). The model
+// family is matched only in its real spelling (a capital P or all lower case, a one or two digit version), so an
+// upper case PHI marker followed by a number is still the health class.
+const TECH_TERMS = Object.freeze([
+  /(?:[Rr]evenue[Cc]at|REVENUECAT)(?![a-z])/g,
+  /(?<![A-Za-z0-9])[Pp]hi-?\d{1,2}(?:\.\d{1,2})?(?!\d)/g,
+]);
+
+/** The text with each known technical product or model name replaced by a space. Pure. */
+function neutralizeTech(s) {
+  let out = String(s).normalize("NFKC").replace(INVISIBLES, "");
+  for (const re of TECH_TERMS) out = out.replace(re, " ");
+  return out;
+}
+
 // "privileged-container" as a tag is engineering vocabulary, the same way the phrase is in free text.
 const PRIV_TECH_LABEL = new RegExp(`(^|-)privileged-(?:${PRIV_TECH})(?=-|$)`, "g");
+// "personal-access-token" as a tag is the GitHub credential, the same way the phrase is in free text.
+const PAT_LABEL = /(^|-)personal-access-tokens?(?=-|$)/g;
 
 function labelHits(norm, keys) {
-  const hay = `-${norm.replace(PRIV_TECH_LABEL, "$1")}-`;
+  const hay = `-${norm.replace(PRIV_TECH_LABEL, "$1").replace(PAT_LABEL, "$1")}-`;
   return keys.some((k) => hay.includes(`-${k}-`));
 }
 
@@ -182,32 +210,68 @@ function refuse(cls, field) {
 
 /** Class id of the first sensitive LABEL found in one structured field value, or null. */
 function labelClass(value) {
-  const norm = normLabel(value);
+  const norm = normLabel(neutralizeTech(value));
   if (!norm) return null;
   for (const [cls, keys] of Object.entries(LABEL_KEYS)) if (labelHits(norm, keys)) return cls;
   return null;
 }
 
-/** Class id of the first sensitive PHRASE found in free text, or null. */
+/** Class id of the first sensitive PHRASE found in free text, or null.
+ *  The text is read in two forms, and a phrase that matches either one is a hit: with hyphens as written
+ *  ("8-k", "non-public"), and with every hyphen read as a space, so "cap-table", "cap_table", "CapTable",
+ *  "Cap Table" and "cap  table" are all the same phrase. Underscores and camelCase are split by foldText, and
+ *  every pattern is case insensitive. */
 function textClass(value) {
-  const folded = foldText(value).replace(PAT_PHRASE, " ");
-  for (const [cls, res] of Object.entries(PHRASES)) for (const re of res) if (re.test(folded)) return cls;
+  const base = foldText(neutralizeTech(value)).replace(PAT_PHRASE, " ");
+  const spaced = base.replace(/-+/g, " ").replace(/\s+/g, " ");
+  const forms = spaced === base ? [base] : [base, spaced];
+  // Class by class, so the most specific class wins whichever form it matched in.
+  for (const [cls, res] of Object.entries(PHRASES)) for (const re of res) for (const hay of forms) if (re.test(hay)) return cls;
   return null;
 }
 
 // Fields that hold a path or a repo name rather than prose. Their segments are checked against the label
 // vocabulary too, so a pointer such as docs/finance/plan.md or an owner-handled directory cannot slip through.
 const PATH_FIELDS = new Set(["source_audit_doc", "source_doc", "source", "fix_repo", "repo", "path", "paths", "file", "files"]);
+// Top level directories the owner handles personally. A path that starts in one of these (after normalization)
+// is refused whatever way it is spelled. The ledger file and the clo directory are covered elsewhere: the clo
+// directory by the label vocabulary (its name is a legal label), the ledger file by the writer that owns it.
 const OWNER_HANDLED_ROOTS = new Set(["projects"]);
 
-/** Class id for a path-like value (first sensitive segment wins), or null. */
+/** The segments of a path-like value after normalization: compatibility-folded, invisibles removed,
+ *  percent-decoded (up to three rounds, so a double encoded name is read too), backslashes read as slashes,
+ *  "." dropped and ".." resolved. A colon also separates (drive letters, repo:path). `absolute` is true for a
+ *  path that starts at a root, a drive or the home directory, where the repo root is unknown. Pure. */
+function pathParts(value) {
+  let s = String(value).normalize("NFKC").replace(INVISIBLES, "");
+  for (let round = 0; round < 3; round += 1) {
+    let decoded;
+    try { decoded = decodeURIComponent(s); } catch { break; }
+    if (decoded === s) break;
+    s = decoded.normalize("NFKC").replace(INVISIBLES, "");
+  }
+  s = s.replace(/\\/g, "/");
+  const absolute = /^(?:\/|~|[A-Za-z]:)/.test(s);
+  const out = [];
+  for (const part of s.split(/[/:]+/)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") { if (out.length && out[out.length - 1] !== "..") out.pop(); else if (!absolute) out.push(".."); continue; }
+    out.push(part);
+  }
+  return { parts: out, absolute };
+}
+
+/** Class id for a path-like value (first sensitive segment wins), or null. An owner handled directory is
+ *  refused when the normalized path starts in it (leading ".." is ignored, since the path may be relative to a
+ *  sub directory), or anywhere in an absolute path, where the repo root cannot be known. */
 function pathClass(value) {
-  const segments = String(value).split(/[\\/:]+/);
-  for (let i = 0; i < segments.length; i += 1) {
-    const n = normLabel(segments[i]);
+  const { parts, absolute } = pathParts(value);
+  const names = parts.filter((p) => p !== "..");
+  for (let i = 0; i < names.length; i += 1) {
+    const n = normLabel(names[i]);
     if (!n) continue;
-    if (i === 0 && OWNER_HANDLED_ROOTS.has(n)) return "restricted";
-    const cls = labelClass(segments[i]);
+    if (OWNER_HANDLED_ROOTS.has(n) && (i === 0 || absolute)) return "restricted";
+    const cls = labelClass(names[i]);
     if (cls) return cls;
   }
   return null;
@@ -282,7 +346,13 @@ function evaluate(entry) {
     }
   }
 
-  // 4. Free text.
+  // 4. Paths: the file names a writer is about to commit (the CLI also passes where each one really resolves).
+  for (const p of listOf(entry.paths, "paths")) {
+    const cls = pathClass(p);
+    if (cls) return refuse(cls, "paths");
+  }
+
+  // 5. Free text.
   for (const [field, value] of textFields(entry.text)) {
     const cls = textClass(value) || (PATH_FIELDS.has(field) ? pathClass(value) : null);
     if (cls) return refuse(cls, field);
@@ -375,9 +445,9 @@ export function ambientIdentities({ env = process.env, readFile = (p) => readFil
 
 /** Build the entry a CLI wrapper hands to the gate: the declared lane (a flag, else the ambient identity),
  *  plus the ambient identities as seats. Pure given its arguments. */
-export function entryForCli({ lane, author, category, tags, text }, ambient) {
+export function entryForCli({ lane, author, category, tags, text, paths }, ambient) {
   const seats = Array.isArray(ambient) ? ambient : [];
-  return { lane: lane || seats[0] || "", seats, author, category, tags, text };
+  return { lane: lane || seats[0] || "", seats, author, category, tags, text, paths };
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -400,12 +470,23 @@ function positionals(argv, valueFlags) {
 }
 
 const USAGE = [
-  "usage: public-write-gate.mjs check --lane <lane> [--author <a>] [--category <c>] [--tags a,b] [--text <free text>] [--writer <name>]",
+  "usage: public-write-gate.mjs check --lane <lane> [--author <a>] [--category <c>] [--tags a,b] [--text <free text>] [--path <path>] [--writer <name>]",
   "       public-write-gate.mjs files --lane <lane> [--writer <name>] <file>...",
 ].join("\n");
 
+/** The root of the checkout this file lives in (setup/ sits one level below it). */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
 /** Run the CLI. Returns { code, stdout, stderr } so tests can drive it without spawning a process. */
-export function runCli(argv, { env = process.env, readFile = (p) => readFileSync(p, "utf8"), fileSize = (p) => statSync(p).size, ambient } = {}) {
+export function runCli(argv, {
+  env = process.env,
+  readFile = (p) => readFileSync(p, "utf8"),
+  fileSize = (p) => statSync(p).size,
+  realPath = (p) => realpathSync(p),
+  cwd = process.cwd(),
+  root = REPO_ROOT,
+  ambient,
+} = {}) {
   const sub = argv[0];
   const rest = argv.slice(1);
   const writer = flagValues(rest, "--writer").pop() || "this writer";
@@ -424,6 +505,7 @@ export function runCli(argv, { env = process.env, readFile = (p) => readFileSync
       category: flagValues(rest, "--category"),
       tags: flagValues(rest, "--tags"),
       text: flagValues(rest, "--text"),
+      paths: flagValues(rest, "--path"),
     }, seats);
     const decision = evaluatePublicWrite(entry);
     return decision.allowed ? allowed(writer) : refusedWith(decision);
@@ -434,6 +516,7 @@ export function runCli(argv, { env = process.env, readFile = (p) => readFileSync
     // No files named means there is nothing to vet, so there is nothing safe to allow.
     if (!files.length) return refusedWith(refuse("missing-metadata", "files"));
     const text = {};
+    const paths = [];
     for (const f of files) {
       try {
         if (fileSize(f) > MAX_FILE_BYTES) return refusedWith(refuse("malformed-metadata", f));
@@ -442,16 +525,45 @@ export function runCli(argv, { env = process.env, readFile = (p) => readFileSync
         // A file that cannot be read cannot be vetted, so the write is refused.
         return refusedWith(refuse("malformed-metadata", f));
       }
+      // The name as typed (when it is relative), and where it really resolves (a symlink, an absolute path, a name
+      // typed from another directory) relative to this checkout and to the working directory, so an alias cannot
+      // hide an owner handled directory. A file outside both is not in this repo, so only its content is vetted.
+      if (!isAbsolute(f)) paths.push(f);
+      let real = null;
+      try { real = realPath(resolve(cwd, f)); } catch { /* the file was just read, so this is only a missing alias */ }
+      if (real) {
+        for (const base of [root, cwd]) {
+          const rel = relative(base, real);
+          if (rel && !/^\.\.(?:[\\/]|$)/.test(rel) && !isAbsolute(rel)) paths.push(rel);
+        }
+      }
     }
-    const decision = evaluatePublicWrite(entryForCli({ lane, text }, seats));
+    const decision = evaluatePublicWrite(entryForCli({ lane, text, paths }, seats));
     return decision.allowed ? allowed(`${files.length} file(s) for ${writer}`) : refusedWith(decision);
   }
 
   return { code: EXIT_REFUSED, stdout: "", stderr: `${USAGE}\n` };
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
+/** True when this file is the program node was started with, including when it was started through a symlink.
+ *  The earlier check compared import.meta.url (the real path node resolves a symlink to) with the path as typed,
+ *  so a symlinked path made the CLI a silent no-op that exited 0, and a workflow's `|| exit 1` never fired. Both
+ *  sides are resolved with realpath here. If a path cannot be resolved the comparison falls back to plain
+ *  absolute paths. Exported so a test can pin it. */
+export function isEntryPoint(argv1 = process.argv[1], selfUrl = import.meta.url) {
+  if (!argv1) return false;
+  try {
+    const self = fileURLToPath(selfUrl);
+    let a;
+    let b;
+    try { a = realpathSync(argv1); b = realpathSync(self); } catch { a = resolve(argv1); b = resolve(self); }
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   const res = runCli(process.argv.slice(2));
   if (res.stdout) process.stdout.write(res.stdout);
   if (res.stderr) process.stderr.write(res.stderr);
