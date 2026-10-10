@@ -47,9 +47,13 @@ REGION="us-east-1"
 STACK="otchealth-ops-alarms"
 TOPIC_NAME="otchealth-ops-alerts"
 ALERT_EMAIL="" # set from --email below; never from the environment, never defaulted
+BRAIN_ONLY="no" # set to yes only by the --brain-only option
 
 ECS_CLUSTER="otchealth"
-ECS_SERVICE="otchealth"
+# The gateway's ECS service: the name infra/aws/ecs-gateway.tf (otchealth-mcp-server) gives it. The environment may
+# set ECS_SERVICE to use another one. If no ACTIVE service has the name, the service is found by its task
+# definition family instead (see resolve_gateway_service below).
+ECS_SERVICE="${ECS_SERVICE:-otchealth-gateway}"
 EXPECTED_TASK_FAMILY="otchealth-gateway"
 DOMAIN="otchealth-brain"
 LOW_STORAGE_PERCENT=20
