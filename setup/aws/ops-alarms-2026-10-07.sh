@@ -721,7 +721,7 @@ Resources:
       AlarmDescription: |-
         WHAT HAPPENED: The OTCHealth gateway has had no healthy servers for 3 minutes in a row (not one load balancer node can see a healthy gateway server), or CloudWatch has stopped getting health reports for it. While this lasts, the AI team may be unable to reach its tools or the company brain.
         WHAT TO DO: Forward this email to the CTO right away and write "gateway down". You do not need to log in to AWS or restart anything yourself.
-        FOR THE CTO: AWS console, ECS, cluster otchealth, service otchealth: check the tasks and why they stopped, then the target group health checks.
+        FOR THE CTO: AWS console, ECS, cluster otchealth, service otchealth-gateway: check the tasks and why they stopped, then the target group health checks.
       Namespace: AWS/ApplicationELB
       MetricName: HealthyHostCount
       Dimensions:
