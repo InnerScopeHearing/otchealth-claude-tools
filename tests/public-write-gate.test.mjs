@@ -29,6 +29,9 @@ import {
   runCli,
 } from "../setup/public-write-gate.mjs";
 
+// An em dash or an en dash, built from code points so this file itself contains neither.
+const DASH = new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`);
+
 const GATE_PATH = fileURLToPath(new URL("../setup/public-write-gate.mjs", import.meta.url));
 
 // The securities acronym is assembled from two halves on purpose. GitHub tooling that scans outgoing writes for
@@ -207,11 +210,11 @@ test("evaluatePublicWrite never throws, whatever it is given", () => {
 
 test("sees through zero width characters, dash variants, snake case, camel case and full width letters", () => {
   const sneaky = [
-    "fin​ancial summary",
-    "non‑public information",
+    "fin" + String.fromCharCode(0x200B) + "ancial summary",
+    "non" + String.fromCharCode(0x2011) + "public information",
     "attorney_client_notes",
     "ContainsPHI flag set",
-    "ＦＩＮＡＮＣＥ review",
+    String.fromCharCode(0xFF26, 0xFF29, 0xFF2E, 0xFF21, 0xFF2E, 0xFF23, 0xFF25) + " review",
     "LEGAL review",
     "Investors",
   ];
@@ -310,7 +313,7 @@ test("every refusal message is plain English: names the private alternative, no 
   assert.equal(new Set(decisions.map((d) => d.class)).size, REFUSAL_CLASSES.length, "every class is exercised");
   for (const d of decisions) {
     const msg = refusalMessage(d, "some writer");
-    assert.ok(!/[–—]/.test(msg), msg);
+    assert.ok(!DASH.test(msg), msg);
     assert.match(msg, /private ledger/);
     assert.match(msg, /memory_remember with type finding/);
     assert.match(msg, /task_create/);

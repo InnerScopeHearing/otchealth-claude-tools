@@ -148,7 +148,8 @@ export const REFUSAL_CLASSES = Object.freeze(Object.keys(REASONS));
 // ---------------------------------------------------------------------------------------------------------
 // Normalization
 // ---------------------------------------------------------------------------------------------------------
-const INVISIBLES = /[­​-‏⁠﻿]/g;
+const INVISIBLES = new RegExp("[\\u00AD\\u200B-\\u200F\\u2060\\uFEFF]", "g");
+const DASHES = new RegExp("[\\u2010-\\u2015\\u2212]", "g");
 
 /** Hyphen-separated lowercase form of a label ("Cap Table" -> "cap-table"). Pure. */
 function normLabel(s) {
@@ -161,7 +162,7 @@ function foldText(s) {
   return String(s)
     .normalize("NFKC")
     .replace(INVISIBLES, "")
-    .replace(/[‐-―−]/g, "-")
+    .replace(DASHES, "-")
     .replace(/_/g, " ")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/\s+/g, " ");
