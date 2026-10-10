@@ -27,7 +27,10 @@
 // marked finance, legal, investor, deal, inside information, privileged, PHI or personal (or from a ring lane, or with no
 // lane at all) is refused with exit 2 and nothing is written. Record those in the private ledger instead
 // (memory_remember with type finding, or task_create). Declare the lane with --lane, or run from a session
-// whose identity is cto or developer. The read verbs (check, list, finding list, finding check) are not gated.
+// whose identity is cto or developer. The read verbs (check, list, finding list, finding check) are not gated,
+// and they do not need the gate file at all: it is loaded on the first write, not at import, so an install
+// where setup/public-write-gate.mjs is missing (the hydrate script only warns when that copy fails) can still
+// read the ledger. A write with no gate fails closed: exit 2, nothing written.
 //
 // Auth (2026-07-13): tries the CI job token (GITHUB_TOKEN), then the fleet-bot GitHub App token minted
 // from Key Vault (the canonical, always-fresh fleet identity), then the legacy github-user-pat — each
@@ -41,9 +44,9 @@
 // plus independent reread verify pattern, generalized into fetchFile/putFile/verifyCommitLanded below
 // so both ledgers share one write path instead of duplicating it.
 import crypto from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
-import { assertPublicWriteAllowed, isApproval, ambientIdentities, entryForCli, EXIT_REFUSED } from "../../setup/public-write-gate.mjs";
 
 const OWNER = "InnerScopeHearing";
 const REPO = "otchealth-claude-tools";
@@ -111,8 +114,33 @@ async function fetchFile(token, path) {
 // setup/public-write-gate.mjs first. gatePublicWrite throws a refusal (exit 2 at the CLI, nothing written)
 // for anything that is not a technical entry from the cto or developer lane, and returns the approval that
 // putFile demands, so no caller can reach the Contents API without having passed the gate.
-function gatePublicWrite(writer, fields, text) {
-  return assertPublicWriteAllowed({
+//
+// The gate is loaded on first use, not at import: the read verbs never need it, so a missing gate file must
+// not take them down. With no gate, every write refuses (fail closed) and says how to restore it.
+const EXIT_REFUSED = 2;
+let gateModule; // undefined: not tried yet, null: tried and could not load
+async function loadGate() {
+  if (gateModule === undefined) {
+    try { gateModule = await import("../../setup/public-write-gate.mjs"); } catch { gateModule = null; }
+  }
+  return gateModule;
+}
+
+function gateUnavailable() {
+  const e = new Error(
+    "REFUSED: the ledger could not load the public-write gate (setup/public-write-gate.mjs), so nothing was written.\n" +
+    "Restore the file (run setup/hydrate-skills.sh, or pull the toolkit) and retry. Reading the ledger still works without it.",
+  );
+  e.refused = true;
+  e.exitCode = EXIT_REFUSED;
+  e.decision = { allowed: false, class: "gate-unavailable", field: null, reason: "the public-write gate could not be loaded" };
+  return e;
+}
+
+async function gatePublicWrite(writer, fields, text) {
+  const gate = await loadGate();
+  if (!gate) throw gateUnavailable();
+  return gate.assertPublicWriteAllowed({
     lane: fields.lane,
     seats: fields.seats,
     author: fields.author,
@@ -130,21 +158,21 @@ function failure(e) {
 
 // The CLI declares its lane with --lane (else it falls back to the session identity) and passes the session
 // identities as seats, so a declared lane cannot hide the seat the process really runs as. Only the CLI
-// wrappers call this, which keeps the exported functions free of ambient state.
-function cliIdentity() {
-  const { lane, seats, author, category, tags } = entryForCli({
-    lane: val("--lane", ""),
-    author: val("--author", ""),
-    category: val("--category", ""),
-    tags: val("--tags", ""),
-  }, ambientIdentities());
+// wrappers call this, which keeps the exported functions free of ambient state. With no gate loaded the
+// declared fields are returned as they are: the write is refused right after, in gatePublicWrite.
+async function cliIdentity() {
+  const declared = { lane: val("--lane", ""), author: val("--author", ""), category: val("--category", ""), tags: val("--tags", "") };
+  const gate = await loadGate();
+  if (!gate) return declared;
+  const { lane, seats, author, category, tags } = gate.entryForCli(declared, gate.ambientIdentities());
   return { lane, seats, author, category, tags };
 }
 
 /** The single write path to the public repo. Requires the approval minted by the public-write gate, and
  *  refuses before any network use when it is missing, so a future caller cannot skip the gate. Exported for tests. */
 export async function putFile(token, path, newContent, sha, message, approval) {
-  if (!isApproval(approval)) throw new Error("refused: this write did not pass the public-write gate (setup/public-write-gate.mjs), so nothing was written");
+  const gate = await loadGate();
+  if (!gate || !gate.isApproval(approval)) throw new Error("refused: this write did not pass the public-write gate (setup/public-write-gate.mjs), so nothing was written");
   const putRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`, {
     method: "PUT",
     headers: { ...ghHeaders(token), "Content-Type": "application/json" },
@@ -225,7 +253,7 @@ export async function addRegression(fields, deps = {}) {
   }
   let approval;
   try {
-    approval = gatePublicWrite("ledger add", fields, { tag, bug, root_cause: rootCause, fix_repo: fixRepo, fix_commit: fixCommit, fix_summary: fixSummary, verified_by: verifiedBy });
+    approval = await gatePublicWrite("ledger add", fields, { tag, bug, root_cause: rootCause, fix_repo: fixRepo, fix_commit: fixCommit, fix_summary: fixSummary, verified_by: verifiedBy });
   } catch (e) {
     if (e && e.refused) return failure(e);
     throw e;
@@ -258,7 +286,7 @@ async function cmdAdd() {
     console.error("usage: ledger.mjs add --tag <tag> --bug \"...\" --root-cause \"...\" --fix-repo <owner/repo> --fix-commit <sha> --fix-summary \"...\" [--verified-by \"...\"] [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]");
     process.exit(2);
   }
-  const res = await addRegression({ tag, bug, rootCause, fixRepo, fixCommit, fixSummary, verifiedBy, ...cliIdentity() });
+  const res = await addRegression({ tag, bug, rootCause, fixRepo, fixCommit, fixSummary, verifiedBy, ...(await cliIdentity()) });
   if (res.refused) { console.error(res.error); process.exitCode = EXIT_REFUSED; return; }
   const { priorHits, commitSha, verifiedLanded } = res;
 
@@ -488,7 +516,7 @@ export async function addFinding(fields, deps = {}) {
     assertFindingStatus(status);
     if (!fields.source_audit_doc) throw new Error("source_audit_doc is required");
     if (!fields.title) throw new Error("title is required");
-    const approval = gatePublicWrite("ledger finding add", fields, {
+    const approval = await gatePublicWrite("ledger finding add", fields, {
       id: fields.id,
       title: fields.title,
       source_audit_doc: fields.source_audit_doc,
@@ -533,14 +561,14 @@ export async function closeFinding(id, fields = {}, deps = {}) {
     const status = fields.status || "fixed";
     assertFindingStatus(status);
     if (status === "open") throw new Error('status for close must be "fixed" or "wontfix", not "open"');
-    gatePublicWrite("ledger finding close", fields, { id, fix_commit: fields.fix_commit, verified_by: fields.verified_by });
+    await gatePublicWrite("ledger finding close", fields, { id, fix_commit: fields.fix_commit, verified_by: fields.verified_by });
     const io = { pat, fetchFile, putFile, verifyCommitLanded, ...deps };
     const token = await io.pat();
     const { content, sha } = await io.fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);
     const found = existing.find((f) => f.id === id);
     if (!found) return { ok: false, error: `finding ${id} not found, run "finding list" to see valid ids` };
-    const approval = gatePublicWrite("ledger finding close (existing entry)", fields, {
+    const approval = await gatePublicWrite("ledger finding close (existing entry)", fields, {
       id: found.id,
       title: found.title,
       source_audit_doc: found.source_audit_doc,
@@ -601,7 +629,7 @@ async function cmdFindingAdd() {
     console.error('usage: ledger.mjs finding add --severity <critical|high|medium|low> --source-audit-doc "<path>" --title "<one-line>" [--id <id>] [--status open|fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"] [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]');
     process.exit(2);
   }
-  const res = await addFinding({ id: idArg || undefined, severity, source_audit_doc: source, title, status, fix_commit: fixCommit || null, verified_by: verifiedBy || null, ...cliIdentity() });
+  const res = await addFinding({ id: idArg || undefined, severity, source_audit_doc: source, title, status, fix_commit: fixCommit || null, verified_by: verifiedBy || null, ...(await cliIdentity()) });
   if (res.refused) { console.error(res.error); process.exitCode = EXIT_REFUSED; return; }
   if (!res.ok) { console.error(`[ledger] finding add ERROR: ${res.error}`); process.exitCode = 1; return; }
   console.log(`[ledger] finding ${res.finding.id} added (severity:${res.finding.severity} status:${res.finding.status}) source:${res.finding.source_audit_doc}`);
@@ -628,7 +656,7 @@ async function cmdFindingClose() {
   const fixCommit = val("--fix-commit", "");
   const verifiedBy = val("--verified-by", "");
   if (!id) { console.error('usage: ledger.mjs finding close <id> [--status fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"] [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]'); process.exit(2); }
-  const res = await closeFinding(id, { status, fix_commit: fixCommit || null, verified_by: verifiedBy || null, ...cliIdentity() });
+  const res = await closeFinding(id, { status, fix_commit: fixCommit || null, verified_by: verifiedBy || null, ...(await cliIdentity()) });
   if (res.refused) { console.error(res.error); process.exitCode = EXIT_REFUSED; return; }
   if (!res.ok) { console.error(`[ledger] finding close ERROR: ${res.error}`); process.exitCode = 1; return; }
   console.log(`[ledger] finding ${id}: ${res.wasStatus} -> ${res.finding.status}`);
@@ -661,10 +689,22 @@ async function cmdFindingCheck() {
 // Guard the CLI dispatch so importing this file for its exported functions (parseFindings,
 // renderFinding, upsertFinding, filterFindings, reconcileSummary, addFinding, closeFinding,
 // reconcileOpenFindings -- the finding tests do exactly this) never triggers a CLI run / process.exit.
-// Mirrors decision-clock.mjs's isMain guard verbatim; behavior when run directly is unchanged (this
-// file is still its own entry point in every existing invocation).
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
+// Behavior when run directly is unchanged (this file is still its own entry point in every existing
+// invocation). The old guard compared import.meta.url (the real path node resolves a symlink to) with
+// process.argv[1] as typed, so a symlinked start made it false and the CLI silently did nothing and exited 0.
+// Both sides are compared as real paths here.
+function isEntryPoint() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    const self = fileURLToPath(import.meta.url);
+    let a;
+    let b;
+    try { a = realpathSync(entry); b = realpathSync(self); } catch { a = entry; b = self; }
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  } catch { return false; }
+}
+if (isEntryPoint()) {
   (async () => {
     try {
       if (cmd === "add") await cmdAdd();
