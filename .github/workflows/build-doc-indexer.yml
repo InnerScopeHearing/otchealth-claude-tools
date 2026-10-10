@@ -12,7 +12,8 @@
 # purpose, so a stale reference is loud instead of silent.
 #
 # Where to go instead: .github/workflows/build-doc-indexer-ecr.yml builds and pushes the image to ECR on every
-# merge to main, and can be dispatched for a manual rebuild. That is the workflow that keeps the image current.
+# merge to main except docs-only changes, and can be dispatched for a manual rebuild. That is the workflow that
+# keeps the image current.
 #
 # Last working version: commit d19ce0e76350da65ca9cd782cc81a8f07ff05e40.
 #
@@ -32,6 +33,6 @@ jobs:
     steps:
       - name: Fail on purpose
         run: |
-          echo "Retired: Azure was deleted on 2026-08-13; see .github/workflows/build-doc-indexer-ecr.yml (rebuilds on every merge to main; dispatch it for a manual rebuild)"
-          echo "::error title=build-doc-indexer is retired::Azure was deleted on 2026-08-13; see .github/workflows/build-doc-indexer-ecr.yml (rebuilds on every merge to main; dispatch it for a manual rebuild)"
+          echo "Retired: Azure was deleted on 2026-08-13; see .github/workflows/build-doc-indexer-ecr.yml (rebuilds on merges to main except docs-only changes; dispatch it for a manual rebuild)"
+          echo "::error title=build-doc-indexer is retired::Azure was deleted on 2026-08-13; see .github/workflows/build-doc-indexer-ecr.yml (rebuilds on merges to main except docs-only changes; dispatch it for a manual rebuild)"
           exit 1

@@ -4,7 +4,7 @@
 # baseline gate a deploy, report-only until a flag was flipped.
 #
 # Why it is gone: its only cloud login was Azure, which was permanently deleted on 2026-08-13. Nothing ever
-# called it: this repo has no deploy step, and otchealth-mcp-server tried it and rejected it, because a
+# called it: this repo has no deploy step, and otchealth-mcp-server considered it and rejected it, because a
 # cross-repo call checks out the caller repo and not this one. It has no recorded run. It was also an
 # injection path. The tolerance input (a free-text string under workflow_dispatch) and the agent input (under
 # workflow_call) were pasted straight into shell lines in a job that held id-token: write.
