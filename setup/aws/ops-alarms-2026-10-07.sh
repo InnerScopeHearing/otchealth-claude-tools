@@ -161,6 +161,9 @@ while [ "$#" -gt 0 ]; do
     -h|--help)
       usage
       exit 0 ;;
+    --brain-only)
+      BRAIN_ONLY="yes"
+      shift ;;
     --email|--email=*)
       if [ "$EMAIL_GIVEN" = "yes" ]; then
         stop "--email was given more than once. Nothing was changed. Run the script again with it once."
