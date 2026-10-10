@@ -785,11 +785,8 @@ fi
 
 echo "Gateway task role (cluster $ECS_CLUSTER, service $ECS_SERVICE):"
 B_PROBLEM=""
-if ! run_aws TD ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query "services[?status=='ACTIVE'].taskDefinition | [0]" --output text; then
-  B_PROBLEM="the ECS service could not be read: $(err_text)"
-elif [ -z "$TD" ] || [ "$TD" = "None" ]; then
-  B_PROBLEM="ECS service $ECS_SERVICE in cluster $ECS_CLUSTER was not found, or is not ACTIVE"
-else
+resolve_gateway_service
+if [ -z "$B_PROBLEM" ]; then
   echo "  Task definition in use : ${TD##*/}"
   if ! run_aws TROLE ecs describe-task-definition --task-definition "$TD" --query taskDefinition.taskRoleArn --output text; then
     B_PROBLEM="the task definition ${TD##*/} could not be read: $(err_text)"
