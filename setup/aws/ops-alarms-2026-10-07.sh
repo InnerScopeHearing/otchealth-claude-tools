@@ -180,7 +180,7 @@ while [ "$#" -gt 0 ]; do
         shift
       fi ;;
     *)
-      stop "unknown option \"$1\". The only option is --email you@example.com   Nothing was changed." ;;
+      stop "unknown option \"$1\". The options are --email you@example.com and, only if the CTO says so, --brain-only.   Nothing was changed." ;;
   esac
 done
 if [ -z "$ALERT_EMAIL" ]; then
