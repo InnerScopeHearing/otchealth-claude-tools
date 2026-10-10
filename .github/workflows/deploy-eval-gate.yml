@@ -7,7 +7,9 @@
 # called it: this repo has no deploy step, and otchealth-mcp-server considered it and rejected it, because a
 # cross-repo call checks out the caller repo and not this one. It has no recorded run. It was also an
 # injection path. The tolerance input (a free-text string under workflow_dispatch) and the agent input (under
-# workflow_call) were pasted straight into shell lines in a job that held id-token: write.
+# workflow_call) were pasted straight into shell lines in a job that held id-token: write. Its Azure login
+# step was set to continue on error, so those lines still ran after the login failed. Of the four workflows
+# retired in S-03, this is the one that stayed reachable after Azure was deleted.
 #
 # What it does now: nothing. No inputs, no permissions, no secrets, no cloud login. It no longer declares
 # workflow_call, so a stale uses: reference fails at parse time instead of running. Dispatching it fails on

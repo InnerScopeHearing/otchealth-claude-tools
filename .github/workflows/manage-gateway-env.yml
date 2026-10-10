@@ -5,9 +5,9 @@
 #
 # Why it is gone: Azure was permanently deleted on 2026-08-13, so it could only ever fail. It was also an
 # injection path. Free-text dispatch inputs were pasted straight into shell lines in a job that held
-# id-token: write, contents: write and pull-requests: write, so anyone able to dispatch workflows could run
-# commands in a job that can ask GitHub for a cloud token. It has no recorded run since it was activated on
-# 2026-07-10, and nothing in this repo or in otchealth-mcp-server dispatches it.
+# id-token: write, contents: write and pull-requests: write. The Azure login step in front of those lines
+# would stop the job now, which is all that kept the path closed. It has no recorded run since it was
+# activated on 2026-07-10, and nothing in this repo or in otchealth-mcp-server dispatches it.
 #
 # What it does now: nothing. No inputs, no permissions, no secrets, no cloud login. Dispatching it fails on
 # purpose, so a stale reference is loud instead of silent.
