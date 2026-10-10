@@ -14,6 +14,14 @@
 // RING-SAFE: the inbox lives in the shared commons (non-PHI). Do not dispatch MNPI/PHI/privileged
 // content; this is a coordination channel, not a data channel. Fail-open on read paths.
 //
+// PUBLIC REPO RULE (owner decision 2026-10-10): --spawn writes the task text into a workflow dispatch in a
+// GitHub repo (claude-tools is public), where the run inputs, the run's branch and its draft PR are visible to
+// anyone. So --spawn first passes the fail-closed gate in setup/public-write-gate.mjs: only a technical task
+// from the cto or developer lane may be spawned. A task that reads as finance, legal, investor, deal, inside information,
+// privileged, PHI or personal material, or comes from any other lane, is refused (exit 2) before anything is
+// queued or sent; run the same dispatch without --spawn to queue it in the private inbox instead. Declare the
+// lane with --lane (or --from), or run from a session whose identity is cto or developer.
+//
 // STORAGE (ported to S3, 2026-08-27): the inbox used to live in Azure Blob (otchealthcommons/
 // company-journal, account-SAS'd directly in this file). That storage account died with the Azure
 // subscription deletion (2026-08-13). Now routes through skills/kb-memory/commons-store.mjs, the
