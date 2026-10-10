@@ -31,6 +31,9 @@ cleanup_sandboxes() {
   fi
 }
 
+# register_sandbox DIR: DIR is removed with the sandboxes when the tests end (for a folder a test makes for its own use).
+register_sandbox() { SANDBOXES+=("$1"); }
+
 # new_world [PATCH_JSON]: a fresh sandbox with a pretend account (changed by the patch, if one is given).
 new_world() {
   local patch="${1:-}"
