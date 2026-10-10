@@ -490,6 +490,9 @@ else
   warn "the brain alarms are skipped because ${BRAIN_WHY:-the brain could not be found}. Tell the CTO."
 fi
 if [ "$GATEWAY_ON" != "yes" ] && [ "$BRAIN_ON" != "yes" ]; then
+  if [ "$BRAIN_ONLY" = "yes" ]; then
+    stop "--brain-only was given and the script could not find the brain, so there is nothing to watch. Nothing was changed. Copy this screen and send it to the CTO."
+  fi
   stop "the script could not find the gateway or the brain, so there is nothing to watch. Nothing was changed. Copy this screen and send it to the CTO."
 fi
 
