@@ -147,10 +147,12 @@ refresh_stack_status() {
 
 # ---------------------------------------------------------------------------------------------
 # The one required option is --email ADDRESS: who receives the alarm emails. It has no default and
-# is never read from the environment. Everything here runs before the first AWS call.
+# is never read from the environment. The only other option is --brain-only (see the top of this file).
+# Everything here runs before the first AWS call.
 usage() {
   echo "Usage:  bash ops-alarms-2026-10-07.sh --email you@example.com"
   echo "  --email ADDRESS   the address that receives the alarm emails (required, no default)"
+  echo "  --brain-only      install only the 3 brain alarms and do not look for the gateway (only if the CTO says so)"
   echo "  --help            show this text"
 }
 EMAIL_GIVEN="no"
