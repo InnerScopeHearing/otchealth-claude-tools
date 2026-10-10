@@ -1446,6 +1446,31 @@ elif [ -n "$TASK_ROLE_ARN" ]; then
 else
   echo "  Gateway task role allowed to assume it: no (the gateway task role was not found)"
 fi
+echo ""
+if [ "$BILLING_USER_OK" = "yes" ] || [ "$BILLING_ROLE_OK" = "yes" ]; then
+  echo "Cost and billing: read only"
+  echo "  The AI reader can now READ the AWS bill and cost reports: Cost Explorer (spend by service, forecasts, anomalies),"
+  echo "  Budgets, Savings Plans, Cost Optimization Hub and Compute Optimizer advice, the AWS price list, credits and"
+  echo "  invoice summaries. It cannot change, buy, pay for or cancel anything. Payment methods and tax settings stay blocked."
+  if [ "$BILLING_USER_OK" = "yes" ]; then
+    echo "  User $READER_USER: ON (policy $BILLING_POLICY is attached)"
+  else
+    echo "  User $READER_USER: OFF (the policy is not attached; see the FAIL lines above)"
+  fi
+  if [ "$BILLING_ROLE_OK" = "yes" ]; then
+    echo "  Role $READER_ROLE: ON (policy $BILLING_POLICY is attached)"
+  elif [ "$ROLE_EXACT" = "no" ]; then
+    echo "  Role $READER_ROLE: OFF (the role was left exactly as it was)"
+  else
+    echo "  Role $READER_ROLE: OFF (the role was not set up in this run; see the FAIL lines above)"
+  fi
+  echo "  To see real numbers, the account owner does three one-time steps in the console (this script cannot do them):"
+  echo "    1. Cost Explorer: Billing and Cost Management > Cost Explorer > Launch Cost Explorer (data shows up within about a day)."
+  echo "    2. Credits and bills pages: turn on \"Activate IAM Access\" in Account settings (the cost reports do not need it)."
+  echo "    3. Cost Optimization Hub and Compute Optimizer: opt in once in each service (they have no advice until then)."
+else
+  echo "Cost and billing: NOT in place on the user or the role after this run (see the FAIL lines above)."
+fi
 TOTAL=$((PASSED + FAILED))
 echo ""
 echo "=============================================================="
@@ -1453,6 +1478,9 @@ if [ "$FAILED" -eq 0 ]; then
   echo " RESULT: ALL CHECKS PASSED ($PASSED of $TOTAL)"
   echo "=============================================================="
   echo " Tell the CTO: read-only AWS identities are ready."
+  if [ "$BILLING_USER_OK" = "yes" ] && [ "$BILLING_ROLE_OK" = "yes" ]; then
+    echo " Cost and billing: read only, on for the user and the role (details above)."
+  fi
 else
   echo " RESULT: $FAILED of $TOTAL CHECKS FAILED"
   echo "=============================================================="
