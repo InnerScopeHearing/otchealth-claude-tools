@@ -458,7 +458,12 @@ discover_brain() {
   fi
 }
 
-discover_gateway
+if [ "$BRAIN_ONLY" = "yes" ]; then
+  echo "Gateway: not looked for, because --brain-only was given."
+  GATEWAY_WHY="you asked for --brain-only"
+else
+  discover_gateway
+fi
 echo ""
 discover_brain
 echo ""
