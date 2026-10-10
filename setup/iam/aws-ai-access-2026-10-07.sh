@@ -997,6 +997,72 @@ echo "Policy $EXTRAS_POLICY (a few extra read calls):"
 if ! put_managed "$EXTRAS_POLICY" "$EXTRAS_FILE" 6144 "Extra read-only calls for AI read-only identities: metrics, cost, alarms, ECS, load balancers, OpenSearch domain info, Lightsail (2026-10-07)"; then
   stop "the extras policy could not be saved (the message above says why). Run again, or send this screen to the CTO."
 fi
+# The billing policy is its own policy (not part of the extras), so the extras and the deny text stay exactly as they
+# were, and taking cost and billing away again is one detach per identity. Five of the Cost Explorer and Budgets names
+# are also in the extras; they are repeated here so this policy stands on its own. None of the names below is matched by
+# a Deny statement in the deny policy (the tests check that with the saved policies).
+BILLING_FILE="$WORK_DIR/billing.json"
+cat > "$BILLING_FILE" <<'BILLING_JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CostAndBillingReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ce:DescribeCostCategoryDefinition", "ce:GetAnomalies", "ce:GetAnomalyMonitors",
+        "ce:GetAnomalySubscriptions", "ce:GetApproximateUsageRecords", "ce:GetCommitmentPurchaseAnalysis",
+        "ce:GetCostAndUsage", "ce:GetCostAndUsageComparisons", "ce:GetCostAndUsageWithResources",
+        "ce:GetCostCategories", "ce:GetCostComparisonDrivers", "ce:GetCostForecast",
+        "ce:GetDimensionValues", "ce:GetReservationCoverage", "ce:GetReservationPurchaseRecommendation",
+        "ce:GetReservationUtilization", "ce:GetRightsizingRecommendation",
+        "ce:GetSavingsPlanPurchaseRecommendationDetails", "ce:GetSavingsPlansCoverage",
+        "ce:GetSavingsPlansPurchaseRecommendation", "ce:GetSavingsPlansUtilization",
+        "ce:GetSavingsPlansUtilizationDetails", "ce:GetTags", "ce:GetUsageForecast",
+        "ce:ListCommitmentPurchaseAnalyses", "ce:ListCostAllocationTagBackfillHistory",
+        "ce:ListCostAllocationTags", "ce:ListCostCategoryDefinitions",
+        "ce:ListCostCategoryResourceAssociations", "ce:ListSavingsPlansPurchaseRecommendationGeneration",
+        "ce:ListTagsForResource",
+        "budgets:ViewBudget", "budgets:DescribeBudgetAction", "budgets:DescribeBudgetActionHistories",
+        "budgets:DescribeBudgetActionsForAccount", "budgets:DescribeBudgetActionsForBudget",
+        "budgets:ListTagsForResource",
+        "savingsplans:DescribeSavingsPlanRates", "savingsplans:DescribeSavingsPlans",
+        "savingsplans:DescribeSavingsPlansOfferingRates", "savingsplans:DescribeSavingsPlansOfferings",
+        "savingsplans:ListTagsForResource",
+        "cost-optimization-hub:GetPreferences", "cost-optimization-hub:GetRecommendation",
+        "cost-optimization-hub:ListEfficiencyMetrics", "cost-optimization-hub:ListEnrollmentStatuses",
+        "cost-optimization-hub:ListRecommendationSummaries", "cost-optimization-hub:ListRecommendations",
+        "compute-optimizer:DescribeRecommendationExportJobs",
+        "compute-optimizer:GetAutoScalingGroupRecommendations",
+        "compute-optimizer:GetEBSVolumeRecommendations", "compute-optimizer:GetEC2InstanceRecommendations",
+        "compute-optimizer:GetEC2RecommendationProjectedMetrics",
+        "compute-optimizer:GetECSServiceRecommendationProjectedMetrics",
+        "compute-optimizer:GetECSServiceRecommendations",
+        "compute-optimizer:GetEffectiveRecommendationPreferences", "compute-optimizer:GetEnrollmentStatus",
+        "compute-optimizer:GetEnrollmentStatusesForOrganization",
+        "compute-optimizer:GetIdleRecommendations", "compute-optimizer:GetLambdaFunctionRecommendations",
+        "compute-optimizer:GetLicenseRecommendations",
+        "compute-optimizer:GetRDSDatabaseRecommendationProjectedMetrics",
+        "compute-optimizer:GetRDSDatabaseRecommendations",
+        "compute-optimizer:GetRecommendationPreferences", "compute-optimizer:GetRecommendationSummaries",
+        "pricing:DescribeServices", "pricing:GetAttributeValues", "pricing:GetPriceListFileUrl",
+        "pricing:GetProducts", "pricing:ListPriceLists",
+        "billing:GetBillingData", "billing:GetBillingDetails", "billing:GetBillingNotifications",
+        "billing:GetBillingPreferences", "billing:GetBillingView", "billing:GetBillingViewData",
+        "billing:GetCreditAllocationHistory", "billing:GetCredits", "billing:ListBillingViews",
+        "account:GetAccountInformation",
+        "consolidatedbilling:GetAccountBillingRole", "consolidatedbilling:ListLinkedAccounts",
+        "invoicing:ListInvoiceSummaries"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+BILLING_JSON
+echo "Policy $BILLING_POLICY (cost and billing, read only: Read and List actions, nothing that changes or buys):"
+if ! put_managed "$BILLING_POLICY" "$BILLING_FILE" 6144 "Read-only cost and billing calls for AI read-only identities: Cost Explorer, Budgets, Savings Plans, Cost Optimization Hub, Compute Optimizer, price list, credits and bills. No write action (2026-10-09)"; then
+  stop "the billing policy could not be saved (the message above says why). Run again, or send this screen to the CTO."
+fi
 
 # ---------------------------------------------------------------------------------------------
 section "3. Part A: IAM user $READER_USER"
@@ -1017,7 +1083,7 @@ add_rollback 30 "aws iam delete-login-profile --user-name $READER_USER"
 pass "A  user $READER_USER exists (tags: purpose=ai-read-only, owner=cto, created=2026-10-07)"
 
 echo "  Policies on the user:"
-for arn in "$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[@]}"; do
+for arn in "$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[@]}"; do
   if ! ensure_attached user "$READER_USER" "$arn"; then
     stop "could not attach ${arn##*/} to $READER_USER (the message above says why)."
   fi
@@ -1054,14 +1120,15 @@ if ! run_aws HAVE_ALL iam list-attached-user-policies --user-name "$READER_USER"
   show_err
   stop "could not read back the policies attached to $READER_USER."
 fi
-UMISSING="$(list_missing "$HAVE_ALL" "$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[@]}")"
+UMISSING="$(list_missing "$HAVE_ALL" "$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[@]}")"
 if [ -z "$UMISSING" ]; then
-  pass "A  all 6 managed policies are attached to the user (4 AWS managed, extras, deny)"
+  pass "A  all 7 managed policies are attached to the user (4 AWS managed, extras, billing, deny)"
 else
   fail "A  these policies are not attached to the user:$UMISSING"
 fi
+if list_has "$HAVE_ALL" "$BILLING_ARN"; then BILLING_USER_OK="yes"; fi
 echo "  Checking that the user has nothing this script did not put there:"
-EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[@]}")
+EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[@]}")
 EXPECT_INLINE=()
 if [ "$MFA_MODE" = "managed" ]; then
   EXPECT_MANAGED+=("arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${MFA_POLICY}")
@@ -1069,7 +1136,7 @@ else
   EXPECT_INLINE+=("$MFA_POLICY")
 fi
 if exact_check user "$READER_USER"; then
-  pass "A  the user has only the expected policies (6 managed, plus the MFA policy): no other policy, no group, no permissions boundary"
+  pass "A  the user has only the expected policies (7 managed, plus the MFA policy): no other policy, no group, no permissions boundary"
 else
   fail "A  the user has $EXACT_N item(s) this script did not add, or that could not be read: ${EXACT_LIST}. Do not connect any AI tool as this user until they are gone. No console password is created or changed meanwhile."
 fi
