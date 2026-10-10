@@ -34,7 +34,7 @@
 // part of this port.
 //
 // Verbs:
-//   node dispatch.mjs send <to> "<message/task>" [--from <a>] [--task] [--spawn [--repo <r>] [--minutes N]]
+//   node dispatch.mjs send <to> "<message/task>" [--from <a>] [--task] [--spawn [--repo <r>] [--minutes N] [--lane <cto|developer>]]
 //   node dispatch.mjs check --agent <self>        # surface + ACK this agent's inbox (wired into SessionStart)
 //   node dispatch.mjs list [--agent <a>]          # operator view of pending dispatches
 import { execFileSync } from "node:child_process";
