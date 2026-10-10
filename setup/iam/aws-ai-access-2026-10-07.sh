@@ -1183,7 +1183,7 @@ EOF
     # (A same-account trust policy that names the task role is already enough for it to assume the role, so the
     # trust policy is the thing that must never be written to a role that is not exact.)
     echo "  Role exists: $ROLE_ARN. Checking that it holds nothing this script did not put there, BEFORE anything on it is changed:"
-    EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}")
+    EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[0]}")
     EXPECT_INLINE=()
     if ! exact_check role "$READER_ROLE"; then
       ROLE_EXACT="no"
@@ -1208,7 +1208,7 @@ EOF
   fi
   if [ "$B_OK" = "yes" ]; then
     add_rollback 25 "aws iam delete-role --role-name $READER_ROLE"
-    for arn in "$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}"; do
+    for arn in "$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[0]}"; do
       if ! ensure_attached role "$READER_ROLE" "$arn"; then B_OK="no"; break; fi
     done
   fi
@@ -1224,17 +1224,18 @@ EOF
       fail "B  could not read back role $READER_ROLE"
     fi
     if run_aws RPOL iam list-attached-role-policies --role-name "$READER_ROLE" --query 'AttachedPolicies[].PolicyArn' --output text; then
-      RMISSING="$(list_missing "$RPOL" "$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}")"
+      RMISSING="$(list_missing "$RPOL" "$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[0]}")"
       if [ -z "$RMISSING" ]; then
-        pass "B  the role has ViewOnlyAccess, the extras and the deny policy attached"
+        pass "B  the role has ViewOnlyAccess, the extras, the billing policy and the deny policy attached"
       else
         fail "B  these policies are not attached to the role:$RMISSING"
       fi
+      if list_has "$RPOL" "$BILLING_ARN"; then BILLING_ROLE_OK="yes"; fi
       echo "  Checking that the role has nothing this script did not put there:"
-      EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}")
+      EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[0]}")
       EXPECT_INLINE=()
       if exact_check role "$READER_ROLE"; then
-        pass "B  the role has only the 3 expected managed policies: no inline policy, no permissions boundary"
+        pass "B  the role has only the 4 expected managed policies: no inline policy, no permissions boundary"
       else
         fail "B  the role has $EXACT_N item(s) this script did not add, or that could not be read: ${EXACT_LIST}. Do not let the gateway use the role until they are gone."
       fi
