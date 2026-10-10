@@ -9,11 +9,11 @@
 // list of writers honest.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, symlinkSync, mkdirSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ALLOWED_LANES,
   RING_LANES,
@@ -27,6 +27,7 @@ import {
   ambientIdentities,
   entryForCli,
   runCli,
+  isEntryPoint,
 } from "../setup/public-write-gate.mjs";
 
 // An em dash or an en dash, built from code points so this file itself contains neither.
@@ -347,7 +348,7 @@ test("runCli check: allowed and refused", () => {
 test("runCli files: scans the content of the files about to be committed", () => {
   const store = {
     "diagnostics/ok.md": "# nightly canary\nexit code 0\n",
-    "diagnostics/sensitive.md": "Summary of the investor update\n",
+    "diagnostics/summary.md": "Summary of the investor update\n",
     "diagnostics/big.md": "x",
   };
   const readFile = (p) => { if (!(p in store)) { const e = new Error("nope"); e.code = "ENOENT"; throw e; } return store[p]; };
@@ -358,10 +359,10 @@ test("runCli files: scans the content of the files about to be committed", () =>
   assert.equal(ok.code, 0);
   assert.match(ok.stdout, /ALLOWED/);
 
-  const sensitive = runCli(["files", "--lane", "cto", "--writer", "diag workflow", "diagnostics/ok.md", "diagnostics/sensitive.md"], base);
+  const sensitive = runCli(["files", "--lane", "cto", "--writer", "diag workflow", "diagnostics/ok.md", "diagnostics/summary.md"], base);
   assert.equal(sensitive.code, 2);
   assert.match(sensitive.stderr, /investor material/);
-  assert.match(sensitive.stderr, /diagnostics\/sensitive\.md/, "the file is named, its text is not");
+  assert.match(sensitive.stderr, /diagnostics\/summary\.md/, "the file is named, its text is not");
   assert.ok(!sensitive.stderr.includes("Summary of the investor update"));
 
   const ringClean = runCli(["files", "--lane", "clo-personal", "--writer", "diagnostic workflow", "diagnostics/ok.md"], base);
@@ -411,6 +412,286 @@ test("the CLI process exits 2 on refusal and 0 on allow, and prints nothing on s
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- started through a symlink (review item 1) ----
+//
+// A symlinked path used to make the CLI a silent no-op that exited 0, because the module compared its resolved
+// url with the path as typed. A workflow's `|| exit 1` never fired, so the push went ahead unchecked.
+
+/** Runs a script as a child process from a throw away directory that has no session identity. */
+function spawnNode(entryPath, args, dir) {
+  return spawnSync(process.execPath, [entryPath, ...args], {
+    cwd: dir,
+    env: { PATH: process.env.PATH, HOME: dir, CLAUDE_PROJECT_DIR: dir },
+    encoding: "utf8",
+    timeout: 20000,
+  });
+}
+
+test("the CLI runs, and refuses, when it is started through a symlink", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "pwg-link-")));
+  try {
+    mkdirSync(join(dir, "tools"));
+    mkdirSync(join(dir, "elsewhere"));
+    const link = join(dir, "gate-link.mjs");
+    symlinkSync(GATE_PATH, link); // a file symlink to the real gate
+    const chain = join(dir, "elsewhere", "gate-chain.mjs");
+    symlinkSync(link, chain); // a chain of two links
+    const rel = join(dir, "tools", "gate-rel.mjs");
+    symlinkSync(relative(join(dir, "tools"), GATE_PATH), rel); // a relative link
+    symlinkSync(dirname(GATE_PATH), join(dir, "setup-link")); // a linked directory that holds the gate
+    const viaDir = join(dir, "setup-link", "public-write-gate.mjs");
+    for (const entry of [GATE_PATH, link, chain, rel, viaDir]) {
+      const refused = spawnNode(entry, ["check", "--lane", "cfo", "--text", "plain technical note", "--writer", "link test"], dir);
+      assert.equal(refused.status, 2, `${entry}: a ring lane must exit 2 (stdout: ${refused.stdout} stderr: ${refused.stderr})`);
+      assert.match(refused.stderr, /REFUSED/, entry);
+      assert.equal(refused.stdout, "", entry);
+      const dirty = spawnNode(entry, ["check", "--lane", "cto", "--text", "Review the legal hold notice"], dir);
+      assert.equal(dirty.status, 2, `${entry}: sensitive text must exit 2`);
+      const allowed = spawnNode(entry, ["check", "--lane", "cto", "--text", "plain technical note", "--writer", "link test"], dir);
+      assert.equal(allowed.status, 0, `${entry}: ${allowed.stderr}`);
+      assert.match(allowed.stdout, /ALLOWED/, entry);
+      const bare = spawnNode(entry, [], dir);
+      assert.equal(bare.status, 2, `${entry}: no subcommand prints the usage and fails`);
+      assert.match(bare.stderr, /usage:/, entry);
+    }
+    // The shape a workflow uses: the gate through a link, then `|| exit 1`, over a real file.
+    writeFileSync(join(dir, "out.md"), "Legal hold notice attached\n");
+    const wf = spawnSync("sh", ["-c", `node "${link}" files --lane cto --writer wf out.md || exit 1; echo PUSHED`], {
+      cwd: dir, env: { PATH: process.env.PATH, HOME: dir, CLAUDE_PROJECT_DIR: dir }, encoding: "utf8",
+    });
+    assert.equal(wf.status, 1, "the step stops");
+    assert.ok(!wf.stdout.includes("PUSHED"), "nothing after the gate ran");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("isEntryPoint compares real paths: a symlink to the gate is the gate, any other file is not", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "pwg-ep-")));
+  try {
+    const selfUrl = pathToFileURL(GATE_PATH).href;
+    const link = join(dir, "link.mjs");
+    symlinkSync(GATE_PATH, link);
+    const other = join(dir, "other.mjs");
+    writeFileSync(other, "export {};\n");
+    assert.equal(isEntryPoint(GATE_PATH, selfUrl), true);
+    assert.equal(isEntryPoint(link, selfUrl), true, "through a symlink");
+    assert.equal(isEntryPoint(GATE_PATH, pathToFileURL(link).href), true, "when the module url is itself the link");
+    assert.equal(isEntryPoint(other, selfUrl), false);
+    assert.equal(isEntryPoint(undefined, selfUrl), false);
+    assert.equal(isEntryPoint("", selfUrl), false);
+    assert.equal(isEntryPoint(join(dir, "missing.mjs"), selfUrl), false, "a path that does not exist is not the gate");
+    assert.equal(isEntryPoint(), false, "an importer (here the test runner) is not the entry point");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- path variants (review item 5) ----
+
+const ENCODED_P = String.fromCharCode(0xFF50, 0xFF52, 0xFF4F, 0xFF4A, 0xFF45, 0xFF43, 0xFF54, 0xFF53); // full width letters
+const ROOT_VARIANTS = [
+  "projects/x/notes.md", "./projects/x/notes.md", "././projects/x/notes.md", "../projects/x/notes.md", "../../projects/x/notes.md",
+  "docs/../projects/x/notes.md", "docs/./../projects/x", "a/b/../../projects/x",
+  "/projects/x/notes.md", "//projects//x", "projects", "projects/", "./projects/",
+  "projects\\x\\notes.md", ".\\projects\\x", "docs\\..\\projects\\x", "docs/..\\projects/x",
+  "Projects/x/notes.md", "PROJECTS/X",
+  "%70rojects/x/notes.md", "projects%2Fx%2Fnotes.md", "projects%252Fx", "%2e/projects/x", "%2E%2E/projects/x", "docs%2F..%2Fprojects%2Fx",
+  `${ENCODED_P}/x`, "pro" + String.fromCharCode(0x200B) + "jects/x",
+  "C:\\repo\\projects\\x", "~/projects/x", "/home/runner/work/repo/repo/projects/x",
+];
+
+test("a path into the owner handled projects directory is refused in every spelling, in every path field", () => {
+  for (const v of ROOT_VARIANTS) {
+    for (const field of ["source_audit_doc", "source_doc", "source", "fix_repo", "repo", "path", "file", "files"]) {
+      const d = evaluatePublicWrite({ lane: "cto", text: { [field]: v } });
+      assert.equal(d.allowed, false, `${field}: ${JSON.stringify(v)}`);
+      assert.equal(d.class, "restricted", `${field}: ${JSON.stringify(v)}`);
+      assert.equal(d.field, field);
+    }
+    const byPaths = evaluatePublicWrite({ lane: "cto", paths: [v] });
+    assert.equal(byPaths.class, "restricted", `paths: ${JSON.stringify(v)}`);
+    assert.equal(byPaths.field, "paths");
+  }
+});
+
+test("the clo directory is refused in every spelling too", () => {
+  for (const v of ["dream-team/clo/notes.md", "./dream-team/clo/notes.md", "dream-team\\clo\\notes.md", "DREAM-TEAM/CLO/x", "dream-team/%63lo/x", "docs/../dream-team/clo/x", "../dream-team/clo/x"]) {
+    const d = evaluatePublicWrite({ lane: "cto", paths: [v] });
+    assert.equal(d.class, "legal", JSON.stringify(v));
+  }
+});
+
+test("ordinary paths that only resemble the owner handled directory are allowed", () => {
+  for (const v of ["docs/projects-overview.md", "skills/projects-view/view.mjs", "my-projects/x", "projects.md", "projectsx/y", "docs/projects.md", "src/../docs/ok.md", "diagnostics/graph-tenant-check.md", "docs/projects/plan.md"]) {
+    const d = evaluatePublicWrite({ lane: "cto", paths: [v], text: { source_audit_doc: v } });
+    assert.equal(d.allowed, true, `${JSON.stringify(v)} -> ${d.class}`);
+  }
+});
+
+test("a path with a sensitive label in any segment is refused, in any spelling", () => {
+  assert.equal(evaluatePublicWrite({ lane: "cto", paths: ["docs\\finance\\plan.md"] }).class, "finance");
+  assert.equal(evaluatePublicWrite({ lane: "cto", paths: ["./docs/../docs/Legal/x.md"] }).class, "legal");
+  assert.equal(evaluatePublicWrite({ lane: "cto", paths: ["docs/cap_table/x.md"] }).class, "finance");
+  assert.equal(evaluatePublicWrite({ lane: "cto", paths: ["docs/%66inance/x.md"] }).class, "finance");
+  assert.equal(evaluatePublicWrite({ lane: "cto", paths: "docs/ok.md, projects/x.md" }).class, "restricted", "a list is read item by item");
+});
+
+test("runCli check --path vets a path the same way", () => {
+  assert.equal(runCli(["check", "--lane", "cto", "--path", "./projects/x.md"], { ambient: [] }).code, 2);
+  assert.equal(runCli(["check", "--lane", "cto", "--path", "docs/ok.md"], { ambient: [] }).code, 0);
+});
+
+test("runCli files: the file NAMES are vetted too, and so is where a name really resolves", () => {
+  const readFile = () => "# nightly canary\nexit code 0\n";
+  const base = { ambient: [], readFile, fileSize: () => 10, cwd: "/repo", root: "/repo", realPath: (p) => p };
+  const run = (names, extra = {}) => runCli(["files", "--lane", "cto", "--writer", "diag workflow", ...names], { ...base, ...extra });
+  for (const name of ["projects/x.md", "./projects/x.md", "projects\\x.md", "docs/../projects/x.md", "../repo/projects/x.md", "/repo/projects/x.md", "Projects/X.md"]) {
+    const r = run([name]);
+    assert.equal(r.code, 2, name);
+    assert.match(r.stderr, /Field checked: paths\./, name);
+  }
+  // A name that is itself clean but is a link into the owner handled directory.
+  const aliased = run(["docs/alias.md"], { realPath: (p) => (p.endsWith("alias.md") ? "/repo/projects/x.md" : p) });
+  assert.equal(aliased.code, 2, "an alias is refused");
+  // The same alias seen from a sub directory of the checkout (the working directory is not the root).
+  const fromSub = run(["alias.md"], { cwd: "/repo/docs", realPath: (p) => (p.endsWith("alias.md") ? "/repo/projects/x.md" : p) });
+  assert.equal(fromSub.code, 2, "an alias is refused when the checkout root is above the working directory");
+  // Clean names, an absolute name inside the checkout, a nested directory with the same name, and a file outside the checkout.
+  assert.equal(run(["diagnostics/ok.md"]).code, 0);
+  assert.equal(run(["/repo/diagnostics/ok.md"]).code, 0);
+  assert.equal(run(["docs/projects/plan.md"]).code, 0);
+  assert.equal(run(["/tmp/outside/ok.md"]).code, 0, "a file outside the checkout cannot be committed, so only its content is vetted");
+  assert.equal(run(["diagnostics/ok.md", "projects/x.md"]).code, 2, "one bad name among several refuses the lot");
+});
+
+test("the CLI refuses a real symlink that points into the owner handled directory", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "pwg-alias-")));
+  try {
+    mkdirSync(join(dir, "projects"));
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "projects", "x.md"), "nightly canary passed\n");
+    writeFileSync(join(dir, "docs", "ok.md"), "nightly canary passed\n");
+    symlinkSync(join(dir, "projects", "x.md"), join(dir, "docs", "alias.md"));
+    const run = (name) => spawnNode(GATE_PATH, ["files", "--lane", "cto", "--writer", "alias test", name], dir);
+    assert.equal(run("docs/ok.md").status, 0);
+    assert.equal(run(join(dir, "docs", "ok.md")).status, 0, "an absolute name inside the working directory is fine");
+    assert.equal(run("docs/alias.md").status, 2);
+    assert.equal(run("projects/x.md").status, 2);
+    assert.equal(run("./projects/x.md").status, 2);
+    assert.equal(run(join(dir, "projects", "x.md")).status, 2, "an absolute name is resolved too");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- hyphen, underscore and case spellings (review item 6) ----
+
+const PHRASE_CLASSES = [
+  ["finance", ["cap table", "general ledger", "trial balance", "chart of accounts", "accounts payable", "balance sheet", "income statement", "profit and loss", "bank statement", "wire transfer", "routing number", "tax return"]],
+  ["legal", ["court order", "family law", "docket number", "case number", "superior court"]],
+  ["investor", ["investor relations", "securities offering"]],
+  ["deal", ["term sheet", "letter of intent", "due diligence", "data room", "purchase price", "deal room", "acquisition target"]],
+  ["phi", ["protected health information", "patient records", "medical records", "health records"]],
+  ["personal", ["personally identifiable"]],
+  ["inside-information", ["material non public", "insider trading"]],
+  ["privileged", ["attorney client", "attorney work product", "legally privileged"]],
+];
+
+/** The same phrase spelled with spaces, hyphens, underscores, camelCase, PascalCase and capitals. */
+function spellings(phrase) {
+  const w = phrase.split(" ");
+  const cap = (x) => x[0].toUpperCase() + x.slice(1);
+  return [
+    w.join(" "), w.join("  "), w.join("-"), w.join("--"), w.join(" - "), w.join("_"), w.join("__"),
+    w.map(cap).join(" "), w.map(cap).join(""), w[0] + w.slice(1).map(cap).join(""),
+    w.join("-").toUpperCase(), w.join("_").toUpperCase(), w.join(" ").toUpperCase(),
+  ];
+}
+
+test("a sensitive phrase is refused whether it is written with spaces, hyphens, underscores, camelCase or capitals", () => {
+  for (const [cls, phrases] of PHRASE_CLASSES) {
+    for (const phrase of phrases) {
+      for (const form of spellings(phrase)) {
+        const d = evaluatePublicWrite({ lane: "cto", text: { title: `Notes about the ${form} from last week` } });
+        assert.equal(d.allowed, false, `${cls}: ${JSON.stringify(form)}`);
+        assert.equal(d.class, cls, `${cls}: ${JSON.stringify(form)} -> ${d.class}`);
+      }
+    }
+  }
+});
+
+test("the cap table, the case that was missed, is refused in every spelling, as text and as a label", () => {
+  for (const form of ["cap-table", "cap_table", "CapTable", "capTable", "Cap Table", "CAP-TABLE", "cap--table", "capital-table", "captable", "CAPTABLE"]) {
+    assert.equal(evaluatePublicWrite({ lane: "cto", text: { title: `update the ${form} export` } }).class, "finance", form);
+    assert.equal(evaluatePublicWrite({ lane: "cto", tags: [form] }).class, "finance", `tag ${form}`);
+    assert.equal(evaluatePublicWrite({ lane: "cto", category: form }).class, "finance", `category ${form}`);
+  }
+});
+
+test("hyphen spellings do not introduce false matches across ordinary hyphenated words", () => {
+  for (const title of [
+    "the build-time cap on retries was raised",
+    "term-length counters reset after a deploy",
+    "re-deal the cards in the test fixture",
+    "multi-room chat layout is cut off",
+    "data-driven table layout",
+    "due-date field is optional",
+    "non-public API surface check passes",
+  ]) {
+    const d = evaluatePublicWrite({ lane: "cto", text: { title } });
+    assert.equal(d.allowed, true, `${title} -> ${d.class}`);
+  }
+});
+
+// ---- known technical words (review item 6, the false refusals) ----
+
+test("known technical names that contain a sensitive word by accident are allowed, as text and as tags", () => {
+  const ok = [
+    "RevenueCat webhook retries on a 5xx",
+    "initRevenueCat() runs before the paywall renders",
+    "REVENUECAT_API_KEY is missing in the build environment",
+    "RevenueCatUI paywall layout glitch on small screens",
+    "revenuecat-dashboard request times out after 30 seconds",
+    "Phi-3 mini fails to load on the runner",
+    "phi3 quantized weights exceed the cache limit",
+    "microsoft/phi-3-mini-4k-instruct download times out",
+    "Phi-3.5 vision model returns an empty string",
+    "onnx_phi3 export logs a warning",
+    "Phi-4 and RevenueCat both need a version bump",
+  ];
+  for (const title of ok) {
+    for (const lane of ["cto", "developer"]) {
+      const d = evaluatePublicWrite({ lane, text: { title } });
+      assert.equal(d.allowed, true, `${lane}: ${title} -> ${d.class}`);
+    }
+  }
+  for (const tag of ["revenuecat", "RevenueCat", "phi-3", "Phi-4", "phi3", "personal-access-token", "personal-access-tokens"]) {
+    assert.equal(evaluatePublicWrite({ lane: "cto", tags: [tag] }).allowed, true, tag);
+  }
+});
+
+test("the technical names never hide a sensitive word next to them or a sensitive use of the same letters", () => {
+  const refused = [
+    ["RevenueCat revenue report for the quarter", "finance"],
+    ["RevenueCat investor update", "investor"],
+    ["investorRevenueCat sync", "investor"],
+    ["the RevenueCat cap table", "finance"],
+    ["Phi-3 patient records in the log", "phi"],
+    ["Phi-3 and PHI in the same trace", "phi"],
+    ["PHI-3 audit trail", "phi"],
+    ["phi-12345 appears in the export", "phi"],
+    ["Revenue Cat report", "finance"],
+    ["revenue by month", "finance"],
+  ];
+  for (const [title, cls] of refused) {
+    assert.equal(evaluatePublicWrite({ lane: "cto", text: { title } }).class, cls, title);
+  }
+  assert.equal(evaluatePublicWrite({ lane: "cto", tags: ["phi-3-patient"] }).class, "phi");
+  assert.equal(evaluatePublicWrite({ lane: "cto", tags: ["revenuecat", "finance"] }).class, "finance");
+  assert.equal(evaluatePublicWrite({ lane: "cto", tags: ["personal-access-token", "personal"] }).class, "personal");
 });
 
 test("the gate module stays dependency free: node builtins only", () => {
