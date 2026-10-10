@@ -1,33 +1,37 @@
+# RETIRED 2026-10-09 (security finding S-03). This file is a disarmed stub. Do not restore the old body.
+#
+# What it was: a one-click rebuild of the shared doc-indexer container image in Azure Container Registry
+# (otchealthacr), authenticated with Azure OIDC.
+#
+# Why it is gone: Azure was permanently deleted on 2026-08-13, and the scheduled jobs pull this image from AWS
+# ECR, so this never updated anything that runs today. Its last run was on 2026-07-14. It was also an
+# injection path: the tag input, free text, was pasted straight into a shell line in a job that held
+# id-token: write.
+#
+# What it does now: nothing. No inputs, no permissions, no secrets, no cloud login. Dispatching it fails on
+# purpose, so a stale reference is loud instead of silent.
+#
+# Where to go instead: .github/workflows/build-doc-indexer-ecr.yml builds and pushes the image to ECR on every
+# merge to main, and can be dispatched for a manual rebuild. That is the workflow that keeps the image current.
+#
+# Last working version: commit d19ce0e76350da65ca9cd782cc81a8f07ff05e40.
+#
+# tests/workflow-input-injection.test.mjs keeps this file a stub.
 name: build-doc-indexer
 
-# Rebuild + push the shared doc-indexer container image (otchealthacr/doc-indexer:latest) that the
-# Container Apps Jobs (signal-radar, decision-clock, librarians, fleet-medic) run. One-click, OIDC auth
-# (no stored credentials). Use after merging a change under any COPYd skill dir (signal-radar/, etc.).
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Image tag to build/push'
-        required: false
-        default: 'latest'
 
-permissions:
-  id-token: write
-  contents: read
+permissions: {}
 
 jobs:
-  build:
+  retired:
+    name: retired
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
-      - name: Azure login (OIDC, no stored secret)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: az acr build doc-indexer
+      - name: Fail on purpose
         run: |
-          set -euo pipefail
-          az acr build -r otchealthacr -t "doc-indexer:${{ github.event.inputs.tag }}" \
-            -f skills/doc-indexer/job/Dockerfile .
+          echo "Retired: Azure was deleted on 2026-08-13; see .github/workflows/build-doc-indexer-ecr.yml (rebuilds on every merge to main; dispatch it for a manual rebuild)"
+          echo "::error title=build-doc-indexer is retired::Azure was deleted on 2026-08-13; see .github/workflows/build-doc-indexer-ecr.yml (rebuilds on every merge to main; dispatch it for a manual rebuild)"
+          exit 1

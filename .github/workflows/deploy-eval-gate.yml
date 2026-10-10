@@ -1,116 +1,40 @@
-# Deploy Eval Gate — reusable workflow implementing the Azure GenAIOps #4/#31 pattern: "the eval
-# baseline GATES deploys", not just observes them. This is the enforceable half of the CI eval-gate;
-# nightly-eval.yml already runs the SAME eval-gate.mjs comparison in report-only mode every night so
-# the mechanism is proven before anything depends on it.
+# RETIRED 2026-10-09 (security finding S-03). This file is a disarmed stub. Do not restore the old body.
 #
-# PHASE: report-first, with a flip switch. `enforce` defaults to false (warn, never block) so it can be
-# wired into a deploy pipeline immediately with zero risk, observed for a burn-in period, then flipped
-# to true (blocking) once the baseline.json trend is trusted. This mirrors how promptcheck.yml started
-# report-only before any consideration of tightening.
+# What it was: a reusable workflow (workflow_call plus workflow_dispatch) meant to let a golden-task eval
+# baseline gate a deploy, report-only until a flag was flipped.
 #
-# HOW A DEPLOY WORKFLOW USES THIS (once a real deploy pipeline exists — otchealth-claude-tools itself
-# has no deploy step today; this is the plumbing so the FIRST deploy pipeline that lands gets the gate
-# for free):
+# Why it is gone: its only cloud login was Azure, which was permanently deleted on 2026-08-13. Nothing ever
+# called it: this repo has no deploy step, and otchealth-mcp-server tried it and rejected it, because a
+# cross-repo call checks out the caller repo and not this one. It has no recorded run. It was also an
+# injection path. The tolerance input (a free-text string under workflow_dispatch) and the agent input (under
+# workflow_call) were pasted straight into shell lines in a job that held id-token: write.
 #
-#   jobs:
-#     eval-gate:
-#       uses: InnerScopeHearing/otchealth-claude-tools/.github/workflows/deploy-eval-gate.yml@main
-#       secrets: inherit
-#       with:
-#         enforce: true          # flip to true once the baseline is trusted; false = warn-only
-#         tolerance: 0.05        # allowed drop (absolute) below the recorded baseline before flagging
-#     deploy:
-#       needs: eval-gate
-#       runs-on: ubuntu-latest
-#       steps: [ ... ]           # needs: eval-gate is itself the enforcement point once enforce=true,
-#                                # because this workflow's job fails (non-zero exit) on a blocked gate.
+# What it does now: nothing. No inputs, no permissions, no secrets, no cloud login. It no longer declares
+# workflow_call, so a stale uses: reference fails at parse time instead of running. Dispatching it fails on
+# purpose.
 #
-# Needs GCP_CLAUDE_DRIVER_SA_JSON (same claude-driver SA secret nightly-eval.yml / promptcheck.yml use).
+# Where to go instead: .github/workflows/nightly-eval.yml runs the same eval-gate.mjs comparison, report only,
+# with AWS auth. A real deploy gate, if one is wanted later, should be a new workflow that passes inputs
+# through env: and asks for id-token only in a job that assumes a role.
+#
+# Last working version: commit b5e808756967040b8caac2487fddf021760ab331.
+#
+# tests/workflow-input-injection.test.mjs keeps this file a stub.
 name: Deploy Eval Gate (reusable)
 
 on:
-  workflow_call:
-    inputs:
-      enforce:
-        description: "Block (fail this job) on a detected regression. Default false = report-only/warn."
-        type: boolean
-        default: false
-      tolerance:
-        description: "Allowed absolute drop below the recorded baseline avg before flagging a regression."
-        type: number
-        default: 0.05
-      agent:
-        description: "Optional: restrict the gate to one agent's golden tasks (--agent filter). Empty = all."
-        type: string
-        default: ""
   workflow_dispatch:
-    inputs:
-      enforce:
-        description: "Block on regression?"
-        type: boolean
-        default: false
-      tolerance:
-        description: "Regression tolerance (absolute, 0-1)"
-        type: string
-        default: "0.05"
 
-permissions:
-  id-token: write     # secretless OIDC login to Azure (azure/login); no secret at rest
-  contents: read
+permissions: {}
 
 jobs:
-  gate:
-    name: golden-task eval gate
+  retired:
+    name: retired
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 2
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-
-      - name: Set up Node 22
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 22
-
-      - name: Azure login (OIDC, secretless — the claude-tools Azure auth pattern; main context)
-        continue-on-error: true
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Run golden-task suite (judge on Azure credits)
-        id: run
-        continue-on-error: true # run-evals.mjs exits 1 on any single failing task; that is a scoring
-                                 # SIGNAL for eval-gate.mjs to interpret, not a workflow error by itself.
-        working-directory: skills/agent-evals
-        # No env creds: azure/login (above) authenticated the runner via OIDC; run-evals.mjs resolves
-        # azure-openai-* from Key Vault via kvSecret()'s az-CLI/OIDC path. No secret at rest.
+      - name: Fail on purpose
         run: |
-          AGENT_FLAG=""
-          if [ -n "${{ inputs.agent }}" ]; then AGENT_FLAG="--agent ${{ inputs.agent }}"; fi
-          set -o pipefail   # GitHub's default run shell is `bash -e` WITHOUT pipefail: a pipeline's exit code is tee's, not the command's. Without this line this monitor/gate CANNOT FAIL.
-          node run-evals.mjs $AGENT_FLAG --json "${GITHUB_WORKSPACE}/deploy-gate-scorecard.json" 2>&1 | tee "${GITHUB_WORKSPACE}/deploy-gate.log"
-
-      - name: Eval-gate vs last baseline
-        id: gate
-        if: always()
-        run: |
-          ENFORCE_FLAG=""
-          if [ "${{ inputs.enforce }}" = "true" ]; then ENFORCE_FLAG="--enforce"; fi
-          node skills/agent-evals/eval-gate.mjs "${GITHUB_WORKSPACE}/deploy-gate-scorecard.json" \
-            --baseline skills/agent-evals/baseline.json \
-            --tolerance "${{ inputs.tolerance }}" \
-            $ENFORCE_FLAG
-
-      - name: Upload scorecard + run log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: deploy-eval-gate-scorecard
-          path: |
-            deploy-gate-scorecard.json
-            deploy-gate.log
-          retention-days: 30
-          if-no-files-found: warn
+          echo "Retired: Azure was deleted on 2026-08-13; see .github/workflows/nightly-eval.yml (same eval gate, report only, AWS auth)"
+          echo "::error title=deploy-eval-gate is retired::Azure was deleted on 2026-08-13; see .github/workflows/nightly-eval.yml (same eval gate, report only, AWS auth)"
+          exit 1
