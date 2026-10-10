@@ -540,7 +540,11 @@ for a in "${ALL_ALARMS[@]}"; do
   if [[ "$OWNED" == *" $a "* ]] && ! in_list "$a" "${WANT[@]}"; then REMOVE+=("$a"); fi
 done
 if [ "${#REMOVE[@]}" -gt 0 ]; then
-  echo "  These alarms were installed by an earlier run, but the script cannot find what they watch now:"
+  if [ "$BRAIN_ONLY" = "yes" ]; then
+    echo "  These alarms were installed by an earlier run, and --brain-only would leave them out:"
+  else
+    echo "  These alarms were installed by an earlier run, but the script cannot find what they watch now:"
+  fi
   for a in "${REMOVE[@]}"; do echo "    - $a"; done
   stop "the script will not remove existing alarms by itself. Nothing was changed. Copy this screen and send it to the CTO."
 fi
