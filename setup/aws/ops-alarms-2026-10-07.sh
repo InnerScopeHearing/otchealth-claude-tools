@@ -14,8 +14,13 @@
 #         otchealth-brain-writes-blocked         the brain refuses new writes
 #         otchealth-brain-low-storage            a brain data server has under 20 percent of its disk free
 #   The script finds the gateway load balancer and the brain disk size on its own (nothing is
-#   hard-coded). If it cannot find one of the two, or CloudWatch has no data for it yet, it says so
-#   (WARN) and installs only the other group.
+#   hard-coded). The gateway is the ECS service otchealth-gateway in cluster otchealth. If no ACTIVE
+#   service has that name, the one ACTIVE service in the cluster whose task definition family is
+#   otchealth-gateway is used. If there is none, or more than one, the script STOPS before it changes
+#   anything (FAIL); installing only the brain alarms in that case needs the explicit option
+#   --brain-only. If that service is found but the load balancer behind it cannot be found, or
+#   CloudWatch has no data for the gateway or for the brain yet, or the brain cannot be found, it says
+#   so (WARN) and installs only the other group.
 #   It never removes alarms an earlier run installed: if something it used to watch cannot be found
 #   now, it stops and asks you to tell the CTO.
 #   NOT touched on purpose: the AWS Budget, the ECS service, the load balancer, the OpenSearch
