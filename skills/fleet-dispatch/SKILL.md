@@ -51,6 +51,17 @@ Non-PHI coordination channel. Do NOT dispatch MNPI (INND securities), PHI, or cl
 content; route those in their own rings. The inbox is delete-after-read (low-volume hand-offs); a sender
 re-dispatches if needed. Fail-open: `check` never blocks or breaks a session.
 
+**`--spawn` writes to a public repo, so it is gated.** The spawned task text becomes a workflow input in a
+GitHub repo (claude-tools is public), visible to anyone, along with the run's branch and draft PR. Finance,
+legal and personal material never goes to a public repo (owner decision 2026-10-10). `--spawn` therefore
+passes the fail-closed gate in `setup/public-write-gate.mjs` first: only a technical task from the `cto` or
+`developer` lane is spawned. A task that reads as finance, legal, investor, deal, inside information, privileged, PHI or
+personal material, a task from any other lane, or one with no lane at all is refused (exit 2) before anything
+is queued or sent. Declare the lane with `--lane cto` (or `--from cto`), or run from a session whose identity
+is `cto` or `developer`. `--from` is checked as the author as well, so `--lane cto --from cfo` is refused. To
+hand sensitive work over, dispatch without `--spawn` (it stays in the private inbox) or record it in the
+private ledger (`memory_remember` type `finding`, or `task_create`).
+
 ## Wired into compute-allocator (task dispatches consult it)
 On a TASK dispatch (`--task`/`--spawn`), `send` now consults **compute-allocator** (`allocateComputeAsync`
 + `recentSignalsFor(to)`) and stamps a `compute` recommendation — `{ agents, model, useCritic, rationale }`,

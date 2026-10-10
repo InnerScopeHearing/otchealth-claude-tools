@@ -245,6 +245,9 @@ jobs:
             tail -100 /tmp/index_output.log 2>/dev/null || echo "(no index_output.log)"
             echo '```'
           } > diagnostics/pull-log.md
+          # Public repo write gate (owner decision 2026-10-10): this workflow handles material in a sensitive
+          # category, so its output is never committed to a public repo. The ring lane below makes the gate refuse.
+          node setup/public-write-gate.mjs files --lane clo-personal --writer "diagnostic workflow" diagnostics/pull-log.md || exit 1
           git config user.name "cto-diagnostic-bot"
           git config user.email "cto-bot@otchealth.app"
           git fetch origin diag-connector-toolset-latest 2>/dev/null || true

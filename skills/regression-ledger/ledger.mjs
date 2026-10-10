@@ -17,8 +17,20 @@
 // Usage:
 //   node ledger.mjs add --tag <root-cause-tag> --bug "<one-line>" --root-cause "<why, not just what>"
 //        --fix-repo <owner/repo> --fix-commit <sha> --fix-summary "<one-line>" [--verified-by "<how>"]
+//        [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]
 //   node ledger.mjs check <tag>                 # has this root-cause tag ever appeared before?
 //   node ledger.mjs list [--json]                # dump all entries
+//
+// PUBLIC REPO RULE (owner decision 2026-10-10): this file writes to a PUBLIC repo. Finance, legal and
+// personal findings never go here. Every write verb (add, finding add, finding close) first passes the
+// fail-closed gate in setup/public-write-gate.mjs: only the cto and developer lanes may write, and an entry
+// marked finance, legal, investor, deal, inside information, privileged, PHI or personal (or from a ring lane, or with no
+// lane at all) is refused with exit 2 and nothing is written. Record those in the private ledger instead
+// (memory_remember with type finding, or task_create). Declare the lane with --lane, or run from a session
+// whose identity is cto or developer. The read verbs (check, list, finding list, finding check) are not gated,
+// and they do not need the gate file at all: it is loaded on the first write, not at import, so an install
+// where setup/public-write-gate.mjs is missing (the hydrate script only warns when that copy fails) can still
+// read the ledger. A write with no gate fails closed: exit 2, nothing written.
 //
 // Auth (2026-07-13): tries the CI job token (GITHUB_TOKEN), then the fleet-bot GitHub App token minted
 // from Key Vault (the canonical, always-fresh fleet identity), then the legacy github-user-pat — each
@@ -32,7 +44,8 @@
 // plus independent reread verify pattern, generalized into fetchFile/putFile/verifyCommitLanded below
 // so both ledgers share one write path instead of duplicating it.
 import crypto from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const OWNER = "InnerScopeHearing";
@@ -97,7 +110,69 @@ async function fetchFile(token, path) {
   return { content: Buffer.from(j.content, "base64").toString("utf8"), sha: j.sha };
 }
 
-async function putFile(token, path, newContent, sha, message) {
+// PUBLIC-WRITE GATE (owner decision 2026-10-10). This repo is public, so every write below goes through
+// setup/public-write-gate.mjs first. gatePublicWrite throws a refusal (exit 2 at the CLI, nothing written)
+// for anything that is not a technical entry from the cto or developer lane, and returns the approval that
+// putFile demands, so no caller can reach the Contents API without having passed the gate.
+//
+// The gate is loaded on first use, not at import: the read verbs never need it, so a missing gate file must
+// not take them down. With no gate, every write refuses (fail closed) and says how to restore it.
+const EXIT_REFUSED = 2;
+let gateModule; // undefined: not tried yet, null: tried and could not load
+async function loadGate() {
+  if (gateModule === undefined) {
+    try { gateModule = await import("../../setup/public-write-gate.mjs"); } catch { gateModule = null; }
+  }
+  return gateModule;
+}
+
+function gateUnavailable() {
+  const e = new Error(
+    "REFUSED: the ledger could not load the public-write gate (setup/public-write-gate.mjs), so nothing was written.\n" +
+    "Restore the file (run setup/hydrate-skills.sh, or pull the toolkit) and retry. Reading the ledger still works without it.",
+  );
+  e.refused = true;
+  e.exitCode = EXIT_REFUSED;
+  e.decision = { allowed: false, class: "gate-unavailable", field: null, reason: "the public-write gate could not be loaded" };
+  return e;
+}
+
+async function gatePublicWrite(writer, fields, text) {
+  const gate = await loadGate();
+  if (!gate) throw gateUnavailable();
+  return gate.assertPublicWriteAllowed({
+    lane: fields.lane,
+    seats: fields.seats,
+    author: fields.author,
+    category: fields.category,
+    tags: fields.tags,
+    text,
+  }, writer);
+}
+
+// Fail-open result shape for the findings API: a refusal is reported as ok:false with refused:true.
+function failure(e) {
+  if (e && e.refused) return { ok: false, refused: true, error: e.message, refusal: e.decision };
+  return { ok: false, error: e && e.message ? e.message : String(e) };
+}
+
+// The CLI declares its lane with --lane (else it falls back to the session identity) and passes the session
+// identities as seats, so a declared lane cannot hide the seat the process really runs as. Only the CLI
+// wrappers call this, which keeps the exported functions free of ambient state. With no gate loaded the
+// declared fields are returned as they are: the write is refused right after, in gatePublicWrite.
+async function cliIdentity() {
+  const declared = { lane: val("--lane", ""), author: val("--author", ""), category: val("--category", ""), tags: val("--tags", "") };
+  const gate = await loadGate();
+  if (!gate) return declared;
+  const { lane, seats, author, category, tags } = gate.entryForCli(declared, gate.ambientIdentities());
+  return { lane, seats, author, category, tags };
+}
+
+/** The single write path to the public repo. Requires the approval minted by the public-write gate, and
+ *  refuses before any network use when it is missing, so a future caller cannot skip the gate. Exported for tests. */
+export async function putFile(token, path, newContent, sha, message, approval) {
+  const gate = await loadGate();
+  if (!gate || !gate.isApproval(approval)) throw new Error("refused: this write did not pass the public-write gate (setup/public-write-gate.mjs), so nothing was written");
   const putRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`, {
     method: "PUT",
     headers: { ...ghHeaders(token), "Content-Type": "application/json" },
@@ -167,6 +242,38 @@ function renderEntry({ ts, tag, bug, rootCause, fixRepo, fixCommit, fixSummary, 
 `;
 }
 
+/** Record one bug in REGRESSION-LEDGER.md. Throws on a network or auth failure, exactly as the CLI always has.
+ *  A refused entry (see setup/public-write-gate.mjs) is NOT thrown: it resolves to { ok:false, refused:true,
+ *  error } before any token or network use, and nothing is written. `deps` lets tests inject the I/O. */
+export async function addRegression(fields, deps = {}) {
+  const { tag, bug, rootCause, fixRepo, fixCommit, fixSummary } = fields;
+  const verifiedBy = fields.verifiedBy || "";
+  if (!tag || !bug || !rootCause || !fixRepo || !fixCommit || !fixSummary) {
+    throw new Error("tag, bug, rootCause, fixRepo, fixCommit and fixSummary are all required");
+  }
+  let approval;
+  try {
+    approval = await gatePublicWrite("ledger add", fields, { tag, bug, root_cause: rootCause, fix_repo: fixRepo, fix_commit: fixCommit, fix_summary: fixSummary, verified_by: verifiedBy });
+  } catch (e) {
+    if (e && e.refused) return failure(e);
+    throw e;
+  }
+  const io = { pat, fetchLedger, putFile, verifyCommitLanded, ...deps };
+  const token = await io.pat();
+  const { content, sha } = await io.fetchLedger(token);
+  const existing = parseEntries(content);
+  const priorHits = existing.filter((e) => e.tag === tag);
+  const ts = new Date().toISOString().slice(0, 16) + "Z";
+  const entryMd = renderEntry({ ts, tag, bug, rootCause, fixRepo, fixCommit, fixSummary, verifiedBy, priorHits });
+  const newContent = (content || HEADER).replace(/\n*$/, "\n\n") + entryMd;
+
+  const { commitSha } = await io.putFile(token, PATH, newContent, sha, `regression-ledger: ${priorHits.length ? "REGRESSION" : "new"} tag:${tag}: ${bug}`, approval);
+
+  // Verify via an independent read before reporting success -- never trust the push response alone.
+  const verifiedLanded = await io.verifyCommitLanded(token, PATH, commitSha);
+  return { ok: true, tag, ts, priorHits, commitSha, verifiedLanded };
+}
+
 async function cmdAdd() {
   const tag = val("--tag");
   const bug = val("--bug");
@@ -176,21 +283,12 @@ async function cmdAdd() {
   const fixSummary = val("--fix-summary");
   const verifiedBy = val("--verified-by", "");
   if (!tag || !bug || !rootCause || !fixRepo || !fixCommit || !fixSummary) {
-    console.error("usage: ledger.mjs add --tag <tag> --bug \"...\" --root-cause \"...\" --fix-repo <owner/repo> --fix-commit <sha> --fix-summary \"...\" [--verified-by \"...\"]");
+    console.error("usage: ledger.mjs add --tag <tag> --bug \"...\" --root-cause \"...\" --fix-repo <owner/repo> --fix-commit <sha> --fix-summary \"...\" [--verified-by \"...\"] [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]");
     process.exit(2);
   }
-  const token = await pat();
-  const { content, sha } = await fetchLedger(token);
-  const existing = parseEntries(content);
-  const priorHits = existing.filter((e) => e.tag === tag);
-  const ts = new Date().toISOString().slice(0, 16) + "Z";
-  const entryMd = renderEntry({ ts, tag, bug, rootCause, fixRepo, fixCommit, fixSummary, verifiedBy, priorHits });
-  const newContent = (content || HEADER).replace(/\n*$/, "\n\n") + entryMd;
-
-  const { commitSha } = await putFile(token, PATH, newContent, sha, `regression-ledger: ${priorHits.length ? "REGRESSION" : "new"} tag:${tag} — ${bug}`);
-
-  // Verify via an independent read before reporting success -- never trust the push response alone.
-  const verifiedLanded = await verifyCommitLanded(token, PATH, commitSha);
+  const res = await addRegression({ tag, bug, rootCause, fixRepo, fixCommit, fixSummary, verifiedBy, ...(await cliIdentity()) });
+  if (res.refused) { console.error(res.error); process.exitCode = EXIT_REFUSED; return; }
+  const { priorHits, commitSha, verifiedLanded } = res;
 
   if (priorHits.length) {
     console.log(`[ledger] REGRESSION recorded: tag:${tag} has fired ${priorHits.length + 1} time(s) now (prior: ${priorHits.map((h) => h.ts).join(", ")}).`);
@@ -245,9 +343,10 @@ async function cmdList() {
 // Verbs:
 //   node ledger.mjs finding add --severity <critical|high|medium|low> --source-audit-doc "<path>"
 //        --title "<one-line>" [--id <id>] [--status open|fixed|wontfix] [--fix-commit <sha>]
-//        [--verified-by "<how>"]
+//        [--verified-by "<how>"] [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]
 //   node ledger.mjs finding list [--status <s>] [--severity <s>] [--source <substring>] [--json]
 //   node ledger.mjs finding close <id> [--status fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"]
+//        [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]
 //   node ledger.mjs finding check [<id-or-source-substring>]   # the reconcile gate, see SKILL.md
 //
 // Fail-open contract: addFinding/closeFinding/reconcileOpenFindings NEVER throw into an importing
@@ -403,16 +502,30 @@ export function reconcileSummary(findings) {
  *  verified } once the write has landed AND been independently confirmed via a reread (same
  *  discipline as the bug ledger's add). Exported so a future caller (an audit script, a hook) can
  *  file findings as a side effect without risking its own primary task on this ledger being
- *  reachable. */
-export async function addFinding(fields) {
+ *  reachable.
+ *
+ *  PUBLIC REPO GATE: the ledger lives in a public repo, so after input validation and before any token or
+ *  network use the entry must pass setup/public-write-gate.mjs. A caller must supply `fields.lane` (cto or
+ *  developer); a missing lane, a ring lane, or a finance, legal, investor, deal, inside information, privileged, PHI or
+ *  personal marker resolves to { ok:false, refused:true, error } and nothing is written. Use the private
+ *  ledger (memory_remember type finding, or task_create) for those. `deps` lets tests inject the I/O. */
+export async function addFinding(fields, deps = {}) {
   try {
     assertSeverity(fields.severity);
     const status = fields.status || "open";
     assertFindingStatus(status);
     if (!fields.source_audit_doc) throw new Error("source_audit_doc is required");
     if (!fields.title) throw new Error("title is required");
-    const token = await pat();
-    const { content, sha } = await fetchFile(token, FINDINGS_PATH);
+    const approval = await gatePublicWrite("ledger finding add", fields, {
+      id: fields.id,
+      title: fields.title,
+      source_audit_doc: fields.source_audit_doc,
+      fix_commit: fields.fix_commit,
+      verified_by: fields.verified_by,
+    });
+    const io = { pat, fetchFile, putFile, verifyCommitLanded, ...deps };
+    const token = await io.pat();
+    const { content, sha } = await io.fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);
     const id = fields.id || genFindingId();
     if (existing.some((f) => f.id === id)) {
@@ -431,25 +544,37 @@ export async function addFinding(fields) {
       closed: status !== "open" ? now : null,
     };
     const { content: newContent } = upsertFinding(content, finding);
-    const { commitSha } = await putFile(token, FINDINGS_PATH, newContent, sha, `findings-ledger: add ${id} severity=${finding.severity}: ${finding.title}`);
-    const verified = await verifyCommitLanded(token, FINDINGS_PATH, commitSha);
+    const { commitSha } = await io.putFile(token, FINDINGS_PATH, newContent, sha, `findings-ledger: add ${id} severity=${finding.severity}: ${finding.title}`, approval);
+    const verified = await io.verifyCommitLanded(token, FINDINGS_PATH, commitSha);
     return { ok: true, finding, commitSha, verified };
   } catch (e) {
-    return { ok: false, error: e.message };
+    return failure(e);
   }
 }
 
-/** Close (fixed or wontfix) an existing finding by id. Fail-open, same contract as addFinding. */
-export async function closeFinding(id, fields = {}) {
+/** Close (fixed or wontfix) an existing finding by id. Fail-open, same contract as addFinding, and the same
+ *  public repo gate: the caller's own lane and text are vetted before any network use, and then the existing
+ *  entry is vetted too, because the commit message below carries its title. An existing entry that is itself in a
+ *  sensitive category is refused and left untouched (the owner handles those), without its text being echoed. */
+export async function closeFinding(id, fields = {}, deps = {}) {
   try {
     const status = fields.status || "fixed";
     assertFindingStatus(status);
     if (status === "open") throw new Error('status for close must be "fixed" or "wontfix", not "open"');
-    const token = await pat();
-    const { content, sha } = await fetchFile(token, FINDINGS_PATH);
+    await gatePublicWrite("ledger finding close", fields, { id, fix_commit: fields.fix_commit, verified_by: fields.verified_by });
+    const io = { pat, fetchFile, putFile, verifyCommitLanded, ...deps };
+    const token = await io.pat();
+    const { content, sha } = await io.fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);
     const found = existing.find((f) => f.id === id);
     if (!found) return { ok: false, error: `finding ${id} not found, run "finding list" to see valid ids` };
+    const approval = await gatePublicWrite("ledger finding close (existing entry)", fields, {
+      id: found.id,
+      title: found.title,
+      source_audit_doc: found.source_audit_doc,
+      fix_commit: found.fix_commit,
+      verified_by: found.verified_by,
+    });
     const now = new Date().toISOString();
     const updated = {
       ...found,
@@ -459,11 +584,11 @@ export async function closeFinding(id, fields = {}) {
       closed: now,
     };
     const { content: newContent } = upsertFinding(content, updated);
-    const { commitSha } = await putFile(token, FINDINGS_PATH, newContent, sha, `findings-ledger: ${status} ${id}: ${updated.title}`);
-    const verified = await verifyCommitLanded(token, FINDINGS_PATH, commitSha);
+    const { commitSha } = await io.putFile(token, FINDINGS_PATH, newContent, sha, `findings-ledger: ${status} ${id}: ${updated.title}`, approval);
+    const verified = await io.verifyCommitLanded(token, FINDINGS_PATH, commitSha);
     return { ok: true, finding: updated, wasStatus: found.status, commitSha, verified };
   } catch (e) {
-    return { ok: false, error: e.message };
+    return failure(e);
   }
 }
 
@@ -501,10 +626,11 @@ async function cmdFindingAdd() {
   const fixCommit = val("--fix-commit", "");
   const verifiedBy = val("--verified-by", "");
   if (!severity || !source || !title) {
-    console.error('usage: ledger.mjs finding add --severity <critical|high|medium|low> --source-audit-doc "<path>" --title "<one-line>" [--id <id>] [--status open|fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"]');
+    console.error('usage: ledger.mjs finding add --severity <critical|high|medium|low> --source-audit-doc "<path>" --title "<one-line>" [--id <id>] [--status open|fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"] [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]');
     process.exit(2);
   }
-  const res = await addFinding({ id: idArg || undefined, severity, source_audit_doc: source, title, status, fix_commit: fixCommit || null, verified_by: verifiedBy || null });
+  const res = await addFinding({ id: idArg || undefined, severity, source_audit_doc: source, title, status, fix_commit: fixCommit || null, verified_by: verifiedBy || null, ...(await cliIdentity()) });
+  if (res.refused) { console.error(res.error); process.exitCode = EXIT_REFUSED; return; }
   if (!res.ok) { console.error(`[ledger] finding add ERROR: ${res.error}`); process.exitCode = 1; return; }
   console.log(`[ledger] finding ${res.finding.id} added (severity:${res.finding.severity} status:${res.finding.status}) source:${res.finding.source_audit_doc}`);
   console.log(`[ledger] commit ${res.commitSha} -- independently verified via commit-history read: ${res.verified ? "CONFIRMED" : "NOT CONFIRMED (check manually)"}`);
@@ -529,8 +655,9 @@ async function cmdFindingClose() {
   const status = val("--status", "fixed");
   const fixCommit = val("--fix-commit", "");
   const verifiedBy = val("--verified-by", "");
-  if (!id) { console.error('usage: ledger.mjs finding close <id> [--status fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"]'); process.exit(2); }
-  const res = await closeFinding(id, { status, fix_commit: fixCommit || null, verified_by: verifiedBy || null });
+  if (!id) { console.error('usage: ledger.mjs finding close <id> [--status fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"] [--lane <cto|developer>] [--author <a>] [--category <c>] [--tags a,b]'); process.exit(2); }
+  const res = await closeFinding(id, { status, fix_commit: fixCommit || null, verified_by: verifiedBy || null, ...(await cliIdentity()) });
+  if (res.refused) { console.error(res.error); process.exitCode = EXIT_REFUSED; return; }
   if (!res.ok) { console.error(`[ledger] finding close ERROR: ${res.error}`); process.exitCode = 1; return; }
   console.log(`[ledger] finding ${id}: ${res.wasStatus} -> ${res.finding.status}`);
   console.log(`[ledger] commit ${res.commitSha} -- independently verified via commit-history read: ${res.verified ? "CONFIRMED" : "NOT CONFIRMED (check manually)"}`);
@@ -562,10 +689,22 @@ async function cmdFindingCheck() {
 // Guard the CLI dispatch so importing this file for its exported functions (parseFindings,
 // renderFinding, upsertFinding, filterFindings, reconcileSummary, addFinding, closeFinding,
 // reconcileOpenFindings -- the finding tests do exactly this) never triggers a CLI run / process.exit.
-// Mirrors decision-clock.mjs's isMain guard verbatim; behavior when run directly is unchanged (this
-// file is still its own entry point in every existing invocation).
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
+// Behavior when run directly is unchanged (this file is still its own entry point in every existing
+// invocation). The old guard compared import.meta.url (the real path node resolves a symlink to) with
+// process.argv[1] as typed, so a symlinked start made it false and the CLI silently did nothing and exited 0.
+// Both sides are compared as real paths here.
+function isEntryPoint() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    const self = fileURLToPath(import.meta.url);
+    let a;
+    let b;
+    try { a = realpathSync(entry); b = realpathSync(self); } catch { a = entry; b = self; }
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  } catch { return false; }
+}
+if (isEntryPoint()) {
   (async () => {
     try {
       if (cmd === "add") await cmdAdd();

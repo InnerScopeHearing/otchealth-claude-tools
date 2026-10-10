@@ -14,6 +14,14 @@
 // RING-SAFE: the inbox lives in the shared commons (non-PHI). Do not dispatch MNPI/PHI/privileged
 // content; this is a coordination channel, not a data channel. Fail-open on read paths.
 //
+// PUBLIC REPO RULE (owner decision 2026-10-10): --spawn writes the task text into a workflow dispatch in a
+// GitHub repo (claude-tools is public), where the run inputs, the run's branch and its draft PR are visible to
+// anyone. So --spawn first passes the fail-closed gate in setup/public-write-gate.mjs: only a technical task
+// from the cto or developer lane may be spawned. A task that reads as finance, legal, investor, deal, inside information,
+// privileged, PHI or personal material, or comes from any other lane, is refused (exit 2) before anything is
+// queued or sent; run the same dispatch without --spawn to queue it in the private inbox instead. Declare the
+// lane with --lane (or --from), or run from a session whose identity is cto or developer.
+//
 // STORAGE (ported to S3, 2026-08-27): the inbox used to live in Azure Blob (otchealthcommons/
 // company-journal, account-SAS'd directly in this file). That storage account died with the Azure
 // subscription deletion (2026-08-13). Now routes through skills/kb-memory/commons-store.mjs, the
@@ -26,7 +34,7 @@
 // part of this port.
 //
 // Verbs:
-//   node dispatch.mjs send <to> "<message/task>" [--from <a>] [--task] [--spawn [--repo <r>] [--minutes N]]
+//   node dispatch.mjs send <to> "<message/task>" [--from <a>] [--task] [--spawn [--repo <r>] [--minutes N] [--lane <cto|developer>]]
 //   node dispatch.mjs check --agent <self>        # surface + ACK this agent's inbox (wired into SessionStart)
 //   node dispatch.mjs list [--agent <a>]          # operator view of pending dispatches
 import { execFileSync } from "node:child_process";
@@ -89,6 +97,30 @@ async function send() {
   const to = (positional[0] || "").toLowerCase();
   const text = positional.slice(1).join(" ").trim();
   if (!to || !text) { console.error('usage: dispatch.mjs send <to-agent> "<message/task>" [--from <a>] [--task] [--spawn]'); process.exit(2); }
+  // PUBLIC-WRITE GATE for --spawn (see the header). Loaded only here so check/list, which run at every session
+  // start, never depend on it; if it cannot load, a spawn fails closed. Nothing is queued or sent on refusal.
+  if (FLAG("--spawn")) {
+    let gate;
+    try { gate = await import("../../setup/public-write-gate.mjs"); } catch {
+      console.error("REFUSED: fleet-dispatch --spawn could not load the public-write gate (setup/public-write-gate.mjs), so nothing was sent.");
+      process.exit(2);
+    }
+    try {
+      gate.assertPublicWriteAllowed(gate.entryForCli({
+        lane: val("--lane", "") || val("--from", ""),
+        author: val("--from", ""),
+        category: to,
+        text: { task: text, repo: val("--repo", "otchealth-claude-tools") },
+      }, gate.ambientIdentities()), "fleet-dispatch --spawn");
+    } catch (e) {
+      if (e && e.refused) {
+        console.error(e.message);
+        console.error("To hand the work over without publishing it, run the same dispatch without --spawn: it queues in the private inbox.");
+        process.exit(gate.EXIT_REFUSED);
+      }
+      throw e;
+    }
+  }
   const from = (val("--from", "") || process.env.KB_AGENT || "cto").toLowerCase();
   const rows = fromNd(await cGet(inboxKey(to)));
   const d = new Date().toISOString();
