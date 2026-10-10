@@ -29,7 +29,10 @@
 # HOW TO RUN: download this file and run it with bash (do not paste its body into the shell):
 #       bash ops-alarms-2026-10-07.sh --email you@example.com
 #   --email is required: it is the address that receives the alarm emails. There is no default
-#   (no address is stored in this file) and no environment variable is read.
+#   (no address is stored in this file) and it is never read from the environment.
+#   --brain-only is optional, and only for when the CTO asks for it: it installs just the 3 brain
+#   alarms and does not look for the gateway at all.
+#   The environment variable ECS_SERVICE can name a different gateway service (rarely needed).
 # SAFE TO RE-RUN: it looks everything up again; the stack changes only if something is different.
 #   It does not repair an alarm that someone deleted or edited by hand: for that, delete the stack
 #   (the ROLLBACK line) and run the script again.
