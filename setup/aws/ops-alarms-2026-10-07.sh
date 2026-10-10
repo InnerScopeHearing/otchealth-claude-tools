@@ -302,6 +302,7 @@ discover_gateway() {
   local s total healthy
   local tgs=() states=()
   echo "Gateway (ECS service $ECS_SERVICE in cluster $ECS_CLUSTER):"
+  resolve_gateway_service
   if ! try_aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
       --query 'services[0].[status,desiredCount,runningCount,taskDefinition]' --output text; then
     if [[ "$ERRTXT" == *ClusterNotFoundException* ]]; then
