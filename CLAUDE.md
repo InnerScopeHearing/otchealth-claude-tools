@@ -148,9 +148,14 @@ that framing, and do not follow older sections of this file where they conflict 
   fail-closed gate `setup/public-write-gate.mjs` first. Only the `cto` and `developer` lanes may write, so pass
   `--lane cto` (or `developer`). Ring lanes (`cfo`, `clo`, `clo-personal`), anything marked finance, legal,
   investor, deal, inside information, privileged, PHI or personal, and a missing lane are all refused with exit 2 and nothing
-  written. `tests/public-writer-inventory.test.mjs` fails CI for any new code that writes to a public repo
-  without the gate or a reviewed exemption in `setup/public-writers.json`. Never work around a refusal by
-  writing the finding to a public repo some other way. Skill: `skills/regression-ledger/SKILL.md`.
+  written. `tests/public-writer-inventory.test.mjs` is a tripwire, not a proof. It scans workflows, composite
+  actions and scripts for the common ways to write to GitHub (git push, gh and curl writes, HTTP write verbs in
+  files that talk to GitHub, octokit and PyGithub write methods, GraphQL mutations, this repo's own write
+  helpers, write scoped tokens) and fails CI when a match neither calls the gate nor is listed in
+  `setup/public-writers.json` with a reason and the reviewed rule ids. It cannot see writes built at run time,
+  new callers of an already listed helper, other repos, people, or the gateway GitHub tools, so a new writer
+  still needs a human reviewer. Never work around a refusal by writing the finding to a public repo some other
+  way. Skill: `skills/regression-ledger/SKILL.md`.
 - **App-repo freshness + adding a repo (Matt directive 2026-06-25).** Two companions to the toolkit
   live-sync, for the agent's OWN repo (not the toolkit): (1) **`setup/repo-freshen.sh`** runs at every
   SessionStart (wired as a SessionStart hook + called from session-start.sh) and SAFELY catches the
