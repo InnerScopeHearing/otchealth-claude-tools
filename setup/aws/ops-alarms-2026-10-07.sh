@@ -313,8 +313,7 @@ discover_gateway() {
   fi
   read -r status desired running taskdef <<<"$OUT"
   if [ -z "$status" ] || [ "$status" = "None" ]; then
-    GATEWAY_WHY="the ECS service $ECS_SERVICE was not found in cluster $ECS_CLUSTER"
-    return 0
+    gateway_stop "the gateway's ECS service was not found: the ECS service $ECS_SERVICE is no longer in cluster $ECS_CLUSTER."
   fi
   family="${taskdef##*/}"
   echo "  Service        : $status, $running running of $desired wanted"
