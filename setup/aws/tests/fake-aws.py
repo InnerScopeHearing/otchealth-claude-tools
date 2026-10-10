@@ -436,6 +436,60 @@ def iam_create_login_profile(world, flags):
     return "{}"
 
 
+def glob_match(pattern, value, fold=False):
+    """IAM wildcard matching: * is any run of characters and ? is any one character. Action names ignore case."""
+    if fold:
+        pattern, value = pattern.lower(), value.lower()
+    regex = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern)
+    return re.fullmatch(regex, value, re.S) is not None
+
+
+def listed(value):
+    """A policy element that may be one string or a list of strings, as a list."""
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
+def attached_documents(world, who_arn):
+    """(source, document) for the default version of every customer managed policy attached to the user or role in the
+    pretend account, and for every inline policy on it. AWS managed policies (ViewOnlyAccess and so on) are not modelled:
+    their text is not part of the pretend account."""
+    match = re.match(r"^arn:aws:iam::[0-9]+:(user|role)/(.+)$", who_arn)
+    if not match:
+        raise Gap("cannot tell which user or role %r is" % who_arn)
+    key = "%s:%s" % (match.group(1), match.group(2).rsplit("/", 1)[-1])
+    found = []
+    for arn in world["iam"]["attached"].get(key, []):
+        for entry in world["iam"]["policies"].values():
+            if entry["arn"] == arn:
+                found.append((arn, [v["doc"] for v in entry["versions"] if v["default"]][0]))
+    for name, doc in sorted(world["iam"]["inline"].get(key, {}).items()):
+        found.append(("inline policy " + name, doc))
+    return found
+
+
+def evaluate(world, who_arn, action, resource):
+    """allowed | implicitDeny | explicitDeny, by the IAM rule: an explicit Deny beats any Allow, and no Allow means no access.
+    Conditions, NotAction, NotResource, Principal and permissions boundaries are not modelled: a policy that uses one
+    is a Gap (a loud failure), never a guess."""
+    allowed = False
+    for source, doc in attached_documents(world, who_arn):
+        statements = doc["Statement"]
+        for statement in [statements] if isinstance(statements, dict) else statements:
+            for unsupported in ("NotAction", "NotResource", "Condition", "Principal"):
+                if unsupported in statement:
+                    raise Gap("the pretend simulator does not model %s (policy %s)" % (unsupported, source))
+            if not any(glob_match(p, action, fold=True) for p in listed(statement.get("Action"))):
+                continue
+            if not any(p == "*" or glob_match(p, resource) for p in listed(statement.get("Resource"))):
+                continue
+            if statement.get("Effect") == "Deny":
+                return "explicitDeny"
+            allowed = True
+    return "allowed" if allowed else "implicitDeny"
+
+
 def iam_simulate(world, flags):
     who = one(flags, "policy-source-arn", "")
     action = one(flags, "action-names", "")
@@ -446,6 +500,8 @@ def iam_simulate(world, flags):
         decision = "explicitDeny"
     elif action in ALLOWED:
         decision = "allowed"
+    elif action.split(":", 1)[0].lower() in EVALUATED_SERVICES:
+        decision = evaluate(world, who, action, resource)
     elif action == "iam:EnableMFADevice":
         decision = "allowed" if (who == user_arn and resource == user_arn) else "implicitDeny"
     elif action == "sts:AssumeRole":
