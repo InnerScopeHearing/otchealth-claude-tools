@@ -58,8 +58,9 @@ passes the fail-closed gate in `setup/public-write-gate.mjs` first: only a techn
 `developer` lane is spawned. A task that reads as finance, legal, investor, deal, inside information, privileged, PHI or
 personal material, a task from any other lane, or one with no lane at all is refused (exit 2) before anything
 is queued or sent. Declare the lane with `--lane cto` (or `--from cto`), or run from a session whose identity
-is `cto` or `developer`. To hand sensitive work over, dispatch without `--spawn` (it stays in the private
-inbox) or record it in the private ledger (`memory_remember` type `finding`, or `task_create`).
+is `cto` or `developer`. `--from` is checked as the author as well, so `--lane cto --from cfo` is refused. To
+hand sensitive work over, dispatch without `--spawn` (it stays in the private inbox) or record it in the
+private ledger (`memory_remember` type `finding`, or `task_create`).
 
 ## Wired into compute-allocator (task dispatches consult it)
 On a TASK dispatch (`--task`/`--spawn`), `send` now consults **compute-allocator** (`allocateComputeAsync`
