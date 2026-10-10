@@ -10,11 +10,11 @@
 // (findings.test.mjs) are untouched and still pass.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, copyFileSync, symlinkSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { addFinding, closeFinding, addRegression, putFile, upsertFinding, parseFindings } from "../ledger.mjs";
 import { assertPublicWriteAllowed, isApproval } from "../../../setup/public-write-gate.mjs";
 
@@ -409,6 +409,97 @@ test("CLI: the usage errors are unchanged and now mention the lane flag", () => 
   assert.match(addUsage.stderr, /usage: ledger\.mjs add/);
 });
 
+// ---- a missing gate file must not take the read side down, and a write must fail closed ----
+
+/** A throw away copy of the skill with NO setup/public-write-gate.mjs next to it, the way a failed hydrate leaves it. */
+function installWithoutGate() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "ledger-nogate-")));
+  mkdirSync(join(dir, "skills", "regression-ledger"), { recursive: true });
+  mkdirSync(join(dir, "skills", "kb-memory"), { recursive: true });
+  copyFileSync(LEDGER_PATH, join(dir, "skills", "regression-ledger", "ledger.mjs"));
+  writeFileSync(join(dir, "skills", "kb-memory", "azure-secret.mjs"), "export async function kvSecret() { return null; }\n");
+  return { dir, ledger: join(dir, "skills", "regression-ledger", "ledger.mjs") };
+}
+
+test("without the gate file the module still loads and the read helpers work, and every write refuses before any I/O", async () => {
+  const { dir, ledger } = installWithoutGate();
+  try {
+    const mod = await import(pathToFileURL(ledger).href);
+    const finding = { id: "FND-20260101-aaaa", severity: "low", status: "open", title: "a technical note", source_audit_doc: "docs/audit.md", fix_commit: null, verified_by: null, opened: "2026-01-01T00:00:00.000Z", closed: null };
+    const { content } = upsertFinding(null, finding);
+    assert.equal(mod.parseFindings(content).length, 1, "a read helper works with no gate present");
+
+    const { deps, calls } = makeIo({ content, sha: "s1" });
+    const add = await mod.addFinding({ ...BASE, lane: "cto" }, deps);
+    assert.equal(add.ok, false);
+    assert.equal(add.refused, true);
+    assert.match(add.error, /could not load the public-write gate/);
+    const close = await mod.closeFinding("FND-20260101-aaaa", { lane: "cto" }, deps);
+    assert.equal(close.refused, true);
+    const reg = await mod.addRegression({ tag: "t", bug: "b", rootCause: "r", fixRepo: "o/r", fixCommit: "abc", fixSummary: "s", lane: "cto" }, deps);
+    assert.equal(reg.refused, true);
+    assert.ok(untouched(calls), "no token, no read, no write");
+
+    const originalFetch = global.fetch;
+    global.fetch = async () => { throw new Error("the network must not be reached"); };
+    try {
+      await assert.rejects(() => mod.putFile("tok", "X.md", "c", null, "m", {}), /public-write gate/);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI without the gate file: the CLI still starts, write verbs exit 2 and say how to restore the gate", () => {
+  const { dir, ledger } = installWithoutGate();
+  try {
+    const run = (args) => spawnSync(process.execPath, [ledger, ...args], {
+      env: { PATH: process.env.PATH, HOME: dir, HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" },
+      encoding: "utf8",
+      timeout: 20000,
+    });
+    const usage = run(["bogus"]);
+    assert.equal(usage.status, 2);
+    assert.match(usage.stderr, /usage: ledger\.mjs add/, "the CLI ran, so the module loaded without the gate");
+    assert.ok(!/ERR_MODULE_NOT_FOUND|Cannot find module/.test(usage.stderr));
+    for (const args of [[...FINDING_ARGS, "--lane", "cto"], [...ADD_ARGS, "--lane", "cto"], ["finding", "close", "FND-20260101-aaaa", "--lane", "cto"]]) {
+      const r = run(args);
+      assert.equal(r.status, 2, r.stderr);
+      assert.equal(r.stdout, "");
+      assert.match(r.stderr, /could not load the public-write gate/);
+      assert.match(r.stderr, /nothing was written/i);
+      assert.ok(!/GitHub token|regression-ledger ERROR/.test(r.stderr), "refused before any token or network use");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- started through a symlink ----
+
+test("CLI through a symlink: it still runs (the old guard made it a silent exit 0)", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "ledger-link-")));
+  try {
+    const link = join(dir, "ledger-link.mjs");
+    symlinkSync(LEDGER_PATH, link);
+    const run = (args) => spawnSync(process.execPath, [link, ...args], {
+      env: { PATH: process.env.PATH, HOME: dir, CLAUDE_PROJECT_DIR: dir, HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" },
+      cwd: dir,
+      encoding: "utf8",
+      timeout: 20000,
+    });
+    const usage = run(["bogus"]);
+    assert.equal(usage.status, 2, `usage must be printed with exit 2 (stderr: ${usage.stderr})`);
+    assert.match(usage.stderr, /usage: ledger\.mjs add/);
+    assertRefusedCli(run([...FINDING_ARGS, "--lane", "cfo"]), "finding add, ring lane, through a symlink");
+    assertRefusedCli(run([...ADD_ARGS]), "add without a lane, through a symlink");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---- structure: the gate cannot be bypassed by a future edit that forgets it ----
 
 const SRC = readFileSync(LEDGER_PATH, "utf8");
@@ -453,8 +544,14 @@ test("structure: there is exactly one Contents API write, inside putFile, behind
 });
 
 test("structure: the CLI wrappers pass the lane and session identity to the exported functions", () => {
-  assert.equal((SRC.match(/\.\.\.cliIdentity\(\)/g) || []).length, 3, "add, finding add and finding close");
-  assert.ok(SRC.includes('from "../../setup/public-write-gate.mjs"'));
+  assert.equal((SRC.match(/\.\.\.\(await cliIdentity\(\)\)/g) || []).length, 3, "add, finding add and finding close");
+});
+
+test("structure: the gate is loaded lazily, once, and never by a static import (the read verbs must not need it)", () => {
+  const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(!/^\s*import\b[^;]*public-write-gate/m.test(code), "no static import of the gate");
+  assert.equal((code.match(/import\(\s*"\.\.\/\.\.\/setup\/public-write-gate\.mjs"\s*\)/g) || []).length, 1, "one dynamic import, inside loadGate");
+  assert.ok(/async function loadGate\(\)/.test(code));
 });
 
 test("structure: the read verbs (check, list, finding list, finding check, reconcile) are not gated", () => {
