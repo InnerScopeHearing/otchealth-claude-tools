@@ -61,6 +61,9 @@ jobs:
           set -uo pipefail
           mkdir -p diagnostics
           cp /tmp/force-ocr-output.log diagnostics/force-ocr-two-summaries.log 2>/dev/null || echo "(no log captured)" > diagnostics/force-ocr-two-summaries.log
+          # Public repo write gate (owner decision 2026-10-10): this workflow handles material in a sensitive
+          # category, so its output is never committed to a public repo. The ring lane below makes the gate refuse.
+          node setup/public-write-gate.mjs files --lane clo-personal --writer "diagnostic workflow" diagnostics/force-ocr-two-summaries.log || exit 1
           git config user.name "cto-diagnostic-bot"
           git config user.email "cto-bot@otchealth.app"
           git checkout -B diag-connector-toolset-latest
