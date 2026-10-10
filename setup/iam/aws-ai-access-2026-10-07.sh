@@ -15,6 +15,8 @@
 #          IAMUserChangePassword
 #        - customer managed policy otchealth-ai-reader-extras (a few more read calls: metrics,
 #          cost, alarms, ECS, load balancers, OpenSearch domain info, Lightsail instances)
+#        - customer managed policy otchealth-ai-reader-billing (read-only cost and billing; see
+#          COST AND BILLING below)
 #        - customer managed policy otchealth-ai-reader-deny (explicit Deny; wins over any Allow)
 #        - inline policy otchealth-ai-reader-self-mfa (the user may set up ITS OWN MFA device)
 #        - a console password written ONLY to ~/otchealth-ai-reader-initial-password.txt (mode
@@ -26,7 +28,7 @@
 #          name, the one ACTIVE service in the cluster whose task definition family is
 #          otchealth-gateway is used instead; none, or more than one, is a STOP before anything is
 #          written. Sessions last at most 1 hour.
-#        - Same read-only policies as the user (ViewOnlyAccess + extras + deny).
+#        - Same read-only policies as the user (ViewOnlyAccess + extras + billing + deny).
 #        - The task role gets ONE small inline policy, otchealth-assume-ai-reader-2026-10-07,
 #          that allows sts:AssumeRole on this one role and nothing else.
 #
@@ -36,6 +38,22 @@
 # function environment variables, instance user data and VPN keys, CloudFront origin headers, shell
 # or exec access, payment methods, and changes to IAM credentials or permissions. See the policy
 # text below.
+#
+# COST AND BILLING: READ ONLY (added 2026-10-09). The policy otchealth-ai-reader-billing has ONE Allow
+# statement, written as explicit action names (no wildcards), and every name is marked Read or List
+# in the AWS Service Authorization Reference: Cost Explorer reads (spend by service, forecasts, tags,
+# anomalies, cost categories, reservation and Savings Plans use, coverage and advice, right-sizing),
+# Budgets view, Savings Plans describe, Cost Optimization Hub reads, Compute Optimizer reads, the Price
+# List, and what the Billing console reads to show credits and bills (billing:, account:
+# GetAccountInformation, consolidatedbilling:, invoicing:ListInvoiceSummaries). Nothing in it can
+# create, change, buy, pay for or cancel anything. The retired aws-portal actions are not used (AWS
+# ended standard support for them in July 2023). The payment actions stay denied by the deny policy
+# below, and no tax or contact action is allowed, so the console Bills page may show a payments error
+# while the bill itself loads. The list, with the page that documents each action, is
+# setup/aws/tests/billing-read-actions.tsv; the tests fail when the policy and that list differ.
+# Owner steps this script cannot do: launch Cost Explorer once (console only), switch on "Activate IAM
+# Access" (account owner; only the Billing console pages need it, the cost reports do not), and opt in
+# to Cost Optimization Hub and Compute Optimizer (each is empty until then).
 #
 # KNOWN TRADE-OFF (kept on purpose): cloudtrail:LookupEvents and ecs:DescribeTasks stay ALLOWED.
 # CloudTrail events can show request parameters, and ECS task details can show per-run overrides, so
@@ -50,6 +68,10 @@
 # fails this check never gets a console password. A role is checked BEFORE anything on it is
 # changed: if it fails, it is left completely alone (its trust policy is not rewritten, nothing is
 # attached to it, and the gateway task role is not given permission to use it).
+# An identity made by an earlier version of this script (before the billing policy existed) passes this
+# check: the check only objects to what is NOT on the expected list, and the billing policy is on it.
+# This run then attaches the billing policy to that identity. Everything else is set again exactly as in
+# any re-run, and nothing is removed.
 #
 # HOW TO RUN: download this file and run it with bash (do not paste its body into the shell).
 # SAFE TO RE-RUN: every name is fixed; a re-run changes nothing that is already correct and never
@@ -70,6 +92,7 @@ READER_USER="otchealth-ai-reader"
 READER_ROLE="otchealth-ai-reader-role"
 EXTRAS_POLICY="otchealth-ai-reader-extras"
 DENY_POLICY="otchealth-ai-reader-deny"
+BILLING_POLICY="otchealth-ai-reader-billing"
 MFA_POLICY="otchealth-ai-reader-self-mfa"
 ASSUME_POLICY="otchealth-assume-ai-reader-2026-10-07"
 ECS_CLUSTER="otchealth"
@@ -91,6 +114,7 @@ MANAGED_ARNS=()
 
 EXTRAS_ARN="arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${EXTRAS_POLICY}"
 DENY_ARN="arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${DENY_POLICY}"
+BILLING_ARN="arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${BILLING_POLICY}"
 USER_ARN=""
 ROLE_ARN=""
 TASK_ROLE_ARN=""
@@ -101,6 +125,8 @@ PW_POLICY_JSON="{}"
 B_OK="no"
 ROLE_EXACT="yes"
 GRANT_OK="no"
+BILLING_USER_OK="no"
+BILLING_ROLE_OK="no"
 EXPECT_MANAGED=()
 EXPECT_INLINE=()
 EXACT_N=0
