@@ -7,11 +7,17 @@
 # WHAT IT DOES: syntax and lint checks on the scripts and on these test files, then runs each script from start to
 # finish against a PRETEND AWS account (fake-aws.py). It never reaches a real AWS account: the pretend `aws` is first
 # on PATH, every run gets an empty home folder, and no AWS credentials are passed in.
+# The cost and billing scenarios also audit the policies the script saved in the pretend account (policy-audit.py) against
+# the list of allowed actions in billing-read-actions.tsv; the audit only reads two local files.
 #
 # Run it with:  bash setup/aws/tests/run-owner-script-tests.sh
 # tests/owner-aws-scripts.test.mjs runs it too, so run-tests.sh and the CI workflow "tests" run it on every PR.
 # Optional environment variables, to try the tests on other copies of the scripts (for example the previous version):
 #   OWNER_AI_SCRIPT, OWNER_ALARMS_SCRIPT, OWNER_GRANT_SCRIPT   paths of the scripts to test
+#   OWNER_PREVIOUS_AI_SCRIPT                                   path of the PREVIOUS version of the aws-ai-access script (the one
+#                                                              from before the cost and billing policy). When it is set, one more
+#                                                              scenario builds the pretend account with it and upgrades it with
+#                                                              the script under test. When it is not set, that scenario is skipped.
 #   OWNER_SHELLCHECK_SEVERITY                                  shellcheck -S level (default warning)
 # Exit code: 0 when every check passed, 1 when anything failed.
 # shellcheck source-path=SCRIPTDIR
@@ -23,6 +29,7 @@ ROOT="$(cd -- "$HERE/../../.." && pwd)"
 . "$HERE/lib.sh"
 
 AI="${OWNER_AI_SCRIPT:-$ROOT/setup/iam/aws-ai-access-2026-10-07.sh}"
+PREV_AI="${OWNER_PREVIOUS_AI_SCRIPT:-}"
 ALARMS="${OWNER_ALARMS_SCRIPT:-$ROOT/setup/aws/ops-alarms-2026-10-07.sh}"
 GRANT="${OWNER_GRANT_SCRIPT:-$ROOT/setup/iam/fleet-monitor-grant-2026-10-07.sh}"
 SEVERITY="${OWNER_SHELLCHECK_SEVERITY:-warning}"
@@ -41,6 +48,11 @@ for script in "$AI" "$ALARMS" "$GRANT"; do
   fi
 done
 
+if [ -n "$PREV_AI" ] && [ ! -f "$PREV_AI" ]; then
+  echo "FAILED  the previous version of the script (OWNER_PREVIOUS_AI_SCRIPT) is missing: $PREV_AI"
+  exit 1
+fi
+
 short() { printf '%s' "${1#"$ROOT"/}"; }
 flat() { printf '%s' "$1" | head -n 12 | tr '\n' ' '; }
 
@@ -56,6 +68,10 @@ done
 
 t_begin "fake-aws.py parses"
 if ! err="$(python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$HERE/fake-aws.py" 2>&1)"; then t_note "$(flat "$err")"; fi
+t_end
+
+t_begin "policy-audit.py parses"
+if ! err="$(python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$HERE/policy-audit.py" 2>&1)"; then t_note "$(flat "$err")"; fi
 t_end
 
 if command -v shellcheck >/dev/null 2>&1; then

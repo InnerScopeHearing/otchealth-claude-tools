@@ -15,6 +15,8 @@
 #          IAMUserChangePassword
 #        - customer managed policy otchealth-ai-reader-extras (a few more read calls: metrics,
 #          cost, alarms, ECS, load balancers, OpenSearch domain info, Lightsail instances)
+#        - customer managed policy otchealth-ai-reader-billing (read-only cost and billing; see
+#          COST AND BILLING below)
 #        - customer managed policy otchealth-ai-reader-deny (explicit Deny; wins over any Allow)
 #        - inline policy otchealth-ai-reader-self-mfa (the user may set up ITS OWN MFA device)
 #        - a console password written ONLY to ~/otchealth-ai-reader-initial-password.txt (mode
@@ -26,7 +28,7 @@
 #          name, the one ACTIVE service in the cluster whose task definition family is
 #          otchealth-gateway is used instead; none, or more than one, is a STOP before anything is
 #          written. Sessions last at most 1 hour.
-#        - Same read-only policies as the user (ViewOnlyAccess + extras + deny).
+#        - Same read-only policies as the user (ViewOnlyAccess + extras + billing + deny).
 #        - The task role gets ONE small inline policy, otchealth-assume-ai-reader-2026-10-07,
 #          that allows sts:AssumeRole on this one role and nothing else.
 #
@@ -36,6 +38,22 @@
 # function environment variables, instance user data and VPN keys, CloudFront origin headers, shell
 # or exec access, payment methods, and changes to IAM credentials or permissions. See the policy
 # text below.
+#
+# COST AND BILLING: READ ONLY (added 2026-10-09). The policy otchealth-ai-reader-billing has ONE Allow
+# statement, written as explicit action names (no wildcards), and every name is marked Read or List
+# in the AWS Service Authorization Reference: Cost Explorer reads (spend by service, forecasts, tags,
+# anomalies, cost categories, reservation and Savings Plans use, coverage and advice, right-sizing),
+# Budgets view, Savings Plans describe, Cost Optimization Hub reads, Compute Optimizer reads, the Price
+# List, and what the Billing console reads to show credits and bills (billing:, account:
+# GetAccountInformation, consolidatedbilling:, invoicing:ListInvoiceSummaries). Nothing in it can
+# create, change, buy, pay for or cancel anything. The retired aws-portal actions are not used (AWS
+# ended standard support for them in July 2023). The payment actions stay denied by the deny policy
+# below, and no tax or contact action is allowed, so the console Bills page may show a payments error
+# while the bill itself loads. The list, with the page that documents each action, is
+# setup/aws/tests/billing-read-actions.tsv; the tests fail when the policy and that list differ.
+# Owner steps this script cannot do: launch Cost Explorer once (console only), switch on "Activate IAM
+# Access" (account owner; only the Billing console pages need it, the cost reports do not), and opt in
+# to Cost Optimization Hub and Compute Optimizer (each is empty until then).
 #
 # KNOWN TRADE-OFF (kept on purpose): cloudtrail:LookupEvents and ecs:DescribeTasks stay ALLOWED.
 # CloudTrail events can show request parameters, and ECS task details can show per-run overrides, so
@@ -50,6 +68,10 @@
 # fails this check never gets a console password. A role is checked BEFORE anything on it is
 # changed: if it fails, it is left completely alone (its trust policy is not rewritten, nothing is
 # attached to it, and the gateway task role is not given permission to use it).
+# An identity made by an earlier version of this script (before the billing policy existed) passes this
+# check: the check only objects to what is NOT on the expected list, and the billing policy is on it.
+# This run then attaches the billing policy to that identity. Everything else is set again exactly as in
+# any re-run, and nothing is removed.
 #
 # HOW TO RUN: download this file and run it with bash (do not paste its body into the shell).
 # SAFE TO RE-RUN: every name is fixed; a re-run changes nothing that is already correct and never
@@ -70,6 +92,7 @@ READER_USER="otchealth-ai-reader"
 READER_ROLE="otchealth-ai-reader-role"
 EXTRAS_POLICY="otchealth-ai-reader-extras"
 DENY_POLICY="otchealth-ai-reader-deny"
+BILLING_POLICY="otchealth-ai-reader-billing"
 MFA_POLICY="otchealth-ai-reader-self-mfa"
 ASSUME_POLICY="otchealth-assume-ai-reader-2026-10-07"
 ECS_CLUSTER="otchealth"
@@ -91,6 +114,7 @@ MANAGED_ARNS=()
 
 EXTRAS_ARN="arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${EXTRAS_POLICY}"
 DENY_ARN="arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${DENY_POLICY}"
+BILLING_ARN="arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${BILLING_POLICY}"
 USER_ARN=""
 ROLE_ARN=""
 TASK_ROLE_ARN=""
@@ -101,6 +125,8 @@ PW_POLICY_JSON="{}"
 B_OK="no"
 ROLE_EXACT="yes"
 GRANT_OK="no"
+BILLING_USER_OK="no"
+BILLING_ROLE_OK="no"
 EXPECT_MANAGED=()
 EXPECT_INLINE=()
 EXACT_N=0
@@ -396,6 +422,9 @@ list_missing() {
   done
   printf '%s' "$out"
 }
+
+# list_has LIST ARN: succeeds when ARN is in the tab or newline separated LIST.
+list_has() { printf '%s\n' "$1" | tr '\t' '\n' | grep -Fxq -- "$2"; }
 
 # ---- "an existing user or role must be exactly what this script would have made" ------------------
 # safe_token TEXT: succeeds when TEXT holds only the characters that IAM names and ARNs normally use and does not
@@ -968,6 +997,72 @@ echo "Policy $EXTRAS_POLICY (a few extra read calls):"
 if ! put_managed "$EXTRAS_POLICY" "$EXTRAS_FILE" 6144 "Extra read-only calls for AI read-only identities: metrics, cost, alarms, ECS, load balancers, OpenSearch domain info, Lightsail (2026-10-07)"; then
   stop "the extras policy could not be saved (the message above says why). Run again, or send this screen to the CTO."
 fi
+# The billing policy is its own policy (not part of the extras), so the extras and the deny text stay exactly as they
+# were, and taking cost and billing away again is one detach per identity. Five of the Cost Explorer and Budgets names
+# are also in the extras; they are repeated here so this policy stands on its own. None of the names below is matched by
+# a Deny statement in the deny policy (the tests check that with the saved policies).
+BILLING_FILE="$WORK_DIR/billing.json"
+cat > "$BILLING_FILE" <<'BILLING_JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CostAndBillingReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ce:DescribeCostCategoryDefinition", "ce:GetAnomalies", "ce:GetAnomalyMonitors",
+        "ce:GetAnomalySubscriptions", "ce:GetApproximateUsageRecords", "ce:GetCommitmentPurchaseAnalysis",
+        "ce:GetCostAndUsage", "ce:GetCostAndUsageComparisons", "ce:GetCostAndUsageWithResources",
+        "ce:GetCostCategories", "ce:GetCostComparisonDrivers", "ce:GetCostForecast",
+        "ce:GetDimensionValues", "ce:GetReservationCoverage", "ce:GetReservationPurchaseRecommendation",
+        "ce:GetReservationUtilization", "ce:GetRightsizingRecommendation",
+        "ce:GetSavingsPlanPurchaseRecommendationDetails", "ce:GetSavingsPlansCoverage",
+        "ce:GetSavingsPlansPurchaseRecommendation", "ce:GetSavingsPlansUtilization",
+        "ce:GetSavingsPlansUtilizationDetails", "ce:GetTags", "ce:GetUsageForecast",
+        "ce:ListCommitmentPurchaseAnalyses", "ce:ListCostAllocationTagBackfillHistory",
+        "ce:ListCostAllocationTags", "ce:ListCostCategoryDefinitions",
+        "ce:ListCostCategoryResourceAssociations", "ce:ListSavingsPlansPurchaseRecommendationGeneration",
+        "ce:ListTagsForResource",
+        "budgets:ViewBudget", "budgets:DescribeBudgetAction", "budgets:DescribeBudgetActionHistories",
+        "budgets:DescribeBudgetActionsForAccount", "budgets:DescribeBudgetActionsForBudget",
+        "budgets:ListTagsForResource",
+        "savingsplans:DescribeSavingsPlanRates", "savingsplans:DescribeSavingsPlans",
+        "savingsplans:DescribeSavingsPlansOfferingRates", "savingsplans:DescribeSavingsPlansOfferings",
+        "savingsplans:ListTagsForResource",
+        "cost-optimization-hub:GetPreferences", "cost-optimization-hub:GetRecommendation",
+        "cost-optimization-hub:ListEfficiencyMetrics", "cost-optimization-hub:ListEnrollmentStatuses",
+        "cost-optimization-hub:ListRecommendationSummaries", "cost-optimization-hub:ListRecommendations",
+        "compute-optimizer:DescribeRecommendationExportJobs",
+        "compute-optimizer:GetAutoScalingGroupRecommendations",
+        "compute-optimizer:GetEBSVolumeRecommendations", "compute-optimizer:GetEC2InstanceRecommendations",
+        "compute-optimizer:GetEC2RecommendationProjectedMetrics",
+        "compute-optimizer:GetECSServiceRecommendationProjectedMetrics",
+        "compute-optimizer:GetECSServiceRecommendations",
+        "compute-optimizer:GetEffectiveRecommendationPreferences", "compute-optimizer:GetEnrollmentStatus",
+        "compute-optimizer:GetEnrollmentStatusesForOrganization",
+        "compute-optimizer:GetIdleRecommendations", "compute-optimizer:GetLambdaFunctionRecommendations",
+        "compute-optimizer:GetLicenseRecommendations",
+        "compute-optimizer:GetRDSDatabaseRecommendationProjectedMetrics",
+        "compute-optimizer:GetRDSDatabaseRecommendations",
+        "compute-optimizer:GetRecommendationPreferences", "compute-optimizer:GetRecommendationSummaries",
+        "pricing:DescribeServices", "pricing:GetAttributeValues", "pricing:GetPriceListFileUrl",
+        "pricing:GetProducts", "pricing:ListPriceLists",
+        "billing:GetBillingData", "billing:GetBillingDetails", "billing:GetBillingNotifications",
+        "billing:GetBillingPreferences", "billing:GetBillingView", "billing:GetBillingViewData",
+        "billing:GetCreditAllocationHistory", "billing:GetCredits", "billing:ListBillingViews",
+        "account:GetAccountInformation",
+        "consolidatedbilling:GetAccountBillingRole", "consolidatedbilling:ListLinkedAccounts",
+        "invoicing:ListInvoiceSummaries"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+BILLING_JSON
+echo "Policy $BILLING_POLICY (cost and billing, read only: Read and List actions, nothing that changes or buys):"
+if ! put_managed "$BILLING_POLICY" "$BILLING_FILE" 6144 "Read-only cost and billing calls for AI read-only identities: Cost Explorer, Budgets, Savings Plans, Cost Optimization Hub, Compute Optimizer, price list, credits and bills. No write action (2026-10-09)"; then
+  stop "the billing policy could not be saved (the message above says why). Run again, or send this screen to the CTO."
+fi
 
 # ---------------------------------------------------------------------------------------------
 section "3. Part A: IAM user $READER_USER"
@@ -988,7 +1083,7 @@ add_rollback 30 "aws iam delete-login-profile --user-name $READER_USER"
 pass "A  user $READER_USER exists (tags: purpose=ai-read-only, owner=cto, created=2026-10-07)"
 
 echo "  Policies on the user:"
-for arn in "$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[@]}"; do
+for arn in "$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[@]}"; do
   if ! ensure_attached user "$READER_USER" "$arn"; then
     stop "could not attach ${arn##*/} to $READER_USER (the message above says why)."
   fi
@@ -1025,14 +1120,15 @@ if ! run_aws HAVE_ALL iam list-attached-user-policies --user-name "$READER_USER"
   show_err
   stop "could not read back the policies attached to $READER_USER."
 fi
-UMISSING="$(list_missing "$HAVE_ALL" "$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[@]}")"
+UMISSING="$(list_missing "$HAVE_ALL" "$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[@]}")"
 if [ -z "$UMISSING" ]; then
-  pass "A  all 6 managed policies are attached to the user (4 AWS managed, extras, deny)"
+  pass "A  all 7 managed policies are attached to the user (4 AWS managed, extras, billing, deny)"
 else
   fail "A  these policies are not attached to the user:$UMISSING"
 fi
+if list_has "$HAVE_ALL" "$BILLING_ARN"; then BILLING_USER_OK="yes"; fi
 echo "  Checking that the user has nothing this script did not put there:"
-EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[@]}")
+EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[@]}")
 EXPECT_INLINE=()
 if [ "$MFA_MODE" = "managed" ]; then
   EXPECT_MANAGED+=("arn:aws:iam::${EXPECTED_ACCOUNT}:policy/${MFA_POLICY}")
@@ -1040,7 +1136,7 @@ else
   EXPECT_INLINE+=("$MFA_POLICY")
 fi
 if exact_check user "$READER_USER"; then
-  pass "A  the user has only the expected policies (6 managed, plus the MFA policy): no other policy, no group, no permissions boundary"
+  pass "A  the user has only the expected policies (7 managed, plus the MFA policy): no other policy, no group, no permissions boundary"
 else
   fail "A  the user has $EXACT_N item(s) this script did not add, or that could not be read: ${EXACT_LIST}. Do not connect any AI tool as this user until they are gone. No console password is created or changed meanwhile."
 fi
@@ -1087,7 +1183,7 @@ EOF
     # (A same-account trust policy that names the task role is already enough for it to assume the role, so the
     # trust policy is the thing that must never be written to a role that is not exact.)
     echo "  Role exists: $ROLE_ARN. Checking that it holds nothing this script did not put there, BEFORE anything on it is changed:"
-    EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}")
+    EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[0]}")
     EXPECT_INLINE=()
     if ! exact_check role "$READER_ROLE"; then
       ROLE_EXACT="no"
@@ -1112,7 +1208,7 @@ EOF
   fi
   if [ "$B_OK" = "yes" ]; then
     add_rollback 25 "aws iam delete-role --role-name $READER_ROLE"
-    for arn in "$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}"; do
+    for arn in "$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[0]}"; do
       if ! ensure_attached role "$READER_ROLE" "$arn"; then B_OK="no"; break; fi
     done
   fi
@@ -1128,17 +1224,18 @@ EOF
       fail "B  could not read back role $READER_ROLE"
     fi
     if run_aws RPOL iam list-attached-role-policies --role-name "$READER_ROLE" --query 'AttachedPolicies[].PolicyArn' --output text; then
-      RMISSING="$(list_missing "$RPOL" "$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}")"
+      RMISSING="$(list_missing "$RPOL" "$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[0]}")"
       if [ -z "$RMISSING" ]; then
-        pass "B  the role has ViewOnlyAccess, the extras and the deny policy attached"
+        pass "B  the role has ViewOnlyAccess, the extras, the billing policy and the deny policy attached"
       else
         fail "B  these policies are not attached to the role:$RMISSING"
       fi
+      if list_has "$RPOL" "$BILLING_ARN"; then BILLING_ROLE_OK="yes"; fi
       echo "  Checking that the role has nothing this script did not put there:"
-      EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "${MANAGED_ARNS[0]}")
+      EXPECT_MANAGED=("$DENY_ARN" "$EXTRAS_ARN" "$BILLING_ARN" "${MANAGED_ARNS[0]}")
       EXPECT_INLINE=()
       if exact_check role "$READER_ROLE"; then
-        pass "B  the role has only the 3 expected managed policies: no inline policy, no permissions boundary"
+        pass "B  the role has only the 4 expected managed policies: no inline policy, no permissions boundary"
       else
         fail "B  the role has $EXACT_N item(s) this script did not add, or that could not be read: ${EXACT_LIST}. Do not let the gateway use the role until they are gone."
       fi
@@ -1209,6 +1306,20 @@ check_identity() {
   expect_blocked "$who  cannot change parameters (ssm:PutParameter is not allowed)" "$arn" ssm:PutParameter "arn:aws:ssm:${REGION}:${EXPECTED_ACCOUNT}:parameter/otchealth/example" any
   expect_blocked "$who  cannot change secrets (secretsmanager:PutSecretValue is not allowed)" "$arn" secretsmanager:PutSecretValue "arn:aws:secretsmanager:${REGION}:${EXPECTED_ACCOUNT}:secret:example" any
   expect_blocked "$who  cannot change ECS services (ecs:UpdateService is not allowed)" "$arn" ecs:UpdateService "$SVC_ARN" any
+  # Cost and billing (policy otchealth-ai-reader-billing): the reads work, and nothing that changes or buys does.
+  # look_allowed is used for the newest billing, invoice and recommendation actions, which a simulator may not know yet.
+  expect_allowed "$who  can read cost anomalies (ce:GetAnomalies)" "$arn" ce:GetAnomalies "*"
+  expect_allowed "$who  can read budget actions (budgets:DescribeBudgetActionsForAccount)" "$arn" budgets:DescribeBudgetActionsForAccount "*"
+  expect_allowed "$who  can read Savings Plans (savingsplans:DescribeSavingsPlans)" "$arn" savingsplans:DescribeSavingsPlans "*"
+  expect_allowed "$who  can read AWS prices (pricing:GetProducts)" "$arn" pricing:GetProducts "*"
+  expect_allowed "$who  can read right-sizing advice (compute-optimizer:GetEC2InstanceRecommendations)" "$arn" compute-optimizer:GetEC2InstanceRecommendations "*"
+  look_allowed "$who  can read cost savings advice (cost-optimization-hub:ListRecommendations)" "$arn" cost-optimization-hub:ListRecommendations "*"
+  look_allowed "$who  can read credits (billing:GetCredits)" "$arn" billing:GetCredits "*"
+  look_allowed "$who  can read invoice summaries (invoicing:ListInvoiceSummaries)" "$arn" invoicing:ListInvoiceSummaries "*"
+  look_allowed "$who  can read the bill in the console (billing:GetBillingData)" "$arn" billing:GetBillingData "*"
+  expect_blocked "$who  cannot change budgets (budgets:ModifyBudget is not allowed)" "$arn" budgets:ModifyBudget "*" any
+  expect_blocked "$who  cannot buy a Savings Plan (savingsplans:CreateSavingsPlan is not allowed)" "$arn" savingsplans:CreateSavingsPlan "*" any
+  expect_blocked "$who  cannot change account contact details (account:PutContactInformation is not allowed)" "$arn" account:PutContactInformation "*" any
 }
 
 CUR_PART="A"
@@ -1335,6 +1446,31 @@ elif [ -n "$TASK_ROLE_ARN" ]; then
 else
   echo "  Gateway task role allowed to assume it: no (the gateway task role was not found)"
 fi
+echo ""
+if [ "$BILLING_USER_OK" = "yes" ] || [ "$BILLING_ROLE_OK" = "yes" ]; then
+  echo "Cost and billing: read only"
+  echo "  The AI reader can now READ the AWS bill and cost reports: Cost Explorer (spend by service, forecasts, anomalies),"
+  echo "  Budgets, Savings Plans, Cost Optimization Hub and Compute Optimizer advice, the AWS price list, credits and"
+  echo "  invoice summaries. It cannot change, buy, pay for or cancel anything. Payment methods and tax settings stay blocked."
+  if [ "$BILLING_USER_OK" = "yes" ]; then
+    echo "  User $READER_USER: ON (policy $BILLING_POLICY is attached)"
+  else
+    echo "  User $READER_USER: OFF (the policy is not attached; see the FAIL lines above)"
+  fi
+  if [ "$BILLING_ROLE_OK" = "yes" ]; then
+    echo "  Role $READER_ROLE: ON (policy $BILLING_POLICY is attached)"
+  elif [ "$ROLE_EXACT" = "no" ]; then
+    echo "  Role $READER_ROLE: OFF (the role was left exactly as it was)"
+  else
+    echo "  Role $READER_ROLE: OFF (the role was not set up in this run; see the FAIL lines above)"
+  fi
+  echo "  To see real numbers, the account owner does three one-time steps in the console (this script cannot do them):"
+  echo "    1. Cost Explorer: Billing and Cost Management > Cost Explorer > Launch Cost Explorer (data shows up within about a day)."
+  echo "    2. Credits and bills pages: turn on \"Activate IAM Access\" in Account settings (the cost reports do not need it)."
+  echo "    3. Cost Optimization Hub and Compute Optimizer: opt in once in each service (they have no advice until then)."
+else
+  echo "Cost and billing: NOT in place on the user or the role after this run (see the FAIL lines above)."
+fi
 TOTAL=$((PASSED + FAILED))
 echo ""
 echo "=============================================================="
@@ -1342,6 +1478,9 @@ if [ "$FAILED" -eq 0 ]; then
   echo " RESULT: ALL CHECKS PASSED ($PASSED of $TOTAL)"
   echo "=============================================================="
   echo " Tell the CTO: read-only AWS identities are ready."
+  if [ "$BILLING_USER_OK" = "yes" ] && [ "$BILLING_ROLE_OK" = "yes" ]; then
+    echo " Cost and billing: read only, on for the user and the role (details above)."
+  fi
 else
   echo " RESULT: $FAILED of $TOTAL CHECKS FAILED"
   echo "=============================================================="
