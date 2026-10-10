@@ -22,7 +22,10 @@
 #        - NO access keys are ever created.
 #   B. IAM role  otchealth-ai-reader-role   (used by the gateway's AWS bridge).
 #        - Only the gateway's ECS task role may assume it (found at run time: cluster otchealth,
-#          service otchealth, task definition taskRoleArn). Sessions last at most 1 hour.
+#          service otchealth-gateway, task definition taskRoleArn). If no ACTIVE service has that
+#          name, the one ACTIVE service in the cluster whose task definition family is
+#          otchealth-gateway is used instead; none, or more than one, is a STOP before anything is
+#          written. Sessions last at most 1 hour.
 #        - Same read-only policies as the user (ViewOnlyAccess + extras + deny).
 #        - The task role gets ONE small inline policy, otchealth-assume-ai-reader-2026-10-07,
 #          that allows sts:AssumeRole on this one role and nothing else.
