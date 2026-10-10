@@ -319,8 +319,7 @@ discover_gateway() {
   echo "  Service        : $status, $running running of $desired wanted"
   echo "  Task definition: $family"
   if [ "$status" != "ACTIVE" ]; then
-    GATEWAY_WHY="the ECS service $ECS_SERVICE is $status, not ACTIVE"
-    return 0
+    gateway_stop "the gateway's ECS service is not running: the ECS service $ECS_SERVICE is $status, not ACTIVE."
   fi
   if [ "${family%%:*}" != "$EXPECTED_TASK_FAMILY" ]; then
     echo "  NOTE  the task family is not the expected $EXPECTED_TASK_FAMILY. The alarms follow the load balancer, so this does not stop anything."
