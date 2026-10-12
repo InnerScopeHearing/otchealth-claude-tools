@@ -285,7 +285,13 @@ test("two processes that observed one dead owner cannot reclaim a later live loc
     )));
     assert.equal(results.filter((result) => result.status === "acquired").length, 1);
     assert.equal(results.filter((result) => result.status === "blocked").length, 1);
-    assert.match(results.find((result) => result.status === "blocked").reason, /active|reclamation/);
+    // A contender can observe the winner between mkdir and the durable owner write.
+    // All three outcomes refuse reclamation; require an exact known refusal.
+    assert.ok([
+      "idempotent memory operation is already active in another process",
+      "stale operation lock reclamation is already active",
+      "operation lock owner is missing or malformed; refusing automatic reclaim",
+    ].includes(results.find((result) => result.status === "blocked").reason));
     const winner = results.find((result) => result.status === "acquired");
     const owner = JSON.parse(await readFile(join(lockDir, "owner.json"), "utf8"));
     assert.equal(owner.pid, winner.pid, "the winning live lock must still own the canonical lock path");
