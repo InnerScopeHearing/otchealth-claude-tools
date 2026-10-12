@@ -1,9 +1,15 @@
 ---
 name: gateway-connect
-description: One-and-done connect (+ auto-refresh) of an agent's Claude Code Desktop session to the OTCHealth MCP gateway on its RING-SCOPED lane. Mints the lane's short-lived client_credentials token, registers the gateway as a Claude Code MCP server, verifies the lane sees its tools, and re-mints before the token expires (client_credentials tokens live 24h, OAUTH_CC_TTL_SECONDS on the gateway, verified 2026-07-16) so the agent connects once and stays connected. Ring-safe; secrets never printed.
+description: Connect a Developer cloud task directly to the live OTCHealth gateway through owner-authorized OAuth and current tool schemas, or connect a Claude Code Desktop session through its existing ring-scoped lane credentials. The cloud path avoids missing desktop AWS credential resolvers and preserves server permissions. Tokens stay in owner-only storage and are never printed.
 ---
 
 # gateway-connect — put an agent's Desktop session on its gateway lane, durably
+
+## Developer tasks in Codex Cloud
+
+Prefer the already authenticated OTCHealth Developer app for normal work. For required tools or options absent from its cached description, use the separate direct cloud session client documented in [cloud-session.md](cloud-session.md). This path uses the existing CTO-issued Developer setup code and native OAuth authorization-code/PKCE flow; it needs no AWS keys, desktop login, browser automation, gateway permission change or Claude CLI. It reads one current tool schema at a time. It does not refresh the native app cache or move/create a Codex chat or project.
+
+The desktop instructions below describe a different credential path. Do not run desktop registration in a Codex Cloud task or treat a missing desktop credential source as proof that the working Developer app is disconnected.
 
 ## The problem it solves
 The MCP gateway (`mcp.otchealth.app`) issues **24-hour** access tokens via the `client_credentials` grant (`OAUTH_CC_TTL_SECONDS`, 86400 since 2026-07-16; they were 1-hour before that), and each lane's token carries its agent identity so the gateway ring-gates privileged RAG (`kb_search_privileged` returns only that lane's rooms). A static bearer header expires when that TTL runs out, so an agent that pasted a token drops off after a day. This skill mints the lane token, wires the gateway into Claude Code, verifies, and (`--watch`) auto-refreshes.
