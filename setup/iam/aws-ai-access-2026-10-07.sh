@@ -863,6 +863,17 @@ cat > "$EXTRAS_FILE" <<'EXTRAS_JSON'
         "logs:DescribeLogStreams", "sts:GetCallerIdentity"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "AwareDeviceFarmRunMetadataOnly",
+      "Effect": "Allow",
+      "Action": ["devicefarm:GetRun"],
+      "Resource": "arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*",
+      "Condition": {
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::900915535335:role/otchealth-ai-reader-role"
+        }
+      }
     }
   ]
 }
@@ -1516,3 +1527,4 @@ fi
 print_rollbacks
 if [ "$FAILED" -ne 0 ]; then exit 1; fi
 exit 0
+

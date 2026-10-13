@@ -72,6 +72,7 @@ if (writes.includes(operation)) {
     const payload=JSON.parse(fs.readFileSync(file.slice(7),'utf8'));
     fs.writeFileSync(statePath, JSON.stringify(payload));
     fs.writeFileSync(process.env.AWARE_CAPTURE, JSON.stringify(payload));
+    if(scenario.failCreate) { process.stderr.write('Uncertain mocked write result\n'); process.exit(254); }
     process.stdout.write(JSON.stringify({PolicyVersion:{VersionId:'v2'}}));
   }
   process.exit(0);
@@ -95,8 +96,10 @@ if (args[0] === 'iam' && operation === 'get-policy') {
 if (args[0] === 'iam' && operation === 'get-policy-version') {
   if (scenario.denyRead && args.join(' ').includes(scenario.denyRead)) { process.stderr.write('AccessDenied: mocked read denial\n'); process.exit(254); }
   const arn=args[args.indexOf('--policy-arn')+1];
-  let doc = args.includes('v2') && fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath,'utf8')) : scenario.extras;
+  let doc = args.includes('v2') && fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath,'utf8')) : undefined;
+  if (!doc && arn.endsWith(':policy/otchealth-ai-reader-extras')) doc=scenario.extras;
   if (!doc) doc = arn.endsWith(':policy/otchealth-ai-reader-deny') ? JSON.parse(fs.readFileSync(process.env.AWARE_DENY, 'utf8')) : JSON.parse(fs.readFileSync(process.env.AWARE_BASELINE, 'utf8'));
+  if(scenario.denyDrift && arn.endsWith(':policy/otchealth-ai-reader-deny'))doc={Version:'2012-10-17',Statement:[]};
   if (scenario.alreadyDesired && arn.endsWith(':policy/otchealth-ai-reader-extras')) {
     const ss = Array.isArray(doc.Statement) ? doc.Statement : [doc.Statement];
     if(!ss.some((s)=>s?.Sid===${JSON.stringify(sid)}))doc = {...doc, Statement:[...ss, ${JSON.stringify(desiredStatement())}]};
@@ -133,7 +136,7 @@ async function harness(scenario = {}) {
   return {
     tmp, log, writes,
     async run(flag = '--check', changes = {}) {
-      return spawnSync('bash', [repair, flag], { encoding:'utf8', env:{...process.env, PATH:`${bin}:${process.env.PATH}`, AWARE_MOCK_LOG:log, AWARE_MOCK_WRITES:writes, AWARE_MOCK_STATE:path.join(tmp,'state.json'), AWARE_CAPTURE:capture, AWARE_BASELINE:baseline, AWARE_DENY:deny, AWARE_MOCK_SCENARIO:JSON.stringify({...scenario,...changes})} });
+      return spawnSync('bash', [repair, flag], { encoding:'utf8', env:{...process.env, TMPDIR:tmp, PATH:`${bin}:${process.env.PATH}`, AWARE_MOCK_LOG:log, AWARE_MOCK_WRITES:writes, AWARE_MOCK_STATE:path.join(tmp,'state.json'), AWARE_CAPTURE:capture, AWARE_BASELINE:baseline, AWARE_DENY:deny, AWARE_MOCK_SCENARIO:JSON.stringify({...scenario,...changes})} });
     },
     async lines(file) { const text = await readFile(file,'utf8'); return text.trim() ? text.trim().split('\n').map((s)=>JSON.parse(s)) : []; },
     close() { return rm(tmp,{recursive:true,force:true}); },
@@ -160,21 +163,22 @@ test('default --check is read-only; --apply makes exactly one CreatePolicyVersio
   } finally { await h.close(); }
 });
 
-for (const [label, changes] of [
-  ['wrong account', {identity:{Account:'111122223333',Arn:'arn:aws:iam::111122223333:user/test',UserId:'A'}}],
-  ['reader IAM user caller', {identity:{Account:account,Arn:`arn:aws:iam::${account}:user/otchealth-ai-reader`,UserId:'AIDATEST'}}],
-  ['assumed reader role caller', {identity:{Account:account,Arn:`arn:aws:sts::${account}:assumed-role/otchealth-ai-reader-role/session`,UserId:'AROA:session'}}],
-  ['reader role caller', {identity:{Account:account,Arn:role,UserId:'AROA:session'}}],
-  ['root caller', {identity:{Account:account,Arn:`arn:aws:iam::${account}:root`,UserId:account}}],
-  ['unexpected existing extras drift', {extras:{Version:'2012-10-17',Statement:[{Sid:'Unexpected',Effect:'Allow',Action:['s3:*'],Resource:'*'}]}}],
-  ['permissions boundary', {boundary:{PermissionsBoundaryArn:'arn:aws:iam::900915535335:policy/boundary'}}],
-  ['trust drift', {trustDrift:true}],
-  ['extra managed policy', {extraManaged:true}],
-  ['missing required attached policy', {missingAttached:true}],
-  ['missing policy', {missingPolicy:true}],
-  ['inline policy', {inlinePolicies:['unexpected-inline']}],
-  ['five policy versions', {versionCount:5}],
-  ['read API denial', {denyRead:'get-policy-version'}],
+for (const [label, changes, expectedStop] of [
+  ['wrong account', {identity:{Account:'111122223333',Arn:'arn:aws:iam::111122223333:user/test',UserId:'A'}}, 'use the existing account owner/admin session'],
+  ['reader IAM user caller', {identity:{Account:account,Arn:`arn:aws:iam::${account}:user/otchealth-ai-reader`,UserId:'AIDATEST'}}, 'use the existing account owner/admin session'],
+  ['assumed reader role caller', {identity:{Account:account,Arn:`arn:aws:sts::${account}:assumed-role/otchealth-ai-reader-role/session`,UserId:'AROA:session'}}, 'use the existing account owner/admin session'],
+  ['reader role caller', {identity:{Account:account,Arn:role,UserId:'AROA:session'}}, 'use the existing account owner/admin session'],
+  ['root caller', {identity:{Account:account,Arn:`arn:aws:iam::${account}:root`,UserId:account}}, 'use the existing account owner/admin session'],
+  ['unexpected existing extras drift', {extras:{Version:'2012-10-17',Statement:[{Sid:'Unexpected',Effect:'Allow',Action:['s3:*'],Resource:'*'}]}}, 'existing extras policy drift'],
+  ['deny policy drift', {denyDrift:true}, 'existing explicit deny policy differs'],
+  ['permissions boundary', {boundary:{PermissionsBoundaryArn:'arn:aws:iam::900915535335:policy/boundary'}}, 'reader role, trust or boundary differs'],
+  ['trust drift', {trustDrift:true}, 'reader role, trust or boundary differs'],
+  ['extra managed policy', {extraManaged:true}, 'reader attachments differ'],
+  ['missing required attached policy', {missingAttached:true}, 'reader attachments differ'],
+  ['missing policy', {missingPolicy:true}, 'AWS read failed (iam get-policy)'],
+  ['inline policy', {inlinePolicies:['unexpected-inline']}, 'unexpected reader inline policy'],
+  ['five policy versions', {versionCount:5}, 'no safe version slot'],
+  ['read API denial', {denyRead:'get-policy-version'}, 'AWS read failed (iam get-policy-version)'],
 ]) {
   test(`${label} fails closed without writes`, async () => {
     await readFile(repair, 'utf8');
@@ -182,6 +186,7 @@ for (const [label, changes] of [
     try {
       const result = await h.run('--apply');
       assert.notEqual(result.status, 0, result.stdout || 'unsafe scenario unexpectedly succeeded');
+      assert.ok(result.stderr.includes(expectedStop), `expected fail-closed guard ${JSON.stringify(expectedStop)}, got: ${result.stderr}`);
       assert.deepEqual(await h.lines(h.writes), []);
     } finally { await h.close(); }
   });
@@ -193,5 +198,22 @@ test('already-present exact scoped statement is idempotent and performs no write
     const result = await h.run('--apply');
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.deepEqual(await h.lines(h.writes), []);
+  } finally { await h.close(); }
+});
+
+test('uncertain CreatePolicyVersion failure is recorded and never retried', async () => {
+  const h = await harness({failCreate:true});
+  try {
+    const result = await h.run('--apply');
+    assert.notEqual(result.status, 0, 'uncertain write response must fail closed');
+    const writes = await h.lines(h.writes);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0][1], 'create-policy-version');
+    const dirs = (await import('node:fs/promises')).readdir;
+    const entries = await dirs(h.tmp);
+    const privateDir = entries.find((name)=>name.startsWith('aware-reader-repair.'));
+    assert.ok(privateDir, 'private repair evidence directory must be retained');
+    const receipt = JSON.parse(await readFile(path.join(h.tmp,privateDir,'receipt.json'),'utf8'));
+    assert.equal(receipt.writeAttempted,true);
   } finally { await h.close(); }
 });

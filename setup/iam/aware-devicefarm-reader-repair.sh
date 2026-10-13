@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Owner/admin CloudShell repair for the existing AWARE reader policy. Default: read-only check.
+# This is NOT the broad account bootstrap. It never creates identities, credentials or attachments,
+# changes trust/boundaries, deletes policy versions, or retries a write. Run only from reviewed source.
+set -euo pipefail
+umask 077
+export AWS_PAGER="" AWS_MAX_ATTEMPTS=1
+mode="${1:---check}"
+if [ "$#" -gt 1 ] || { [ "$mode" != --check ] && [ "$mode" != --apply ]; }; then
+  echo 'Usage: bash aware-devicefarm-reader-repair.sh [--check|--apply]' >&2
+  exit 2
+fi
+for dependency in aws jq awk mktemp; do
+  command -v "$dependency" >/dev/null || { echo "STOP: missing $dependency" >&2; exit 1; }
+done
+account=900915535335
+role_name=otchealth-ai-reader-role
+role_arn="arn:aws:iam::$account:role/$role_name"
+policy_arn="arn:aws:iam::$account:policy/otchealth-ai-reader-extras"
+deny_arn="arn:aws:iam::$account:policy/otchealth-ai-reader-deny"
+sid=AwareDeviceFarmRunMetadataOnly
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source_file="$script_dir/aws-ai-access-2026-10-07.sh"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/aware-reader-repair.XXXXXX")"
+chmod 700 "$work_dir"
+stop() { echo "STOP: $1. Private evidence: $work_dir; do not retry an uncertain write." >&2; exit 1; }
+read_aws() {
+  local destination="$1"
+  shift
+  if ! aws "$@" --region us-east-1 --output json > "$destination" 2> "$work_dir/aws-error.txt"; then
+    stop "AWS read failed ($1 $2); no permission bypass attempted"
+  fi
+  jq -e . "$destination" >/dev/null || stop 'invalid AWS response'
+}
+extract_policy() {
+  local marker="$1" destination="$2"
+  awk -v marker="$marker" '
+    $0 ~ "<<\047" marker "\047$" { inside=1; next }
+    inside && $0 == marker { exit }
+    inside { print }
+  ' "$source_file" > "$destination"
+  jq -e 'type == "object" and .Version == "2012-10-17" and (.Statement | type == "array")' "$destination" >/dev/null || stop 'invalid reviewed policy source'
+}
+[ -f "$source_file" ] || stop 'sibling reviewed bootstrap source is missing'
+extract_policy EXTRAS_JSON "$work_dir/desired.json"
+extract_policy DENY_JSON "$work_dir/expected-deny.json"
+jq -e --arg role "$role_arn" --arg sid "$sid" '
+  [.Statement[] | select(.Sid == $sid)] == [{
+    Sid: $sid, Effect: "Allow", Action: ["devicefarm:GetRun"],
+    Resource: "arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*",
+    Condition: {ArnEquals: {"aws:PrincipalArn": $role}}
+  }]
+' "$work_dir/desired.json" >/dev/null || stop 'repair grant is not the exact reviewed action, project and role'
+jq --arg sid "$sid" '.Statement |= map(select(.Sid != $sid))' "$work_dir/desired.json" > "$work_dir/baseline.json"
+read_aws "$work_dir/identity.json" sts get-caller-identity
+jq -e --arg account "$account" '
+  .Account == $account and (.Arn | type == "string") and
+  (.Arn | test("^arn:aws:(iam|sts)::" + $account + ":(user/|assumed-role/).+")) and
+  (.Arn | test("(:user/otchealth-ai-reader$|:assumed-role/otchealth-ai-reader-role/)") | not)
+' "$work_dir/identity.json" >/dev/null || stop 'use the existing account owner/admin session, never root or the AI reader'
+read_aws "$work_dir/role-before.json" iam get-role --role-name "$role_name"
+jq -e --arg role "$role_arn" --arg account "$account" '
+  .Role.Arn == $role and (.Role.PermissionsBoundary == null) and
+  (.Role.AssumeRolePolicyDocument.Version == "2012-10-17") and
+  (.Role.AssumeRolePolicyDocument.Statement | length == 1) and
+  (.Role.AssumeRolePolicyDocument.Statement[0] as $s |
+    $s.Sid == "GatewayTaskRoleOnly" and $s.Effect == "Allow" and $s.Action == "sts:AssumeRole" and
+    ($s.Condition == null) and ($s.Principal | keys == ["AWS"]) and
+    ($s.Principal.AWS == ("arn:aws:iam::" + $account + ":role/otchealthTaskRole") or
+     $s.Principal.AWS == ("arn:aws:iam::" + $account + ":role/otchealthGatewayTaskRole")))
+' "$work_dir/role-before.json" >/dev/null || stop 'reader role, trust or boundary differs from reviewed provisioning'
+read_aws "$work_dir/attachments.json" iam list-attached-role-policies --role-name "$role_name"
+jq -e --arg account "$account" '
+  [.AttachedPolicies[].PolicyArn] | sort == ([
+    "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess",
+    "arn:aws:iam::" + $account + ":policy/otchealth-ai-reader-extras",
+    "arn:aws:iam::" + $account + ":policy/otchealth-ai-reader-billing",
+    "arn:aws:iam::" + $account + ":policy/otchealth-ai-reader-deny"
+  ] | sort)
+' "$work_dir/attachments.json" >/dev/null || stop 'reader attachments differ from the exact expected four policies'
+read_aws "$work_dir/inline.json" iam list-role-policies --role-name "$role_name"
+jq -e '.PolicyNames == []' "$work_dir/inline.json" >/dev/null || stop 'unexpected reader inline policy'
+read_aws "$work_dir/deny-policy.json" iam get-policy --policy-arn "$deny_arn"
+deny_version="$(jq -er '.Policy.DefaultVersionId | select(test("^v[1-9][0-9]*$"))' "$work_dir/deny-policy.json")"
+read_aws "$work_dir/deny-live.json" iam get-policy-version --policy-arn "$deny_arn" --version-id "$deny_version"
+jq -e --slurpfile expected "$work_dir/expected-deny.json" '.PolicyVersion.Document == $expected[0]' "$work_dir/deny-live.json" >/dev/null || stop 'existing explicit deny policy differs; it must be preserved'
+read_aws "$work_dir/policy-before.json" iam get-policy --policy-arn "$policy_arn"
+jq -e --arg arn "$policy_arn" '.Policy.Arn == $arn' "$work_dir/policy-before.json" >/dev/null || stop 'unexpected policy identity'
+before_version="$(jq -er '.Policy.DefaultVersionId | select(test("^v[1-9][0-9]*$"))' "$work_dir/policy-before.json")"
+read_aws "$work_dir/preimage.json" iam get-policy-version --policy-arn "$policy_arn" --version-id "$before_version"
+if jq -e --slurpfile desired "$work_dir/desired.json" '.PolicyVersion.Document == $desired[0]' "$work_dir/preimage.json" >/dev/null; then
+  echo "ALREADY_APPLIED: exact scoped policy is default ($before_version); no writes."
+  exit 0
+fi
+jq -e --slurpfile baseline "$work_dir/baseline.json" '.PolicyVersion.Document == $baseline[0]' "$work_dir/preimage.json" >/dev/null || stop 'existing extras policy drift; no unknown statements will be overwritten'
+read_aws "$work_dir/versions.json" iam list-policy-versions --policy-arn "$policy_arn"
+jq -e --arg version "$before_version" '
+  (.Versions | length < 5) and ([.Versions[] | select(.IsDefaultVersion == true) | .VersionId] == [$version])
+' "$work_dir/versions.json" >/dev/null || stop 'no safe version slot or unexpected default; no versions will be deleted'
+jq -n --arg policy "$policy_arn" --arg version "$before_version" --arg mode "$mode" '{policyArn:$policy,previousDefaultVersion:$version,mode:$mode,writeAttempted:false}' > "$work_dir/receipt.json"
+if [ "$mode" = --check ]; then
+  echo "READY: exact AWARE GetRun-only repair; no writes. Private evidence: $work_dir"
+  exit 0
+fi
+# Narrow the unavoidable IAM compare/write race; IAM does not support a conditional version update.
+read_aws "$work_dir/policy-recheck.json" iam get-policy --policy-arn "$policy_arn"
+jq -e --arg version "$before_version" '.Policy.DefaultVersionId == $version' "$work_dir/policy-recheck.json" >/dev/null || stop 'default changed before apply'
+jq '.writeAttempted = true' "$work_dir/receipt.json" > "$work_dir/attempt.json"
+mv "$work_dir/attempt.json" "$work_dir/receipt.json"
+if ! aws iam create-policy-version --policy-arn "$policy_arn" --policy-document "file://$work_dir/desired.json" --set-as-default --region us-east-1 --output json > "$work_dir/write-response.json" 2> "$work_dir/aws-error.txt"; then
+  stop 'single policy write did not return success; reconcile the default version before any further action'
+fi
+after_version="$(jq -er '.PolicyVersion.VersionId | select(test("^v[1-9][0-9]*$"))' "$work_dir/write-response.json")"
+read_aws "$work_dir/policy-after.json" iam get-policy --policy-arn "$policy_arn"
+jq -e --arg version "$after_version" '.Policy.DefaultVersionId == $version' "$work_dir/policy-after.json" >/dev/null || stop 'new default not confirmed; no automatic retry or rollback'
+read_aws "$work_dir/postimage.json" iam get-policy-version --policy-arn "$policy_arn" --version-id "$after_version"
+jq -e --slurpfile desired "$work_dir/desired.json" '.PolicyVersion.Document == $desired[0]' "$work_dir/postimage.json" >/dev/null || stop 'new policy document differs; retain evidence for owner reconciliation'
+read_aws "$work_dir/role-after.json" iam get-role --role-name "$role_name"
+jq -e --slurpfile before "$work_dir/role-before.json" '.Role == $before[0].Role' "$work_dir/role-after.json" >/dev/null || stop 'role metadata changed concurrently; retain evidence'
+jq --arg version "$after_version" '. + {newDefaultVersion:$version,exactPolicyReadback:true,roleUnchanged:true}' "$work_dir/receipt.json" > "$work_dir/completed.json"
+mv "$work_dir/completed.json" "$work_dir/receipt.json"
+echo "APPLIED: exact policy version $after_version. Private receipt: $work_dir/receipt.json"
+echo "Owner rollback only after reconciliation: aws iam set-default-policy-version --policy-arn $policy_arn --version-id $before_version"
+echo 'Next: verify the original GetRun through the same reader bridge. This policy receipt is not a Device Farm or Premium PASS.'
