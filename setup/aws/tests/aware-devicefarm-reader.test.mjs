@@ -110,7 +110,7 @@ if (args[0] === 'iam' && operation === 'list-policy-versions') {
   const n = scenario.versionCount || 1;
   process.stdout.write(JSON.stringify({Versions:Array.from({length:n},(_,i)=>({VersionId:'v'+(i+1),IsDefaultVersion:i===0}))})); process.exit(0);
 }
-if (args[0] === 'iam' && operation === 'list-attached-role-policies') { const p=[{PolicyArn:'arn:aws:iam::aws:policy/job-function/ViewOnlyAccess'},{PolicyArn:'arn:aws:iam::900915535335:policy/otchealth-ai-reader-extras'},{PolicyArn:'arn:aws:iam::900915535335:policy/otchealth-ai-reader-billing'},{PolicyArn:'arn:aws:iam::900915535335:policy/otchealth-ai-reader-deny'}]; if(scenario.extraManaged)p.push({PolicyArn:'arn:aws:iam::900915535335:policy/unexpected'}); if(scenario.missingAttached)p.pop(); process.stdout.write(JSON.stringify({AttachedPolicies:p})); process.exit(0); }
+if (args[0] === 'iam' && operation === 'list-attached-role-policies') { const p=[{PolicyArn:'arn:aws:iam::aws:policy/job-function/ViewOnlyAccess'},{PolicyArn:'arn:aws:iam::900915535335:policy/otchealth-ai-reader-extras'},{PolicyArn:'arn:aws:iam::900915535335:policy/otchealth-ai-reader-billing'},{PolicyArn:'arn:aws:iam::900915535335:policy/otchealth-ai-reader-deny'}]; if(scenario.omitBilling){const i=p.findIndex((x)=>x.PolicyArn.endsWith(':policy/otchealth-ai-reader-billing'));p.splice(i,1);} if(scenario.extraManaged)p.push({PolicyArn:'arn:aws:iam::900915535335:policy/unexpected'}); if(scenario.missingAttached)p.pop(); process.stdout.write(JSON.stringify({AttachedPolicies:p})); process.exit(0); }
 if (args[0] === 'iam' && operation === 'list-role-policies') { process.stdout.write(JSON.stringify({PolicyNames:scenario.inlinePolicies || []})); process.exit(0); }
 if (args[0] === 'iam' && operation === 'list-entities-for-policy') { process.stdout.write(JSON.stringify({PolicyUsers:[],PolicyGroups:[],PolicyRoles:[{RoleName:'otchealth-ai-reader-role'}]})); process.exit(0); }
 if (args[0] === 'iam' && operation === 'get-role-policy') { process.stderr.write('NoSuchEntity\n'); process.exit(254); }
@@ -160,6 +160,25 @@ test('default --check is read-only; --apply makes exactly one CreatePolicyVersio
     const doc = JSON.parse(await readFile(path.join(h.tmp,'captured.json'), 'utf8'));
     assert.deepEqual(statements(doc).filter((s)=>s?.Sid===sid), [desiredStatement()]);
     assert.ok((await h.lines(h.log)).every((c)=>!['delete-policy-version','delete-policy','put-role-policy','attach-role-policy','detach-role-policy','update-assume-role-policy'].includes(c[1])));
+  } finally { await h.close(); }
+});
+
+test('three-policy role profile without optional billing policy is preserved by one scoped write', async () => {
+  const h = await harness({omitBilling:true});
+  try {
+    const checked=await h.run('--check');
+    assert.equal(checked.status,0,checked.stderr||checked.stdout);
+    assert.deepEqual(await h.lines(h.writes),[]);
+    const applied=await h.run('--apply');
+    assert.equal(applied.status,0,applied.stderr||applied.stdout);
+    const writes=await h.lines(h.writes);
+    assert.equal(writes.length,1);
+    assert.equal(writes[0][1],'create-policy-version');
+    assert.ok(writes[0].includes('--policy-arn')&&writes[0].includes(policyArn));
+    const doc=JSON.parse(await readFile(path.join(h.tmp,'captured.json'),'utf8'));
+    assert.deepEqual(statements(doc).filter((s)=>s?.Sid===sid),[desiredStatement()]);
+    const attachedCall=(await h.lines(h.log)).find((c)=>c[1]==='list-attached-role-policies');
+    assert.ok(attachedCall,'three-policy profile must be read and checked');
   } finally { await h.close(); }
 });
 

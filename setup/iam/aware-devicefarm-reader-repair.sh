@@ -71,13 +71,14 @@ jq -e --arg role "$role_arn" --arg account "$account" '
 ' "$work_dir/role-before.json" >/dev/null || stop 'reader role, trust or boundary differs from reviewed provisioning'
 read_aws "$work_dir/attachments.json" iam list-attached-role-policies --role-name "$role_name"
 jq -e --arg account "$account" '
-  [.AttachedPolicies[].PolicyArn] | sort == ([
+  [.AttachedPolicies[].PolicyArn] | sort as $actual |
+  ([
     "arn:aws:iam::aws:policy/job-function/ViewOnlyAccess",
     "arn:aws:iam::" + $account + ":policy/otchealth-ai-reader-extras",
-    "arn:aws:iam::" + $account + ":policy/otchealth-ai-reader-billing",
     "arn:aws:iam::" + $account + ":policy/otchealth-ai-reader-deny"
-  ] | sort)
-' "$work_dir/attachments.json" >/dev/null || stop 'reader attachments differ from the exact expected four policies'
+  ] | sort) as $core |
+  ($actual == $core or $actual == ($core + ["arn:aws:iam::" + $account + ":policy/otchealth-ai-reader-billing"] | sort))
+' "$work_dir/attachments.json" >/dev/null || stop 'reader attachments differ from the exact reviewed three/four-policy profiles'
 read_aws "$work_dir/inline.json" iam list-role-policies --role-name "$role_name"
 jq -e '.PolicyNames == []' "$work_dir/inline.json" >/dev/null || stop 'unexpected reader inline policy'
 read_aws "$work_dir/deny-policy.json" iam get-policy --policy-arn "$deny_arn"
