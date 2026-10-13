@@ -471,15 +471,24 @@ def attached_documents(world, who_arn):
 
 def evaluate(world, who_arn, action, resource):
     """allowed | implicitDeny | explicitDeny, by the IAM rule: an explicit Deny beats any Allow, and no Allow means no access.
-    Conditions, NotAction, NotResource, Principal and permissions boundaries are not modelled: a policy that uses one
-    is a Gap (a loud failure), never a guess."""
+    Only one condition is modelled: ArnEquals with the single aws:PrincipalArn key and one string value.
+    Other condition forms, NotAction, NotResource, Principal and permissions boundaries are a Gap, never a guess."""
     allowed = False
     for source, doc in attached_documents(world, who_arn):
         statements = doc["Statement"]
         for statement in [statements] if isinstance(statements, dict) else statements:
-            for unsupported in ("NotAction", "NotResource", "Condition", "Principal"):
+            for unsupported in ("NotAction", "NotResource", "Principal"):
                 if unsupported in statement:
                     raise Gap("the pretend simulator does not model %s (policy %s)" % (unsupported, source))
+            if "Condition" in statement:
+                condition = statement["Condition"]
+                if (not isinstance(condition, dict) or set(condition) != {"ArnEquals"}
+                        or not isinstance(condition["ArnEquals"], dict)
+                        or set(condition["ArnEquals"]) != {"aws:PrincipalArn"}
+                        or not isinstance(condition["ArnEquals"]["aws:PrincipalArn"], str)):
+                    raise Gap("the pretend simulator does not model this Condition (policy %s)" % source)
+                if condition["ArnEquals"]["aws:PrincipalArn"] != who_arn:
+                    continue
             if not any(glob_match(p, action, fold=True) for p in listed(statement.get("Action"))):
                 continue
             if not any(p == "*" or glob_match(p, resource) for p in listed(statement.get("Resource"))):
@@ -807,3 +816,4 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
