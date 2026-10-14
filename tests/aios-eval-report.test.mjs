@@ -160,11 +160,12 @@ test("wraps sanitized ordinal baseline against exact case artifact bytes without
   assert.equal(report.schema, "EvalRunV1");
   assert.equal(report.metadata.caseArtifactSha256, sha256(artifact));
   assert.equal(report.metadata.sourceIndexGeneration, null);
-  assert.deepEqual(report.counts, { cases: 2, passed: 1, failed: 1 });
+  assert.deepEqual(report.counts, { cases: 2, passed: 1, failed: 1, dependencyFailures: 0 });
   assert.deepEqual(report.metrics.passRate, { numerator: 1, denominator: 2, rate: 0.5 });
   assert.deepEqual(report.metrics.byCategory.map(({ category, cases }) => ({ category, cases })), [
     { category: "guardrail", cases: 1 }, { category: "recall", cases: 1 },
   ]);
+  assert.deepEqual(report.metrics.byRing, [{ ring: null, cases: 2, passed: 1, failed: 1, dependencyFailures: 0, passRate: { numerator: 1, denominator: 2, rate: 0.5 } }]);
   assert.deepEqual(report.cases.map(({ ordinal, category, pass, rank, currentness, citationToClaim, costUsd }) =>
     ({ ordinal, category, pass, rank, currentness, citationToClaim, costUsd })), [
     { ordinal: 1, category: "recall", pass: true, rank: null, currentness: null, citationToClaim: null, costUsd: null },
@@ -172,6 +173,48 @@ test("wraps sanitized ordinal baseline against exact case artifact bytes without
   ]);
   assert.equal(JSON.stringify(report).includes("private fixture body"), false);
   assert.equal(JSON.stringify(report).includes("secret expected text"), false);
+});
+
+test("metadata-only case manifest supplies category, ring, and index generation without copying case bodies", () => {
+  const privateMarker = "PRIVATE_EXPECTED_BODY_DO_NOT_COPY";
+  const artifact = Buffer.from(JSON.stringify({
+    schemaVersion: 1, datasetId: "public-controls", datasetVersion: "holdout-v2", indexGeneration: "idx-2026-10-14",
+    cases: [
+      { kind: "recall", category: "exact-id", ring: "company" },
+      { kind: "recall", category: "temporal", ring: "personal" },
+      { kind: "guardrail", category: "unsupported-control", ring: "public-control" },
+    ],
+  }));
+  const baseline = {
+    schemaVersion: 1, totalCases: 3, passed: 1, failed: 2,
+    cases: [
+      { caseIndex: 1, kind: "recall", pass: true, reason: "passed" },
+      { caseIndex: 2, kind: "recall", pass: false, reason: "transport_error" },
+      { caseIndex: 3, kind: "guardrail", pass: false, reason: "guardrail_evidence_missing" },
+    ],
+  };
+  const report = normalizeEvalBaseline(baseline, artifact);
+  assert.equal(report.metadata.datasetVersion, "holdout-v2");
+  assert.equal(report.metadata.caseArtifactIndexGeneration, "idx-2026-10-14");
+  assert.equal(report.metadata.sourceIndexGeneration, null, "case metadata is not proof of the index used by the run");
+  assert.equal(report.metadata.caseArtifactSha256, sha256(artifact));
+  assert.deepEqual(report.metrics.byCategory.map(({ category, cases }) => ({ category, cases })), [
+    { category: "exact-id", cases: 1 }, { category: "temporal", cases: 1 }, { category: "unsupported-control", cases: 1 },
+  ]);
+  assert.equal(report.metrics.byCategory.find(({ category }) => category === "temporal").dependencyFailures, 1);
+  assert.deepEqual(report.metrics.byRing.map(({ ring, cases }) => ({ ring, cases })), [
+    { ring: "company", cases: 1 }, { ring: "personal", cases: 1 }, { ring: "public-control", cases: 1 },
+  ]);
+  assert.equal(report.counts.dependencyFailures, 1);
+  assert.equal(report.evidence.expected.unknown, 3);
+  assert.equal(report.evidence.expected.coverageRate, null);
+  assert.ok(report.cases.every((row) => row.expectedEvidence === null && row.retrievedEvidence === null && row.rank === null && row.currentness === null && row.citationToClaim === null && row.costUsd === null));
+  assert.equal(JSON.stringify(report).includes(privateMarker), false);
+  assert.equal(report.cases[0].ring, "company");
+  assert.equal(report.cases[0].ordinal, 1);
+  const unsafeArtifact = JSON.parse(artifact.toString("utf8"));
+  unsafeArtifact.cases[0].expectedAnswer = privateMarker;
+  assert.throws(() => normalizeEvalBaseline(baseline, Buffer.from(JSON.stringify(unsafeArtifact))), /unsupported fields/);
 });
 
 test("rejects unpinned or inconsistent ordinal baselines", () => {
@@ -206,7 +249,10 @@ test("CLI wraps a sanitized ordinal baseline only with its pinned case artifact"
     const inputPath = join(directory, "baseline #1.json");
     const casesPath = join(directory, "cases #1.json");
     const outputPath = join(directory, "report #1.json");
-    const artifact = Buffer.from(JSON.stringify([{ kind: "recall", input: "not copied" }]));
+    const artifact = Buffer.from(JSON.stringify({
+      schemaVersion: 1, datasetId: "synthetic", datasetVersion: "v1", indexGeneration: "idx-fixture", ring: "company",
+      cases: [{ kind: "recall", category: "recall", ring: "company" }],
+    }));
     const baseline = { schemaVersion: 1, totalCases: 1, passed: 1, failed: 0, cases: [{ caseIndex: 1, kind: "recall", pass: true, reason: "passed" }] };
     await copyFile(new URL("../tools/aios-eval-report.mjs", import.meta.url), script);
     await writeFile(inputPath, JSON.stringify(baseline));
@@ -214,6 +260,10 @@ test("CLI wraps a sanitized ordinal baseline only with its pinned case artifact"
     await execFile(process.execPath, [script, inputPath, "--cases", casesPath, "--out", outputPath]);
     const report = JSON.parse(await readFile(outputPath, "utf8"));
     assert.equal(report.metadata.caseArtifactSha256, sha256(artifact));
+    assert.equal(report.metadata.datasetVersion, "v1");
+    assert.equal(report.metadata.caseArtifactIndexGeneration, "idx-fixture");
+    assert.equal(report.metadata.sourceIndexGeneration, null);
+    assert.deepEqual(report.metrics.byRing.map(({ ring, cases }) => ({ ring, cases })), [{ ring: "company", cases: 1 }]);
     assert.equal(report.inputSha256, sha256(await readFile(inputPath)));
   } finally {
     await rm(directory, { recursive: true, force: true });
