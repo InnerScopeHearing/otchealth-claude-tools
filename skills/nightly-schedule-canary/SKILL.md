@@ -44,7 +44,7 @@ reports UNWITNESSED, which pages and names the fix. `FLEET_WATCH_GH_TOKEN` is an
 | LIVE | no | proof of life inside the limit |
 | PENDING | no | the row has `armed: "YYYY-MM-DD"`, no proof yet, and is still inside armed date + its own limit (grace for a brand new job). It never hides UNREADABLE or UNWITNESSED |
 | STALE | yes | no ok beat and no scheduled run inside the limit: the job or its cron is silent |
-| NO-DATA | yes | a beat-only row that has never beaten ok (after any armed grace) |
+| NO-DATA | yes | a beat-only row with no successful ok beat observed (after any armed grace); workload execution state is unknown |
 | FAILING | yes | the job runs but reports failure: fresh beat with `consecutive_fail` above 0, a beat that never reported ok, or the last scheduled run failed or timed out |
 | UNWITNESSED | yes | a `gh_workflow` row with no usable beat whose GitHub read failed (private repo, no such file, rate limit). The line names the fix |
 | UNREADABLE | yes | a beat-only row and the checker's AWS role cannot read the beat store. One grouped line carries the exact missing permission |

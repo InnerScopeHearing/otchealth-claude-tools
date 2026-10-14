@@ -24,10 +24,9 @@
 //     group; there is nothing left to query there). Left in place rather than stripped out --  it
 //     still documents which jobs were considered safe/unsafe to auto-restart, which is exactly the
 //     judgment call an eventual ECS restart executor will need to re-make.
-//   - `check` reports LIVE/LATE/DEAD/NO-DATA from the self-beat alone. A job that cannot even start
-//     now shows the SAME "DEAD (never)" as a job that started and then silently stopped beating --
-//     that distinction (the whole point of the old ARM-liveness half) is a real regression until an
-//     ECS-based equivalent exists; it is called out here rather than left to be discovered.
+//   - `check` reports LIVE/LATE/DEAD/NO-DATA from the self-beat alone. Without a self-beat, it cannot
+//     establish whether the workload started; that distinction (the whole point of the old
+//     ARM-liveness half) remains unavailable until an ECS-based equivalent exists.
 //   - `planAutoRestart()` (the pure cooldown/escalate decision core) is UNCHANGED and stays exported +
 //     hermetically tested (tests/heartbeat-autorestart.test.mjs) -- its cooldown/escalate judgment
 //     will be the right thing to reuse once a real ECS executor exists. `maybeAutoRestart()` (the I/O
@@ -188,9 +187,8 @@ if (isMain)
       const lastOk = hb.last_ok ? Date.parse(hb.last_ok) : null;
       const ageMin = lastOk ? Math.round((now - lastOk) / 60000) : null;
       // No ARM/control-plane signal any more (see header note): status is derived from the self-beat
-      // alone. A job that never even started now reads identically to one that started and stopped
-      // beating -- both are "DEAD (never)" / "NO-DATA" -- where the pre-port ARM path could once tell
-      // those apart. Flagged, not silently narrowed.
+      // alone. The absence of an ok beat does not establish whether a job started; consumers must
+      // report unknown execution state unless another launch witness is available.
       let status;
       if (!intervalMin && !lastOk) status = "NO-DATA";
       else if (!lastOk) status = "DEAD";

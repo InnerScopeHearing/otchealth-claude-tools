@@ -4,9 +4,109 @@ import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { assessCapabilityProbe, classifyToolBinding } from "../setup/capability-check.mjs";
+import { assessCapabilityProbe, classifyToolBinding, probeFromNativeCatalogReceipt } from "../setup/capability-check.mjs";
 
 const observedAt = "2026-10-13T23:34:00Z";
+
+test("native catalog receipt maps only exact caller and operation evidence", () => {
+  const probe = probeFromNativeCatalogReceipt({
+    expectedSeat: "cto",
+    observedAt,
+    toolName: "mcp__codex_apps__otchealth_cto_catalog_probe",
+    surfaceToolNames: ["mcp__codex_apps__otchealth_cto_catalog_probe"],
+    receipt: {
+      isError: false,
+      structuredContent: {
+        correlation_id: "test-correlation-1",
+        result: {
+          build_tag: "catalog-probe-2026-07-26.1",
+          tool_registry_count: 1046,
+          revision: { image_tag: "gateway-test", image_digest: "sha256:abc" },
+          known_tools_present: { catalog_probe: true },
+          request_context: { caller_agent: "cto", is_connector_surface: true },
+        },
+      },
+    },
+  });
+  const assessed = assessCapabilityProbe(probe);
+  assert.equal(assessed.binding.status, "operation_succeeded");
+  assert.equal(assessed.metadata.layers.executor_binding.state, "healthy");
+  assert.equal(assessed.metadata.layers.skill_discovery.state, "unknown");
+  assert.deepEqual(probe.gatewayCatalogNames, ["catalog_probe", "mcp__codex_apps__otchealth_cto_catalog_probe"]);
+  assert.equal(assessed.binding.catalogPresent, true);
+  assert.equal(probe.operationEvidenceRef, "receipt:test-correlation-1");
+  assert.equal(probe.catalogVersion, null, "fixed build tags do not identify the catalog fingerprint");
+  assert.equal(probe.sourceRevision, null, "an image tag is not a verified source revision");
+});
+
+function nativeCatalogFixture() {
+  return {
+    isError: false,
+    structuredContent: {
+      correlation_id: "native-shape-test-1",
+      result: {
+        build_tag: "catalog-probe-test",
+        tool_registry_count: 1046,
+        known_tools_present: { catalog_probe: true },
+        request_context: { caller_agent: "cto", is_connector_surface: true,
+                           is_m365_static_auth: false },
+      },
+    },
+  };
+}
+
+function assessNative(receipt, toolName = "mcp__codex_apps__otchealth_cto_catalog_probe") {
+  return assessCapabilityProbe(probeFromNativeCatalogReceipt({
+    expectedSeat: "cto", observedAt, toolName, surfaceToolNames: [toolName], receipt,
+  }));
+}
+
+test("native result-only and error-only receipts cannot prove handler success", () => {
+  for (const result of [
+    { request_context: { caller_agent: "cto", is_connector_surface: true } },
+    { error: "denied", request_context: { caller_agent: "cto", is_connector_surface: true } },
+    [],
+  ]) {
+    const receipt = nativeCatalogFixture();
+    receipt.structuredContent.result = result;
+    const assessed = assessNative(receipt);
+    assert.notEqual(assessed.binding.status, "operation_succeeded");
+    assert.notEqual(assessed.binding.handlerBound, true);
+    assert.notEqual(assessed.metadata.layers.read_operation.state, "healthy");
+    assert.notEqual(assessed.metadata.layers.connector_authentication.state, "healthy");
+    assert.equal(assessed.binding.refreshNeeded, true);
+  }
+});
+
+test("native catalog success requires its exact shape and usable receipt correlation", () => {
+  for (const mutate of [
+    r => delete r.structuredContent.correlation_id,
+    r => { r.structuredContent.correlation_id = "unsafe receipt"; },
+    r => { r.structuredContent.result.error = "denied"; },
+    r => { r.structuredContent.result.known_tools_present.catalog_probe = false; },
+    r => { r.structuredContent.result.tool_registry_count = 0; },
+    r => { r.structuredContent.result.tool_registry_count = "1046"; },
+    r => { r.structuredContent.result.request_context.is_connector_surface = false; },
+    r => { r.isError = true; },
+  ]) {
+    const receipt = nativeCatalogFixture();
+    mutate(receipt);
+    const assessed = assessNative(receipt);
+    assert.notEqual(assessed.binding.status, "operation_succeeded");
+    assert.notEqual(assessed.metadata.layers.read_operation.state, "healthy");
+    assert.equal(assessed.binding.refreshNeeded, true);
+  }
+});
+
+test("a catalog receipt cannot be relabeled as a different operation or seat binding", () => {
+  for (const toolName of ["mcp__codex_apps__otchealth_cto_memory_write",
+                         "mcp__codex_apps__otchealth_coo_catalog_probe"]) {
+    const assessed = assessNative(nativeCatalogFixture(), toolName);
+    assert.notEqual(assessed.binding.status, "operation_succeeded");
+    assert.notEqual(assessed.binding.handlerBound, true);
+    assert.notEqual(assessed.metadata.layers.read_operation.state, "healthy");
+  }
+});
 
 test("parent tool can be proven while a child-missing tool stays a distinct gap", () => {
   const parent = classifyToolBinding({

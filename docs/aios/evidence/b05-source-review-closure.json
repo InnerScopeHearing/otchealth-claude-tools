@@ -1,0 +1,73 @@
+{
+  "schema": "aios-b05-source-review-closure/v1",
+  "observed_at": "2026-10-14T01:35:46Z",
+  "run_id": "AIOS-EXECUTE-20261013-01/B05",
+  "review": {
+    "kind": "one independent Sol source pass followed by root remediation",
+    "critical": 0,
+    "findings": [
+      {
+        "id": "B05-R1",
+        "severity": "Important",
+        "closed": true,
+        "resolution": "Validate non-error catalog shape, usable correlation and exact caller/catalog-operation binding.",
+        "regression": "Three reproduced failures before fix; ten capability tests passed after fix."
+      },
+      {
+        "id": "B05-R2",
+        "severity": "Important",
+        "closed": true,
+        "resolution": "Retain exact sanitized publisher/native-instruction receipt in source; validate pin against that receipt.",
+        "regression": "Missing-source-evidence test failed before fix; ten plugin-lock tests and 44 registry tests passed after fix."
+      },
+      {
+        "id": "B05-R3",
+        "severity": "Minor",
+        "closed": true,
+        "resolution": "Replace author-workspace Gateway pointers with immutable GitHub source references at PR553 merge 7ce093b322948fc03888f66ec7d6564af6cacfbb."
+      },
+      {
+        "id": "B05-R4",
+        "severity": "Minor",
+        "closed": true,
+        "resolution": "Distinguish committed stdlib invariant/currentness tests from separate optional local JSON Schema validation."
+      }
+    ]
+  },
+  "local_verification": {
+    "capability": 10,
+    "plugin_lock": 10,
+    "registry": 44,
+    "source_currentness": 14,
+    "monitor_independent_review": 80,
+    "diff_checks": "passed"
+  },
+  "scoped_parent_capability": {
+    "observed_at": "2026-10-14T01:34:46Z",
+    "correlation_id": "f7617fae-41b0-438d-932d-fe658f6adcb5",
+    "caller": "cto",
+    "gateway_revision": "otchealth-gateway:212",
+    "operation": "catalog_probe",
+    "producer_snapshot_sha256": "9af5249fb36963febb4d36116a514e31f53ae9f5e2325aa7269a68fa8e2b095d",
+    "validator": "valid",
+    "freshness_at_validation": "current; TTL300seconds",
+    "overall_capability": "partial",
+    "not_proven": [
+      "all seats",
+      "reversible write",
+      "administration",
+      "tunnel",
+      "skill discovery by this probe",
+      "catalog version"
+    ]
+  },
+  "boundaries": {
+    "release": "source candidate; required CI and merge still pending at this receipt",
+    "monitor": "No heartbeat fabricated, pager suppression or provider restart. Actual launch state requires provider evidence.",
+    "plugin": "Private 0.2.4 publisher and six loaded instruction texts verified; vendor invocation, install and other-client adoption unverified.",
+    "source_authority": "Metadata configuration only; runtime loader and source-owner receipts not established.",
+    "graph": "Current readback unavailable under this caller; existing hold and gross USD1200 monthly ceiling retained.",
+    "communication": "Canonical prior checkpoint text independently matched; Developer ACK and current-client newest_first binding unverified."
+  },
+  "rollback": "Additive revert of this bounded source change through normal reviewed GitHub release; preserve previous immutable source and plugin history."
+}
