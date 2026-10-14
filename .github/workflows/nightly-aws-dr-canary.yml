@@ -76,9 +76,24 @@ jobs:
       - name: "Heartbeat: mark this workflow's schedule as alive"
         id: heartbeat
         if: always()
+        env:
+          HEARTBEAT_OUTCOME: ${{ steps.canary.outcome == 'success' && 'ok' || 'fail' }}
         run: |
           set -o pipefail
-          timeout 20 node setup/heartbeat.mjs beat nightly-aws-dr-canary ok 2>&1 | tee "${RUNNER_TEMP:-/tmp}/aws-dr-heartbeat.log"
+          event=fail
+          if [[ "${HEARTBEAT_OUTCOME:-}" == "ok" ]]; then event=ok; fi
+          private_output="$(mktemp "${RUNNER_TEMP:?RUNNER_TEMP is required}/aws-dr-heartbeat-private.XXXXXX")"
+          set +e
+          timeout 20 node setup/heartbeat.mjs beat nightly-aws-dr-canary "$event" >"$private_output" 2>&1
+          heartbeat_exit=$?
+          set -e
+          rm -f -- "$private_output"
+          set +e
+          printf '[heartbeat] nightly-aws-dr-canary event=%s exit=%s\n' "$event" "$heartbeat_exit" | tee "${RUNNER_TEMP}/aws-dr-heartbeat.log"
+          metadata_exit=$?
+          set -e
+          if [[ "$heartbeat_exit" -ne 0 ]]; then exit "$heartbeat_exit"; fi
+          exit "$metadata_exit"
 
       - name: Upload canary log
         if: always()
