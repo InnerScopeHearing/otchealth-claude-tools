@@ -1,0 +1,49 @@
+{
+  "schema": "aios-b17-retrieval-gap/v1",
+  "status": "reviewed_source_fix_verified_live_corpus_occurrence_unverified",
+  "prepared_at_utc": "2026-10-14T13:02:00Z",
+  "source": {
+    "repo": "/workspace/aios-b17-retrieval-gap-20261014",
+    "branch": "claude/aios-b17-retrieval-gap-20261014",
+    "base_commit": "6d4ea12760790026fb98276f563e7d219bbc7235",
+    "base_note": "Local B13 source-equivalent commit; exact accepted remote-main object described as 8d6e by Root was not available locally. No changes were made to the shared source worktree or its untracked files."
+  },
+  "finding": {
+    "area": "skills/kb-memory/semantic.mjs assignDocIds / reindex exact document identity",
+    "severity": "possible silent exact-ID loss when distinct raw identifiers normalize to the same search key",
+    "reproduction": {
+      "fixture": "Synthetic non-sensitive rows: agent cto, IDs doc/a and doc_a, identical text.",
+      "before_base_key_for_both": "cto__doc_a",
+      "before_distinct_assigned_keys": 1,
+      "before_collision_group_reported": false,
+      "before_red_test": "9/10 semantic-docid tests passed; the new collision test failed because distinct raw IDs collapsed to the shared bare key.",
+      "after_assigned_keys": ["cto__doc_a__eedf3c40fdaf", "cto__doc_a__eedf3c40fdaf", "cto__doc_a__08d9f98ae81d"],
+      "after_distinct_assigned_keys": 2,
+      "exact_duplicate_behavior": "Two identical copies of the same raw agent/id/normalized text still converge on one key."
+    },
+    "cause": "docId sanitizes disallowed identifier characters to underscore. assignDocIds previously recognized collisions only when text differed; different raw identifiers with identical text therefore shared one document key and were not marked for stale-base-key pruning.",
+    "fix": "Preserve byte-exact legacy base+shortHash(rawText) IDs for single raw-identity groups with distinct texts. For every multi-identity group, use stable source-identity+normalized-text hashes regardless of text cardinality, tracking legacy text-hash aliases by base. The existing reindex path prunes a stale bare base or legacy alias only after every current replacement ID is confirmed in the index or successfully embedded; current assigned IDs are never alias-deleted.",
+    "compatibility_limit": "Historical single-identity different-text groups retain exact legacy text-hash keys. Multi-identity groups migrate old text-hash keys through guarded alias cleanup; cleanup remains deferred if any replacement is absent or fails embedding.",
+    "review_history": "Initial HOLD and the subsequent temporal-identity HOLD are preserved in /workspace/b17-source-group-review.json and /workspace/b17-source-group-review.md; final independent review closed the temporal alias finding.",
+    "occurrence_limit": "The defect is reproducible in the actual pure index-ID assignment function. No authorized owner-reviewed source inventory was read to establish whether this exact sanitized-ID collision currently occurs in a live corpus or index. No eval cases, manifests, or expected bodies were added or changed."
+  },
+  "changed_files": [
+    {"path": "skills/kb-memory/semantic.mjs", "sha256": "c1b2d0976af42a813603edcd826ac56297bf12a2949e48a38ef6b7f56b15c83d", "change": "Stable identity+normalized-text IDs for multi-identity groups; guarded legacy alias cleanup in actual reindex path."},
+    {"path": "tests/semantic-docid.test.mjs", "sha256": "d1c03ee18800e39d799c031a98fab6a961c84be333686800329031c21965941c", "change": "Synthetic temporal append, legacy compatibility, safe alias cleanup, partial replacement and duplicate-convergence regressions."}
+  ],
+  "verification": {
+    "red": [
+      {"command": "node --test tests/semantic-docid.test.mjs", "result": "9 passed, 1 failed before the first implementation; reproduced same-text sanitized-ID loss."},
+      {"command": "node --test tests/semantic-docid.test.mjs", "result": "10 passed, 2 failed before the compatibility narrowing; both failures showed legacy different-text IDs had changed."},
+      {"command": "node --test tests/semantic-docid.test.mjs skills/kb-memory/tests/semantic-opensearch-dispatch.test.mjs", "result": "17 passed, 0 failed on final frozen source; includes temporal append stability, exact legacy hashes, and guarded alias cleanup."}
+    ],
+    "green": {"command": "node --test tests/semantic-docid.test.mjs skills/kb-memory/tests/semantic-opensearch-dispatch.test.mjs", "result": "17 passed, 0 failed; independent reviewer also passed supersession/partial-replacement/current-ID-protection probes. Root reports its broader focused suite at 28/28."},
+    "diff_check": "git diff --check passed",
+    "provider_calls": 0,
+    "model_calls": 0,
+    "external_writes": 0,
+    "eval_corpus_mutations": 0
+  },
+  "evaluation_pipeline_observation": "The staged EvalRunV1 normalizer and metadata-only ordinal wrapper retain exact artifact-byte hash, contiguous one-based ordinals, kind alignment, source-vs-artifact index generation distinction, denominator provenance, and unknown rank/evidence/currentness/citation-claim/cost fields. No separate reproduced coverage defect was found in this scoped check.",
+  "remaining_action": "Source publication is owned by Root. If an owner-approved read-only corpus/index metadata view is later authorized, check only raw source-ID-to-normalized-key collision counts before claiming the defect affected live data. No ingestion or index mutation was performed or authorized here."
+}

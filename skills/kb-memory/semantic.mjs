@@ -277,13 +277,12 @@ export async function readExecFeed() {
 // Exported for tests/semantic-docid.test.mjs (stability + key-charset safety). Pure.
 export const docId = (agent, id) => `${agent}__${id}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
 
-// Stable short content hash for collision disambiguation (assignDocIds below). Not security-sensitive;
-// it only has to be deterministic and well-distributed so two DIFFERENT texts sharing one base key get
-// different suffixes. sha1 -> first 12 hex chars, already inside the Azure AI Search key charset.
+// Stable short hash for collision disambiguation (assignDocIds below). Not security-sensitive; it only
+// has to be deterministic and well-distributed. sha1 -> first 12 hex chars, inside Azure key charset.
 const shortHash = (text) => crypto.createHash("sha1").update(String(text == null ? "" : text)).digest("hex").slice(0, 12);
 
 // Assign a STABLE, INJECTIVE index doc-key to every entry (tagging each with `_docId`) and return the
-// set of base keys that had a genuine collision (>=2 entries with DIFFERENT text under one base key).
+// set of base keys that had a collision (different source identities or text under one base key).
 //
 // THE BUG THIS FIXES (gs-10 -- a real data-integrity loss in the live brain): nextId() historically
 // produced un-salted 2-segment ids (e.g. "20260701-044"), so two different ledger entries could share
@@ -295,10 +294,10 @@ const shortHash = (text) => crypto.createHash("sha1").update(String(text == null
 //
 // Minimal-churn by design: the common (unique) case KEEPS its bare `agent__id` key, so the ~4.7k
 // healthy docs stay in the index untouched (no re-embed). ONLY the colliding entries get a
-// `__<contentHash>` suffix so each distinct fact gets its own key. Idempotent: same entry -> same key
-// every run. Same-text entries within a colliding group still share a key (correct -- they are the same
-// fact). Pure (no I/O); exported for tests.
-export function assignDocIds(entries) {
+// `__<hash>` suffix so each distinct source identity/text gets its own key. Idempotent: same entry ->
+// same key every run. Exact duplicate copies of one source identity and normalized text still share a
+// key. Pure (no I/O); exported for tests.
+export function assignDocIds(entries, legacyAliasesByBase = new Map()) {
   const groups = new Map(); // baseKey -> entries[]
   for (const e of entries || []) {
     if (!e || !e.id) continue;
@@ -309,11 +308,53 @@ export function assignDocIds(entries) {
   const collidedBaseKeys = new Set();
   for (const [base, arr] of groups) {
     const distinctText = new Set(arr.map((e) => (e.text || "").trim()));
-    if (distinctText.size < 2) { for (const e of arr) e._docId = base; continue; }
-    collidedBaseKeys.add(base);
-    for (const e of arr) e._docId = `${base}__${shortHash(e.text)}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
+    const distinctSourceIds = new Set(arr.map((e) => JSON.stringify([String(e._agent ?? ""), String(e.id)])));
+    if (distinctSourceIds.size > 1) {
+      collidedBaseKeys.add(base);
+      if (legacyAliasesByBase) {
+        if (!legacyAliasesByBase.has(base)) legacyAliasesByBase.set(base, new Set());
+        for (const e of arr) legacyAliasesByBase.get(base).add(`${base}__${shortHash(e.text)}`.replace(/[^A-Za-z0-9_\-=]/g, "_"));
+      }
+      for (const e of arr) {
+        const identity = JSON.stringify([String(e._agent ?? ""), String(e.id), (e.text || "").trim()]);
+        e._docId = `${base}__${shortHash(identity)}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
+      }
+      continue;
+    }
+    if (distinctText.size > 1) {
+      // Preserve the exact legacy key format for already-separated text collisions. Changing these
+      // keys would leave the old hashed documents behind; current safe pruning only removes the bare key.
+      collidedBaseKeys.add(base);
+      for (const e of arr) e._docId = `${base}__${shortHash(e.text)}`.replace(/[^A-Za-z0-9_\-=]/g, "_");
+      continue;
+    }
+    for (const e of arr) e._docId = base;
   }
   return collidedBaseKeys;
+}
+
+// Select stale collision keys only after every intended replacement is confirmed present.
+export function collisionPruneIds(entries, collidedBaseKeys, legacyAliasesByBase, have, embedded) {
+  const groupDocIds = new Map();
+  const currentDocIds = new Set();
+  for (const e of entries || []) {
+    if (!e || !e.id || !e._docId) continue;
+    const base = docId(e._agent, e.id);
+    if (!groupDocIds.has(base)) groupDocIds.set(base, new Set());
+    groupDocIds.get(base).add(e._docId);
+    currentDocIds.add(e._docId);
+  }
+  const safe = (base) => {
+    const ids = groupDocIds.get(base);
+    return Boolean(ids?.size) && [...ids].every((id) => have.has(id) || embedded.has(id));
+  };
+  const prune = new Set();
+  for (const base of collidedBaseKeys || []) if (have.has(base) && safe(base)) prune.add(base);
+  for (const [base, aliases] of legacyAliasesByBase || []) {
+    if (!safe(base)) continue;
+    for (const alias of aliases) if (have.has(alias) && !currentDocIds.has(alias)) prune.add(alias);
+  }
+  return [...prune];
 }
 
 // Trust-rank + annotate recall hits using an INJECTED semantic-trust module (so this is pure and unit-
@@ -406,10 +447,10 @@ export async function reindex() {
   await init(); await ensureIndex();
   const entries = await readExecFeed();
   const have = await existingIds();
-  // Assign a stable, injective key to every entry: bare `agent__id` for the unique common case (kept
-  // as-is in the index, no re-embed), a content-hash-suffixed key ONLY for genuinely colliding entries
-  // so no distinct fact is silently dropped (the gs-10 id-collision bug).
-  const collidedBaseKeys = assignDocIds(entries);
+  // Assign a stable key to every entry: bare `agent__id` for the unique common case (kept as-is in the
+  // index, no re-embed), a hash-suffixed key ONLY for colliding entries so no distinct source is dropped.
+  const legacyAliasesByBase = new Map();
+  const collidedBaseKeys = assignDocIds(entries, legacyAliasesByBase);
   // RETRACTION (defect-2 fix, 2026-07-21): computed ONCE over the full feed -- an entry's id landing in
   // this set means some OTHER entry `--supersedes`s it, i.e. the fleet has corrected/retracted it. Baked
   // into every doc as `retracted` (inline below, plus a retroactive refresh pass after the main loop) so
@@ -450,11 +491,8 @@ export async function reindex() {
   // embed failed for any group member, keep the bare key as a fallback so no fact is lost; the next run
   // retries. (Deletes run AFTER all upserts, so a partial feed read / embed failure can never orphan a
   // live fact.)
-  const groupDocIds = new Map(); // base -> Set(_docId) over the FULL feed
-  for (const e of entries) { if (e.id && e._docId) { const b = docId(e._agent, e.id); if (!groupDocIds.has(b)) groupDocIds.set(b, new Set()); groupDocIds.get(b).add(e._docId); } }
-  const groupSafe = (b) => [...(groupDocIds.get(b) || [])].every(d => have.has(d) || embedded.has(d));
-  const orphans = [...collidedBaseKeys].filter(b => have.has(b) && groupSafe(b));
-  if (orphans.length) { await aisDelete(orphans); console.error(`  pruned ${orphans.length} stale bare-key duplicate(s)`); }
+  const orphans = collisionPruneIds(entries, collidedBaseKeys, legacyAliasesByBase, have, embedded);
+  if (orphans.length) { await aisDelete(orphans); console.error(`  pruned ${orphans.length} stale collision key(s)`); }
   console.log(`memory-semantic: indexed ${n} new entries into ${IDX} (~${have.size + n - orphans.length} total after pruning ${orphans.length} duplicate(s)).`);
 }
 
