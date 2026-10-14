@@ -28,10 +28,12 @@
 // completed a run for 26h, and the watchdog is itself a registry row judged here.
 //
 // Usage: node skills/nightly-schedule-canary/schedule-canary.mjs [--json] [--strict]
+//        node skills/nightly-schedule-canary/schedule-canary.mjs --execution-evidence receipt.json [--execution-evidence-only]
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { classifyExecutionBundle } from "./execution-evidence.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -351,6 +353,30 @@ function runHeartbeatCheck() {
 }
 
 async function main() {
+  const evidenceArg = argv.indexOf("--execution-evidence");
+  let execution = null;
+  if (evidenceArg !== -1) {
+    try {
+      const bundle = JSON.parse(readFileSync(resolve(argv[evidenceArg + 1] || ""), "utf8"));
+      execution = classifyExecutionBundle(bundle);
+    } catch {
+      execution = { ok: false, error: "receipt file is unavailable or does not contain valid JSON", observations: [], monitor: { state: "MONITOR-WITNESS-UNKNOWN", detail: "monitor witness was not evaluated" } };
+    }
+  }
+  if (argv.includes("--execution-evidence-only")) {
+    if (!execution) {
+      console.log("[ERROR   ] --execution-evidence-only requires --execution-evidence <json-file>");
+      process.exit(1);
+    }
+    const ok = execution.ok && execution.observations.every((r) => r.ok) && execution.monitor.state === "MONITOR-WITNESSED";
+    if (JSONOUT) console.log(JSON.stringify({ ok, executionEvidence: execution }, null, 2));
+    else if (execution.error) console.log(`[ERROR   ] ${execution.error}`);
+    else {
+      for (const r of execution.observations) console.log(`[${r.state.padEnd(23)}] ${r.job}: ${r.detail}`);
+      console.log(`[${execution.monitor.state.padEnd(23)}] monitor: ${execution.monitor.detail}`);
+    }
+    process.exit(ok ? 0 : 1);
+  }
   const registry = loadRegistry();
   const watched = watchedJobs(registry);
   if (!watched.length) {
@@ -374,19 +400,31 @@ async function main() {
     }),
   );
   const verdict = evaluateSilence({ registry, beatRows: hb.ok ? hb.rows : null, beatError, schedule });
+  const executionFailed = Boolean(execution && (!execution.ok || !execution.observations.every((r) => r.ok) || execution.monitor.state !== "MONITOR-WITNESSED"));
+  // Explicit, operator-supplied evidence is attached to this existing CLI; no default AWS fanout or extra watcher.
+  if (execution) verdict.executionEvidence = execution;
   if (JSONOUT) {
     console.log(JSON.stringify(verdict, null, 2));
   } else {
     console.log(`[silence-monitor] ${watched.length} registered job(s) checked, ${verdict.anomalies.length} needing attention (${summarizeStates(verdict.results)})`);
     for (const r of verdict.results) console.log(`  ${r.state.padEnd(19)} ${r.job.padEnd(30)} ${r.state === "UNREADABLE" ? "beat store unreadable (reason under ATTENTION)" : r.detail}${r.witness ? ` [${r.witness}]` : ""}`);
+    if (execution && execution.observations) {
+      console.log("\nEXECUTION EVIDENCE (operator supplied; independent of beat verdicts)");
+      if (execution.error) console.log(`  [ERROR] ${execution.error}`);
+      else {
+        for (const r of execution.observations) console.log(`  ${r.state.padEnd(24)} ${r.job}: ${r.detail}`);
+        console.log(`  ${execution.monitor.state.padEnd(24)} monitor: ${execution.monitor.detail}`);
+      }
+    } else if (execution && execution.error) console.log(`\n[ERROR   ] ${execution.error}`);
     const att = renderAttention(verdict.anomalies);
     if (att.length) {
       console.log("\nATTENTION");
       for (const l of att) console.log(l);
     }
-    console.log(verdict.ok ? "\n[silence-monitor] OK: every registered job has recent proof of life" : `\n[silence-monitor] SILENCE = FAILURE: ${verdict.anomalies.map((r) => r.job).join(", ")}`);
+    if (executionFailed) console.log("[ERROR   ] supplied execution receipt is incomplete, nonhealthy, or lacks a successful fresh monitor witness");
+    console.log(verdict.ok && !executionFailed ? "\n[silence-monitor] OK: every registered job has recent proof of life" : `\n[silence-monitor] SILENCE = FAILURE: ${verdict.anomalies.map((r) => r.job).join(", ")}${executionFailed ? (verdict.anomalies.length ? ", " : "") + "execution-evidence" : ""}`);
   }
-  process.exit(pageExitCode(verdict.anomalies.length, STRICT));
+  process.exit(pageExitCode(verdict.anomalies.length + Number(executionFailed), STRICT));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
