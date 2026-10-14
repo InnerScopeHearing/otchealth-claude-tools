@@ -108,6 +108,90 @@ export function classifyTaskWithHistory(text, hints = {}) {
   return { model, maxTokens: Math.max(base.maxTokens, 8000), reason: `${base.reason}; escalated ${base.model} -> ${model} (${why})` };
 }
 
+/**
+ * Build a deterministic, side-effect-free company intake/handoff plan.
+ * This describes work for an orchestrator; it never dispatches or reads evidence sources.
+ * Required observed data is supplied by the caller so missing authority stays explicit.
+ */
+export function intakeCompanyTask(input = {}) {
+  const parentTaskId = typeof input.parentTaskId === "string" ? input.parentTaskId.trim() : "";
+  const objective = typeof input.objective === "string" ? input.objective.trim() : "";
+  const outcome = typeof input.outcome === "string" ? input.outcome.trim() : "";
+  const scope = input.scope;
+  const evidencePointers = Array.isArray(input.evidencePointers)
+    ? input.evidencePointers.filter((p) => typeof p === "string" && p.trim()).map((p) => p.trim())
+    : [];
+  const mode = input.classification;
+
+  if (!parentTaskId || !objective || !outcome || !["company", "personal"].includes(mode)) {
+    return { parentTaskId: parentTaskId || null, status: "blocked", reason: "missing parentTaskId, objective, outcome, or classification", packets: [] };
+  }
+  if (mode === "personal") {
+    return {
+      parentTaskId, status: "direct-owner", disposition: "personal-owner", objective, outcome,
+      sourceRead: false, evidencePointers: [], packets: [],
+    };
+  }
+
+  const domains = Array.isArray(input.domains) ? [...new Set(input.domains)] : [];
+  const known = new Set(["engineering", "finance", "operations"]);
+  const invalidDomains = domains.filter((domain) => !known.has(domain));
+  const source = typeof input.intendedSource === "string" ? input.intendedSource.trim() : "";
+  const owner = typeof input.intendedOwner === "string" ? input.intendedOwner.trim() : "";
+  const surface = typeof input.intendedSurface === "string" ? input.intendedSurface.trim() : "";
+  const operation = typeof input.operation === "string" ? input.operation.trim() : "";
+  const observedCapabilities = Array.isArray(input.observedCapabilities)
+    ? input.observedCapabilities
+    : input.observedCapability && typeof input.observedCapability === "object" ? [input.observedCapability] : [];
+  const nowMs = Number.isFinite(input.nowMs) ? input.nowMs : Date.now();
+  const agentIds = new Set(["cto", "developer", "coo", "cro", "cfo", "clo", "wefunder"]);
+  const roleOwners = { engineering: "Developer", finance: "CFO", operations: "COO" };
+  const roleAgentIds = { engineering: "developer", finance: "cfo", operations: "coo" };
+  const validScope = ["bounded", "authorized"].includes(scope);
+  const validEvidence = Array.isArray(input.evidencePointers) && evidencePointers.length > 0 && evidencePointers.length === input.evidencePointers.length;
+  const validCompanyInput = validScope && domains.length > 0 && invalidDomains.length === 0 && validEvidence && source && surface && operation && owner && ["CTO", "cto"].includes(owner);
+  const packets = domains.map((domain) => {
+    const domainOwner = roleOwners[domain];
+    const targetAgentId = roleAgentIds[domain];
+    const roleAvailable = Array.isArray(input.availableRoles) && input.availableRoles.includes(targetAgentId);
+    const capability = observedCapabilities.find((record) => {
+      if (!record || typeof record !== "object") return false;
+      const observedAt = typeof record.observedAt === "string" ? Date.parse(record.observedAt) : Number(record.observedAt);
+      const ageSeconds = (nowMs - observedAt) / 1000;
+      return agentIds.has(record.callerAgentId) && record.callerAgentId === "cto" &&
+        agentIds.has(record.agentId) && record.agentId === targetAgentId &&
+        record.role === targetAgentId && record.surface === surface && record.operation === operation &&
+        Number.isFinite(observedAt) && ageSeconds >= 0 && ageSeconds <= 300;
+    });
+    const ready = validCompanyInput && domainOwner && roleAvailable && capability;
+    return {
+      parentTaskId, domain, coordinator: "cto", owner: domainOwner || null, agentId: targetAgentId || null,
+      status: ready ? "ready_for_handoff" : "blocked",
+      reason: ready ? null : !validCompanyInput ? "invalid company scope or missing intake fields" : !domainOwner ? "unsupported domain" : !roleAvailable ? "owner role unavailable" : !capability ? "fresh matching caller, role, surface, and operation evidence unavailable" : null,
+      objective, outcome, evidencePointers, intendedSource: source || null, intendedSurface: surface || null, operation: operation || null,
+      capabilityEvidence: ready ? capability : null,
+    };
+  });
+  const invalid = !validCompanyInput;
+  return {
+    parentTaskId, status: invalid ? "blocked" : packets.length && packets.every((p) => p.status === "ready_for_handoff") ? "ready_for_handoff" : "blocked",
+    reason: invalid ? "invalid company scope or missing intake fields" : null,
+    objective, outcome, scope: scope || null, domains, evidencePointers, intendedSource: source || null,
+    intendedSurface: surface || null, operation: operation || null, packets,
+    childReceipts: Array.isArray(input.childReceipts) ? input.childReceipts.map((receipt) => ({
+      parentTaskId, domain: receipt?.domain || null,
+      status: receipt?.parentTaskId === parentTaskId && ["complete", "partial", "blocked"].includes(receipt?.status) ? receipt.status : "unknown",
+      outcome: typeof receipt?.outcome === "string" ? receipt.outcome : null,
+    })) : [],
+    parentOutcome: Array.isArray(input.childReceipts) && input.childReceipts.length
+      ? (domains.length > 0 && input.childReceipts.length === domains.length && new Set(input.childReceipts.map((receipt) => receipt?.domain)).size === domains.length && domains.every((domain) => input.childReceipts.some((receipt) => receipt?.domain === domain && receipt?.parentTaskId === parentTaskId && receipt?.status === "complete"))
+          ? "complete"
+          : input.childReceipts.some((receipt) => receipt?.parentTaskId === parentTaskId && ["complete", "partial"].includes(receipt?.status))
+            ? "partial" : "unknown")
+      : "pending",
+  };
+}
+
 export { PRICE };
 
 // ---------------------------------------------------------------------------

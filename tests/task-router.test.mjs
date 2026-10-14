@@ -1,7 +1,7 @@
 // Tests for fleet-telemetry/task-router.mjs, the pure quality-gated task -> model/budget classifier.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyTask, classifyTaskWithHistory, estimateSavings } from "../skills/fleet-telemetry/task-router.mjs";
+import { classifyTask, classifyTaskWithHistory, estimateSavings, intakeCompanyTask } from "../skills/fleet-telemetry/task-router.mjs";
 
 test("mechanical + short task routes to haiku", () => {
   const r = classifyTask("list the files in the skills directory");
@@ -101,4 +101,74 @@ test("custom failRateThreshold is honored", () => {
   assert.equal(belowCustom.model, "sonnet"); // 0.25 >= 0.2 -> escalates
   const stillHaiku = classifyTaskWithHistory("list the files", { priorFailureRate: 0.25, failRateThreshold: 0.5 });
   assert.equal(stillHaiku.model, "haiku"); // 0.25 < 0.5 -> no escalation
+});
+
+const intakeNow = Date.now();
+const observedCapabilities = [
+  ["engineering", "developer"], ["finance", "cfo"], ["operations", "coo"],
+].map(([domain, agentId]) => ({
+  callerAgentId: "cto", agentId, role: agentId,
+  surface: "fleet://company/app", operation: "review", observedAt: new Date(intakeNow).toISOString(),
+}));
+const companyIntake = {
+  parentTaskId: "task-42", classification: "company", objective: "Ship the cross-domain change",
+  outcome: "One accepted parent receipt", scope: "bounded",
+  domains: ["engineering", "finance", "operations"],
+  evidencePointers: ["artifact://spec/42"], intendedSource: "repo://company/app",
+  intendedOwner: "CTO", intendedSurface: "fleet://company/app", operation: "review",
+  availableRoles: ["developer", "cfo", "coo"], observedCapabilities, nowMs: intakeNow,
+};
+
+test("company intake creates three domain packets under the same parent ID", () => {
+  const r = intakeCompanyTask(companyIntake);
+  assert.equal(r.status, "ready_for_handoff");
+  assert.deepEqual(r.packets.map((p) => [p.domain, p.owner, p.parentTaskId]), [
+    ["engineering", "Developer", "task-42"], ["finance", "CFO", "task-42"], ["operations", "COO", "task-42"],
+  ]);
+  assert.ok(r.packets.every((p) => p.status === "ready_for_handoff" && p.capabilityEvidence));
+  assert.deepEqual(intakeCompanyTask(companyIntake), r); // deterministic; no IDs or dispatch side effects
+});
+
+test("personal intake returns direct-owner disposition without source or evidence reads", () => {
+  const r = intakeCompanyTask({ ...companyIntake, classification: "personal", intendedSource: "secret://not-read" });
+  assert.equal(r.status, "direct-owner");
+  assert.equal(r.sourceRead, false);
+  assert.deepEqual(r.evidencePointers, []);
+  assert.equal("intendedSource" in r, false);
+});
+
+test("missing role capability evidence blocks only its packet, and partial child receipts stay partial", () => {
+  const r = intakeCompanyTask({ ...companyIntake, availableRoles: ["developer", "cfo"], observedCapabilities: [],
+    childReceipts: [{ parentTaskId: "task-42", domain: "engineering", status: "complete", outcome: "built" }] });
+  assert.equal(r.status, "blocked");
+  assert.equal(r.packets[2].status, "blocked");
+  assert.equal(r.parentOutcome, "partial");
+  assert.deepEqual(r.childReceipts[0], { parentTaskId: "task-42", domain: "engineering", status: "complete", outcome: "built" });
+});
+
+test("stale, future, wrong-seat, wrong-surface, and unrelated-operation evidence cannot authorize handoff", () => {
+  const corruptions = [
+    (cap) => ({ ...cap, observedAt: new Date(intakeNow - 301_000).toISOString() }),
+    (cap) => ({ ...cap, observedAt: new Date(intakeNow + 1_000).toISOString() }),
+    (cap) => ({ ...cap, agentId: "cro", role: "cro" }),
+    (cap) => ({ ...cap, callerAgentId: "cro" }),
+    (cap) => ({ ...cap, surface: "fleet://unrelated" }),
+    (cap) => ({ ...cap, operation: "delete" }),
+    () => ({ callable: true, metadata: {} }),
+    (cap) => ({ ...cap, agentId: "wefunder", role: "wefunder" }),
+  ];
+  for (const corrupt of corruptions) {
+    const capabilities = [...observedCapabilities];
+    capabilities[0] = corrupt(capabilities[0]);
+    const r = intakeCompanyTask({ ...companyIntake, observedCapabilities: capabilities });
+    assert.equal(r.packets[0].status, "blocked");
+    assert.equal(r.packets[0].parentTaskId, "task-42");
+    assert.deepEqual(r.packets[0].evidencePointers, ["artifact://spec/42"]);
+  }
+});
+
+test("invalid company scope blocks every child packet even with fresh matching evidence", () => {
+  const r = intakeCompanyTask({ ...companyIntake, scope: "unbounded" });
+  assert.equal(r.status, "blocked");
+  assert.ok(r.packets.every((p) => p.status === "blocked"));
 });
