@@ -151,6 +151,14 @@ test("a job that has only ever reported fail is FAILING, not 'never ran'", () =>
   assert.equal(state(verdict([{ job: "beater", ageMin: null, consecutive_fail: 0 }]), "beater"), "NO-DATA");
 });
 
+test("missing ok beat does not claim the workload never ran", () => {
+  const v = verdict([]);
+  const r = row(v, "beater");
+  assert.equal(r.state, "NO-DATA");
+  assert.match(r.detail, /execution state unknown/i);
+  assert.doesNotMatch(r.detail, /never ran|never started/i);
+});
+
 test("evaluateSilence: the GitHub witness catches failing, silent and absent schedules", () => {
   const failing = verdict(GOOD, { nightly: sched(run(300, "failure"), run(1700, "failure")) });
   assert.equal(state(failing, "nightly"), "FAILING");

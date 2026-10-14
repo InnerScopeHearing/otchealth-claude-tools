@@ -290,7 +290,7 @@ export function evaluateSilence({ registry, beatRows, beatError = null, schedule
       add(job, "UNREADABLE", beatError, meta);
     } else if (age == null) {
       if (grace) pending();
-      else add(job, "NO-DATA", "registered but has never beaten ok: a monitor that never ran", meta);
+      else add(job, "NO-DATA", "registered but no successful ok beat is observed; workload execution state unknown", meta);
     } else {
       add(job, "STALE", `last ok beat ${fmtAge(age)} ago, limit ${fmtAge(limit)}`, meta);
     }
