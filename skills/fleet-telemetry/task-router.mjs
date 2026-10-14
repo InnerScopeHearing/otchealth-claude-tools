@@ -128,12 +128,7 @@ export function intakeCompanyTask(input = {}) {
   if (!parentTaskId || !objective || !outcome || !["company", "personal"].includes(mode)) {
     return { parentTaskId: parentTaskId || null, status: "blocked", reason: "missing parentTaskId, objective, outcome, or classification", packets: [] };
   }
-  if (mode === "personal") {
-    return {
-      parentTaskId, status: "direct-owner", disposition: "personal-owner", objective, outcome,
-      sourceRead: false, evidencePointers: [], packets: [],
-    };
-  }
+  if (mode === "personal") return intakePersonalTask(input);
 
   const domains = Array.isArray(input.domains) ? [...new Set(input.domains)] : [];
   const known = new Set(["engineering", "finance", "operations"]);
@@ -194,6 +189,65 @@ export function intakeCompanyTask(input = {}) {
           : input.childReceipts.some((receipt) => receipt?.parentTaskId === parentTaskId && domains.includes(receipt?.domain) && ["complete", "partial"].includes(receipt?.status))
             ? "partial" : "unknown")
       : "pending",
+  };
+}
+
+/**
+ * Plan a personal handoff from caller-supplied, fresh metadata observations. This is not an
+ * authenticator or dispatcher: it never reads the referenced home/source and never returns content.
+ * Missing or mismatched observations remain unverified, with no company-role fallback.
+ */
+export function intakePersonalTask(input = {}) {
+  const parentTaskId = typeof input.parentTaskId === "string" ? input.parentTaskId.trim() : "";
+  const objective = typeof input.objective === "string" ? input.objective.trim() : "";
+  const outcome = typeof input.outcome === "string" ? input.outcome.trim() : "";
+  const requestType = input.requestType;
+  const nowMs = Number.isFinite(input.nowMs) ? input.nowMs : Date.now();
+  const roles = new Set(Array.isArray(input.availableRoles) ? input.availableRoles : []);
+  const profile = input.personalHome;
+  const recent = (value) => {
+    let at;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return false;
+      at = value;
+    } else if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) {
+      at = Date.parse(value);
+      if (!Number.isFinite(at)) return false;
+      const canonical = new Date(at).toISOString();
+      if (canonical !== (value.includes(".") ? value : `${value.slice(0, -1)}.000Z`)) return false;
+    } else return false;
+    const age = (nowMs - at) / 1000;
+    return Number.isFinite(at) && age >= 0 && age <= 300;
+  };
+  const homeReady = profile && typeof profile === "object" && !Array.isArray(profile) &&
+    profile.ownerId === "Matt" && typeof profile.projectId === "string" && profile.projectId.trim() &&
+    profile.isolated === true && profile.verified === true && recent(profile.observedAt);
+  const bindings = Array.isArray(input.personalBindings) ? input.personalBindings : [];
+  const entity = typeof input.personalEntity === "string" ? input.personalEntity.trim() : "";
+  const binding = bindings.find((record) => {
+    if (!record || typeof record !== "object" || Array.isArray(record) ||
+        record.ownerId !== "Matt" || record.requestType !== requestType || record.enrolled !== true || !recent(record.observedAt)) return false;
+    if (requestType === "legal") return record.agentId === "clo-personal" && record.role === "clo-personal" && roles.has("clo-personal");
+    if (requestType === "health") return typeof record.agentId === "string" && record.agentId.trim() &&
+      !["cto", "developer", "coo", "cro", "clo", "wefunder", "cfo"].includes(record.agentId) &&
+      record.role === "health" && roles.has(record.agentId);
+    if (requestType === "finance") return record.agentId === "cfo" && record.role === "cfo" && record.scope === "personal-book" &&
+      entity.length > 0 && record.entity === entity && roles.has("cfo");
+    return false;
+  });
+  const validInput = parentTaskId && objective && outcome && input.classification === "personal" &&
+    ["legal", "health", "finance"].includes(requestType);
+  const ready = Boolean(validInput && homeReady && binding);
+  return {
+    parentTaskId: parentTaskId || null,
+    classification: "personal",
+    requestType: ["legal", "health", "finance"].includes(requestType) ? requestType : "unknown",
+    status: ready ? "ready_for_handoff" : "unverified",
+    reason: ready ? null : !validInput ? "invalid personal intake fields or unsupported request type" : !homeReady ? "verified isolated personal home observation unavailable" : "fresh enrolled matching personal binding unavailable",
+    destination: ready ? binding.agentId : null,
+    personalEntity: ready && requestType === "finance" ? entity : null,
+    sourceRead: false,
+    evidencePointers: [],
   };
 }
 
@@ -294,12 +348,13 @@ if (__isMain && process.argv[2] === "--intake") {
     }
     const input = JSON.parse(inputText);
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error();
-    const allowed = new Set(["parentTaskId", "objective", "outcome", "scope", "evidencePointers", "classification", "domains", "intendedSource", "intendedOwner", "intendedSurface", "operation", "observedCapabilities", "observedCapability", "nowMs", "availableRoles", "childReceipts"]);
+    const allowed = new Set(["parentTaskId", "objective", "outcome", "scope", "evidencePointers", "classification", "domains", "intendedSource", "intendedOwner", "intendedSurface", "operation", "observedCapabilities", "observedCapability", "nowMs", "availableRoles", "childReceipts", "requestType", "personalEntity", "personalHome", "personalBindings"]);
     if (Object.keys(input).some((key) => !allowed.has(key))) throw new Error();
-    const result = intakeCompanyTask(input);
+    const result = input.classification === "personal" ? intakePersonalTask(input) : intakeCompanyTask(input);
     const receipt = {
       parentTaskId: result.parentTaskId,
       status: result.status,
+      ...(result.classification === "personal" ? { classification: result.classification, requestType: result.requestType, destination: result.destination, personalEntity: result.personalEntity, sourceRead: false, evidencePointers: [], reason: result.reason } : {}),
       ...(result.parentOutcome ? { parentOutcome: result.parentOutcome } : {}),
       packets: Array.isArray(result.packets) ? result.packets.map(({ domain, status }) => ({ domain, status })) : [],
       childReceipts: Array.isArray(result.childReceipts) ? result.childReceipts.map(({ parentTaskId, domain, status }) => ({ parentTaskId, domain, status })) : [],

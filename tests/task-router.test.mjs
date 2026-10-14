@@ -1,7 +1,7 @@
 // Tests for fleet-telemetry/task-router.mjs, the pure quality-gated task -> model/budget classifier.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyTask, classifyTaskWithHistory, estimateSavings, intakeCompanyTask } from "../skills/fleet-telemetry/task-router.mjs";
+import { classifyTask, classifyTaskWithHistory, estimateSavings, intakeCompanyTask, intakePersonalTask } from "../skills/fleet-telemetry/task-router.mjs";
 
 test("mechanical + short task routes to haiku", () => {
   const r = classifyTask("list the files in the skills directory");
@@ -129,12 +129,82 @@ test("company intake creates three domain packets under the same parent ID", () 
   assert.deepEqual(intakeCompanyTask(companyIntake), r); // deterministic; no IDs or dispatch side effects
 });
 
-test("personal intake returns direct-owner disposition without source or evidence reads", () => {
+test("personal intake without a verified home remains unverified without source or evidence reads", () => {
   const r = intakeCompanyTask({ ...companyIntake, classification: "personal", intendedSource: "secret://not-read" });
-  assert.equal(r.status, "direct-owner");
+  assert.equal(r.status, "unverified");
   assert.equal(r.sourceRead, false);
   assert.deepEqual(r.evidencePointers, []);
   assert.equal("intendedSource" in r, false);
+});
+
+const personalNow = Date.now();
+const personalBase = {
+  parentTaskId: "personal-1", classification: "personal", objective: "Handle a personal task",
+  outcome: "Return a scoped receipt", nowMs: personalNow,
+  personalHome: { ownerId: "Matt", projectId: "personal-home-test", isolated: true, verified: true, observedAt: new Date(personalNow).toISOString() },
+};
+
+test("personal legal intake routes directly to clo-personal only with matching fresh home and binding", () => {
+  const r = intakePersonalTask({ ...personalBase, requestType: "legal", availableRoles: ["clo-personal"],
+    personalBindings: [{ ownerId: "Matt", requestType: "legal", agentId: "clo-personal", role: "clo-personal", enrolled: true, observedAt: new Date(personalNow).toISOString() }] });
+  assert.equal(r.status, "ready_for_handoff");
+  assert.equal(r.destination, "clo-personal");
+  assert.equal(r.sourceRead, false);
+});
+
+test("health and finance require their enrolled binding and explicit personal entity", () => {
+  const health = intakePersonalTask({ ...personalBase, requestType: "health", availableRoles: ["health-review"],
+    personalBindings: [{ ownerId: "Matt", requestType: "health", agentId: "health-review", role: "health", enrolled: true, observedAt: new Date(personalNow).toISOString() }] });
+  assert.equal(health.status, "ready_for_handoff");
+  assert.equal(health.destination, "health-review");
+  const finance = intakePersonalTask({ ...personalBase, requestType: "finance", personalEntity: "Matt personal", availableRoles: ["cfo"],
+    personalBindings: [{ ownerId: "Matt", requestType: "finance", agentId: "cfo", role: "cfo", scope: "personal-book", entity: "Matt personal", enrolled: true, observedAt: new Date(personalNow).toISOString() }] });
+  assert.equal(finance.status, "ready_for_handoff");
+  assert.equal(finance.destination, "cfo");
+});
+
+test("health bindings cannot relabel a company role ID as a personal health destination", () => {
+  const companyRoles = ["cto", "developer", "coo", "cro", "clo", "wefunder", "cfo"];
+  for (const agentId of companyRoles) {
+    const r = intakePersonalTask({ ...personalBase, requestType: "health", availableRoles: [agentId],
+      personalBindings: [{ ownerId: "Matt", requestType: "health", agentId, role: "health", enrolled: true, observedAt: new Date(personalNow).toISOString() }] });
+    assert.equal(r.status, "unverified", agentId);
+    assert.equal(r.destination, null, agentId);
+  }
+});
+
+test("personal observedAt accepts only valid UTC ISO strings or finite numbers", () => {
+  const invalidTimes = [true, false, null, {}, [], "1700000000000", "2026-02-30T12:00:00.000Z", "2026-10-14T12:00:00+00:00"];
+  for (const observedAt of invalidTimes) {
+    const home = { ...personalBase.personalHome, observedAt };
+    const binding = { ownerId: "Matt", requestType: "legal", agentId: "clo-personal", role: "clo-personal", enrolled: true, observedAt: new Date(personalNow).toISOString() };
+    const homeResult = intakePersonalTask({ ...personalBase, requestType: "legal", personalHome: home, availableRoles: ["clo-personal"], personalBindings: [binding] });
+    assert.equal(homeResult.status, "unverified", `home timestamp ${String(observedAt)}`);
+    const bindingResult = intakePersonalTask({ ...personalBase, requestType: "legal", availableRoles: ["clo-personal"], personalBindings: [{ ...binding, observedAt }] });
+    assert.equal(bindingResult.status, "unverified", `binding timestamp ${String(observedAt)}`);
+  }
+  for (const observedAt of [personalNow]) {
+    const r = intakePersonalTask({ ...personalBase, requestType: "legal", personalHome: { ...personalBase.personalHome, observedAt }, availableRoles: ["clo-personal"],
+      personalBindings: [{ ownerId: "Matt", requestType: "legal", agentId: "clo-personal", role: "clo-personal", enrolled: true, observedAt }] });
+    assert.equal(r.status, "ready_for_handoff");
+  }
+});
+
+test("missing home/binding and wrong owner, entity, role, or unknown lane stay unverified", () => {
+  const legalBinding = { ownerId: "Matt", requestType: "legal", agentId: "clo-personal", role: "clo-personal", enrolled: true, observedAt: new Date(personalNow).toISOString() };
+  for (const input of [
+    { requestType: "legal", personalBindings: [legalBinding] },
+    { ...personalBase, requestType: "legal" },
+    { ...personalBase, requestType: "legal", availableRoles: ["clo"], personalBindings: [legalBinding] },
+    { ...personalBase, requestType: "health", availableRoles: ["health-review"], personalBindings: [{ ...legalBinding, requestType: "health", agentId: "health-review", role: "health", ownerId: "someone-else" }] },
+    { ...personalBase, requestType: "finance", personalEntity: "Matt personal", availableRoles: ["cfo"], personalBindings: [{ ...legalBinding, requestType: "finance", agentId: "cfo", role: "cfo", entity: "company" }] },
+    { ...personalBase, requestType: "unknown" },
+  ]) {
+    const r = intakePersonalTask(input);
+    assert.equal(r.status, "unverified");
+    assert.equal(r.destination, null);
+    assert.equal(r.sourceRead, false);
+  }
 });
 
 test("missing role capability evidence blocks only its packet, and partial child receipts stay partial", () => {
