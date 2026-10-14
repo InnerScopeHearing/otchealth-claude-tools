@@ -5,7 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fake = path.join(here, 'fake-aws.py');
+const fake = process.env.AIOS_READER_FAKE_AWS ?? path.join(here, 'fake-aws.py');
 const python = String.raw`
 import importlib.util, json, sys
 spec=importlib.util.spec_from_file_location('fake_aws',sys.argv[1]); fake=importlib.util.module_from_spec(spec); spec.loader.exec_module(fake)
@@ -66,5 +66,56 @@ test('fake evaluator supports only the exact scoped aws:PrincipalArn ArnEquals c
     unknown_condition_key: 'GAP',
     multiple_condition_operators: 'GAP',
     malformed_condition_value: 'GAP',
+  });
+});
+
+const sourcePython = String.raw`
+import importlib.util, json, pathlib, re, sys
+spec=importlib.util.spec_from_file_location('fake_aws',sys.argv[1]); fake=importlib.util.module_from_spec(spec); spec.loader.exec_module(fake)
+source=pathlib.Path(sys.argv[2]).read_text()
+match=re.search(r"cat > \"\$EXTRAS_FILE\" <<'EXTRAS_JSON'\n(.*?)\nEXTRAS_JSON",source,re.S)
+assert match, 'EXTRAS_JSON heredoc not found'
+doc=json.loads(match.group(1))
+role='arn:aws:iam::900915535335:role/otchealth-ai-reader-role'
+user='arn:aws:iam::900915535335:user/otchealth-ai-reader'
+stmt=[s for s in doc['Statement'] if s.get('Sid')=='SchedulerGetOwnedScheduleMetadata']
+assert len(stmt)==1, f'expected exactly one scheduler grant, got {len(stmt)}'
+stmt=stmt[0]
+assert stmt == {'Sid':'SchedulerGetOwnedScheduleMetadata','Effect':'Allow','Action':['scheduler:GetSchedule'],'Resource':'arn:aws:scheduler:us-east-1:900915535335:schedule/default/otchealth-*','Condition':{'ArnEquals':{'aws:PrincipalArn':role}}}
+def decision(who, action, resource):
+    m=re.match(r'^arn:aws:iam::[0-9]+:(user|role)/(.+)$',who); kind,name=m.groups(); key=kind+':'+name.rsplit('/',1)[-1]
+    world={'iam':{'attached':{key:['arn:aws:iam::900915535335:policy/test']},'policies':{'test':{'arn':'arn:aws:iam::900915535335:policy/test','versions':[{'default':True,'doc':doc}]}},'inline':{}}}
+    return fake.evaluate(world,who,action,resource)
+exact='arn:aws:scheduler:us-east-1:900915535335:schedule/default/otchealth-health-check'
+cases={
+ 'exact_role_get':decision(role,'scheduler:GetSchedule',exact),
+ 'reader_user_get':decision(user,'scheduler:GetSchedule',exact),
+ 'other_role_get':decision('arn:aws:iam::900915535335:role/other','scheduler:GetSchedule',exact),
+ 'other_schedule_get':decision(role,'scheduler:GetSchedule','arn:aws:scheduler:us-east-1:900915535335:schedule/default/other-health-check'),
+ 'other_group_get':decision(role,'scheduler:GetSchedule','arn:aws:scheduler:us-east-1:900915535335:schedule/custom/otchealth-health-check'),
+ 'wrong_region_get':decision(role,'scheduler:GetSchedule','arn:aws:scheduler:us-west-2:900915535335:schedule/default/otchealth-health-check'),
+ 'wrong_account_get':decision(role,'scheduler:GetSchedule','arn:aws:scheduler:us-east-1:111122223333:schedule/default/otchealth-health-check'),
+ 'list_schedules':decision(role,'scheduler:ListSchedules','*'),
+ 'update_schedule':decision(role,'scheduler:UpdateSchedule',exact),
+}
+assert cases=={'exact_role_get':'allowed','reader_user_get':'implicitDeny','other_role_get':'implicitDeny','other_schedule_get':'implicitDeny','other_group_get':'implicitDeny','wrong_region_get':'implicitDeny','wrong_account_get':'implicitDeny','list_schedules':'implicitDeny','update_schedule':'implicitDeny'}, cases
+assert any(s.get('Sid')=='AwareDeviceFarmRunMetadataOnly' for s in doc['Statement']), 'existing scoped DeviceFarm statement was lost'
+print(json.dumps(cases,sort_keys=True))
+`;
+
+test('candidate script grants only owned Scheduler GetSchedule metadata to the reader role', () => {
+  const source = process.env.AIOS_READER_POLICY_SCRIPT ?? path.resolve(here, '../../iam/aws-ai-access-2026-10-07.sh');
+  const result = spawnSync('python3', ['-I', '-S', '-c', sourcePython, fake, source], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    exact_role_get: 'allowed',
+    reader_user_get: 'implicitDeny',
+    other_role_get: 'implicitDeny',
+    other_schedule_get: 'implicitDeny',
+    other_group_get: 'implicitDeny',
+    wrong_region_get: 'implicitDeny',
+    wrong_account_get: 'implicitDeny',
+    list_schedules: 'implicitDeny',
+    update_schedule: 'implicitDeny',
   });
 });
