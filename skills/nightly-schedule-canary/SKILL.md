@@ -113,6 +113,15 @@ unavailability and invalid/stale/mismatched metadata remain separate. Running wi
 and the monitor's own witness are reported independently. The mode is opt-in and does not add a watcher or default AWS
 API fanout. Historical receipts are not fresh execution evidence.
 
+### Captured Core diagnostic envelopes
+
+For B11 operator-captured Core diagnostics, pass both JSON envelopes to the same CLI using repeated
+`--execution-evidence <file>` flags. The pair is validated and rendered offline in either text or `--json` mode;
+`--execution-evidence-only` is optional for this raw format. These files are unsigned observations, never live
+provider identity or current proof. Stale captures remain stale; a schedule absent from the selected reads, a missing
+beat object, an unreadable object and an old beat are distinct observations. None is proof a job never started.
+Normalized legacy evidence bundles retain their existing single-file behavior.
+
 ## Adding a job
 
 1. Pick the witness. Best is a beat: a final step `node setup/heartbeat.mjs beat <job> ok` with `if: always()` and
