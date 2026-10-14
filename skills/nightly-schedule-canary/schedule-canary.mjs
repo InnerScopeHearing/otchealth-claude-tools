@@ -33,7 +33,7 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { classifyExecutionBundle } from "./execution-evidence.mjs";
+import { classifyCoreDiagnosticEnvelopes, classifyExecutionBundle } from "./execution-evidence.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -353,15 +353,34 @@ function runHeartbeatCheck() {
 }
 
 async function main() {
-  const evidenceArg = argv.indexOf("--execution-evidence");
+  const evidencePaths = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--execution-evidence") {
+      if (argv[i + 1]) evidencePaths.push(argv[i + 1]);
+      i++;
+    }
+  }
   let execution = null;
-  if (evidenceArg !== -1) {
+  if (evidencePaths.length) {
     try {
-      const bundle = JSON.parse(readFileSync(resolve(argv[evidenceArg + 1] || ""), "utf8"));
-      execution = classifyExecutionBundle(bundle);
+      const inputs = evidencePaths.map((path) => JSON.parse(readFileSync(resolve(path), "utf8")));
+      const coreCaptures = inputs.length > 1 ? inputs : Array.isArray(inputs[0]) ? inputs[0] : null;
+      if (coreCaptures) execution = classifyCoreDiagnosticEnvelopes(coreCaptures, { registry: loadRegistry() });
+      else execution = classifyExecutionBundle(inputs[0]);
     } catch {
       execution = { ok: false, error: "receipt file is unavailable or does not contain valid JSON", observations: [], monitor: { state: "MONITOR-WITNESS-UNKNOWN", detail: "monitor witness was not evaluated" } };
     }
+  }
+  // Raw B11 diagnostic envelopes are unsigned captures, not live provider evidence.
+  // Keep them on the offline reporting path even when --execution-evidence-only was omitted.
+  if (execution?.authenticity === "unsigned-operator-capture") {
+    if (JSONOUT) console.log(JSON.stringify({ ok: false, executionEvidence: execution }, null, 2));
+    else {
+      console.log(`[UNAUTHENTICATED] captured Core diagnostic (${execution.currentness}); this is not current provider proof`);
+      for (const r of execution.observations) console.log(`[${r.currentness.padEnd(20)}] ${r.job}: schedule ${r.schedule}; ${r.configuration} (${r.configurationDetail}); target ${r.target}; ${r.beat}${r.beatAgeMin == null ? "" : ` (${Math.round(r.beatAgeMin)}m at capture)`}`);
+      console.log(`[${execution.monitor.state.padEnd(23)}] monitor: ${execution.monitor.detail}`);
+    }
+    process.exit(1);
   }
   if (argv.includes("--execution-evidence-only")) {
     if (!execution) {
@@ -371,7 +390,11 @@ async function main() {
     const ok = execution.ok && execution.observations.every((r) => r.ok) && execution.monitor.state === "MONITOR-WITNESSED";
     if (JSONOUT) console.log(JSON.stringify({ ok, executionEvidence: execution }, null, 2));
     else if (execution.error) console.log(`[ERROR   ] ${execution.error}`);
-    else {
+    else if (execution.authenticity === "unsigned-operator-capture") {
+      console.log(`[UNAUTHENTICATED] captured Core diagnostic (${execution.currentness}); this is not current provider proof`);
+      for (const r of execution.observations) console.log(`[${r.currentness.padEnd(20)}] ${r.job}: schedule ${r.schedule}; ${r.configuration} (${r.configurationDetail}); target ${r.target}; ${r.beat}${r.beatAgeMin == null ? "" : ` (${Math.round(r.beatAgeMin)}m at capture)`}`);
+      console.log(`[${execution.monitor.state.padEnd(23)}] monitor: ${execution.monitor.detail}`);
+    } else {
       for (const r of execution.observations) console.log(`[${r.state.padEnd(23)}] ${r.job}: ${r.detail}`);
       console.log(`[${execution.monitor.state.padEnd(23)}] monitor: ${execution.monitor.detail}`);
     }
