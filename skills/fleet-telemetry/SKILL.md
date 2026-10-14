@@ -92,6 +92,12 @@ history as plain data, same fail-open/pure discipline `compute-allocator` uses f
 Self-test: `node skills/fleet-telemetry/task-router.mjs --test` (7 example (task, history) pairs, no
 live LLM calls). Unit tests: `tests/task-router.test.mjs`.
 
+Company intake dry plan: `node skills/fleet-telemetry/task-router.mjs --intake <input.json>` accepts one
+explicit JSON object (maximum 64 KiB) using `intakeCompanyTask` fields. It prints one compact receipt
+with parent ID, plan status, domain statuses, and correlated child receipt statuses. It does not
+dispatch, read source pointers, or make network/provider calls. Malformed, oversized, and unknown-field
+inputs fail with a fixed error. CLI tests: `node --test tests/task-router-cli.test.mjs`.
+
 ## Automatic
 Wired as a **Stop hook** (`.claude/settings.json`) so every agent session auto-reports on end.
 Reads `KB_AGENT` for attribution. Exits 0 always (never blocks a session). The skill installs to

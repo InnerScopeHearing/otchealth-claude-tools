@@ -172,3 +172,33 @@ test("invalid company scope blocks every child packet even with fresh matching e
   assert.equal(r.status, "blocked");
   assert.ok(r.packets.every((p) => p.status === "blocked"));
 });
+
+test("blocked company plan cannot aggregate complete child receipts into a complete parent", () => {
+  const r = intakeCompanyTask({ ...companyIntake, scope: "unbounded", childReceipts: [
+    ...companyIntake.domains.map((domain) => ({ parentTaskId: "task-42", domain, status: "complete" })),
+  ] });
+  assert.equal(r.status, "blocked");
+  assert.equal(r.parentOutcome, "partial");
+});
+
+test("wrong parent or out-of-plan domain never correlates as a completed child", () => {
+  const r = intakeCompanyTask({ ...companyIntake, domains: ["engineering"], childReceipts: [
+    { parentTaskId: "other-parent", domain: "engineering", status: "complete" },
+    { parentTaskId: "task-42", domain: "finance", status: "complete" },
+  ] });
+  assert.equal(r.parentOutcome, "unknown");
+  assert.equal(r.childReceipts[0].parentTaskId, "other-parent");
+  assert.equal(r.childReceipts[0].status, "unknown");
+  assert.equal(r.childReceipts[1].status, "unknown");
+});
+
+test("valid company inputs with a blocked handoff packet cannot aggregate complete parent", () => {
+  const r = intakeCompanyTask({ ...companyIntake, availableRoles: [], observedCapabilities: [], childReceipts: [
+    { parentTaskId: "task-42", domain: "engineering", status: "complete" },
+    { parentTaskId: "task-42", domain: "finance", status: "complete" },
+    { parentTaskId: "task-42", domain: "operations", status: "complete" },
+  ] });
+  assert.equal(r.packets.every((packet) => packet.status === "blocked"), true);
+  assert.equal(r.parentOutcome, "partial");
+  assert.equal(r.childReceipts.filter((receipt) => receipt.status === "complete").length, 3);
+});

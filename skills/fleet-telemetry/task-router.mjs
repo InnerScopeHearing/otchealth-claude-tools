@@ -8,6 +8,8 @@
 // are recommended down to Haiku. Advisory only, the orchestrator makes the final call.
 //
 // Pure + IO-free so it is trivially testable and safe to import anywhere.
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 // $/Mtok [input, output, cache-write, cache-read] - mirrors fleet-telemetry/telemetry.mjs PRICE.
 const PRICE = { opus: [15, 75, 18.75, 1.5], sonnet: [3, 15, 3.75, 0.3], haiku: [0.8, 4, 1.0, 0.08] };
@@ -179,14 +181,17 @@ export function intakeCompanyTask(input = {}) {
     objective, outcome, scope: scope || null, domains, evidencePointers, intendedSource: source || null,
     intendedSurface: surface || null, operation: operation || null, packets,
     childReceipts: Array.isArray(input.childReceipts) ? input.childReceipts.map((receipt) => ({
-      parentTaskId, domain: receipt?.domain || null,
-      status: receipt?.parentTaskId === parentTaskId && ["complete", "partial", "blocked"].includes(receipt?.status) ? receipt.status : "unknown",
+      parentTaskId: typeof receipt?.parentTaskId === "string" ? receipt.parentTaskId : null,
+      domain: typeof receipt?.domain === "string" ? receipt.domain : null,
+      status: receipt?.parentTaskId === parentTaskId && domains.includes(receipt?.domain) && ["complete", "partial", "blocked"].includes(receipt?.status) ? receipt.status : "unknown",
       outcome: typeof receipt?.outcome === "string" ? receipt.outcome : null,
     })) : [],
     parentOutcome: Array.isArray(input.childReceipts) && input.childReceipts.length
-      ? (domains.length > 0 && input.childReceipts.length === domains.length && new Set(input.childReceipts.map((receipt) => receipt?.domain)).size === domains.length && domains.every((domain) => input.childReceipts.some((receipt) => receipt?.domain === domain && receipt?.parentTaskId === parentTaskId && receipt?.status === "complete"))
+      ? (packets.length === 0 || packets.some((packet) => packet.status !== "ready_for_handoff")
+        ? (input.childReceipts.some((receipt) => receipt?.parentTaskId === parentTaskId && domains.includes(receipt?.domain) && ["complete", "partial"].includes(receipt?.status)) ? "partial" : "unknown")
+        : domains.length > 0 && input.childReceipts.length === domains.length && new Set(input.childReceipts.map((receipt) => receipt?.domain)).size === domains.length && domains.every((domain) => input.childReceipts.some((receipt) => receipt?.domain === domain && receipt?.parentTaskId === parentTaskId && receipt?.status === "complete"))
           ? "complete"
-          : input.childReceipts.some((receipt) => receipt?.parentTaskId === parentTaskId && ["complete", "partial"].includes(receipt?.status))
+          : input.childReceipts.some((receipt) => receipt?.parentTaskId === parentTaskId && domains.includes(receipt?.domain) && ["complete", "partial"].includes(receipt?.status))
             ? "partial" : "unknown")
       : "pending",
   };
@@ -259,6 +264,55 @@ function runSelfTest() {
 }
 
 const __isMain = (() => {
-  try { return process.argv[1] && new URL(import.meta.url).pathname === process.argv[1]; } catch { return false; }
+  try { return process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url)); } catch { return false; }
 })();
 if (__isMain && process.argv.includes("--test")) runSelfTest();
+
+// Explicit file input only. This CLI is a dry planning/receipt surface: it performs no dispatch,
+// source reads, network calls, or writes beyond stdout.
+if (__isMain && process.argv[2] === "--intake") {
+  const fail = () => { console.error("Invalid intake input."); process.exitCode = 2; };
+  try {
+    if (process.argv.length !== 4 || !process.argv[3]) throw new Error();
+    const { openSync, fstatSync, readSync, closeSync } = await import("node:fs");
+    const fd = openSync(process.argv[3], "r");
+    let inputText;
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size > 65536) throw new Error();
+      const buffer = Buffer.allocUnsafe(65537);
+      let length = 0;
+      while (length < buffer.length) {
+        const count = readSync(fd, buffer, length, buffer.length - length, length);
+        if (count === 0) break;
+        length += count;
+      }
+      if (length > 65536) throw new Error();
+      inputText = buffer.toString("utf8", 0, length);
+    } finally {
+      closeSync(fd);
+    }
+    const input = JSON.parse(inputText);
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error();
+    const allowed = new Set(["parentTaskId", "objective", "outcome", "scope", "evidencePointers", "classification", "domains", "intendedSource", "intendedOwner", "intendedSurface", "operation", "observedCapabilities", "observedCapability", "nowMs", "availableRoles", "childReceipts"]);
+    if (Object.keys(input).some((key) => !allowed.has(key))) throw new Error();
+    const result = intakeCompanyTask(input);
+    const receipt = {
+      parentTaskId: result.parentTaskId,
+      status: result.status,
+      ...(result.parentOutcome ? { parentOutcome: result.parentOutcome } : {}),
+      packets: Array.isArray(result.packets) ? result.packets.map(({ domain, status }) => ({ domain, status })) : [],
+      childReceipts: Array.isArray(result.childReceipts) ? result.childReceipts.map(({ parentTaskId, domain, status }) => ({ parentTaskId, domain, status })) : [],
+    };
+    process.stdout.write(`${JSON.stringify(receipt)}\n`);
+  } catch {
+    const badArgs = process.argv[2] === "--intake";
+    if (badArgs && (process.argv.length !== 4 || !process.argv[3])) {
+      console.error("Usage: node task-router.mjs --intake <input.json>");
+      process.exitCode = 2;
+    } else fail();
+  }
+} else if (__isMain && process.argv[2] !== "--test") {
+  console.error("Usage: node task-router.mjs --intake <input.json>");
+  process.exitCode = 2;
+}

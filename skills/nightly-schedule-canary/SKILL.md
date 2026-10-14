@@ -102,6 +102,17 @@ on a missed day and not on lateness. The monitor watches the watchdog back throu
 which is `armed: "2026-10-09"` (the day after the expected merge; set it to the merge date if that is later) so the first scheduled run has 36h to show up (a manual dispatch is not a scheduled run).
 `nightly-fleet-sentinels` is never a watched row (the watchdog covers it); a test rejects one.
 
+## Attaching explicit ECS execution evidence
+
+The existing CLI accepts a caller supplied JSON receipt with `--execution-evidence <file>`. For offline validation
+or focused operator review, add `--execution-evidence-only`; this mode performs no provider calls. The bundle must
+contain an `expected` map keyed by finding name, `observations` array, and optional `monitorWitness`. Each observation
+must bind the same account, region, cluster, schedule group/name, task definition, and bounded observation timestamp;
+successful Scheduler/ECS reads with no matching task mean **no verified launch**, never “never started.” Provider
+unavailability and invalid/stale/mismatched metadata remain separate. Running without a fresh ok beat, stopped tasks,
+and the monitor's own witness are reported independently. The mode is opt-in and does not add a watcher or default AWS
+API fanout. Historical receipts are not fresh execution evidence.
+
 ## Adding a job
 
 1. Pick the witness. Best is a beat: a final step `node setup/heartbeat.mjs beat <job> ok` with `if: always()` and
