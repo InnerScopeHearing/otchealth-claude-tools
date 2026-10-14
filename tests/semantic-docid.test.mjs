@@ -3,7 +3,8 @@
 // document keys ([A-Za-z0-9_-=]). Pure function, no I/O.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { docId, assignDocIds } from "../skills/kb-memory/semantic.mjs";
+import { createHash } from "node:crypto";
+import { docId, assignDocIds, collisionPruneIds } from "../skills/kb-memory/semantic.mjs";
 
 const KEY_OK = /^[A-Za-z0-9_\-=]+$/; // Azure AI Search allowed doc-key charset
 
@@ -35,6 +36,7 @@ test("distinct realistic (agent,id) pairs produce distinct keys (collision-safe)
 
 // ── assignDocIds(): the gs-10 id-collision fix (injective, minimal-churn, idempotent) ──────────────
 const E = (agent, id, text, type = "fact") => ({ _agent: agent, id, text, type });
+const legacyTextKey = (base, text) => `${base}__${createHash("sha1").update(text).digest("hex").slice(0, 12)}`;
 
 test("assignDocIds: unique entries KEEP the bare agent__id key (zero churn on healthy docs)", () => {
   const es = [E("cto", "20260717-001-ab", "alpha"), E("cto", "20260717-002-cd", "beta"), E("cfo", "20260717-001-ef", "gamma")];
@@ -60,12 +62,72 @@ test("assignDocIds: a genuine collision (same agent+id, DIFFERENT text) yields T
   assert.match(es[1]._docId, /^[A-Za-z0-9_\-=]+$/);
 });
 
-test("assignDocIds: same-text entries under one base key COLLAPSE (correctly the same fact, not a collision)", () => {
+test("assignDocIds: exact duplicate source rows under one base key COLLAPSE", () => {
   const es = [E("cto", "20260701-050", "identical text"), E("cto", "20260701-050", "identical text")];
   const collided = assignDocIds(es);
   assert.equal(collided.size, 0, "identical text is a true duplicate, not a suppressed distinct fact");
   assert.equal(es[0]._docId, es[1]._docId, "they share one key (mergeOrUpload dedups them)");
   assert.equal(es[0]._docId, "cto__20260701-050");
+});
+
+test("assignDocIds: distinct raw IDs that sanitize to one key remain separate while exact duplicates converge", () => {
+  const es = [
+    E("cto", "doc/a", "same synthetic public fact"),
+    E("cto", "doc/a", "same synthetic public fact"),
+    E("cto", "doc_a", "same synthetic public fact"),
+  ];
+  const collided = assignDocIds(es);
+  assert.ok(collided.has("cto__doc_a"), "sanitized-key collision must trigger stale bare-key pruning");
+  assert.equal(es[0]._docId, es[1]._docId, "exact duplicate copies of the same source row still converge");
+  assert.notEqual(es[0]._docId, es[2]._docId, "distinct source IDs must never collapse based only on equal text");
+  assert.equal(new Set(es.map((entry) => entry._docId)).size, 2);
+});
+
+test("assignDocIds: different-text legacy collisions preserve byte-exact existing hashed IDs", () => {
+  const es = [E("cto", "legacy/id", "first legacy text"), E("cto", "legacy/id", "second legacy text")];
+  const collided = assignDocIds(es);
+  assert.ok(collided.has("cto__legacy_id"));
+  assert.deepEqual(es.map((entry) => entry._docId), [
+    legacyTextKey("cto__legacy_id", "first legacy text"),
+    legacyTextKey("cto__legacy_id", "second legacy text"),
+  ]);
+});
+
+test("assignDocIds: mixed distinct raw IDs use stable identity hashes and collect legacy aliases", () => {
+  const es = [E("cto", "doc/a", "first synthetic text"), E("cto", "doc_a", "second synthetic text")];
+  const aliases = new Map();
+  const collided = assignDocIds(es, aliases);
+  assert.ok(collided.has("cto__doc_a"));
+  assert.equal(new Set(es.map((entry) => entry._docId)).size, 2);
+  assert.ok(aliases.get("cto__doc_a").has(legacyTextKey("cto__doc_a", "first synthetic text")));
+  assert.ok(aliases.get("cto__doc_a").has(legacyTextKey("cto__doc_a", "second synthetic text")));
+});
+
+test("assignDocIds: appending another colliding identity never changes existing identity keys", () => {
+  const before = [E("cto", "doc/a", "same"), E("cto", "doc_a", "same")];
+  assignDocIds(before);
+  const priorKeys = before.map((entry) => entry._docId);
+  const after = [...before.map((entry) => ({ ...entry })), E("cto", "doc:a", "different")];
+  assignDocIds(after);
+  assert.deepEqual(after.slice(0, 2).map((entry) => entry._docId), priorKeys);
+  assert.equal(new Set(after.map((entry) => entry._docId)).size, 3);
+});
+
+test("collisionPruneIds waits for every identity replacement, then removes only stale aliases", () => {
+  const es = [E("cto", "doc/a", "first"), E("cto", "doc_a", "second")];
+  const aliases = new Map();
+  const collided = assignDocIds(es, aliases);
+  const have = new Set([
+    "cto__doc_a",
+    legacyTextKey("cto__doc_a", "first"),
+    legacyTextKey("cto__doc_a", "second"),
+  ]);
+  const partial = new Set([es[0]._docId]);
+  assert.deepEqual(collisionPruneIds(es, collided, aliases, have, partial), []);
+  const complete = new Set(es.map((entry) => entry._docId));
+  const pruned = collisionPruneIds(es, collided, aliases, have, complete);
+  assert.deepEqual(new Set(pruned), new Set([...aliases.get("cto__doc_a"), "cto__doc_a"]));
+  assert.ok(!pruned.some((id) => es.some((entry) => entry._docId === id)), "never delete a currently assigned key");
 });
 
 test("assignDocIds: injective over distinct facts + stable across runs", () => {
