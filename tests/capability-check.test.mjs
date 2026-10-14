@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -231,6 +231,46 @@ test("CLI main guard works when its script path contains spaces and a hash", () 
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.probe_status, "partial");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI accepts a native receipt directly and preserves its observation time", () => {
+  const dir = mkdtempSync(join(tmpdir(), "native receipt cli "));
+  try {
+    const registry = join(dir, "registry.py");
+    const freshness = join(dir, "freshness.py");
+    const receiptPath = join(dir, "receipt.json");
+    writeFileSync(registry, `
+import json, pathlib, sys
+args = sys.argv[1:]
+if args[:2] == ["snapshot", "build"]:
+    metadata = pathlib.Path(args[args.index("--metadata") + 1])
+    output = pathlib.Path(args[args.index("--output") + 1])
+    value = json.loads(metadata.read_text())
+    output.write_text(json.dumps({**value, "content_sha256": "test-sha"}))
+elif args[:2] == ["snapshot", "validate"]:
+    output = pathlib.Path(args[args.index("--output") + 1])
+    output.write_text(json.dumps({"valid": True, "subject_snapshot_sha256": "test-sha", "schema": "test"}))
+`);
+    writeFileSync(freshness, `import json\nprint(json.dumps({"freshness_state": "stale", "refresh_needed": True, "reasons": ["expired"], "max_age_seconds": 10}))\n`);
+    const observedAt = "2026-10-13T23:34:00Z";
+    writeFileSync(receiptPath, JSON.stringify({
+      observed_at: observedAt,
+      tool_name: "mcp__codex_apps__otchealth_cto_catalog_probe",
+      surface_tool_names: ["mcp__codex_apps__otchealth_cto_catalog_probe"],
+      receipt: nativeCatalogFixture(),
+    }));
+    const cli = new URL("../setup/capability-check.mjs", import.meta.url);
+    const result = spawnSync(process.execPath, [cli.pathname, "--registry", registry, "--freshness", freshness,
+      "--native-receipt", receiptPath, "--seat", "cto", "--python", "python3"], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.schema, "aios-capability-check-result/v1");
+    assert.equal(payload.binding.status, "operation_succeeded");
+    assert.equal(payload.snapshot.observed_at, observedAt);
+    assert.equal(payload.consumer.status, "stale");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

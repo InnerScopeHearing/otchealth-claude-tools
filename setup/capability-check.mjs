@@ -209,6 +209,28 @@ function readProbe(path) {
   return JSON.parse(source);
 }
 
+function readNativeProbe(path, expectedSeat) {
+  const input = readProbe(path);
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || typeof input.observed_at !== "string" || !input.observed_at
+    || !Number.isFinite(Date.parse(input.observed_at))
+    || typeof input.tool_name !== "string" || !input.tool_name
+    || !Array.isArray(input.surface_tool_names)
+    || input.surface_tool_names.length === 0
+    || !input.surface_tool_names.every((name) => typeof name === "string")
+    || !input.receipt || typeof input.receipt !== "object" || Array.isArray(input.receipt)
+    || typeof expectedSeat !== "string" || !expectedSeat) {
+    throw new Error("invalid native catalog receipt input");
+  }
+  return probeFromNativeCatalogReceipt({
+    expectedSeat,
+    observedAt: input.observed_at,
+    toolName: input.tool_name,
+    surfaceToolNames: input.surface_tool_names,
+    receipt: input.receipt,
+  });
+}
+
 function runPython(python, script, args) {
   const result = spawnSync(python, [script, ...args], { encoding: "utf8", timeout: 20_000 });
   if (result.error || result.status !== 0) {
@@ -220,15 +242,18 @@ export function main() {
   const registry = option("--registry");
   const freshness = option("--freshness");
   const probePath = option("--probe");
+  const nativeReceiptPath = option("--native-receipt");
+  const seat = option("--seat");
   const python = option("--python", process.env.PYTHON || "python3");
   if (!registry || !freshness) {
-    process.stderr.write("usage: capability-check.mjs --registry <registry.py> --freshness <freshness.py> [--probe <json>] [--python <command>]\n");
+    process.stderr.write("usage: capability-check.mjs --registry <registry.py> --freshness <freshness.py> [--probe <json> | --native-receipt <json> --seat <seat>] [--python <command>]\n");
     return 2;
   }
 
   let temp = null;
   try {
-    const probe = readProbe(probePath);
+    if (probePath && nativeReceiptPath) throw new Error("choose one probe input");
+    const probe = nativeReceiptPath ? readNativeProbe(nativeReceiptPath, seat) : readProbe(probePath);
     const producer = assessCapabilityProbe(probe);
     temp = mkdtempSync(join(tmpdir(), "aios-capability-check-"));
     const metadataPath = join(temp, "metadata.json");
