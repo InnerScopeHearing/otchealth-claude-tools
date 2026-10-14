@@ -98,6 +98,18 @@ with parent ID, plan status, domain statuses, and correlated child receipt statu
 dispatch, read source pointers, or make network/provider calls. Malformed, oversized, and unknown-field
 inputs fail with a fixed error. CLI tests: `node --test tests/task-router-cli.test.mjs`.
 
+Personal intake uses that same CLI with `classification: "personal"`, `requestType` set to `legal`,
+`health`, or `finance`, and explicit `personalHome`, `personalBindings`, and `availableRoles`
+metadata. A home observation must identify owner `Matt`, an isolated verified project, and a
+timestamp no older than five minutes, encoded as a valid UTC ISO timestamp or finite epoch number. A
+binding must match the owner and request type and be marked enrolled with a fresh typed timestamp.
+Legal accepts only the `clo-personal` role; health uses the exact agent ID in its enrolled health
+binding and rejects company role IDs; finance accepts only the `cfo` personal-book binding and
+requires `personalEntity` to match that binding. Missing or mismatched observations yield an
+`unverified` receipt with a null destination. The planner does not authenticate those caller-supplied
+observations, dispatch work, read personal sources, or include source bodies in receipts. Unit and
+CLI cases: `node --test tests/task-router.test.mjs tests/task-router-cli.test.mjs`.
+
 ## Automatic
 Wired as a **Stop hook** (`.claude/settings.json`) so every agent session auto-reports on end.
 Reads `KB_AGENT` for attribution. Exits 0 always (never blocks a session). The skill installs to

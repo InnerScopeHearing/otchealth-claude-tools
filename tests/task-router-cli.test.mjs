@@ -56,10 +56,36 @@ test("CLI keeps parent correlation, bounded receipt output, and personal-first r
 
   const personal = invoke({ ...intake, classification: "personal", intendedSource: "secret://private", evidencePointers: ["private://pointer"] });
   const personalReceipt = JSON.parse(personal.stdout);
-  assert.equal(personalReceipt.status, "direct-owner");
+  assert.equal(personalReceipt.status, "unverified");
   assert.equal(personalReceipt.parentTaskId, "parent-7");
+  assert.equal(personalReceipt.destination, null);
   assert.equal(personal.stdout.includes("secret://"), false);
   assert.equal(personal.stdout.includes("private://"), false);
+});
+
+test("CLI routes personal legal, enrolled health, and entity-bound finance through the existing intake path", () => {
+  const personalHome = { ownerId: "Matt", projectId: "synthetic-personal-home", isolated: true, verified: true, observedAt: new Date(now).toISOString() };
+  const cases = [
+    { requestType: "legal", availableRoles: ["clo-personal"], personalBindings: [{ ownerId: "Matt", requestType: "legal", agentId: "clo-personal", role: "clo-personal", enrolled: true, observedAt: new Date(now).toISOString() }], destination: "clo-personal" },
+    { requestType: "health", availableRoles: ["synthetic-enrolled-health"], personalBindings: [{ ownerId: "Matt", requestType: "health", agentId: "synthetic-enrolled-health", role: "health", enrolled: true, observedAt: new Date(now).toISOString() }], destination: "synthetic-enrolled-health" },
+    { requestType: "finance", personalEntity: "Matt personal", availableRoles: ["cfo"], personalBindings: [{ ownerId: "Matt", requestType: "finance", agentId: "cfo", role: "cfo", scope: "personal-book", entity: "Matt personal", enrolled: true, observedAt: new Date(now).toISOString() }], destination: "cfo" },
+  ];
+  for (const route of cases) {
+    const { destination, ...inputRoute } = route;
+    const result = invoke({ ...intake, classification: "personal", personalHome, ...inputRoute });
+    assert.equal(result.status, 0, result.stderr);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.classification, "personal");
+    assert.equal(receipt.requestType, route.requestType);
+    assert.equal(receipt.status, "ready_for_handoff");
+    assert.equal(receipt.destination, destination);
+    assert.equal(receipt.sourceRead, false);
+    assert.deepEqual(receipt.evidencePointers, []);
+    assert.equal(result.stdout.includes("synthetic-personal-home"), false);
+  }
+  const noBinding = invoke({ ...intake, classification: "personal", requestType: "health", personalHome, availableRoles: ["synthetic-enrolled-health"] });
+  assert.equal(JSON.parse(noBinding.stdout).status, "unverified");
+  assert.equal(JSON.parse(noBinding.stdout).destination, null);
 });
 
 test("CLI rejects inputs above its fixed byte bound", () => {
