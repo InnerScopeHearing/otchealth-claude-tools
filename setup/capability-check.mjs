@@ -63,6 +63,67 @@ function layer(state, observedAt, evidenceRef = null, failureClass = null) {
   return { state, observed_at: observedAt, evidence_ref: evidenceRef, failure_class: failureClass };
 }
 
+/** Convert one native Codex catalog-probe response into the adapter's narrow input.
+ * Callable surface metadata must be supplied independently; gateway names only
+ * populate discovery evidence and never create a binding.
+ */
+export function probeFromNativeCatalogReceipt({
+  expectedSeat,
+  observedAt,
+  toolName,
+  surfaceToolNames,
+  receipt,
+} = {}) {
+  const result = receipt?.structuredContent?.result;
+  const context = result?.request_context;
+  const correlationId = receipt?.structuredContent?.correlation_id;
+  const correlation = typeof correlationId === "string" && /^[A-Za-z0-9-]{1,128}$/.test(correlationId)
+    ? `receipt:${correlationId}` : null;
+  const caller = typeof context?.caller_agent === "string"
+    && /^[a-z][a-z0-9-]{0,31}$/.test(context.caller_agent) ? context.caller_agent : null;
+  const callerNamespace = caller === "cfo" ? "cfo_brain" : caller;
+  const exactCatalogTool = toolName === "catalog_probe"
+    || (callerNamespace !== null && toolName === `mcp__codex_apps__otchealth_${callerNamespace}_catalog_probe`);
+  // A non-error wrapper or caller-shaped object is not a successful operation.
+  // Require the actual catalog receipt shape and bind it only to that caller's
+  // catalog operation; never promote missing/error-only evidence to healthy.
+  const hasResult = Boolean(receipt?.isError === false && result && !Array.isArray(result)
+    && typeof result === "object" && (result.error === undefined || result.error === null)
+    && typeof result.build_tag === "string" && result.build_tag.startsWith("catalog-probe-")
+    && Number.isSafeInteger(result.tool_registry_count) && result.tool_registry_count > 0
+    && result.known_tools_present?.catalog_probe === true && caller !== null
+    && context.is_connector_surface === true && context.is_m365_static_auth !== true
+    && correlation !== null && exactCatalogTool);
+  const gatewayCatalogNames = hasResult
+    ? Object.entries(result.known_tools_present).filter(([, present]) => present === true).map(([name]) => name)
+    : [];
+  // Native gateway catalogs use the operation alias, while the client surface
+  // exposes its namespaced MCP tool. Keep both names as discovery-only metadata.
+  if (typeof toolName === "string" && toolName.endsWith("_catalog_probe") && gatewayCatalogNames.includes("catalog_probe")) {
+    gatewayCatalogNames.push(toolName);
+  }
+
+  return {
+    expectedSeat,
+    authenticatedSeat: caller,
+    observedAt,
+    surface: "codex_apps_connector",
+    surfaceToolNames,
+    requiredTool: toolName,
+    // The exact successful call itself demonstrates that this named handler ran.
+    boundToolNames: hasResult ? [toolName] : null,
+    gatewayCatalogNames,
+    operationStatus: hasResult ? "succeeded" : (receipt?.isError === true ? "failed" : "unobserved"),
+    operationEvidenceRef: correlation,
+    connectorSurface: hasResult,
+    skillCatalogStatus: "unobserved",
+    // The probe build tag is fixed, and its image tag is not a verified source SHA.
+    catalogVersion: null,
+    sourceRevision: null,
+    probeReceiptRefs: correlation ? [correlation] : [],
+  };
+}
+
 export function assessCapabilityProbe(probe = {}) {
   const observedAt = typeof probe.observedAt === "string" ? probe.observedAt : new Date().toISOString();
   const skillStatus = VALID_SKILL_STATES.has(probe.skillCatalogStatus) ? probe.skillCatalogStatus : "unobserved";
