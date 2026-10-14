@@ -237,6 +237,19 @@ test("unregistered stale beats and beating retired jobs are attention items; rec
   assert.deepEqual(v.anomalies.map((r) => r.job).sort(), ["gone-beat", "mystery"]);
 });
 
+test("the autorestart state control object is not a workload, but unknown stale beat keys remain visible", () => {
+  const v = verdict([
+    ...GOOD,
+    { job: "_autorestart_state", ageMin: null },
+    { job: "_unknown-workload", ageMin: 9000 },
+    { job: "p0-selftest", ageMin: 101 * 24 * 60 },
+  ]);
+  assert.equal(state(v, "_autorestart_state"), undefined, "control state must not be classified as an unregistered job");
+  assert.equal(state(v, "_unknown-workload"), "UNREGISTERED-STALE", "other underscore names are not blanket-excluded");
+  assert.equal(state(v, "p0-selftest"), "UNREGISTERED-STALE", "genuinely unknown workloads remain visible");
+  assert.deepEqual(v.anomalies.map((r) => r.job).sort(), ["_unknown-workload", "p0-selftest"]);
+});
+
 test("diagnoseBeatStoreFailure names the exact permission and survives the pager's redaction", () => {
   const perm = diagnoseBeatStoreFailure("heartbeat.mjs check failed: exit 1: [heartbeat] ERROR: AccessDenied: not authorized to perform s3:ListBucket");
   for (const needle of ["MISSING PERMISSION", "s3:ListBucket", "s3:GetObject", "s3:PutObject", "otchealth-brain-dr-55c84f6b", "_HEARTBEAT/"]) assert.ok(perm.includes(needle), needle);

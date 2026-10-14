@@ -262,6 +262,104 @@ test('expired access token refreshes once, verifies the renewed Developer identi
   const rotated = JSON.parse(await readFile(filePath, 'utf8'));
   assert.equal(rotated.refreshToken, 'rotated-refresh-token-value');
   assert.equal(rotated.accessToken, refreshedAccess);
+  // A cache-busted module instance models a fresh client process reading the durable session.
+  const restartedClient = await import(`../cloud-session.mjs?restart=${Date.now()}`);
+  const afterRestart = await restartedClient.sessionStatus({ sessionDir, fetchImpl });
+  assert.equal(afterRestart.status, 'connected');
+  assert.equal(refreshes, 1);
+});
+
+test('expired session with a revoked refresh token fails before a protected operation and does not retry', async (t) => {
+  const { sessionDir } = await tempSessionDir(t);
+  const gateway = fakeGateway();
+  await bootstrapSession({ sessionDir, setupCode: SETUP_CODE, fetchImpl: gateway.fetchImpl });
+  const filePath = join(sessionDir, SESSION_FILE);
+  const saved = JSON.parse(await readFile(filePath, 'utf8'));
+  saved.expiresAt = new Date(Date.now() - 60_000).toISOString();
+  await (await import('node:fs/promises')).writeFile(filePath, JSON.stringify(saved));
+  await chmod(filePath, 0o600);
+
+  let refreshAttempts = 0;
+  let protectedCalls = 0;
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url) === TOKEN_ENDPOINT) {
+      refreshAttempts += 1;
+      assert.equal(new URLSearchParams(options.body).get('grant_type'), 'refresh_token');
+      return json({ error: 'invalid_grant' }, 400);
+    }
+    if (String(url) === MCP_ENDPOINT) protectedCalls += 1;
+    throw new Error('unexpected request');
+  };
+  await assert.rejects(() => callTool({ sessionDir, toolName: 'task_update', args: { task_id: 'x' }, fetchImpl }), /token exchange failed \(HTTP 400\)/);
+  assert.equal(refreshAttempts, 1);
+  assert.equal(protectedCalls, 0);
+  assert.deepEqual(JSON.parse(await readFile(filePath, 'utf8')), saved);
+});
+
+test('a refresh response for another seat is rejected without replacing the durable session', async (t) => {
+  const { sessionDir } = await tempSessionDir(t);
+  const gateway = fakeGateway();
+  await bootstrapSession({ sessionDir, setupCode: SETUP_CODE, fetchImpl: gateway.fetchImpl });
+  const filePath = join(sessionDir, SESSION_FILE);
+  const saved = JSON.parse(await readFile(filePath, 'utf8'));
+  saved.expiresAt = new Date(Date.now() - 60_000).toISOString();
+  await (await import('node:fs/promises')).writeFile(filePath, JSON.stringify(saved));
+  await chmod(filePath, 0o600);
+
+  let refreshAttempts = 0;
+  let gatewayRequests = 0;
+  const fetchImpl = async (url, options = {}) => {
+    if (String(url) === TOKEN_ENDPOINT) {
+      refreshAttempts += 1;
+      return authResponse(token('cto', 'refresh_token'), 'rotated-refresh-token-value', 'refresh_token');
+    }
+    if (String(url) === MCP_ENDPOINT) gatewayRequests += 1;
+    throw new Error('unexpected request');
+  };
+  await assert.rejects(() => sessionStatus({ sessionDir, fetchImpl }), /identity did not match/);
+  assert.equal(refreshAttempts, 1);
+  assert.equal(gatewayRequests, 0);
+  assert.deepEqual(JSON.parse(await readFile(filePath, 'utf8')), saved);
+});
+
+test('missing refresh credential fails before network access', async (t) => {
+  const { sessionDir } = await tempSessionDir(t);
+  const gateway = fakeGateway();
+  await bootstrapSession({ sessionDir, setupCode: SETUP_CODE, fetchImpl: gateway.fetchImpl });
+  const filePath = join(sessionDir, SESSION_FILE);
+  const saved = JSON.parse(await readFile(filePath, 'utf8'));
+  delete saved.refreshToken;
+  await (await import('node:fs/promises')).writeFile(filePath, JSON.stringify(saved));
+  await chmod(filePath, 0o600);
+  let requests = 0;
+  await assert.rejects(() => sessionStatus({ sessionDir, fetchImpl: async () => { requests += 1; throw new Error('unexpected'); } }), /incomplete/);
+  assert.equal(requests, 0);
+});
+
+test('lost refresh response is not retried and does not reach the requested tool', async (t) => {
+  const { sessionDir } = await tempSessionDir(t);
+  const gateway = fakeGateway();
+  await bootstrapSession({ sessionDir, setupCode: SETUP_CODE, fetchImpl: gateway.fetchImpl });
+  const filePath = join(sessionDir, SESSION_FILE);
+  const saved = JSON.parse(await readFile(filePath, 'utf8'));
+  saved.expiresAt = new Date(Date.now() - 60_000).toISOString();
+  await (await import('node:fs/promises')).writeFile(filePath, JSON.stringify(saved));
+  await chmod(filePath, 0o600);
+
+  let refreshAttempts = 0;
+  let protectedCalls = 0;
+  const fetchImpl = async (url) => {
+    if (String(url) === TOKEN_ENDPOINT) {
+      refreshAttempts += 1;
+      throw new Error('synthetic response lost after server rotation');
+    }
+    if (String(url) === MCP_ENDPOINT) protectedCalls += 1;
+    throw new Error('unexpected request');
+  };
+  await assert.rejects(() => callTool({ sessionDir, toolName: 'task_update', args: { task_id: 'x' }, fetchImpl }), /token exchange failed/);
+  assert.equal(refreshAttempts, 1);
+  assert.equal(protectedCalls, 0);
+  assert.deepEqual(JSON.parse(await readFile(filePath, 'utf8')), saved);
 });
 
 test('schema output preserves normal business code properties while removing credential fields', async (t) => {

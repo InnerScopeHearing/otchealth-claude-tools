@@ -51,6 +51,9 @@ const FAILED_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
 export const ANOMALY_STATES = new Set(["STALE", "NO-DATA", "UNWITNESSED", "FAILING", "UNREADABLE", "UNREGISTERED-STALE", "RETIRED-BEATING"]);
 const TAG = { FAILING: "ERROR", UNWITNESSED: "ERROR", UNREADABLE: "ERROR" }; // everything else is a STALE-class finding
 const STATE_ORDER = ["LIVE", "PENDING", "STALE", "NO-DATA", "FAILING", "UNWITNESSED", "UNREADABLE", "UNREGISTERED-STALE", "RETIRED-BEATING", "UNREGISTERED"];
+// Reserved heartbeat control metadata, not a workload. Keep this exact-key allowlist narrow:
+// unknown beat names (including other underscore-prefixed names) must remain visible.
+const CONTROL_BEAT_KEYS = new Set(["_autorestart_state"]);
 
 const argv = process.argv.slice(2);
 const STRICT = argv.includes("--strict") || process.env.NIGHTLY_SCHEDULE_CANARY_STRICT === "1";
@@ -239,7 +242,9 @@ function armedGraceUntil(entry, limitMin, nowMs) {
  *  beatError = diagnosis string or null, schedule = { job: {ok, summary|error} } for rows with gh_workflow,
  *  nowMs only matters for a row's "armed" grace window. */
 export function evaluateSilence({ registry, beatRows, beatError = null, schedule = {}, unregisteredMaxAgeMin = UNREGISTERED_MAX_AGE_MIN, nowMs = Date.now() }) {
-  const byJob = new Map((beatRows || []).filter((r) => r && r.job).map((r) => [r.job, r]));
+  // Filter only from workload classification. The original beatRows argument remains untouched
+  // for callers that need the raw heartbeat metadata.
+  const byJob = new Map((beatRows || []).filter((r) => r && r.job && !CONTROL_BEAT_KEYS.has(r.job)).map((r) => [r.job, r]));
   const results = [];
   const add = (job, state, detail, extra = {}) => results.push({ job, state, detail, ...extra });
   const watched = watchedJobs(registry);

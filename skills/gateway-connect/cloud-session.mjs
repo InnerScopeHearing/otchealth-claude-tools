@@ -370,7 +370,7 @@ async function postToken(fields, fetchImpl) {
     redirect: 'error',
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body: formBody(fields),
-  });
+  }, 'OAuth token exchange');
   return readJsonResponse(response, 'OAuth token exchange');
 }
 
