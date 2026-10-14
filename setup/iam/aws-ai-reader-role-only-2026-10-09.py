@@ -45,6 +45,12 @@ EXTRAS_DOC = {
         ],
         "Resource": "*",
     }, {
+        "Sid": "SchedulerGetOwnedScheduleMetadata",
+        "Effect": "Allow",
+        "Action": ["scheduler:GetSchedule"],
+        "Resource": "arn:aws:scheduler:us-east-1:900915535335:schedule/default/otchealth-*",
+        "Condition": {"ArnEquals": {"aws:PrincipalArn": ROLE_ARN}},
+    }, {
         "Sid": "AwareDeviceFarmRunMetadataOnly",
         "Effect": "Allow",
         "Action": ["devicefarm:GetRun"],

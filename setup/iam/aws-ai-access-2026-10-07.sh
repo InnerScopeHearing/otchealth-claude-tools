@@ -865,6 +865,17 @@ cat > "$EXTRAS_FILE" <<'EXTRAS_JSON'
       "Resource": "*"
     },
     {
+      "Sid": "SchedulerGetOwnedScheduleMetadata",
+      "Effect": "Allow",
+      "Action": ["scheduler:GetSchedule"],
+      "Resource": "arn:aws:scheduler:us-east-1:900915535335:schedule/default/otchealth-*",
+      "Condition": {
+        "ArnEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::900915535335:role/otchealth-ai-reader-role"
+        }
+      }
+    },
+    {
       "Sid": "AwareDeviceFarmRunMetadataOnly",
       "Effect": "Allow",
       "Action": ["devicefarm:GetRun"],

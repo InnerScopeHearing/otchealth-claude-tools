@@ -1,0 +1,92 @@
+{
+  "schema": "b17-reader-source-review/v1",
+  "reviewer": "/root/b12_independent_review",
+  "conductor": "/root",
+  "started_at_utc": "2026-10-14T13:01:32Z",
+  "reviewed_at_utc": "2026-10-14 13:08:43 UTC",
+  "deadline_utc": "2026-10-14T13:09:32Z",
+  "result": "PASS_SOURCE_CANDIDATE_LIVE_PERMISSION_UNREPAIRED",
+  "open_important_or_critical_findings": [],
+  "frozen_source": [
+    {
+      "path": "/workspace/b17-reader-source-only/full-before.sh",
+      "sha256": "ce5500f2c99f9c7b1c19f3c66ee77156c3831704d0c78f54f9482579d7e87310",
+      "git_blob": "43824dc11112fc6e3ec8b37c624dcf51413c2e38",
+      "bytes": 76654
+    },
+    {
+      "path": "/workspace/b17-reader-source-only/full-candidate.sh",
+      "sha256": "835eecc55fe69e5950579198fd6ffb928066b0c479c5dec755723f0e547a7a6b",
+      "bytes": 77026
+    }
+  ],
+  "exact_change": {
+    "added_lines": 11,
+    "statement_sid": "SchedulerGetOwnedScheduleMetadata",
+    "effect": "Allow",
+    "action": [
+      "scheduler:GetSchedule"
+    ],
+    "resource": "arn:aws:scheduler:us-east-1:900915535335:schedule/default/otchealth-*",
+    "condition": {
+      "ArnEquals": {
+        "aws:PrincipalArn": "arn:aws:iam::900915535335:role/otchealth-ai-reader-role"
+      }
+    },
+    "remove_added_statement_restores_entire_before_bytes": true,
+    "extras_without_statement_equals_original_json": true,
+    "deny_heredoc_byte_identical": true,
+    "billing_heredoc_byte_identical": true,
+    "no_other_changes": "Canonical source, role/user definitions, attachments, trust, writes, writer identities, billing/deny policy and all other behavior remain exact before bytes outside the added statement."
+  },
+  "validation": [
+    {
+      "check": "Canonical full source",
+      "result": "Independent Git blob computation equals43824dc11112fc6e3ec8b37c624dcf51413c2e38"
+    },
+    {
+      "check": "Full normal script syntax",
+      "result": "bash -n full-before.sh and full-candidate.sh both pass; scripts were not executed"
+    },
+    {
+      "check": "Complete emitted policy documents",
+      "result": "Parsed full EXTRAS_JSON, DENY_JSON and BILLING_JSON; added single statement exact; extras compact1429bytes below existing6144limit; no preserve-policy change"
+    },
+    {
+      "check": "Independent narrow policy scope probe",
+      "result": "1positive,12negative action/resource/principal cases pass;15protected existing deny cases remain applicable; saved deny does not match scheduler:GetSchedule"
+    },
+    {
+      "check": "Existing repository fake IAM evaluator over complete candidate extras+deny",
+      "result": "Exact role/owned schedule allowed; shared human user, other role, foreign account/region/group/prefix, ListSchedules and UpdateSchedule implicitly denied. Existing secret/permission explicit denies remain; added explicit GetSchedule deny wins."
+    },
+    {
+      "check": "Shared user attachment",
+      "result": "Existing extras attaches to both user and role; ArnEquals exact role condition prevents the new statement from granting the IAM user."
+    }
+  ],
+  "public_document_read": {
+    "count": 1,
+    "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-principalarn",
+    "verified_semantics": [
+      "For IAM roles, request context returns ARN of the role, not ARN of the user that assumed it.",
+      "AWS explicitly says not to use the assumed-role session ARN as this condition value.",
+      "AWS recommends ARN operators for ARN comparisons."
+    ]
+  },
+  "source_validator_test_integration": {
+    "existing_location": "setup/aws/tests/aware-reader-condition.test.mjs and existing policy-source parsing tests",
+    "necessary_guard": "Extend an existing test to extract SchedulerGetOwnedScheduleMetadata from actual canonical EXTRAS_JSON and assert exactly one statement, onlyGetSchedule, fixed account/region/default/prefix resource, exact ArnEquals reader role, and negative shared-user/wrong-role/scope/write/list cases; run existing fake evaluator and normal source CI.",
+    "current_limit": "The inspected aware-reader-condition test exercises DeviceFarm only; this receipt contains independent scheduler assertions but does not modify repository tests or publish a PR.",
+    "no_new_framework": "Reuse existing fake-aws.py/policy test mechanisms; no bootstrap execution, provider IAM mutation, new writer/role/trust or denied-policy edit is required for source validation."
+  },
+  "proof_boundary": "Source and local offline policy evaluation only. Other live managed policies, permission boundaries, SCPs, session policies, attachments, role trust/runtime identity and service behavior were not read or changed. GetSchedule returns schedule configuration; the policy itself is not a response redactor, so any later source/body minimization remains the caller's separate gate. No assertion of effective live permission repair, metadata read success, admin capability, or production deployment. Existing explicit denies remain intact.",
+  "reviewer_mutations": "Only /workspace/b17-reader-source-review.json and /workspace/b17-reader-source-review.md.",
+  "shared_source_edits": 0,
+  "git_writes": 0,
+  "provider_writes": 0,
+  "aws_calls": 0,
+  "full_bootstrap_executions": 0,
+  "descendant_agents": 0,
+  "next_action": "Root may prepare/publish the reviewed source PR with targeted existing-test integration and normal CI; do not execute this full bootstrap or infer a grant. A legitimate narrowly scoped permission mutation route and exact live readback remain separate future authority/evidence gates."
+}
