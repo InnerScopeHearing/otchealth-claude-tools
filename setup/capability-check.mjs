@@ -73,6 +73,9 @@ export function probeFromNativeCatalogReceipt({
   toolName,
   surfaceToolNames,
   receipt,
+  catalogCompleteness,
+  namedSkillRefs,
+  skillReaderReceipts,
 } = {}) {
   const result = receipt?.structuredContent?.result;
   const context = result?.request_context;
@@ -103,6 +106,39 @@ export function probeFromNativeCatalogReceipt({
     gatewayCatalogNames.push(toolName);
   }
 
+  // Listing completeness and named reads are independent evidence. Empty but
+  // explicitly complete listings establish absence; truncated/malformed ones
+  // remain unknown. A named read needs exact resource, nonempty content, role,
+  // and an original timestamp no more than five minutes old (never future).
+  const freshTimestamp = (value) => {
+    if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return false;
+    const ageMs = Date.now() - Date.parse(value);
+    return ageMs >= 0 && ageMs <= 300_000;
+  };
+  const completeEmptyListing = catalogCompleteness && Array.isArray(catalogCompleteness.skills)
+    && catalogCompleteness.skills.length === 0 && catalogCompleteness.complete === true
+    && catalogCompleteness.truncated === false && catalogCompleteness.warning_present === false
+    && catalogCompleteness.cursor_present === false && catalogCompleteness.caller_agent === caller
+    && caller === expectedSeat && freshTimestamp(catalogCompleteness.observed_at);
+  const requestedRefs = Array.isArray(namedSkillRefs)
+    ? [...new Set(namedSkillRefs.filter((ref) => typeof ref === "string" && ref.startsWith("skill://")))] : [];
+  const validSkillReceipts = requestedRefs.flatMap((resource) => {
+    const match = Array.isArray(skillReaderReceipts) ? skillReaderReceipts.find((candidate) =>
+      candidate && typeof candidate === "object" && !Array.isArray(candidate)
+      && candidate.resource === resource && typeof candidate.content === "string" && candidate.content.trim().length > 0
+      && candidate.caller_agent === caller && caller === expectedSeat && freshTimestamp(candidate.observed_at)) : null;
+    return match ? [{ resource, observed_at: match.observed_at,
+      evidence_ref: typeof match.correlation_id === "string" && /^[A-Za-z0-9-]{1,128}$/.test(match.correlation_id)
+        ? `receipt:${match.correlation_id}` : null }] : [];
+  });
+  const skillCatalogStatus = validSkillReceipts.length > 0 ? "available"
+    : (completeEmptyListing ? "unavailable" : "unobserved");
+  const skillObservedAt = validSkillReceipts.length
+    // A newer read must not extend the freshness of an older required reference.
+    ? validSkillReceipts.map((item) => item.observed_at)
+      .sort((left, right) => Date.parse(left) - Date.parse(right)).at(0)
+    : (completeEmptyListing ? catalogCompleteness.observed_at : observedAt);
+
   return {
     expectedSeat,
     authenticatedSeat: caller,
@@ -116,7 +152,12 @@ export function probeFromNativeCatalogReceipt({
     operationStatus: hasResult ? "succeeded" : (receipt?.isError === true ? "failed" : "unobserved"),
     operationEvidenceRef: correlation,
     connectorSurface: hasResult,
-    skillCatalogStatus: "unobserved",
+    skillCatalogStatus,
+    skillRefs: validSkillReceipts.map((item) => item.resource),
+    unresolvedSkillRefs: requestedRefs.filter((resource) => !validSkillReceipts.some((item) => item.resource === resource)),
+    skillEvidenceComplete: requestedRefs.length > 0 && validSkillReceipts.length === requestedRefs.length,
+    skillObservedAt,
+    skillReceiptRefs: validSkillReceipts.map((item) => item.evidence_ref).filter(Boolean),
     // The probe build tag is fixed, and its image tag is not a verified source SHA.
     catalogVersion: null,
     sourceRevision: null,
@@ -174,7 +215,9 @@ export function assessCapabilityProbe(probe = {}) {
     skill_refs: stringList(probe.skillRefs) ?? [],
     layers: {
       client: layer(clientState, observedAt, operationSucceeded ? evidenceRef : null, clientState === "degraded" ? "operation_unverified" : null),
-      skill_discovery: layer(skillStatus === "available" ? "healthy" : "unknown", observedAt, null,
+      skill_discovery: layer(skillStatus === "available" ? "healthy" : "unknown",
+        typeof probe.skillObservedAt === "string" ? probe.skillObservedAt : observedAt,
+        null,
         skillStatus === "unavailable" ? "skill_catalog_unavailable" : null),
       executor_binding: layer(executorState, observedAt, layerEvidence,
         executorState === "unknown" ? binding.status : null),
@@ -187,15 +230,17 @@ export function assessCapabilityProbe(probe = {}) {
       reversible_write: layer("unknown", observedAt),
       administration: layer("unknown", observedAt),
     },
-    probe_receipts: stringList(probe.probeReceiptRefs) ?? [],
+    probe_receipts: [...(stringList(probe.probeReceiptRefs) ?? []), ...(stringList(probe.skillReceiptRefs) ?? [])],
   };
   const childSurfaceObserved = probe.childSurfaceObserved === true;
+  const skillEvidenceComplete = probe.skillEvidenceComplete !== false;
 
   return {
     metadata,
     binding,
-    probeStatus: operationSucceeded && childSurfaceObserved && skillStatus === "available" ? "complete" : "partial",
-    observed: { surface: surfaceObserved, identity: identityObserved, skillCatalog: skillStatus, toolMetadata: toolObservation },
+    probeStatus: operationSucceeded && childSurfaceObserved && skillStatus === "available" && skillEvidenceComplete ? "complete" : "partial",
+    observed: { surface: surfaceObserved, identity: identityObserved, skillCatalog: skillStatus, toolMetadata: toolObservation,
+      skillEvidenceComplete, unresolvedSkillRefs: stringList(probe.unresolvedSkillRefs) ?? [] },
   };
 }
 
@@ -228,6 +273,9 @@ function readNativeProbe(path, expectedSeat) {
     toolName: input.tool_name,
     surfaceToolNames: input.surface_tool_names,
     receipt: input.receipt,
+    catalogCompleteness: input.catalog_completeness,
+    namedSkillRefs: input.named_skill_refs,
+    skillReaderReceipts: input.skill_reader_receipts,
   });
 }
 
