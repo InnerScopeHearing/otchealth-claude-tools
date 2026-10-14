@@ -17,6 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY setup/ /app/setup/
 COPY skills/doc-indexer/ /app/skills/doc-indexer/
+# healthz-monitor source candidate is included by the COPY above at
+# /app/skills/doc-indexer/healthz-monitor/monitor.mjs. The currently disabled ECS schedule still
+# targets a separate pinned node image and SSM-injected SCRIPT_B64; this COPY alone does NOT wire
+# or activate the candidate. Gateway task-definition/source review remains a separate owner gate.
 # brain-save: the commons push-search content gate (skills/doc-indexer/commons-push-gate.mjs) imports its
 # secret gate, ring gate and secret-value loader, so a nightly commons push cannot even start without it
 # (and refuses, exit 2, rather than pushing ungated). Also lets `brain-save audit` run from the image.
