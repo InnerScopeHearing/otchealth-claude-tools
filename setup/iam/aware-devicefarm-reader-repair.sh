@@ -5,11 +5,32 @@
 set -euo pipefail
 umask 077
 export AWS_PAGER="" AWS_MAX_ATTEMPTS=1
-mode="${1:---check}"
-if [ "$#" -gt 1 ] || { [ "$mode" != --check ] && [ "$mode" != --apply ]; }; then
-  echo 'Usage: bash aware-devicefarm-reader-repair.sh [--check|--apply]' >&2
-  exit 2
-fi
+mode=--check
+mode_seen=0
+allow_root_owner=false
+for argument in "$@"; do
+  case "$argument" in
+    --check|--apply)
+      if [ "$mode_seen" -eq 1 ]; then
+        echo 'Usage: bash aware-devicefarm-reader-repair.sh [--check|--apply] [--allow-root-owner]' >&2
+        exit 2
+      fi
+      mode="$argument"
+      mode_seen=1
+      ;;
+    --allow-root-owner)
+      if [ "$allow_root_owner" = true ]; then
+        echo 'Usage: bash aware-devicefarm-reader-repair.sh [--check|--apply] [--allow-root-owner]' >&2
+        exit 2
+      fi
+      allow_root_owner=true
+      ;;
+    *)
+      echo 'Usage: bash aware-devicefarm-reader-repair.sh [--check|--apply] [--allow-root-owner]' >&2
+      exit 2
+      ;;
+  esac
+done
 for dependency in aws jq awk mktemp; do
   command -v "$dependency" >/dev/null || { echo "STOP: missing $dependency" >&2; exit 1; }
 done
@@ -19,6 +40,9 @@ role_arn="arn:aws:iam::$account:role/$role_name"
 policy_arn="arn:aws:iam::$account:policy/otchealth-ai-reader-extras"
 deny_arn="arn:aws:iam::$account:policy/otchealth-ai-reader-deny"
 sid=AwareDeviceFarmRunMetadataOnly
+scheduler_sid=SchedulerGetOwnedScheduleMetadata
+run_arn="arn:aws:devicefarm:us-west-2:$account:run:58bbc541-f082-4594-b744-738a345f3654/*"
+project_arn="arn:aws:devicefarm:us-west-2:$account:project:58bbc541-f082-4594-b744-738a345f3654"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source_file="$script_dir/aws-ai-access-2026-10-07.sh"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/aware-reader-repair.XXXXXX")"
@@ -47,17 +71,31 @@ extract_policy DENY_JSON "$work_dir/expected-deny.json"
 jq -e --arg role "$role_arn" --arg sid "$sid" '
   [.Statement[] | select(.Sid == $sid)] == [{
     Sid: $sid, Effect: "Allow", Action: ["devicefarm:GetRun"],
-    Resource: "arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*",
+    Resource: ["arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*",
+      "arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654"],
     Condition: {ArnEquals: {"aws:PrincipalArn": $role}}
   }]
 ' "$work_dir/desired.json" >/dev/null || stop 'repair grant is not the exact reviewed action, project and role'
+jq -e --arg role "$role_arn" --arg sid "$scheduler_sid" '
+  ([.Statement[].Sid] | sort) == (["MonitoringReads", $sid, "AwareDeviceFarmRunMetadataOnly"] | sort) and
+  [.Statement[] | select(.Sid == $sid)] == [{
+    Sid: $sid, Effect: "Allow", Action: ["scheduler:GetSchedule"],
+    Resource: "arn:aws:scheduler:us-east-1:900915535335:schedule/default/otchealth-*",
+    Condition: {ArnEquals: {"aws:PrincipalArn": $role}}
+  }]
+' "$work_dir/desired.json" >/dev/null || stop 'reviewed Scheduler source differs from the exact known statement'
 jq --arg sid "$sid" '.Statement |= map(select(.Sid != $sid))' "$work_dir/desired.json" > "$work_dir/baseline.json"
+jq --arg sid "$scheduler_sid" '.Statement |= map(select(.Sid != $sid))' "$work_dir/baseline.json" > "$work_dir/legacy-baseline.json"
+jq --arg sid "$scheduler_sid" '.Statement |= map(select(.Sid != $sid))' "$work_dir/desired.json" > "$work_dir/legacy-desired.json"
+jq --arg sid "$sid" --arg run "$run_arn" '.Statement |= map(if .Sid == $sid then .Resource = $run else . end)' "$work_dir/desired.json" > "$work_dir/run-only-desired.json"
+jq --arg sid "$scheduler_sid" '.Statement |= map(select(.Sid != $sid))' "$work_dir/run-only-desired.json" > "$work_dir/run-only-legacy-desired.json"
 read_aws "$work_dir/identity.json" sts get-caller-identity
-jq -e --arg account "$account" '
+jq -e --arg account "$account" --arg allow_root_owner "$allow_root_owner" '
   .Account == $account and (.Arn | type == "string") and
-  (.Arn | test("^arn:aws:(iam|sts)::" + $account + ":(user/|assumed-role/).+")) and
+  ((.Arn == ("arn:aws:iam::" + $account + ":root") and $allow_root_owner == "true") or
+   (.Arn | test("^arn:aws:(iam|sts)::" + $account + ":(user/|assumed-role/).+"))) and
   (.Arn | test("(:user/otchealth-ai-reader$|:assumed-role/otchealth-ai-reader-role/)") | not)
-' "$work_dir/identity.json" >/dev/null || stop 'use the existing account owner/admin session, never root or the AI reader'
+' "$work_dir/identity.json" >/dev/null || stop 'use the existing account owner/admin session; root requires --allow-root-owner and the AI reader is never allowed'
 read_aws "$work_dir/role-before.json" iam get-role --role-name "$role_name"
 jq -e --arg role "$role_arn" --arg account "$account" '
   .Role.Arn == $role and (.Role.PermissionsBoundary == null) and
@@ -90,15 +128,41 @@ jq -e --arg arn "$policy_arn" '.Policy.Arn == $arn' "$work_dir/policy-before.jso
 before_version="$(jq -er '.Policy.DefaultVersionId | select(test("^v[1-9][0-9]*$"))' "$work_dir/policy-before.json")"
 read_aws "$work_dir/preimage.json" iam get-policy-version --policy-arn "$policy_arn" --version-id "$before_version"
 if jq -e --slurpfile desired "$work_dir/desired.json" '.PolicyVersion.Document == $desired[0]' "$work_dir/preimage.json" >/dev/null; then
-  echo "ALREADY_APPLIED: exact scoped policy is default ($before_version); no writes."
+  echo "ALREADY_APPLIED: exact M+Scheduler+GetRun policy is default ($before_version); no writes."
   exit 0
 fi
-jq -e --slurpfile baseline "$work_dir/baseline.json" '.PolicyVersion.Document == $baseline[0]' "$work_dir/preimage.json" >/dev/null || stop 'existing extras policy drift; no unknown statements will be overwritten'
+if jq -e --slurpfile desired "$work_dir/legacy-desired.json" '.PolicyVersion.Document == $desired[0]' "$work_dir/preimage.json" >/dev/null; then
+  echo "ALREADY_APPLIED: exact M+GetRun policy is default ($before_version); no writes."
+  exit 0
+fi
+if jq -e --slurpfile desired "$work_dir/run-only-desired.json" '.PolicyVersion.Document == $desired[0]' "$work_dir/preimage.json" >/dev/null ||
+   jq -e --slurpfile desired "$work_dir/run-only-legacy-desired.json" '.PolicyVersion.Document == $desired[0]' "$work_dir/preimage.json" >/dev/null; then
+  preimage_variant=run_only_migration
+else
+  preimage_variant=
+fi
+desired_file="$work_dir/desired.json"
+if [ "$preimage_variant" = run_only_migration ]; then
+  # The only run-only preimages accepted are the exact deployed v2 documents above.
+  if jq -e --slurpfile previous "$work_dir/run-only-desired.json" '.PolicyVersion.Document == $previous[0]' "$work_dir/preimage.json" >/dev/null; then
+    preimage_variant=monitoring_plus_scheduler_run_only
+  else
+    desired_file="$work_dir/legacy-desired.json"
+    preimage_variant=monitoring_only_run_only
+  fi
+elif jq -e --slurpfile baseline "$work_dir/baseline.json" '.PolicyVersion.Document == $baseline[0]' "$work_dir/preimage.json" >/dev/null; then
+  preimage_variant=monitoring_plus_scheduler
+elif jq -e --slurpfile baseline "$work_dir/legacy-baseline.json" '.PolicyVersion.Document == $baseline[0]' "$work_dir/preimage.json" >/dev/null; then
+  desired_file="$work_dir/legacy-desired.json"
+  preimage_variant=monitoring_only
+else
+  stop 'existing extras policy drift; no unknown statements will be overwritten'
+fi
 read_aws "$work_dir/versions.json" iam list-policy-versions --policy-arn "$policy_arn"
 jq -e --arg version "$before_version" '
   (.Versions | length < 5) and ([.Versions[] | select(.IsDefaultVersion == true) | .VersionId] == [$version])
 ' "$work_dir/versions.json" >/dev/null || stop 'no safe version slot or unexpected default; no versions will be deleted'
-jq -n --arg policy "$policy_arn" --arg version "$before_version" --arg mode "$mode" '{policyArn:$policy,previousDefaultVersion:$version,mode:$mode,writeAttempted:false}' > "$work_dir/receipt.json"
+jq -n --arg policy "$policy_arn" --arg version "$before_version" --arg mode "$mode" --arg rootopt "$allow_root_owner" --arg preimage "$preimage_variant" '{policyArn:$policy,previousDefaultVersion:$version,mode:$mode,rootOwnerOptIn:($rootopt == "true"),preimageVariant:$preimage,writeAttempted:false}' > "$work_dir/receipt.json"
 if [ "$mode" = --check ]; then
   echo "READY: exact AWARE GetRun-only repair; no writes. Private evidence: $work_dir"
   exit 0
@@ -108,14 +172,14 @@ read_aws "$work_dir/policy-recheck.json" iam get-policy --policy-arn "$policy_ar
 jq -e --arg version "$before_version" '.Policy.DefaultVersionId == $version' "$work_dir/policy-recheck.json" >/dev/null || stop 'default changed before apply'
 jq '.writeAttempted = true' "$work_dir/receipt.json" > "$work_dir/attempt.json"
 mv "$work_dir/attempt.json" "$work_dir/receipt.json"
-if ! aws iam create-policy-version --policy-arn "$policy_arn" --policy-document "file://$work_dir/desired.json" --set-as-default --region us-east-1 --output json > "$work_dir/write-response.json" 2> "$work_dir/aws-error.txt"; then
+if ! aws iam create-policy-version --policy-arn "$policy_arn" --policy-document "file://$desired_file" --set-as-default --region us-east-1 --output json > "$work_dir/write-response.json" 2> "$work_dir/aws-error.txt"; then
   stop 'single policy write did not return success; reconcile the default version before any further action'
 fi
 after_version="$(jq -er '.PolicyVersion.VersionId | select(test("^v[1-9][0-9]*$"))' "$work_dir/write-response.json")"
 read_aws "$work_dir/policy-after.json" iam get-policy --policy-arn "$policy_arn"
 jq -e --arg version "$after_version" '.Policy.DefaultVersionId == $version' "$work_dir/policy-after.json" >/dev/null || stop 'new default not confirmed; no automatic retry or rollback'
 read_aws "$work_dir/postimage.json" iam get-policy-version --policy-arn "$policy_arn" --version-id "$after_version"
-jq -e --slurpfile desired "$work_dir/desired.json" '.PolicyVersion.Document == $desired[0]' "$work_dir/postimage.json" >/dev/null || stop 'new policy document differs; retain evidence for owner reconciliation'
+jq -e --slurpfile desired "$desired_file" '.PolicyVersion.Document == $desired[0]' "$work_dir/postimage.json" >/dev/null || stop 'new policy document differs; retain evidence for owner reconciliation'
 read_aws "$work_dir/role-after.json" iam get-role --role-name "$role_name"
 jq -e --slurpfile before "$work_dir/role-before.json" '.Role == $before[0].Role' "$work_dir/role-after.json" >/dev/null || stop 'role metadata changed concurrently; retain evidence'
 jq --arg version "$after_version" '. + {newDefaultVersion:$version,exactPolicyReadback:true,roleUnchanged:true}' "$work_dir/receipt.json" > "$work_dir/completed.json"

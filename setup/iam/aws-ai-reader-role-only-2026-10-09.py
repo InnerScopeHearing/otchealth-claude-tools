@@ -54,7 +54,10 @@ EXTRAS_DOC = {
         "Sid": "AwareDeviceFarmRunMetadataOnly",
         "Effect": "Allow",
         "Action": ["devicefarm:GetRun"],
-        "Resource": "arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*",
+        "Resource": [
+            "arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*",
+            "arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654",
+        ],
         "Condition": {"ArnEquals": {"aws:PrincipalArn": ROLE_ARN}},
     }],
 }
