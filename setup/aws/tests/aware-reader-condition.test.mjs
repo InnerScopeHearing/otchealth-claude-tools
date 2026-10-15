@@ -12,7 +12,8 @@ spec=importlib.util.spec_from_file_location('fake_aws',sys.argv[1]); fake=import
 role='arn:aws:iam::900915535335:role/otchealth-ai-reader-role'
 action='devicefarm:GetRun'
 resource='arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/run-123'
-allow={'Effect':'Allow','Action':['devicefarm:GetRun'],'Resource':'arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*','Condition':{'ArnEquals':{'aws:PrincipalArn':role}}}
+project='arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654'
+allow={'Effect':'Allow','Action':['devicefarm:GetRun'],'Resource':['arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*',project],'Condition':{'ArnEquals':{'aws:PrincipalArn':role}}}
 def decision(statement, who=role, act=action, res=resource):
     doc={'Version':'2012-10-17','Statement':statement if isinstance(statement,list) else [statement]}
     match=__import__('re').match(r'^arn:aws:iam::[0-9]+:(user|role)/(.+)$',who)
@@ -21,6 +22,8 @@ def decision(statement, who=role, act=action, res=resource):
     return fake.evaluate(world,who,act,res)
 cases={
  'exact_role':decision(allow),
+ 'exact_project':decision(allow,res=project),
+ 'wrong_project_arn':decision(allow,res='arn:aws:devicefarm:us-west-2:900915535335:project:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'),
  'human_user':decision(allow,'arn:aws:iam::900915535335:user/otchealth-ai-reader'),
  'wrong_project':decision(allow,res='arn:aws:devicefarm:us-west-2:900915535335:run:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/run-123'),
  'wrong_region':decision(allow,res='arn:aws:devicefarm:us-east-1:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/run-123'),
@@ -55,6 +58,8 @@ test('fake evaluator supports only the exact scoped aws:PrincipalArn ArnEquals c
   const got = evaluateCases();
   assert.deepEqual(got, {
     exact_role: 'allowed',
+    exact_project: 'allowed',
+    wrong_project_arn: 'implicitDeny',
     human_user: 'implicitDeny',
     wrong_project: 'implicitDeny',
     wrong_region: 'implicitDeny',
@@ -99,7 +104,11 @@ cases={
  'update_schedule':decision(role,'scheduler:UpdateSchedule',exact),
 }
 assert cases=={'exact_role_get':'allowed','reader_user_get':'implicitDeny','other_role_get':'implicitDeny','other_schedule_get':'implicitDeny','other_group_get':'implicitDeny','wrong_region_get':'implicitDeny','wrong_account_get':'implicitDeny','list_schedules':'implicitDeny','update_schedule':'implicitDeny'}, cases
-assert any(s.get('Sid')=='AwareDeviceFarmRunMetadataOnly' for s in doc['Statement']), 'existing scoped DeviceFarm statement was lost'
+df=[s for s in doc['Statement'] if s.get('Sid')=='AwareDeviceFarmRunMetadataOnly']
+assert len(df)==1, 'exactly one scoped DeviceFarm statement must exist'
+assert df[0]=={'Sid':'AwareDeviceFarmRunMetadataOnly','Effect':'Allow','Action':['devicefarm:GetRun'],'Resource':['arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*','arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654'],'Condition':{'ArnEquals':{'aws:PrincipalArn':role}}}
+assert decision(role,'devicefarm:GetRun','arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654')=='allowed'
+assert decision(user,'devicefarm:GetRun','arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654')=='implicitDeny'
 print(json.dumps(cases,sort_keys=True))
 `;
 
