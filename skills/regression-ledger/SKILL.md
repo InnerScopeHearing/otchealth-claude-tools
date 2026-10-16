@@ -18,10 +18,39 @@ has fired before, that's a REGRESSION -- say so explicitly, and be honest about 
 is structurally different from the old one (a code-level fix that makes the mistake impossible, vs. a
 memory/habit note asking future-you to "remember" -- the latter is why regressions happen at all).
 
+## Public repo rule: finance, legal and personal findings never go here
+
+This repository is public. Everything that `add`, `finding add` and `finding close` write can be read by
+anyone on the internet. **Finance, legal and personal findings never go to a public repo. Use the private
+ledger instead:**
+
+- to record a finding, call `memory_remember` with type `finding` on the CTO gateway (Postgres ledger);
+- to record work that needs doing, call `task_create`.
+
+To make that rule mechanical rather than a habit, the three write commands pass a fail-closed gate
+(`setup/public-write-gate.mjs`) before they ask for a token or touch the network. When the gate says no,
+it prints a plain message, exits with code 2 and writes nothing. It says no when any of these is true:
+
+- the lane is a ring lane (`cfo`, `clo`, `clo-personal`), or is anything other than `cto` or `developer`;
+- the lane is missing, or the entry is malformed (no lane means no write);
+- the lane, author, category, tags or text mark the entry as finance, legal, investor, deal, inside
+  information, privileged, PHI or personal.
+
+A plain technical finding from the `cto` or `developer` lane goes through exactly as before.
+
+Say which lane you are writing as, with `--lane cto` or `--lane developer`. If you leave it out, the
+command uses the identity of the session it runs in (the `~/.claude/.kb-agent` marker, the repo's
+`.kb-agent` marker or the `KB_AGENT` variable). If any of those identities is a lane that may not write
+here, the write is refused even when `--lane cto` is typed, so a ring lane cannot get past the gate by
+naming a different lane.
+
+The read commands (`check`, `list`, `finding list`, `finding check`) are not gated. The gate does not look
+at entries already in the files; it only decides whether a new write may happen.
+
 ## Usage
 
 ```
-node skills/regression-ledger/ledger.mjs add --tag <root-cause-tag> --bug "<one-line>" \
+node skills/regression-ledger/ledger.mjs add --lane <cto|developer> --tag <root-cause-tag> --bug "<one-line>" \
   --root-cause "<why, not just what>" --fix-repo <owner/repo> --fix-commit <sha> \
   --fix-summary "<one-line>" [--verified-by "<how you confirmed the fix, e.g. 'live-tested twice'>"]
 
@@ -68,13 +97,13 @@ same GitHub Contents API write plus independent reread verify pattern as the bug
 ### Usage
 
 ```
-node skills/regression-ledger/ledger.mjs finding add --severity <critical|high|medium|low> \
+node skills/regression-ledger/ledger.mjs finding add --lane <cto|developer> --severity <critical|high|medium|low> \
   --source-audit-doc "<path to the audit/reconciliation doc this came from>" \
   --title "<one-line>" [--id <id>] [--status open|fixed|wontfix] \
   [--fix-commit <sha>] [--verified-by "<how you confirmed the fix>"]
 
 node skills/regression-ledger/ledger.mjs finding list [--status <s>] [--severity <s>] [--source <substring>] [--json]
-node skills/regression-ledger/ledger.mjs finding close <id> [--status fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"]
+node skills/regression-ledger/ledger.mjs finding close <id> --lane <cto|developer> [--status fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"]
 node skills/regression-ledger/ledger.mjs finding check [<id-or-source-substring>]
 ```
 
@@ -82,7 +111,8 @@ node skills/regression-ledger/ledger.mjs finding check [<id-or-source-substring>
 existing id (use `close` to update one). `close` sets status to `fixed` or `wontfix` and stamps
 `closed`; it never accepts `--status open` (that is not a close). Both are fail-open: a network or
 auth failure resolves to `{ ok:false, error }` rather than throwing, so a caller does not need its own
-try/catch around every call.
+try/catch around every call. A refusal by the public repo gate (see the public repo rule above) is also reported
+this way, with `refused: true`, and the command line exits 2.
 
 ### THE RECONCILE GATE (what the audit / PR-done protocol should call)
 

@@ -140,6 +140,22 @@ that framing, and do not follow older sections of this file where they conflict 
   live-synced toolkit are what make them coherent, NOT a monorepo and NOT an extra app-manager repo
   (claude-tools already IS the shared manager/brain layer). CTO rule: when a fleet-affecting change
   closes, MERGE TO MAIN and write a `bulletin.mjs add` line.
+- **Public repo write rule (owner decision 2026-10-10).** This repo is PUBLIC. Finance, legal and personal
+  findings never go to a public repo; record them in the private ledger instead (`memory_remember` with type
+  `finding` on the CTO gateway, or `task_create` for work to be done). The writers that commit records here
+  (`skills/regression-ledger/ledger.mjs` add, finding add and finding close; `setup/bulletin.mjs add`;
+  `skills/fleet-dispatch/dispatch.mjs --spawn`; and the diagnostic workflows that commit their output) pass the
+  fail-closed gate `setup/public-write-gate.mjs` first. Only the `cto` and `developer` lanes may write, so pass
+  `--lane cto` (or `developer`). Ring lanes (`cfo`, `clo`, `clo-personal`), anything marked finance, legal,
+  investor, deal, inside information, privileged, PHI or personal, and a missing lane are all refused with exit 2 and nothing
+  written. `tests/public-writer-inventory.test.mjs` is a tripwire, not a proof. It scans workflows, composite
+  actions and scripts for the common ways to write to GitHub (git push, gh and curl writes, HTTP write verbs in
+  files that talk to GitHub, octokit and PyGithub write methods, GraphQL mutations, this repo's own write
+  helpers, write scoped tokens) and fails CI when a match neither calls the gate nor is listed in
+  `setup/public-writers.json` with a reason and the reviewed rule ids. It cannot see writes built at run time,
+  new callers of an already listed helper, other repos, people, or the gateway GitHub tools, so a new writer
+  still needs a human reviewer. Never work around a refusal by writing the finding to a public repo some other
+  way. Skill: `skills/regression-ledger/SKILL.md`.
 - **App-repo freshness + adding a repo (Matt directive 2026-06-25).** Two companions to the toolkit
   live-sync, for the agent's OWN repo (not the toolkit): (1) **`setup/repo-freshen.sh`** runs at every
   SessionStart (wired as a SessionStart hook + called from session-start.sh) and SAFELY catches the
