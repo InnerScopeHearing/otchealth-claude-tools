@@ -260,10 +260,10 @@ test("C4: arming is unambiguous (SKIP_PUSH_SEARCH=1 skips, unset prefixes skip, 
 test("N3: a `_count` reply without a numeric count is an ERROR, never 0 (canary and purge)", () => {
   for (const res of [{ ok: true, json: {} }, { ok: true, json: { count: null } }, { ok: true, json: { count: "0" } }, { ok: true, json: null }, { ok: true, json: { count: -1 } }, undefined]) {
     assert.throws(() => strictCount(res, "x"), /no numeric count/, JSON.stringify(res));
-    assert.throws(() => countOf(res, "x"), /no numeric count/, JSON.stringify(res));
+    assert.throws(() => countOf(res, "x"), /count response invalid/, JSON.stringify(res));
   }
   assert.equal(strictCount({ ok: true, json: { count: 0 } }), 0);
-  assert.equal(countOf({ ok: true, json: { count: 17 } }, "x"), 17);
+  assert.equal(countOf({ ok: true, json: { count: 17, _shards: { failed: 0 } } }, "x"), 17);
 });
 
 test("N2: purge and canary residue queries are case-insensitive prefix queries on the whole room path", () => {
