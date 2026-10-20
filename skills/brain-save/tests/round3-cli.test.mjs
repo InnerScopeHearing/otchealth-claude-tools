@@ -45,7 +45,8 @@ test("round 3 #1: purge-ring-residue runs (exit 1 on a widened --prefixes) throu
   for (const [how, root] of Object.entries(ROOTS)) {
     const r = node(join(root, "doc-indexer", "purge-ring-residue.mjs"), ["--prefixes", "not-a-ring-prefix/"]);
     assert.equal(r.status, 1, `${how}: exit ${r.status}`);
-    assert.match(r.stderr, /FATAL: --prefixes may only name ring-private prefixes/, how);
+    assert.match(r.stderr, /FATAL: purge failed; details withheld/, how);
+    assert.ok(!r.stderr.includes("not-a-ring-prefix"), `${how}: rejected input is not echoed`);
   }
 });
 

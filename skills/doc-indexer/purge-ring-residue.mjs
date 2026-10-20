@@ -43,13 +43,17 @@ export const prefixQuery = (prefix) => pathPrefixQuery(`${ROOM_PATH_PREFIX}${pre
  *  as 0, because "0 chunks left" is exactly what the purge's exit code and the canary trust. */
 export function countOf(res, label) {
   const c = res && res.json ? res.json.count : undefined;
-  if (typeof c !== "number" || !Number.isFinite(c) || c < 0) throw new Error(`_count for ${label}: response carried no numeric count; refusing to read it as 0`);
+  const failed = res && res.json && res.json._shards ? res.json._shards.failed : undefined;
+  if (!Number.isSafeInteger(c) || c < 0 || failed !== 0) throw new Error("purge count response invalid; refusing to treat it as zero");
   return c;
 }
 
+/** Never render untrusted error objects, bulk response details, ids, or transport exception text. */
+export function sanitizePurgeError(_error) { return "purge failed; details withheld"; }
+
 async function countPrefix(cfg, prefix) {
   const r = await osCount(cfg, ROOM, prefixQuery(prefix));
-  if (!r.ok) throw new Error(`_count HTTP ${r.status} for ${prefix}`);
+  if (!r.ok) throw new Error("purge count request failed");
   return countOf(r, prefix);
 }
 
@@ -57,11 +61,11 @@ async function purgePrefix(cfg, prefix, { maxRounds = 200 } = {}) {
   let deleted = 0;
   for (let round = 0; round < maxRounds; round++) {
     const res = await osSearch(cfg, ROOM, { size: 500, _source: false, query: prefixQuery(prefix) });
-    if (!res.ok) throw new Error(`_search HTTP ${res.status} for ${prefix}`);
+    if (!res.ok) throw new Error("purge search request failed");
     const ids = (res.json?.hits?.hits || []).map((h) => String(h._id));
     if (!ids.length) break;
     const d = await deleteDocs(ROOM, ids);
-    if (!d.ok) throw new Error(`bulk delete failed for ${prefix}: ${JSON.stringify((d.errors || []).slice(0, 2)).slice(0, 200)}`);
+    if (!d.ok || d.errors === true) throw new Error("purge bulk delete failed");
     deleted += ids.length;
     await refresh(ROOM);
   }
@@ -91,5 +95,5 @@ async function main() {
 function isEntryPoint() { try { return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; } catch { return false; } }
 
 if (isEntryPoint()) {
-  main().then((code) => { process.exitCode = code; }).catch((e) => { console.error(`[purge-ring-residue] FATAL: ${String((e && e.message) || e).slice(0, 300)}`); process.exitCode = 1; });
+  main().then((code) => { process.exitCode = code; }).catch((e) => { console.error(`[purge-ring-residue] FATAL: ${sanitizePurgeError(e)}`); process.exitCode = 1; });
 }
