@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # doc-indexer headless runner: the fleet-KB heavy-pass + the autonomous "librarian".
 # Runs as an Azure Container Apps Job on otchealth-jobs-env (manual for the backfill,
 # scheduled cron for continuous self-improvement). Lean image: pdftotext + tesseract +
@@ -15,6 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       poppler-utils tesseract-ocr unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+# Public RDS CA bundle, reviewed 2026-10-23. The checksum fails the build on
+# upstream drift; NODE_EXTRA_CA_CERTS must be set before a Node process starts.
+# This adds trust roots, never disables certificate or hostname verification.
+ADD --checksum=sha256:90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/certs/rds-global-bundle.pem
+ENV NODE_EXTRA_CA_CERTS=/app/certs/rds-global-bundle.pem
 COPY setup/ /app/setup/
 COPY skills/doc-indexer/ /app/skills/doc-indexer/
 # healthz-monitor source candidate is included by the COPY above at

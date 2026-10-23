@@ -273,7 +273,10 @@ function errorFromFields(fields) {
 async function negotiateTls(plainSocket, { host, sslVerify }) {
   plainSocket.write(SSL_REQUEST);
   const resp = await readOneRawByte(plainSocket);
-  if (resp === 0x4e /* 'N' */) return plainSocket; // server declined -- continue in plaintext
+  if (resp === 0x4e /* 'N' */) {
+    if (sslVerify) throw new Error('pg-wire: verified TLS required, server declined TLS');
+    return plainSocket; // Preserve the explicit unverified legacy fallback only.
+  }
   if (resp !== 0x53 /* 'S' */) {
     throw new Error(`pg-wire: unexpected SSL negotiation response byte 0x${resp.toString(16)}`);
   }
@@ -295,11 +298,13 @@ async function negotiateTls(plainSocket, { host, sslVerify }) {
  *
  * opts: { host, port, database, user, password, ssl = true, sslVerify = false, connectTimeoutMs = 10000 }
  *   ssl=false skips SSL negotiation entirely (plaintext only -- for a local/dev Postgres that has no
- *   TLS configured at all). ssl=true (default) always sends SSLRequest first; a server that responds
- *   'N' falls back to plaintext exactly as ssl=false would, so this is safe against a non-TLS server.
- *   sslVerify mirrors otchealth-mcp-server's PG_SSL_VERIFY: verifying the RDS-issued cert needs the
- *   RDS CA bundle, which is not (yet) baked in anywhere this file runs, so the default is
- *   encrypt-without-verify -- strictly better than plaintext, and the traffic never leaves the VPC.
+ *   TLS configured at all). ssl=true always sends SSLRequest first. With sslVerify=true, a server's
+ *   'N' response is rejected; ssl=false with sslVerify=true is also rejected. Explicit legacy
+ *   sslVerify=false preserves the old plaintext fallback and does NOT authenticate the server.
+ *   Verified RDS callers must provide the public CA bundle via NODE_EXTRA_CA_CERTS before Node
+ *   starts (the doc-indexer image includes /app/certs/rds-global-bundle.pem). The legacy default
+ *   remains false for compatibility; sensitive callers must explicitly request verification.
+ *   connectTimeoutMs bounds TCP connection, TLS negotiation and the authentication handshake.
  *
  *   allowWeakAuth (default false, or env PG_ALLOW_WEAK_AUTH=1) permits the two legacy password
  *   mechanisms this client can speak but will not use unprompted: md5, and cleartext over an
@@ -307,6 +312,8 @@ async function negotiateTls(plainSocket, { host, sslVerify }) {
  */
 export async function connect(opts) {
   const { host, port = 5432, database, user, password, ssl = true, sslVerify = false, connectTimeoutMs = 10000 } = opts;
+  if (sslVerify && !ssl) throw new Error('pg-wire: certificate verification requires TLS');
+  const connectionDeadline = Date.now() + connectTimeoutMs;
   const allowWeakAuth = opts.allowWeakAuth ?? process.env.PG_ALLOW_WEAK_AUTH === "1";
   if (!host || !user || !database) throw new Error("pg-wire: connect() requires host, user, and database");
 
@@ -328,7 +335,18 @@ export async function connect(opts) {
     plainSocket.once("connect", onConnect);
   });
 
-  const socket = ssl ? await negotiateTls(plainSocket, { host, sslVerify }) : plainSocket;
+  // The connection budget includes SSL negotiation/authentication, not just TCP.
+  const handshakeTimer = setTimeout(() => {
+    plainSocket.destroy(new Error('pg-wire: connection handshake timed out'));
+  }, Math.max(1, connectionDeadline - Date.now()));
+  let socket;
+  try {
+    socket = ssl ? await negotiateTls(plainSocket, { host, sslVerify }) : plainSocket;
+  } catch (error) {
+    clearTimeout(handshakeTimer);
+    plainSocket.destroy();
+    throw error;
+  }
   // Whether the bytes are actually encrypted, which is NOT the same as having asked for TLS:
   // negotiateTls falls back to the plain socket when the server answers 'N'. The auth loop needs the
   // real answer, because "I requested ssl" is exactly the kind of intent-not-effect signal that has
@@ -342,6 +360,7 @@ export async function connect(opts) {
     return new Promise((resolve, reject) => socket.write(buf, (err) => (err ? reject(err) : resolve())));
   }
 
+  try {
   // ---- StartupMessage ----
   const startupParams = Buffer.concat([
     Buffer.from("user\0", "ascii"), cstr(user),
@@ -412,6 +431,13 @@ export async function connect(opts) {
       throw new Error(`pg-wire: unsupported authentication method (code ${authType}); only cleartext, md5, and SCRAM-SHA-256 are implemented`);
     }
     throw new Error(`pg-wire: unexpected message type '${type}' during connection startup`);
+  }
+
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  } finally {
+    clearTimeout(handshakeTimer);
   }
 
   let ended = false;
