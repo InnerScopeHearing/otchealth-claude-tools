@@ -70,7 +70,7 @@ extract_policy EXTRAS_JSON "$work_dir/desired.json"
 extract_policy DENY_JSON "$work_dir/expected-deny.json"
 jq -e --arg role "$role_arn" --arg sid "$sid" '
   [.Statement[] | select(.Sid == $sid)] == [{
-    Sid: $sid, Effect: "Allow", Action: ["devicefarm:GetRun"],
+    Sid: $sid, Effect: "Allow", Action: ["devicefarm:GetProject", "devicefarm:GetRun"],
     Resource: ["arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*",
       "arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654"],
     Condition: {ArnEquals: {"aws:PrincipalArn": $role}}
