@@ -31,7 +31,7 @@ function desiredStatement() {
   return {
     Sid: sid,
     Effect: 'Allow',
-    Action: ['devicefarm:GetRun'],
+    Action: ['devicefarm:GetProject', 'devicefarm:GetRun'],
     Resource: [runArn, projectArn],
     Condition: { ArnEquals: { 'aws:PrincipalArn': role } },
   };
