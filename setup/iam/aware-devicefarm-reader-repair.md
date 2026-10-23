@@ -1,6 +1,6 @@
 # AWARE Device Farm reader repair
 
-Scope: fix the missing `devicefarm:GetRun` identity grant, not general Developer tooling or IAM administration. The gateway's renewable assumed-role AWS bridge is healthy. Its dedicated reader role cannot repair its own permissions.
+Scope: fix the missing `devicefarm:GetProject` identity grant while preserving the existing project-scoped `devicefarm:GetRun` metadata grant, not general Developer tooling or IAM administration. The gateway's renewable assumed-role AWS bridge is healthy. Its dedicated reader role cannot repair its own permissions.
 
 ## Diagnosed cause
 

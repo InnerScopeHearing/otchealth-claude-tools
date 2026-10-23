@@ -106,7 +106,7 @@ cases={
 assert cases=={'exact_role_get':'allowed','reader_user_get':'implicitDeny','other_role_get':'implicitDeny','other_schedule_get':'implicitDeny','other_group_get':'implicitDeny','wrong_region_get':'implicitDeny','wrong_account_get':'implicitDeny','list_schedules':'implicitDeny','update_schedule':'implicitDeny'}, cases
 df=[s for s in doc['Statement'] if s.get('Sid')=='AwareDeviceFarmRunMetadataOnly']
 assert len(df)==1, 'exactly one scoped DeviceFarm statement must exist'
-assert df[0]=={'Sid':'AwareDeviceFarmRunMetadataOnly','Effect':'Allow','Action':['devicefarm:GetRun'],'Resource':['arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*','arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654'],'Condition':{'ArnEquals':{'aws:PrincipalArn':role}}}
+assert df[0]=={'Sid':'AwareDeviceFarmRunMetadataOnly','Effect':'Allow','Action':['devicefarm:GetProject','devicefarm:GetRun'],'Resource':['arn:aws:devicefarm:us-west-2:900915535335:run:58bbc541-f082-4594-b744-738a345f3654/*','arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654'],'Condition':{'ArnEquals':{'aws:PrincipalArn':role}}}
 assert decision(role,'devicefarm:GetRun','arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654')=='allowed'
 assert decision(user,'devicefarm:GetRun','arn:aws:devicefarm:us-west-2:900915535335:project:58bbc541-f082-4594-b744-738a345f3654')=='implicitDeny'
 print(json.dumps(cases,sort_keys=True))
