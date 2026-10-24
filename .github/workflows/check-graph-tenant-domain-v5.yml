@@ -57,6 +57,10 @@ jobs:
 
           cat "$OUT"
 
+          # Public repo write gate (owner decision 2026-10-10): this output is committed to a PUBLIC repo, so it must
+          # pass setup/public-write-gate.mjs first. A refusal stops the step before anything is committed or pushed.
+          node setup/public-write-gate.mjs files --lane cto --writer "check-graph-tenant-domain-v5 workflow" "$OUT" || exit 1
+
           git config user.name "otchealth-fleet-bot"
           git config user.email "noreply@otchealth.app"
           git add "$OUT"

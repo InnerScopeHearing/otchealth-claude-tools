@@ -23,6 +23,10 @@ jobs:
           mkdir -p diagnostics
           echo "test $(date -u +%Y-%m-%dT%H:%M:%SZ)" > diagnostics/writepath-test.txt
 
+          # Public repo write gate (owner decision 2026-10-10): this output is committed to a PUBLIC repo, so it must
+          # pass setup/public-write-gate.mjs first. A refusal stops the step before anything is committed or pushed.
+          node setup/public-write-gate.mjs files --lane cto --writer "diag-writepath-test workflow" diagnostics/writepath-test.txt || exit 1
+
           git config user.name "otchealth-fleet-bot"
           git config user.email "noreply@otchealth.app"
 
