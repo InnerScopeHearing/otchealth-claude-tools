@@ -51,6 +51,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getBufferFromS3, putObjectToS3 } from "../kb-memory/s3-blob.mjs";
+import { csvFromRows, publishCfoCopies, verifyPublishedBytes, latestCompletedSessionDate } from "./publication.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Lazy-install xlsx if missing (skill is dependency-light otherwise).
@@ -84,7 +85,6 @@ function splitFactor(date){
   for (const s of EVENTS.splits || []) if (s.date > date) f *= (s.from / s.to);
   return f;
 }
-
 // ---- storage: the S3 DR mirror (single backend; both GCS and Azure are permanently dead) ----------
 // account/container match s3-blob.mjs's verified MIRROR row exactly (otchealthcfodata/innd-stock ->
 // otchealth-finance-legal-dr-55c84f6b/otchealthcfodata/innd-stock/); the blob name is unprefixed
@@ -112,11 +112,16 @@ function storageURI(){ return `s3://${S3_ACCOUNT}/${S3_CONTAINER}/${S3_BLOB}`; }
 async function storageDownload(){ return getBufferFromS3(S3_ACCOUNT, S3_CONTAINER, S3_BLOB); }
 async function storageUpload(buf){
   await putObjectToS3(S3_ACCOUNT, S3_CONTAINER, S3_BLOB, buf, XLSX_CT);
+  const readback = await storageDownload();
+  if (readback == null) throw new Error(`publication readback missing: ${storageURI()}`);
+  const verified = verifyPublishedBytes(buf, readback, storageURI());
+  console.log(`verified canonical workbook bytes: sha256=${verified.sha256}`);
   return storageURI();
 }
 
 // ---- Yahoo Finance daily history ------------------------------------------
 async function fetchYahoo(fromEpoch){
+  const cutoff = latestCompletedSessionDate();
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${TICKER}?period1=${fromEpoch}&period2=${Math.floor(Date.now()/1000)}&interval=1d&includeAdjustedClose=true`;
   const r = await fetch(url,{headers:{"User-Agent":"Mozilla/5.0"}});
   if(!r.ok) throw new Error("Yahoo "+r.status);
@@ -131,6 +136,7 @@ async function fetchYahoo(fromEpoch){
     const o=q.open?.[i], h=q.high?.[i], l=q.low?.[i], c=q.close?.[i], v=q.volume?.[i];
     if(o==null||c==null||h==null||l==null) continue; // skip halted/empty days
     const date = new Date(ts[i]*1000).toISOString().slice(0,10);
+    if (date > cutoff) continue;
     // Yahoo's INND series is SPLIT-ADJUSTED (it back-adjusts the whole history for the
     // 2024-08-22 1:2500 split; verified: Yahoo 2024-06-24 close 0.375 / vol 4966 == the
     // adjusted Polygon values). Convert to AS-TRADED so the workbook shows what actually
@@ -172,7 +178,7 @@ async function fetchMassiveDaily(maxDays){
   const today = new Date();
   const windows = [maxDays, 725, 365, 180].filter((v,i,a)=> v && a.indexOf(v)===i);
   for(const days of windows){
-    const from = ymd(new Date(Date.now()-days*86400000)), to = ymd(today);
+    const from = ymd(new Date(Date.now()-days*86400000)), to = latestCompletedSessionDate();
     try{
       // adjusted=false -> AS-TRADED prices, ACTUAL volume, and the true as-traded VWAP (vw)
       // + trade count (n). We keep the whole workbook on the as-traded basis (split handling
@@ -183,7 +189,7 @@ async function fetchMassiveDaily(maxDays){
         open:x.o, high:x.h, low:x.l, close:x.c, volume:x.v||0,
         vwapTrue: x.vw!=null?x.vw:null, trades: x.n!=null?x.n:null,
         src:"massive",
-      }));
+      })).filter(r => r.date <= to);
       console.error(`Massive: ${rows.length} daily bars ${from}..${to} (as-traded; true VWAP + trade counts)`);
       return rows;
     }catch(e){
@@ -314,6 +320,15 @@ function sheetToRows(XLSX, wb){
   return out;
 }
 
+async function publishWorkbook(XLSX, wb, buf) {
+  const daily = XLSX.utils.sheet_to_json(wb.Sheets["INND Daily"], { header: 1, defval: "" });
+  const csv = csvFromRows(daily.map(row => Array.from({ length: HEADERS.length }, (_, i) => row[i] ?? "")));
+  const canonical = await storageUpload(buf);
+  const verified = await publishCfoCopies(buf, csv);
+  console.log(`published CFO reader copies with byte/hash readback: ${verified.map(x => `${x.path} sha256=${x.sha256}`).join("; ")}`);
+  return canonical;
+}
+
 // ---- main -----------------------------------------------------------------
 const cmd = process.argv[2] || "status";
 try {
@@ -326,7 +341,7 @@ try {
     const wb = buildWorkbook(XLSX, rows);
     const buf = XLSX.write(wb, { type:"buffer", bookType:"xlsx" });
     if (cmd === "local") { const f=process.argv[3]||"INND-daily-stock-history.xlsx"; writeFileSync(f, buf); console.log(`wrote ${rows.length} trading days -> ${f} (${rows[0].date}..${rows[rows.length-1].date})`); }
-    else { const uri=await storageUpload(buf); console.log(`backfilled ${rows.length} trading days (${rows[0].date}..${rows[rows.length-1].date}) -> ${uri}`); }
+    else { const uri=await publishWorkbook(XLSX, wb, buf); console.log(`backfilled ${rows.length} trading days (${rows[0].date}..${rows[rows.length-1].date}) -> ${uri}`); }
 
   } else if (cmd === "update") {
     const existing = await storageDownload();
@@ -348,7 +363,7 @@ try {
     }
     const wb2 = buildWorkbook(XLSX, rows);
     const buf = XLSX.write(wb2, { type:"buffer", bookType:"xlsx" });
-    const uri = await storageUpload(buf);
+    const uri = await publishWorkbook(XLSX, wb2, buf);
     console.log(`updated workbook -> ${uri} (through ${rows[rows.length-1].date}, ${rows.length} days)`);
 
   } else if (cmd === "status") {

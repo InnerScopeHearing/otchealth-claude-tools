@@ -1,6 +1,6 @@
 ---
 name: innd-stock
-description: Maintains the CFO's INND (InnerScope Hearing Technologies, OTC: INND) daily stock-price history as one continually-updated Excel workbook. HYBRID source - Massive (a Polygon.io white-label) for the most recent ~2 years (TRUE volume-weighted VWAP + per-day TRADE COUNT + OTC consolidated tape) merged with Yahoo Finance for the deep history back to 2017-03-15. Captures OHLCV, VWAP, trade count, daily change, two dollar-value measures (Close x Vol and the accurate Vol x VWAP traded value), and a press-release column. Stores in the CFO source-doc bucket (GCS) and appends each new trading day (idempotent). Public market data for INTERNAL CFO record-keeping only, not investor-facing publishing or stock promotion (securities firewall safe). Non-PHI ring.
+description: Maintains the CFO's INND (InnerScope Hearing Technologies, OTC: INND) daily stock-price history as one continually-updated Excel workbook. HYBRID source - Massive (a Polygon.io white-label) for the most recent ~2 years (TRUE volume-weighted VWAP + per-day TRADE COUNT + OTC consolidated tape) merged with Yahoo Finance for the deep history back to 2017-03-15. Captures OHLCV, VWAP, trade count, daily change, two dollar-value measures (Close x Vol and the accurate Vol x VWAP traded value), and a press-release column. Stores the canonical workbook and publishes byte-verified copies plus a CSV sidecar to the CFO source-doc reader paths. Public market data for INTERNAL CFO record-keeping only, not investor-facing publishing or stock promotion (securities firewall safe). Non-PHI ring.
 ---
 
 # INND daily stock-price history (CFO records)
@@ -20,7 +20,7 @@ extra sheets: "About" (sources, basis, the two dollar-value methods) and **"Corp
 All OHLC / Volume / VWAP are **as-traded** (what actually changed hands that day). INND did a
 **1-for-2500 reverse split on 2024-08-22** (verified: Polygon reference + Seeking Alpha). Yahoo
 reports a split-adjusted series, so its deep history is de-split back to as-traded here (price /
-2500, volume x 2500 before 2024-08-22; this ties out exactly to Polygon's raw feed). The
+2500, volume x 2500 before 2024-08-22; spot-checked against Polygon on 2024-06-24). The
 **Split-Adj Close** column is the continuous comparable series, and **Daily Change is computed on
 it**, so the reverse split is not shown as a fake ~2500x one-day move (the as-traded Close does
 jump on the split date by design, since that is what the tape shows). The reverse split is loaded
@@ -44,9 +44,9 @@ from `innd-events.json` via a split-factor function, so adding a future split is
 ## The two dollar-value columns (read this)
 - **Dollar Volume (Close x Vol)** = a simple proxy that prices the whole day's shares at the
   closing price. Can be materially wrong for a volatile sub-penny stock.
-- **Traded Value (Vol x VWAP)** = the REAL money that changed hands = shares traded x VWAP
-  (the average price each share actually traded at). This is the accurate turnover figure; for
-  Massive rows it uses the true VWAP. Example: on 2026-06-11 the close was 0.0002 but the day's
+- **Traded Value (Vol x VWAP)** = shares traded x provider VWAP for Massive rows, or an
+  estimated turnover figure using the typical-price proxy for older Yahoo rows. It is stock
+  trading turnover, not cash raised by the company. Example: on 2026-06-11 the close was 0.0002 but the day's
   VWAP was 0.0001, so Close x Vol said ~$1,196 while the real traded value was ~$598.
   Neither column is a native feed field; both are computed here.
 
@@ -56,22 +56,28 @@ from `innd-events.json` via a split-factor function, so adding a future split is
   flat-files (full history with transactions) exist in the bucket but downloads are NOT
   authorized on the current plan tier (listing is); a higher tier or the OTC-history add-on
   would unlock true VWAP + trades all the way back. See the CTO.
-- **Share-structure caveat:** prices are AS-TRADED and NOT split-adjusted (INND has done
-  reverse splits / large dilution - e.g. ~$625 in 2017, ~$0.50 mid-2024, sub-penny now). Adj
-  Close == Close. Cross-period comparisons need a split-adjusted series + share-count history.
+- **Share-structure caveat:** OHLC, Volume, and VWAP are AS-TRADED. The separate Split-Adj Close
+  column is adjusted for the verified 2024-08-22 1-for-2500 reverse split, and Daily Change uses
+  that comparable series. The point check on 2024-06-24 matched Yahoo's split-adjusted close / volume
+  to Massive's raw as-traded values after applying the split factor; this spot check does not verify
+  every historical row. Cross-period market-cap comparisons also need share-count history.
 - INND is **not** an SEC/EDGAR filer; the Press Release / Event column is sourced from OTC
   Markets / company IR (added separately).
 
-## Storage (GCS or Azure Blob)
-`STORAGE_BACKEND` selects where the workbook lives:
-- `gcs` (default): `gs://otchealth-cfo-source-docs/innd-stock/INND-daily-stock-history.xlsx`
-  (override the bucket with `CFO_SOURCE_BUCKET`). Auth: `GCP_CLAUDE_DRIVER_SA_JSON`.
-- `azure` (the funded-credit lane, used by the scheduled job): Azure Blob
-  `azure://otchealthcfodata/innd-stock/INND-daily-stock-history.xlsx` (storage account in
-  `otchealth-automation-rg`, westus2). Auth: `AZURE_STORAGE_ACCOUNT` + `AZURE_STORAGE_KEY`
-  (+ `AZURE_STORAGE_CONTAINER`, default `innd-stock`), SharedKey. Set `MIRROR_GCS=1` to also
-  write the legacy GCS copy each run during the transition.
-One file that grows over time, either way.
+## Storage and CFO reader copies
+The canonical binary workbook is the logical S3 mirror URI
+`s3://otchealthcfodata/innd-stock/INND-daily-stock-history.xlsx` (the `s3-blob.mjs` mapping resolves
+this to the physical finance-legal DR bucket).
+Each `backfill` or `update` also writes identical workbook bytes to
+`otchealthcfodata/cfo-source-docs/innd-stock/INND-daily-stock-history.xlsx` and a CSV text sidecar
+to `otchealthcfodata/cfo-source-docs/_TEXT/innd-stock/INND-daily-stock-history.xlsx.txt`. The
+publisher reads the canonical workbook and both CFO reader objects back and requires exact byte equality, reporting each workbook SHA-256 hash.
+This verifies storage bytes only; it does not prove that any downstream reader indexed or can access
+the copies. A publication write or readback failure fails the command.
+
+Daily bars dated after the latest completed 16:00 session in `America/New_York` are excluded, so an
+update during market hours cannot append a partial current-day bar. On weekends and holidays the
+cutoff may be a calendar date without a session; available bars remain unchanged.
 
 ## Commands
 ```
@@ -80,29 +86,24 @@ node skills/innd-stock/innd-stock.mjs update         # append new trading days +
 node skills/innd-stock/innd-stock.mjs status         # show last date + row count in the stored workbook
 node skills/innd-stock/innd-stock.mjs local <file>   # write the full workbook to a local path (no upload)
 ```
-Credentials (hydrated from `otchealth-shared-prod` by `setup/fetch-secrets.mjs`):
-`GCP_CLAUDE_DRIVER_SA_JSON` (GCS read/write), `MASSIVE_API_KEY` (+ optional `MASSIVE_API_KEY_2`
-for rate-limit failover; ~5 req/min/key). The S3 flat-files creds (`massive-s3-*`) are stored
-but fetched on demand only. `xlsx` (SheetJS) auto-installs on first run.
+The skill uses the existing AWS credential chain from `s3-blob.mjs` and the existing
+`MASSIVE_API_KEY` (+ optional `MASSIVE_API_KEY_2` for rate-limit failover); it introduces no new IAM
+grant, secret, or provider. `xlsx` (SheetJS) auto-installs on first run.
 
 ## Keeping it updated (the daily skill)
 Run `update` once per business day after the US market close (~4pm ET). It downloads the stored
 workbook, fills any new Yahoo day, then overlays the recent Massive window (true VWAP + trade
 count, refreshing the tail), and re-uploads. Idempotent, safe to re-run.
 
-### Automated on Azure (LIVE)
-The update runs automatically on an **Azure Container Apps Job** (the funded-credit lane):
-- Job `innd-stock-daily` in RG `otchealth-automation-rg` (westus2), environment
-  `otchealth-jobs-env`. Schedule: cron `30 22 * * 1-5` (weekdays 22:30 UTC, after the US close).
-- It runs `node:20-slim`, injects the skill from job secrets (base64), `npm i xlsx`, and runs
-  `update` with `STORAGE_BACKEND=azure` -> writes Azure Blob. No registry or repo clone needed.
-- Trigger a manual run: `POST .../Microsoft.App/jobs/innd-stock-daily/start` (ARM, azure-sp).
-- IMPORTANT: the skill code is baked into the job's `skill-mjs-b64` / `skill-events-b64`
-  secrets, so it is FROZEN at deploy time. When this skill or `innd-events.json` changes,
-  re-deploy the job (re-PUT it with fresh base64) so the job runs the new code.
+### Automated on AWS (LIVE)
+The existing scheduled update runs through EventBridge at **22:30 UTC weekdays** and starts the
+`otchealth-job-innd-stock-daily` ECS task, ARM64, using the doc-indexer image. A scoped release
+can pin the stock task to its verified immutable image digest.
+The task uses the existing runtime configuration and AWS role; this skill adds no grant or key.
+The schedule/task can lag code changes until its image is rebuilt and task definition updated.
 
 ## Guardrails
 - Public market data, internal CFO records only. Never publish, post, or use for stock
   promotion; INND is a public company (securities firewall).
 - Non-PHI ring.
-- Massive/Polygon credentials live in Secret Manager, flagged for rotation; never in chat or a repo.
+- Massive/Polygon credentials use the existing AWS SSM bindings; never put values in chat or a repo.
