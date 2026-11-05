@@ -399,7 +399,18 @@ export async function ssmGetParametersByPathAllWithValues() {
     });
     if (res.status !== 200) {
       if (page === 0) return [];
-      throw new Error(`ssmGetParametersByPathAllWithValues: pagination failed on page ${page + 1} after ${out.length} parameters (HTTP ${res.status}) -- refusing to return a partial export`);
+      // Error responses may contain sensitive text or identifiers. Only emit an explicitly
+      // recognized AWS error category, never the message, token, parameter names or response body.
+      const rawErrorType = res.json?.__type ?? res.json?.code ?? res.json?.Code;
+      const shortErrorType = typeof rawErrorType === "string" ? rawErrorType.split("#").pop() : "";
+      const knownErrorTypes = new Set([
+        "AccessDenied", "AccessDeniedException", "InvalidKeyId", "InvalidKeyIdException",
+        "InvalidNextToken", "InvalidNextTokenException", "Throttling", "ThrottlingException",
+        "RequestLimitExceeded", "InternalServerError", "InternalFailure", "ValidationException",
+        "KMSInvalidStateException", "KMSAccessDeniedException", "DecryptionFailure",
+      ]);
+      const errorType = knownErrorTypes.has(shortErrorType) ? shortErrorType : "unclassified";
+      throw new Error(`ssmGetParametersByPathAllWithValues: pagination failed on page ${page + 1} after ${out.length} parameters (HTTP ${res.status}) -- AWS error ${errorType}; refusing to return a partial export`);
     }
     page += 1;
     for (const p of res.json?.Parameters || []) {
