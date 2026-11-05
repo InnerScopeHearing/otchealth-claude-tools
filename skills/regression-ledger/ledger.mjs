@@ -472,6 +472,7 @@ export async function reconcileOpenFindings(tagOrSource) {
   try {
     const token = await pat();
     const { content } = await fetchFile(token, FINDINGS_PATH);
+    if (!content || !content.trim()) throw new Error('findings ledger missing or empty');
     const all = parseFindings(content);
     let scoped = all;
     let scopeLabel = "(all findings)";
