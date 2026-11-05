@@ -1,7 +1,7 @@
 // Tests for regression-ledger's `finding` extension (FINDINGS-LEDGER.md tracking). Pure, no network:
 // exercises the same parse/render/upsert/filter/reconcile functions the finding add/list/close/check
 // CLI verbs are built on (add is upsertFinding on a new id, close is upsertFinding on an existing id
-// with a mutated status, list is filterFindings, check is reconcileSummary), plus the fail-open
+// with a mutated status, list is filterFindings, check is reconcileSummary), plus the nonthrowing
 // contract of the async wrappers (addFinding/closeFinding/reconcileOpenFindings). For the fail-open
 // tests, global.fetch is stubbed to always reject so no real GitHub API call is ever reachable, no
 // matter what credentials happen to exist in the ambient sandbox; the stub is always restored in a
@@ -19,6 +19,7 @@ import {
   addFinding,
   closeFinding,
   reconcileOpenFindings,
+  cmdFindingCheck,
 } from "../ledger.mjs";
 
 function baseFinding(overrides = {}) {
