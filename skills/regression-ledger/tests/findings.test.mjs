@@ -8,6 +8,11 @@
 // finally block so it cannot leak into any other test file.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, symlinkSync, unlinkSync, rmdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   parseFindings,
   renderFinding,
@@ -200,6 +205,23 @@ test("closeFinding refuses public writes before credential or network access", a
   }
 });
 
+test("directory-linked CLI still executes and refuses a public finding write", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "findings-cli-link-"));
+  const link = join(tmp, "linked");
+  const target = dirname(fileURLToPath(new URL("../ledger.mjs", import.meta.url)));
+  try {
+    symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+    const result = spawnSync(process.execPath, [join(link, "ledger.mjs"), "finding", "add",
+      "--severity", "high", "--source-audit-doc", "synthetic", "--title", "synthetic"],
+      { encoding: "utf8", env: { SystemRoot: process.env.SystemRoot || "" } });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /public_findings_writes_disabled/);
+  } finally {
+    if (process.platform === "win32") rmdirSync(link); else unlinkSync(link);
+    rmdirSync(tmp);
+  }
+});
+
 test("reconcileOpenFindings returns not-clean (ok:false, clean:false) when the network is unreachable, never throws", async () => {
   const originalFetch = global.fetch;
   global.fetch = async () => { throw new Error("network disabled for this test"); };
@@ -319,6 +341,10 @@ test("incomplete findings and unknown scopes never produce a clean result", asyn
   process.env.GITHUB_TOKEN = "synthetic-test-token";
   const canonical = "### finding:FND-synthetic severity:high status:open | synthetic";
   const cases = [
+    ["# Findings Ledger\n\n    ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n\t### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", "synthetic-audit"],
+    ["# Findings Ledger\n\n> ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n####### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
     ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc** synthetic-audit\n", "synthetic-audit"],
     ["# Findings Ledger\n\n## finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
     ["# Findings Ledger\n\n####finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],

@@ -31,7 +31,8 @@
 // `finding add|list|close|check` verbs. Public findings writes are disabled pending a verified private
 // destination; list/check behavior is unchanged. Other direct public write paths are not covered.
 import crypto from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const OWNER = "InnerScopeHearing";
@@ -476,7 +477,7 @@ export async function reconcileOpenFindings(tagOrSource) {
     if (!/^# Findings Ledger(?:\r?\n|$)/.test(content.trimStart())) throw new Error('findings ledger header invalid');
     for (const line of content.split("\n")) {
       const header = line.replace(/\r$/, "");
-      const findingHeading = /^\s{0,3}#{1,6}\s*finding\b/i.test(header);
+      const findingHeading = /^\s*(?:[>*+\-]\s*)*#+\s*finding\b/i.test(header);
       const resemblesRecord = /\bfinding\s*[:\-]|\bfinding\s+FND\b|\bfinding\s*$|\b(?:severity|status)\s*:/i.test(header);
       if (findingHeading && resemblesRecord && !FINDING_HEADER_RE.test(header)) throw new Error('malformed findings header');
     }
@@ -577,9 +578,17 @@ export async function cmdFindingCheck(reconcile = reconcileOpenFindings) {
 // Guard the CLI dispatch so importing this file for its exported functions (parseFindings,
 // renderFinding, upsertFinding, filterFindings, reconcileSummary, addFinding, closeFinding,
 // reconcileOpenFindings -- the finding tests do exactly this) never triggers a CLI run / process.exit.
-// Mirrors decision-clock.mjs's isMain guard verbatim; behavior when run directly is unchanged (this
-// file is still its own entry point in every existing invocation).
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+// Resolve both paths so direct invocation through a symlink or Windows junction still runs the CLI.
+function invokedAsMain() {
+  if (!process.argv[1]) return false;
+  try {
+    const normalize = (path) => process.platform === "win32" ? path.toLowerCase() : path;
+    return normalize(realpathSync(fileURLToPath(import.meta.url))) === normalize(realpathSync(process.argv[1]));
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+const isMain = invokedAsMain();
 if (isMain) {
   (async () => {
     try {
