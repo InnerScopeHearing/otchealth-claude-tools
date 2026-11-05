@@ -476,15 +476,27 @@ export async function reconcileOpenFindings(tagOrSource) {
     if (!/^# Findings Ledger(?:\r?\n|$)/.test(content.trimStart())) throw new Error('findings ledger header invalid');
     for (const line of content.split("\n")) {
       const header = line.replace(/\r$/, "");
-      if (/^###\s+finding\b/i.test(header) && !FINDING_HEADER_RE.test(header)) throw new Error('malformed findings header');
+      if (/^\s{0,3}#{1,6}\s*finding\b/i.test(header) && !FINDING_HEADER_RE.test(header)) throw new Error('malformed findings header');
     }
-    const all = parseFindings(content);
+    const blocks = scanFindingBlocks(content);
+    const ids = new Set();
+    for (const block of blocks) {
+      if (ids.has(block.id)) throw new Error('duplicate finding id');
+      ids.add(block.id);
+      if (!block.title.trim()) throw new Error('finding title missing');
+      const sources = [...block.body.join("\n").matchAll(/^- \*\*Source audit doc:\*\* (.*)$/gm)];
+      if (sources.length !== 1 || !sources[0][1].trim() || sources[0][1].trim() === '(not stated)') {
+        throw new Error('finding source missing or ambiguous');
+      }
+    }
+    const all = blocks.map(blockToFinding);
     let scoped = all;
     let scopeLabel = "(all findings)";
     if (tagOrSource) {
       const byId = all.find((f) => f.id === tagOrSource);
       if (byId) { scoped = [byId]; scopeLabel = `id:${tagOrSource}`; }
       else { scoped = filterFindings(all, { source: tagOrSource }); scopeLabel = `source contains "${tagOrSource}"`; }
+      if (!scoped.length) throw new Error('no findings match requested scope');
     }
     return { ok: true, scopeLabel, ...reconcileSummary(scoped) };
   } catch (e) {

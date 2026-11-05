@@ -310,3 +310,45 @@ test("validated ledgers preserve open and closed findings", async () => {
     else process.env.GITHUB_TOKEN = originalToken;
   }
 });
+
+test("incomplete findings and unknown scopes never produce a clean result", async () => {
+  const originalFetch = global.fetch;
+  const originalToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "synthetic-test-token";
+  const canonical = "### finding:FND-synthetic severity:high status:open | synthetic";
+  const cases = [
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc** synthetic-audit\n", "synthetic-audit"],
+    ["# Findings Ledger\n\n## finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n####finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n### finding:FND-synthetic severity:high status:open |   \n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** \n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** (not stated)\n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** first\n- **Source audit doc:** second\n", "second"],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** synthetic-audit\n\n" + canonical + "\n- **Source audit doc:** other\n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** synthetic-audit\n", "missing-scope"],
+  ];
+  try {
+    for (const [content, scope] of cases) {
+      global.fetch = async (url) => String(url).endsWith("/rate_limit")
+        ? { ok: true }
+        : { ok: true, status: 200, json: async () => ({ content: Buffer.from(content).toString("base64") }) };
+      const result = await reconcileOpenFindings(scope);
+      assert.equal(result.ok, false, `unexpected success for ${scope || "fleet"}`);
+      assert.equal(result.clean, false);
+    }
+    const valid = "# Findings Ledger\n\n" + renderFinding(baseFinding({ id: "FND-synthetic", status: "fixed", source_audit_doc: "synthetic-audit" }));
+    global.fetch = async (url) => String(url).endsWith("/rate_limit")
+      ? { ok: true }
+      : { ok: true, status: 200, json: async () => ({ content: Buffer.from(valid).toString("base64") }) };
+    for (const scope of ["FND-synthetic", "synthetic-audit"]) {
+      const result = await reconcileOpenFindings(scope);
+      assert.equal(result.ok, true);
+      assert.equal(result.clean, true);
+      assert.equal(result.total, 1);
+    }
+  } finally {
+    global.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
+  }
+});
