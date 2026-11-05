@@ -531,11 +531,12 @@ async function cmdFindingClose() {
   if (!res.verified) process.exitCode = 1;
 }
 
-async function cmdFindingCheck() {
+export async function cmdFindingCheck(reconcile = reconcileOpenFindings) {
   const arg = argv[2];
-  const res = await reconcileOpenFindings(arg);
+  const res = await reconcile(arg);
   if (!res.ok) {
-    console.log(`[ledger] finding check: COULD NOT VERIFY (${res.error}). Ledger unreachable, fail-open (not treated as blocking).`);
+    console.log(`[ledger] finding check: COULD NOT VERIFY (${res.error}). Ledger unreachable, verification failed.`);
+    process.exitCode = 1;
     return;
   }
   console.log(`[ledger] finding check ${res.scopeLabel}: ${res.total} finding(s) total, ${res.openCount} OPEN.`);
