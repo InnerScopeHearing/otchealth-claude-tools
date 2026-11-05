@@ -28,11 +28,11 @@
 // FINDINGS LEDGER (2026-07-21, Wave 1.1): this same tool also tracks AUDIT / RECONCILIATION findings,
 // a different record than the bug regressions above (see the FINDINGS LEDGER section further down for
 // the full design note), in a sibling git-tracked file, FINDINGS-LEDGER.md, via new
-// `finding add|list|close|check` verbs. Reuses the same auth and the same GitHub Contents API write
-// plus independent reread verify pattern, generalized into fetchFile/putFile/verifyCommitLanded below
-// so both ledgers share one write path instead of duplicating it.
+// `finding add|list|close|check` verbs. Public findings writes are disabled pending a verified private
+// destination; list/check behavior is unchanged. Other direct public write paths are not covered.
 import crypto from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
 
 const OWNER = "InnerScopeHearing";
@@ -88,7 +88,7 @@ async function pat() {
 }
 
 // Generic GitHub-Contents-API read/write, factored out of the original cmdAdd so the bug ledger and
-// the findings ledger below share exactly one write path (same auth, same independent reread verify).
+// the findings ledger previously shared this path; its public writes are now refused below.
 async function fetchFile(token, path) {
   const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}?ref=main`, { headers: ghHeaders(token) });
   if (r.status === 404) return { content: null, sha: null };
@@ -98,6 +98,8 @@ async function fetchFile(token, path) {
 }
 
 async function putFile(token, path, newContent, sha, message) {
+  // Until a private findings destination is verified, never write this public ledger.
+  if (path === "FINDINGS-LEDGER.md") throw new Error("public_findings_writes_disabled");
   const putRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`, {
     method: "PUT",
     headers: { ...ghHeaders(token), "Content-Type": "application/json" },
@@ -230,18 +232,17 @@ async function cmdList() {
 // reconcile against what is still open instead of re-discovering (or re-forgetting) the same gap.
 // This is the exact recurrence class the bug ledger above exists for, applied to a different kind
 // of record: a finding has a MUTABLE lifecycle (open, then fixed or wontfix), where a regression
-// entry above is an immutable historical fact once written. So findings live in their own
-// git-tracked file, FINDINGS-LEDGER.md (this same repo), instead of mixed into
-// REGRESSION-LEDGER.md's append-only format.
+// entry above is an immutable historical fact once written. Findings were stored in the public
+// FINDINGS-LEDGER.md; new writes there are disabled until a private destination is verified.
 //
 // Reuses, unchanged: pat()/ghHeaders()/tokenWorks()/fleetBotToken() (auth), and the generic
-// fetchFile()/putFile()/verifyCommitLanded() helpers above (factored out of the original cmdAdd so
-// both ledgers share one write path). No new dependency, no new auth scheme, no Cosmos, no second
-// storage backend.
+// fetchFile() for existing reads. The public findings write path is refused before credentials and
+// again by putFile(); this does not install a private storage backend or cover other writers.
 //
 // Schema: { id, severity: critical|high|medium|low, source_audit_doc, title,
 //           status: open|fixed|wontfix, fix_commit, verified_by, opened, closed }
 //
+// Public finding add/close are disabled. Read-only verbs remain available.
 // Verbs:
 //   node ledger.mjs finding add --severity <critical|high|medium|low> --source-audit-doc "<path>"
 //        --title "<one-line>" [--id <id>] [--status open|fixed|wontfix] [--fix-commit <sha>]
@@ -256,6 +257,7 @@ async function cmdList() {
 export const SEVERITIES = new Set(["critical", "high", "medium", "low"]);
 export const FINDING_STATUSES = new Set(["open", "fixed", "wontfix"]);
 const FINDINGS_PATH = "FINDINGS-LEDGER.md";
+const PUBLIC_FINDINGS_WRITES_DISABLED = true;
 // The separator is a pipe, not an em dash, purely so the header line has one unambiguous token
 // boundary before the free-text title (the title itself may contain punctuation).
 const FINDING_HEADER_RE = /^### finding:([A-Za-z0-9_.\-]+) severity:(critical|high|medium|low) status:(open|fixed|wontfix) \| (.+)$/;
@@ -275,16 +277,13 @@ accepted as wontfix. Exists so a finding raised in one session cannot quietly va
 and so any future audit or "PR done" step can reconcile against what is still open instead of
 re-discovering (or re-forgetting) the same gap.
 
-Extends regression-ledger (REGRESSION-LEDGER.md, same skill, same GitHub Contents API write plus
-independent reread verify pattern), kept as a separate file because a finding's status changes over
-time (open, then fixed or wontfix), unlike a regression entry, which is an immutable historical
-record once written.
+Historically extended regression-ledger in a separate public file because a finding's status changes
+over time, unlike an immutable regression entry. Public finding writes are currently disabled.
 
 **Before reporting an audit clean or a PR done, run \`node ledger.mjs finding check\`** (optionally
 scoped to a finding id or a source audit doc substring). Any open critical or high severity finding
-means the work is not actually done yet, say so plainly rather than reporting it clean. File a new
-finding with \`node ledger.mjs finding add\`, close one with
-\`node ledger.mjs finding close <id> --status fixed|wontfix\`.
+means the work is not actually done yet, say so plainly rather than reporting it clean. Public
+finding add and close are disabled pending a verified private destination.
 
 `;
 
@@ -309,7 +308,7 @@ function genFindingId() {
 // Scan raw markdown for `### finding:...` blocks. Pure, no I/O.
 function scanFindingBlocks(content) {
   if (!content) return [];
-  const lines = content.split("\n");
+  const lines = content.split(/\r?\n/);
   const blocks = [];
   let cur = null;
   for (const line of lines) {
@@ -411,6 +410,7 @@ export async function addFinding(fields) {
     assertFindingStatus(status);
     if (!fields.source_audit_doc) throw new Error("source_audit_doc is required");
     if (!fields.title) throw new Error("title is required");
+    if (PUBLIC_FINDINGS_WRITES_DISABLED) return { ok: false, error: "public_findings_writes_disabled" };
     const token = await pat();
     const { content, sha } = await fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);
@@ -445,6 +445,7 @@ export async function closeFinding(id, fields = {}) {
     const status = fields.status || "fixed";
     assertFindingStatus(status);
     if (status === "open") throw new Error('status for close must be "fixed" or "wontfix", not "open"');
+    if (PUBLIC_FINDINGS_WRITES_DISABLED) return { ok: false, error: "public_findings_writes_disabled" };
     const token = await pat();
     const { content, sha } = await fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);
@@ -467,28 +468,42 @@ export async function closeFinding(id, fields = {}) {
   }
 }
 
-/** THE RECONCILE GATE: fetch every finding (optionally scoped to one id, or filtered by a source
- *  audit doc substring) and summarize what is still open. Fail-open: on any failure (no working
- *  GitHub token, network down) returns { ok:false, clean:true, ... } rather than throwing or
- *  asserting a false blocking finding -- unreachable is reported plainly (ok:false) so a human is
- *  never told "clean" when the tool actually could not check, while a programmatic caller reading
- *  only `.clean` degrades to non-blocking, matching how the rest of this codebase treats an
- *  unreachable credential store (see kvSecret in azure-secret.mjs). */
+/** Reconcile findings. A failed read returns ok:false and clean:false, not a clean result. */
 export async function reconcileOpenFindings(tagOrSource) {
   try {
     const token = await pat();
     const { content } = await fetchFile(token, FINDINGS_PATH);
-    const all = parseFindings(content);
+    if (!content || !content.trim()) throw new Error('findings ledger missing or empty');
+    if (!/^# Findings Ledger(?:\r?\n|$)/.test(content.trimStart())) throw new Error('findings ledger header invalid');
+    for (const line of content.split("\n")) {
+      const header = line.replace(/\r$/, "");
+      const findingHeading = /^\s*(?:(?:[>*+\-]|\d+[.)])\s*)*#+\s*finding\b/i.test(header);
+      const resemblesRecord = /\bfinding\s*[:\-]|\bfinding\s+FND\b|\bfinding\s*$|\b(?:severity|status)\s*:/i.test(header);
+      if (findingHeading && resemblesRecord && !FINDING_HEADER_RE.test(header)) throw new Error('malformed findings header');
+    }
+    const blocks = scanFindingBlocks(content);
+    const ids = new Set();
+    for (const block of blocks) {
+      if (ids.has(block.id)) throw new Error('duplicate finding id');
+      ids.add(block.id);
+      if (!block.title.trim()) throw new Error('finding title missing');
+      const sources = [...block.body.join("\n").matchAll(/^- \*\*Source audit doc:\*\* (.*)$/gm)];
+      if (sources.length !== 1 || !sources[0][1].trim() || sources[0][1].trim() === '(not stated)') {
+        throw new Error('finding source missing or ambiguous');
+      }
+    }
+    const all = blocks.map(blockToFinding);
     let scoped = all;
     let scopeLabel = "(all findings)";
     if (tagOrSource) {
       const byId = all.find((f) => f.id === tagOrSource);
       if (byId) { scoped = [byId]; scopeLabel = `id:${tagOrSource}`; }
       else { scoped = filterFindings(all, { source: tagOrSource }); scopeLabel = `source contains "${tagOrSource}"`; }
+      if (!scoped.length) throw new Error('no findings match requested scope');
     }
     return { ok: true, scopeLabel, ...reconcileSummary(scoped) };
   } catch (e) {
-    return { ok: false, error: e.message, scopeLabel: tagOrSource || "(all findings)", total: 0, openCount: 0, open: [], bySeverity: {}, clean: true };
+    return { ok: false, error: e.message, scopeLabel: tagOrSource || "(all findings)", total: 0, openCount: 0, open: [], bySeverity: {}, clean: false };
   }
 }
 
@@ -537,11 +552,12 @@ async function cmdFindingClose() {
   if (!res.verified) process.exitCode = 1;
 }
 
-async function cmdFindingCheck() {
+export async function cmdFindingCheck(reconcile = reconcileOpenFindings) {
   const arg = argv[2];
-  const res = await reconcileOpenFindings(arg);
+  const res = await reconcile(arg);
   if (!res.ok) {
-    console.log(`[ledger] finding check: COULD NOT VERIFY (${res.error}). Ledger unreachable, fail-open (not treated as blocking).`);
+    console.log(`[ledger] finding check: COULD NOT VERIFY (${res.error}). Ledger unreachable, verification failed.`);
+    process.exitCode = 1;
     return;
   }
   console.log(`[ledger] finding check ${res.scopeLabel}: ${res.total} finding(s) total, ${res.openCount} OPEN.`);
@@ -562,9 +578,17 @@ async function cmdFindingCheck() {
 // Guard the CLI dispatch so importing this file for its exported functions (parseFindings,
 // renderFinding, upsertFinding, filterFindings, reconcileSummary, addFinding, closeFinding,
 // reconcileOpenFindings -- the finding tests do exactly this) never triggers a CLI run / process.exit.
-// Mirrors decision-clock.mjs's isMain guard verbatim; behavior when run directly is unchanged (this
-// file is still its own entry point in every existing invocation).
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+// Resolve both paths so direct invocation through a symlink or Windows junction still runs the CLI.
+function invokedAsMain() {
+  if (!process.argv[1]) return false;
+  try {
+    const normalize = (path) => process.platform === "win32" ? path.toLowerCase() : path;
+    return normalize(realpathSync(fileURLToPath(import.meta.url))) === normalize(realpathSync(process.argv[1]));
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+const isMain = invokedAsMain();
 if (isMain) {
   (async () => {
     try {

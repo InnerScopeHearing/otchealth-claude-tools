@@ -1,13 +1,18 @@
 // Tests for regression-ledger's `finding` extension (FINDINGS-LEDGER.md tracking). Pure, no network:
 // exercises the same parse/render/upsert/filter/reconcile functions the finding add/list/close/check
 // CLI verbs are built on (add is upsertFinding on a new id, close is upsertFinding on an existing id
-// with a mutated status, list is filterFindings, check is reconcileSummary), plus the fail-open
+// with a mutated status, list is filterFindings, check is reconcileSummary), plus the nonthrowing
 // contract of the async wrappers (addFinding/closeFinding/reconcileOpenFindings). For the fail-open
 // tests, global.fetch is stubbed to always reject so no real GitHub API call is ever reachable, no
 // matter what credentials happen to exist in the ambient sandbox; the stub is always restored in a
 // finally block so it cannot leak into any other test file.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, symlinkSync, unlinkSync, rmdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   parseFindings,
   renderFinding,
@@ -19,6 +24,7 @@ import {
   addFinding,
   closeFinding,
   reconcileOpenFindings,
+  cmdFindingCheck,
 } from "../ledger.mjs";
 
 function baseFinding(overrides = {}) {
@@ -173,37 +179,56 @@ test("closeFinding rejects an attempt to close back to status open, before touch
 
 // ---- fail-open contract: a network failure must never throw into the caller ----
 
-test("addFinding fails open (returns ok:false, never throws) when the network is unreachable", async () => {
+test("addFinding refuses public writes before credential or network access", async () => {
   const originalFetch = global.fetch;
-  global.fetch = async () => { throw new Error("network disabled for this test"); };
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("unexpected network access"); };
   try {
     const res = await addFinding({ severity: "high", source_audit_doc: "x.md", title: "x" });
-    assert.equal(res.ok, false);
-    assert.equal(typeof res.error, "string");
+    assert.deepEqual(res, { ok: false, error: "public_findings_writes_disabled" });
+    assert.equal(calls, 0);
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test("closeFinding fails open when the network is unreachable", async () => {
+test("closeFinding refuses public writes before credential or network access", async () => {
   const originalFetch = global.fetch;
-  global.fetch = async () => { throw new Error("network disabled for this test"); };
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("unexpected network access"); };
   try {
     const res = await closeFinding("FND-doesnt-matter", { status: "fixed" });
-    assert.equal(res.ok, false);
-    assert.equal(typeof res.error, "string");
+    assert.deepEqual(res, { ok: false, error: "public_findings_writes_disabled" });
+    assert.equal(calls, 0);
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test("reconcileOpenFindings fails open (ok:false, clean:true) when the network is unreachable, never throws", async () => {
+test("directory-linked CLI still executes and refuses a public finding write", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "findings-cli-link-"));
+  const link = join(tmp, "linked");
+  const target = dirname(fileURLToPath(new URL("../ledger.mjs", import.meta.url)));
+  try {
+    symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+    const result = spawnSync(process.execPath, [join(link, "ledger.mjs"), "finding", "add",
+      "--severity", "high", "--source-audit-doc", "synthetic", "--title", "synthetic"],
+      { encoding: "utf8", env: { SystemRoot: process.env.SystemRoot || "" } });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /public_findings_writes_disabled/);
+  } finally {
+    if (process.platform === "win32") rmdirSync(link); else unlinkSync(link);
+    rmdirSync(tmp);
+  }
+});
+
+test("reconcileOpenFindings returns not-clean (ok:false, clean:false) when the network is unreachable, never throws", async () => {
   const originalFetch = global.fetch;
   global.fetch = async () => { throw new Error("network disabled for this test"); };
   try {
     const res = await reconcileOpenFindings();
     assert.equal(res.ok, false);
-    assert.equal(res.clean, true, "fail-open: an unreachable ledger must never assert a blocking finding");
+    assert.equal(res.clean, false);
     assert.equal(typeof res.error, "string");
   } finally {
     global.fetch = originalFetch;
@@ -216,8 +241,152 @@ test("reconcileOpenFindings fails open the same way when scoped to an id or sour
   try {
     const res = await reconcileOpenFindings("some-source-doc.md");
     assert.equal(res.ok, false);
-    assert.equal(res.clean, true);
+    assert.equal(res.clean, false);
   } finally {
     global.fetch = originalFetch;
+  }
+});
+
+test("finding check exits unsuccessfully when verification fails", async () => {
+  const originalLog = console.log;
+  const originalExit = process.exitCode;
+  const messages = [];
+  console.log = (...args) => messages.push(args.join(" "));
+  try {
+    process.exitCode = 0;
+    await cmdFindingCheck(async () => ({ ok: false, error: "offline" }));
+    assert.equal(process.exitCode, 1);
+    assert.match(messages.join(" "), /COULD NOT VERIFY/);
+  } finally {
+    console.log = originalLog;
+    process.exitCode = originalExit;
+  }
+});
+
+test("a missing or empty findings ledger cannot be reported clean", async () => {
+  const originalFetch = global.fetch;
+  const originalToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "synthetic-test-token";
+  try {
+    for (const missing of [true, false]) {
+      global.fetch = async (url) => {
+        if (String(url).endsWith("/rate_limit")) return { ok: true };
+        if (missing) return { ok: false, status: 404 };
+        return { ok: true, status: 200, json: async () => ({ content: Buffer.from(" ").toString("base64") }) };
+      };
+      const result = await reconcileOpenFindings();
+      assert.equal(result.ok, false);
+      assert.equal(result.clean, false);
+      assert.match(result.error, /missing or empty/);
+    }
+  } finally {
+    global.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
+  }
+});
+
+test("malformed findings content cannot be reported clean", async () => {
+  const originalFetch = global.fetch;
+  const originalToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "synthetic-test-token";
+  try {
+    for (const content of ["not a ledger", "# Findings Ledger\n### finding:FND-x severity:critical status:unknown | example"]) {
+      global.fetch = async (url) => String(url).endsWith("/rate_limit")
+        ? { ok: true }
+        : { ok: true, status: 200, json: async () => ({ content: Buffer.from(content).toString("base64") }) };
+      const result = await reconcileOpenFindings();
+      assert.equal(result.ok, false);
+      assert.equal(result.clean, false);
+    }
+    global.fetch = async (url) => String(url).endsWith("/rate_limit")
+      ? { ok: true }
+      : { ok: true, status: 200, json: async () => ({ content: Buffer.from("# Findings Ledger\n").toString("base64") }) };
+    const emptyLedger = await reconcileOpenFindings();
+    assert.equal(emptyLedger.ok, true);
+    assert.equal(emptyLedger.clean, true);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
+  }
+});
+test("validated ledgers preserve open and closed findings", async () => {
+  const originalFetch = global.fetch;
+  const originalToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "synthetic-test-token";
+  try {
+    for (const status of ["open", "fixed"]) {
+      const finding = baseFinding({ status });
+      const document = ("# Findings Ledger\n\n" + renderFinding(finding)).replace(/\n/g, "\r\n");
+      global.fetch = async (url) => String(url).endsWith("/rate_limit")
+        ? { ok: true }
+        : { ok: true, status: 200, json: async () => ({ content: Buffer.from(document).toString("base64") }) };
+      const result = await reconcileOpenFindings();
+      assert.equal(result.ok, true);
+      assert.equal(result.total, 1);
+      assert.equal(result.openCount, status === "open" ? 1 : 0);
+      assert.equal(result.clean, status !== "open");
+    }
+  } finally {
+    global.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
+  }
+});
+
+test("incomplete findings and unknown scopes never produce a clean result", async () => {
+  const originalFetch = global.fetch;
+  const originalToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "synthetic-test-token";
+  const canonical = "### finding:FND-synthetic severity:high status:open | synthetic";
+  const cases = [
+    ["# Findings Ledger\n\n    ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n\t### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", "synthetic-audit"],
+    ["# Findings Ledger\n\n> ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n1. ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n> 2) ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", "synthetic-audit"],
+    ["# Findings Ledger\n\n####### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc** synthetic-audit\n", "synthetic-audit"],
+    ["# Findings Ledger\n\n## finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n####finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n### finding FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n### finding:FND-synthetic severity:high status:open |   \n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** \n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** (not stated)\n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** first\n- **Source audit doc:** second\n", "second"],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** synthetic-audit\n\n" + canonical + "\n- **Source audit doc:** other\n", undefined],
+    ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** synthetic-audit\n", "missing-scope"],
+  ];
+  try {
+    for (const [content, scope] of cases) {
+      global.fetch = async (url) => String(url).endsWith("/rate_limit")
+        ? { ok: true }
+        : { ok: true, status: 200, json: async () => ({ content: Buffer.from(content).toString("base64") }) };
+      const result = await reconcileOpenFindings(scope);
+      assert.equal(result.ok, false, `unexpected success for ${scope || "fleet"}`);
+      assert.equal(result.clean, false);
+    }
+    const valid = "# Findings Ledger\n\n" + renderFinding(baseFinding({ id: "FND-synthetic", status: "fixed", source_audit_doc: "synthetic-audit" }));
+    global.fetch = async (url) => String(url).endsWith("/rate_limit")
+      ? { ok: true }
+      : { ok: true, status: 200, json: async () => ({ content: Buffer.from(valid).toString("base64") }) };
+    for (const scope of ["FND-synthetic", "synthetic-audit"]) {
+      const result = await reconcileOpenFindings(scope);
+      assert.equal(result.ok, true);
+      assert.equal(result.clean, true);
+      assert.equal(result.total, 1);
+    }
+    const prose = "# Findings Ledger\n\n## Finding examples\n\nNo entries.\n";
+    global.fetch = async (url) => String(url).endsWith("/rate_limit")
+      ? { ok: true }
+      : { ok: true, status: 200, json: async () => ({ content: Buffer.from(prose).toString("base64") }) };
+    const proseResult = await reconcileOpenFindings();
+    assert.equal(proseResult.ok, true);
+    assert.equal(proseResult.clean, true);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
   }
 });
