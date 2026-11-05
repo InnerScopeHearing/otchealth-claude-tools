@@ -467,13 +467,7 @@ export async function closeFinding(id, fields = {}) {
   }
 }
 
-/** THE RECONCILE GATE: fetch every finding (optionally scoped to one id, or filtered by a source
- *  audit doc substring) and summarize what is still open. Fail-open: on any failure (no working
- *  GitHub token, network down) returns { ok:false, clean:true, ... } rather than throwing or
- *  asserting a false blocking finding -- unreachable is reported plainly (ok:false) so a human is
- *  never told "clean" when the tool actually could not check, while a programmatic caller reading
- *  only `.clean` degrades to non-blocking, matching how the rest of this codebase treats an
- *  unreachable credential store (see kvSecret in azure-secret.mjs). */
+/** Reconcile findings. A failed read returns ok:false and clean:false, not a clean result. */
 export async function reconcileOpenFindings(tagOrSource) {
   try {
     const token = await pat();
@@ -488,7 +482,7 @@ export async function reconcileOpenFindings(tagOrSource) {
     }
     return { ok: true, scopeLabel, ...reconcileSummary(scoped) };
   } catch (e) {
-    return { ok: false, error: e.message, scopeLabel: tagOrSource || "(all findings)", total: 0, openCount: 0, open: [], bySeverity: {}, clean: true };
+    return { ok: false, error: e.message, scopeLabel: tagOrSource || "(all findings)", total: 0, openCount: 0, open: [], bySeverity: {}, clean: false };
   }
 }
 
