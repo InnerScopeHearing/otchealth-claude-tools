@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, copyFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, copyFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,10 +10,11 @@ import { encrypt } from "../skills/fleet-backup/crypto-envelope.mjs";
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const passphrase = "synthetic test passphrase";
 const secretValue = "synthetic-value-never-print";
-for (const [label, fidelity, expected] of [
+for (const [label, fidelity, expected, useJunction] of [
   ["degraded", "degraded", /WARNING: archive reports degraded restore metadata/],
   ["legacy full", "full", /older full labels may be incomplete/],
   ["unknown", "untrusted-synthetic-value", /WARNING: archive restore metadata fidelity is unknown/],
+  ["degraded through directory link", "degraded", /WARNING: archive reports degraded restore metadata/, true],
 ]) {
   test(`--to-ssm --dry-run warns about ${label} metadata without exposing values`, () => {
     const dir = mkdtempSync(join(tmpdir(), "restore fidelity test "));
@@ -29,7 +30,13 @@ for (const [label, fidelity, expected] of [
       const file = join(dir, "sample.enc");
       const payload = { exportedAt: "2026-01-01", vault: "synthetic", secrets: { example: secretValue }, restoreFidelity: fidelity };
       writeFileSync(file, encrypt(Buffer.from(JSON.stringify(payload)), passphrase));
-      const result = spawnSync(process.execPath, [script, file, "--to-ssm", "--dry-run"], {
+      let launchScript = script;
+      if (useJunction) {
+        const link = join(dir, "linked restore");
+        symlinkSync(base, link, process.platform === "win32" ? "junction" : "dir");
+        launchScript = join(link, "secrets-dr-restore.mjs");
+      }
+      const result = spawnSync(process.execPath, [launchScript, file, "--to-ssm", "--dry-run"], {
         env: { ...process.env, SECRETS_DR_PASSPHRASE: passphrase },
         encoding: "utf8", timeout: 10000,
       });

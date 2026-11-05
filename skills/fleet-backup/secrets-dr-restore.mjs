@@ -46,7 +46,7 @@
  * value, matching --to-env-file's --print-values-refusal posture. `--dry-run` prints the exact plan
  * (name -> type/tier) without writing anything.
  */
-import { readFileSync, writeFileSync, fchmodSync, openSync, closeSync, constants as fsConstants } from "node:fs";
+import { readFileSync, writeFileSync, fchmodSync, openSync, closeSync, realpathSync, constants as fsConstants } from "node:fs";
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -234,6 +234,14 @@ async function main() {
 // Adding the guard changes nothing about real CLI invocation (`node secrets-dr-restore.mjs <file>
 // ...` still runs main() exactly as before, using a normalized file URL for Windows and paths with spaces) and
 // does not affect tests/secrets-dr-restore.test.mjs, which already runs this file as a subprocess.
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+function isEntryPoint() {
+  try {
+    if (!process.argv[1]) return false;
+    const invoked = resolve(process.argv[1]);
+    return import.meta.url === pathToFileURL(invoked).href ||
+      import.meta.url === pathToFileURL(realpathSync(invoked)).href;
+  } catch { return false; }
+}
+if (isEntryPoint()) {
   main();
 }
