@@ -238,3 +238,26 @@ test("finding check exits unsuccessfully when verification fails", async () => {
     process.exitCode = originalExit;
   }
 });
+
+test("a missing or empty findings ledger cannot be reported clean", async () => {
+  const originalFetch = global.fetch;
+  const originalToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "synthetic-test-token";
+  try {
+    for (const missing of [true, false]) {
+      global.fetch = async (url) => {
+        if (String(url).endsWith("/rate_limit")) return { ok: true };
+        if (missing) return { ok: false, status: 404 };
+        return { ok: true, status: 200, json: async () => ({ content: Buffer.from(" ").toString("base64") }) };
+      };
+      const result = await reconcileOpenFindings();
+      assert.equal(result.ok, false);
+      assert.equal(result.clean, false);
+      assert.match(result.error, /missing or empty/);
+    }
+  } finally {
+    global.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
+  }
+});
