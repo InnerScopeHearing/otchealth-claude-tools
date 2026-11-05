@@ -1,6 +1,6 @@
 ---
 name: regression-ledger
-description: Durable, append-only record of every bug found across the fleet -- root cause (not just symptom), fix commit, and whether that same root cause has ever fired before. Run "node ledger.mjs check <tag>" before closing out any fix to see if it's a genuine repeat rather than a new finding. Run "add" to record a fix -- it writes via the authenticated GitHub API directly and verifies the commit landed via an independent read before reporting success, never trusting its own push response alone. Also tracks AUDIT / RECONCILIATION findings (a separate, mutable-status record) via "node ledger.mjs finding add|list|close|check" in a sibling file, FINDINGS-LEDGER.md, so a finding raised in one session cannot silently vanish by the next one; run "finding check" before reporting any audit or PR done.
+description: Review regression history and existing findings. Public findings-ledger writes are disabled pending a verified private destination; preserve sensitive findings in their owner seat.
 ---
 
 # regression-ledger
@@ -55,8 +55,10 @@ gap gets found in one session (an audit, a security review, a reconciliation pas
 disappears by the next one because "merged" / "shipped" / "task completed" gets mistaken for "the
 finding was actually fixed and verified live." A finding has a MUTABLE lifecycle (open, then fixed or
 wontfix), unlike a regression entry above (an immutable historical fact once written), so findings
-live in their own git-tracked file, `FINDINGS-LEDGER.md` (this same repo), written through the exact
-same GitHub Contents API write plus independent reread verify pattern as the bug ledger above.
+were historically stored in `FINDINGS-LEDGER.md` in this public repo. New finding writes and status
+updates to that file are disabled pending a verified private, owner-scoped destination. Keep sensitive
+findings in their authorized owner seat; do not copy them to shared memory as a substitute. This guard
+does not remediate existing public history or protect other write paths.
 
 ### Schema
 
@@ -68,21 +70,14 @@ same GitHub Contents API write plus independent reread verify pattern as the bug
 ### Usage
 
 ```
-node skills/regression-ledger/ledger.mjs finding add --severity <critical|high|medium|low> \
-  --source-audit-doc "<path to the audit/reconciliation doc this came from>" \
-  --title "<one-line>" [--id <id>] [--status open|fixed|wontfix] \
-  [--fix-commit <sha>] [--verified-by "<how you confirmed the fix>"]
-
 node skills/regression-ledger/ledger.mjs finding list [--status <s>] [--severity <s>] [--source <substring>] [--json]
-node skills/regression-ledger/ledger.mjs finding close <id> [--status fixed|wontfix] [--fix-commit <sha>] [--verified-by "<how>"]
 node skills/regression-ledger/ledger.mjs finding check [<id-or-source-substring>]
 ```
 
-`add` auto-generates an id (`FND-YYYYMMDD-<hex>`) when `--id` is omitted, and refuses to overwrite an
-existing id (use `close` to update one). `close` sets status to `fixed` or `wontfix` and stamps
-`closed`; it never accepts `--status open` (that is not a close). Both are fail-open: a network or
-auth failure resolves to `{ ok:false, error }` rather than throwing, so a caller does not need its own
-try/catch around every call.
+`finding add` and `finding close` return `public_findings_writes_disabled` before obtaining credentials
+or calling the network. Direct CLI invocation exits nonzero. Existing link/junction invocation has a
+known separate dispatch issue, so do not treat its exit status as evidence that any command ran.
+Reads and checks retain their existing behavior; they do not prove a new finding was recorded.
 
 ### THE RECONCILE GATE (what the audit / PR-done protocol should call)
 
@@ -100,15 +95,16 @@ open finding is `critical` or `high` severity; `medium`/`low` opens are surfaced
 (visible backlog). Any process that closes out work, an audit report, a "PR done" checklist, a
 session-end summary, should run this check for the relevant source doc (or with no argument for the
 fleet-wide view) and say so plainly if it comes back non-clean, rather than declaring victory over an
-unreconciled finding. Programmatic callers can import `reconcileOpenFindings(sourceOrId)` directly
-(same fail-open contract: an unreachable ledger reports `{ ok:false, clean:true }`, never blocks a
-caller on ledger downtime, but is never silently reported as "verified clean" either).
+unreconciled finding. The current checker can return `{ ok:false, clean:true }` when the ledger is
+unavailable, and its CLI can exit zero in that case. A missing ledger can also be reported clean.
+Treat both as unverified; do not rely on `clean` or the exit code alone. Its parser is not a
+complete corruption detector.
 
 ### Relationship to decision-clock
 
 `decision-clock` (sibling skill, Cosmos-backed) tracks OPEN GATES with an owner and an SLA (rotate a
 secret, a Matt-only decision, a pending review) and pages the owner when one goes overdue. This
-findings ledger is a different concern: a durable, git-tracked, human-readable RECORD of what an
+findings ledger is a different concern: a historical, git-tracked, human-readable RECORD of what an
 audit found and whether it was actually fixed, reconciled against on demand rather than paged on a
 clock. They are complementary, not merged: for a `critical`/`high` finding that also needs an
 owner/SLA nudge, additionally open a decision-clock row (e.g.

@@ -98,6 +98,8 @@ async function fetchFile(token, path) {
 }
 
 async function putFile(token, path, newContent, sha, message) {
+  // Until a private findings destination is verified, never write this public ledger.
+  if (path === "FINDINGS-LEDGER.md") throw new Error("public_findings_writes_disabled");
   const putRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`, {
     method: "PUT",
     headers: { ...ghHeaders(token), "Content-Type": "application/json" },
@@ -256,6 +258,7 @@ async function cmdList() {
 export const SEVERITIES = new Set(["critical", "high", "medium", "low"]);
 export const FINDING_STATUSES = new Set(["open", "fixed", "wontfix"]);
 const FINDINGS_PATH = "FINDINGS-LEDGER.md";
+const PUBLIC_FINDINGS_WRITES_DISABLED = true;
 // The separator is a pipe, not an em dash, purely so the header line has one unambiguous token
 // boundary before the free-text title (the title itself may contain punctuation).
 const FINDING_HEADER_RE = /^### finding:([A-Za-z0-9_.\-]+) severity:(critical|high|medium|low) status:(open|fixed|wontfix) \| (.+)$/;
@@ -411,6 +414,7 @@ export async function addFinding(fields) {
     assertFindingStatus(status);
     if (!fields.source_audit_doc) throw new Error("source_audit_doc is required");
     if (!fields.title) throw new Error("title is required");
+    if (PUBLIC_FINDINGS_WRITES_DISABLED) return { ok: false, error: "public_findings_writes_disabled" };
     const token = await pat();
     const { content, sha } = await fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);
@@ -445,6 +449,7 @@ export async function closeFinding(id, fields = {}) {
     const status = fields.status || "fixed";
     assertFindingStatus(status);
     if (status === "open") throw new Error('status for close must be "fixed" or "wontfix", not "open"');
+    if (PUBLIC_FINDINGS_WRITES_DISABLED) return { ok: false, error: "public_findings_writes_disabled" };
     const token = await pat();
     const { content, sha } = await fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);
