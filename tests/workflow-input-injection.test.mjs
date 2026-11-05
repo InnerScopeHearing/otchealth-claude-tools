@@ -262,9 +262,6 @@ test("scanner: a run: inside another run's heredoc is part of that run, not a se
 
 // Existing offenders left alone on purpose. Do not add to this list: fix the workflow instead.
 const LEGACY_DEBT = {
-  "avatar-render.yml":
-    "the dispatch inputs script, model, backend and base_video are pasted into the Render step, whose job env carries the " +
-    "ElevenLabs, R2, Notion, Replicate and fal keys. It has no id-token, so it is not part of S-03; it needs its own fix.",
 };
 
 // The four S-03 workflows, kept as disarmed stubs, with the file their "see ..." pointer must resolve to.

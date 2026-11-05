@@ -22,6 +22,9 @@ on:
         required: false
         default: "samples/presenter.mp4"
 
+permissions:
+  contents: read
+
 concurrency:
   group: avatar-render
   cancel-in-progress: false
@@ -66,12 +69,26 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       - name: Render
+        env:
+          AVATAR_SCRIPT: ${{ inputs.script }}
+          AVATAR_MODEL: ${{ inputs.model }}
+          AVATAR_BACKEND: ${{ inputs.backend }}
+          AVATAR_BASE_VIDEO: ${{ inputs.base_video }}
         run: |
-          python orchestrate.py \
-            --script "${{ inputs.script }}" \
-            --model "${{ inputs.model }}" \
-            --backend "${{ inputs.backend }}" \
-            ${{ inputs.base_video != '' && format('--base-video "{0}"', inputs.base_video) || '' }}
+          set -euo pipefail
+          case "$AVATAR_MODEL" in
+            latentsync|musetalk|sadtalker) ;;
+            *) echo "Unsupported model" >&2; exit 1 ;;
+          esac
+          case "$AVATAR_BACKEND" in
+            azure|replicate|modal|fal) ;;
+            *) echo "Unsupported backend" >&2; exit 1 ;;
+          esac
+          args=(--script "$AVATAR_SCRIPT" --model "$AVATAR_MODEL" --backend "$AVATAR_BACKEND")
+          if [[ -n "$AVATAR_BASE_VIDEO" ]]; then
+            args+=(--base-video "$AVATAR_BASE_VIDEO")
+          fi
+          python orchestrate.py "${args[@]}"
       - name: Upload final.mp4 artifact
         if: always()
         uses: actions/upload-artifact@v4
