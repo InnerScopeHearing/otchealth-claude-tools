@@ -261,3 +261,52 @@ test("a missing or empty findings ledger cannot be reported clean", async () => 
     else process.env.GITHUB_TOKEN = originalToken;
   }
 });
+
+test("malformed findings content cannot be reported clean", async () => {
+  const originalFetch = global.fetch;
+  const originalToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "synthetic-test-token";
+  try {
+    for (const content of ["not a ledger", "# Findings Ledger\n### finding:FND-x severity:critical status:unknown | example"]) {
+      global.fetch = async (url) => String(url).endsWith("/rate_limit")
+        ? { ok: true }
+        : { ok: true, status: 200, json: async () => ({ content: Buffer.from(content).toString("base64") }) };
+      const result = await reconcileOpenFindings();
+      assert.equal(result.ok, false);
+      assert.equal(result.clean, false);
+    }
+    global.fetch = async (url) => String(url).endsWith("/rate_limit")
+      ? { ok: true }
+      : { ok: true, status: 200, json: async () => ({ content: Buffer.from("# Findings Ledger\n").toString("base64") }) };
+    const emptyLedger = await reconcileOpenFindings();
+    assert.equal(emptyLedger.ok, true);
+    assert.equal(emptyLedger.clean, true);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
+  }
+});
+test("validated ledgers preserve open and closed findings", async () => {
+  const originalFetch = global.fetch;
+  const originalToken = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "synthetic-test-token";
+  try {
+    for (const status of ["open", "fixed"]) {
+      const finding = baseFinding({ status });
+      const document = ("# Findings Ledger\n\n" + renderFinding(finding)).replace(/\n/g, "\r\n");
+      global.fetch = async (url) => String(url).endsWith("/rate_limit")
+        ? { ok: true }
+        : { ok: true, status: 200, json: async () => ({ content: Buffer.from(document).toString("base64") }) };
+      const result = await reconcileOpenFindings();
+      assert.equal(result.ok, true);
+      assert.equal(result.total, 1);
+      assert.equal(result.openCount, status === "open" ? 1 : 0);
+      assert.equal(result.clean, status !== "open");
+    }
+  } finally {
+    global.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
+  }
+});

@@ -309,7 +309,7 @@ function genFindingId() {
 // Scan raw markdown for `### finding:...` blocks. Pure, no I/O.
 function scanFindingBlocks(content) {
   if (!content) return [];
-  const lines = content.split("\n");
+  const lines = content.split(/\r?\n/);
   const blocks = [];
   let cur = null;
   for (const line of lines) {
@@ -473,6 +473,11 @@ export async function reconcileOpenFindings(tagOrSource) {
     const token = await pat();
     const { content } = await fetchFile(token, FINDINGS_PATH);
     if (!content || !content.trim()) throw new Error('findings ledger missing or empty');
+    if (!/^# Findings Ledger(?:\r?\n|$)/.test(content.trimStart())) throw new Error('findings ledger header invalid');
+    for (const line of content.split("\n")) {
+      const header = line.replace(/\r$/, "");
+      if (/^###\s+finding\b/i.test(header) && !FINDING_HEADER_RE.test(header)) throw new Error('malformed findings header');
+    }
     const all = parseFindings(content);
     let scoped = all;
     let scopeLabel = "(all findings)";
