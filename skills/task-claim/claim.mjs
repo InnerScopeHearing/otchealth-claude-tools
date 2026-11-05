@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 // claim.mjs -- CLI for skills/task-claim: a typed, cross-agent exclusive claim (mutex) primitive
 // built on the gateway's existing work-ledger tools. See SKILL.md for the full design and the gap
 // analysis against the cto-bridge prose mutex this is meant to be a proven replacement for.
@@ -103,7 +105,13 @@ async function main() {
   process.exit(2);
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = (() => {
+  try {
+    if (!process.argv[1]) return false;
+    return import.meta.url === pathToFileURL(process.argv[1]).href ||
+      import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch { return false; }
+})();
 if (isMain) {
   main().catch((e) => {
     console.error('ERR', (e && e.message) || e);

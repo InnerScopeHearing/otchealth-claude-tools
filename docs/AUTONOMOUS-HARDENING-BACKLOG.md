@@ -10,9 +10,8 @@ to bottom, one draft PR per item, run `bash run-tests.sh` before each commit.
 - Do NOT call any skill that needs live credentials (no Secret Manager / Azure / GitHub-app token). Test
   PURE LOGIC by importing functions, not by hitting APIs.
 - Every fix ships with a test under `tests/` or a skill `selftest.mjs`. Keep `bash run-tests.sh` green.
-- Make a skill importable for testing with an ESM main-guard so importing it does not run the CLI:
-  `if (import.meta.url === \`file://\${process.argv[1]}\`) { /* CLI dispatch */ }` and `export` the pure
-  functions. This changes NO runtime behavior.
+- Make a skill importable without running its CLI, using a file URL from the invoked path and, when needed, its real path. The raw `file://` plus `process.argv[1]` comparison can silently skip the CLI on Windows, paths with spaces, or linked directories.
+  Test direct execution, linked paths, import safety, and error exits without invoking live providers.
 
 ## P1 — test the gate-integrity + ring-safety logic shipped this week — DONE (PR claude/harden-p1-gate-tests)
 All four landed as pure-function exports behind an ESM main-guard (importing a skill no longer fires its

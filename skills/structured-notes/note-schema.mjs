@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 // structured-notes / note-schema.mjs -- pure, dependency-free schema + validator for STRUCTURED
 // agent notes that layer on top of the existing kb-memory ledger row shape:
 //   { id, ts, type, text, tags, source, was, supersedes, ekey, evalue, agent }
@@ -160,7 +162,9 @@ export function toLedgerText(note) {
 //   node note-schema.mjs to-ledger-text '<json>'
 function isMain() {
   try {
-    return import.meta.url === `file://${process.argv[1]}`;
+    if (!process.argv[1]) return false;
+    return import.meta.url === pathToFileURL(process.argv[1]).href ||
+      import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
   } catch {
     return false;
   }
