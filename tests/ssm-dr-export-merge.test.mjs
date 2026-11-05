@@ -31,18 +31,18 @@ test("degraded when metadata coverage is below 50% (looks broken, not benign dri
   assert.equal(out.restoreFidelity, "degraded");
 });
 
-test("full fidelity tolerated at exactly 50% coverage (the threshold is a strict less-than)", () => {
+test("degraded at exactly 50% matching coverage", () => {
   const values = Array.from({ length: 10 }, (_, i) => V(`p${i}`, String(i)));
   const meta = Array.from({ length: 5 }, (_, i) => M(`p${i}`)); // 5/10 = 50%
   const out = mergeParamsWithMeta(values, meta);
-  assert.equal(out.restoreFidelity, "full");
+  assert.equal(out.restoreFidelity, "degraded");
 });
 
-test("a small benign gap (one name missing from metadata) does not degrade overall fidelity, but that one name gets safe defaults", () => {
+test("a missing metadata name degrades fidelity while keeping the value and defaults", () => {
   const values = [V("a", "1"), V("b", "2"), V("c", "3")];
   const meta = [M("a", "Advanced", "alias/x"), M("b")]; // "c" missing
   const out = mergeParamsWithMeta(values, meta);
-  assert.equal(out.restoreFidelity, "full");
+  assert.equal(out.restoreFidelity, "degraded");
   assert.deepEqual(out.paramMeta.a, { type: "SecureString", tier: "Advanced", keyId: "alias/x" });
   assert.deepEqual(out.paramMeta.c, { type: "SecureString", tier: "Standard", keyId: null });
 });
@@ -56,4 +56,18 @@ test("no values and no metadata is trivially full (nothing to degrade)", () => {
 test("preserves a String/StringList Type recorded on the value itself (Type comes from GetParametersByPath, not DescribeParameters)", () => {
   const out = mergeParamsWithMeta([V("flag", "true", "String")], [M("flag")]);
   assert.equal(out.paramMeta.flag.type, "String");
+});
+
+
+test("unrelated metadata rows cannot inflate coverage", () => {
+  const out = mergeParamsWithMeta([V("a", "1"), V("b", "2")], [M("other1"), M("other2")]);
+  assert.equal(out.restoreFidelity, "degraded");
+  assert.equal(out.metadataMatched, 0);
+  assert.deepEqual(out.secrets, { a: "1", b: "2" });
+});
+
+test("duplicate metadata rows cannot hide a missing parameter", () => {
+  const out = mergeParamsWithMeta([V("a", "1"), V("b", "2")], [M("a"), M("a")]);
+  assert.equal(out.restoreFidelity, "degraded");
+  assert.equal(out.metadataMatched, 1);
 });

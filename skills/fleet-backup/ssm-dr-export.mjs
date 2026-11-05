@@ -160,16 +160,13 @@ async function resolvePassphrase() {
 // WHEN it degrades) is unit-tested directly without any AWS credentials -- see
 // tests/ssm-dr-export-merge.test.mjs. `values` and `metaList` are the raw results of
 // ssmGetParametersByPathAllWithValues()/ssmDescribeParametersAll() respectively (already filtered to
-// exclude the passphrase by the caller). Coverage threshold matches the in-code comment below: below
-// 50% metadata coverage is treated as "something is actually broken", not ordinary two-read drift.
+// exclude the passphrase by the caller). Any unmatched value is reported as degraded because its
+// tier and key metadata cannot be verified.
 export function mergeParamsWithMeta(values, metaList) {
-  let restoreFidelity = "full";
-  if (!metaList.length && values.length) {
-    restoreFidelity = "degraded";
-  } else if (metaList.length < values.length * 0.5) {
-    restoreFidelity = "degraded";
-  }
   const metaByName = new Map(metaList.map((m) => [m.name, m]));
+  // Unmatched or duplicate metadata rows cannot establish restore fidelity.
+  const metadataMatched = values.reduce((count, p) => count + (metaByName.has(p.name) ? 1 : 0), 0);
+  const restoreFidelity = metadataMatched === values.length ? "full" : "degraded";
   const secrets = {};
   const paramMeta = {};
   for (const p of values) {
@@ -177,7 +174,7 @@ export function mergeParamsWithMeta(values, metaList) {
     const m = metaByName.get(p.name);
     paramMeta[p.name] = { type: p.type, tier: m?.tier || "Standard", keyId: m?.keyId || null };
   }
-  return { secrets, paramMeta, restoreFidelity };
+  return { secrets, paramMeta, restoreFidelity, metadataMatched };
 }
 
 // ---------- enumerate every parameter's value + best-effort restore-fidelity metadata (I/O wrapper) ----------
@@ -202,19 +199,10 @@ async function fetchAllParams() {
     console.error(`[ssm-dr-export] WARNING: DescribeParameters pass failed (${e.message}) -- proceeding with values only, restoreFidelity degraded.`);
   }
 
-  const { secrets, paramMeta, restoreFidelity } = mergeParamsWithMeta(filtered, metaList);
+  const { secrets, paramMeta, restoreFidelity, metadataMatched } = mergeParamsWithMeta(filtered, metaList);
   if (restoreFidelity === "degraded") {
-    if (!metaList.length) {
-      console.error(
-        "[ssm-dr-export] WARNING: no parameter metadata available from DescribeParameters (likely missing the " +
-        "ssm:DescribeParameters permission on this role) -- the export still contains every VALUE, but a restore " +
-        "will fall back to Type=SecureString/Tier=Standard for every parameter, which silently corrupts any " +
-        "parameter whose real Type was String/StringList and will hard-fail for any value over 4KB. Grant " +
-        "ssm:DescribeParameters to close this gap; see the provisioning doc's IAM policy."
-      );
-    } else {
-      console.error(`[ssm-dr-export] WARNING: only ${metaList.length}/${filtered.length} parameters have restore-fidelity metadata -- treating as degraded (see paramMeta gaps for the affected names).`);
-    }
+    // Keep the values backup, but do not imply that missing tier or KMS key metadata is complete.
+    console.error(`[ssm-dr-export] WARNING: ${metadataMatched}/${filtered.length} parameters have matching restore metadata; unmatched entries use the Standard tier and default key. Restore fidelity is degraded.`);
   }
   return { secrets, paramMeta, restoreFidelity, totalListed: filtered.length };
 }
