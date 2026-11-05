@@ -101,8 +101,10 @@ open finding is `critical` or `high` severity; `medium`/`low` opens are surfaced
 session-end summary, should run this check for the relevant source doc (or with no argument for the
 fleet-wide view) and say so plainly if it comes back non-clean, rather than declaring victory over an
 unreconciled finding. Programmatic callers can import `reconcileOpenFindings(sourceOrId)` directly
-(an unreachable ledger reports `{ ok:false, clean:false }`; the CLI exits non-zero and reports
-`COULD NOT VERIFY`. This means verification failed, not that an open finding was confirmed).
+(a missing, unreadable, or detectably malformed ledger, an ambiguous or missing finding source,
+or an unmatched requested scope reports `{ ok:false, clean:false }`; the CLI exits non-zero and
+reports `COULD NOT VERIFY`. This means verification failed, not that an open finding was confirmed.
+Validation checks the known record grammar and is not a complete corruption detector).
 
 ### Relationship to decision-clock
 

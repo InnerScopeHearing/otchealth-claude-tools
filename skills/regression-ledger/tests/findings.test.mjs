@@ -320,6 +320,7 @@ test("incomplete findings and unknown scopes never produce a clean result", asyn
     ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc** synthetic-audit\n", "synthetic-audit"],
     ["# Findings Ledger\n\n## finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
     ["# Findings Ledger\n\n####finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n### finding FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
     ["# Findings Ledger\n\n### finding:FND-synthetic severity:high status:open |   \n- **Source audit doc:** synthetic-audit\n", undefined],
     ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** \n", undefined],
     ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc:** (not stated)\n", undefined],
@@ -346,6 +347,13 @@ test("incomplete findings and unknown scopes never produce a clean result", asyn
       assert.equal(result.clean, true);
       assert.equal(result.total, 1);
     }
+    const prose = "# Findings Ledger\n\n## Finding examples\n\nNo entries.\n";
+    global.fetch = async (url) => String(url).endsWith("/rate_limit")
+      ? { ok: true }
+      : { ok: true, status: 200, json: async () => ({ content: Buffer.from(prose).toString("base64") }) };
+    const proseResult = await reconcileOpenFindings();
+    assert.equal(proseResult.ok, true);
+    assert.equal(proseResult.clean, true);
   } finally {
     global.fetch = originalFetch;
     if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
