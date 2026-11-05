@@ -198,13 +198,13 @@ test("closeFinding fails open when the network is unreachable", async () => {
   }
 });
 
-test("reconcileOpenFindings fails open (ok:false, clean:true) when the network is unreachable, never throws", async () => {
+test("reconcileOpenFindings returns not-clean (ok:false, clean:false) when the network is unreachable, never throws", async () => {
   const originalFetch = global.fetch;
   global.fetch = async () => { throw new Error("network disabled for this test"); };
   try {
     const res = await reconcileOpenFindings();
     assert.equal(res.ok, false);
-    assert.equal(res.clean, true, "fail-open: an unreachable ledger must never assert a blocking finding");
+    assert.equal(res.clean, false);
     assert.equal(typeof res.error, "string");
   } finally {
     global.fetch = originalFetch;
@@ -217,8 +217,24 @@ test("reconcileOpenFindings fails open the same way when scoped to an id or sour
   try {
     const res = await reconcileOpenFindings("some-source-doc.md");
     assert.equal(res.ok, false);
-    assert.equal(res.clean, true);
+    assert.equal(res.clean, false);
   } finally {
     global.fetch = originalFetch;
+  }
+});
+
+test("finding check exits unsuccessfully when verification fails", async () => {
+  const originalLog = console.log;
+  const originalExit = process.exitCode;
+  const messages = [];
+  console.log = (...args) => messages.push(args.join(" "));
+  try {
+    process.exitCode = 0;
+    await cmdFindingCheck(async () => ({ ok: false, error: "offline" }));
+    assert.equal(process.exitCode, 1);
+    assert.match(messages.join(" "), /COULD NOT VERIFY/);
+  } finally {
+    console.log = originalLog;
+    process.exitCode = originalExit;
   }
 });
