@@ -28,9 +28,8 @@
 // FINDINGS LEDGER (2026-07-21, Wave 1.1): this same tool also tracks AUDIT / RECONCILIATION findings,
 // a different record than the bug regressions above (see the FINDINGS LEDGER section further down for
 // the full design note), in a sibling git-tracked file, FINDINGS-LEDGER.md, via new
-// `finding add|list|close|check` verbs. Reuses the same auth and the same GitHub Contents API write
-// plus independent reread verify pattern, generalized into fetchFile/putFile/verifyCommitLanded below
-// so both ledgers share one write path instead of duplicating it.
+// `finding add|list|close|check` verbs. Public findings writes are disabled pending a verified private
+// destination; list/check behavior is unchanged. Other direct public write paths are not covered.
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { kvSecret } from "../kb-memory/azure-secret.mjs";
@@ -88,7 +87,7 @@ async function pat() {
 }
 
 // Generic GitHub-Contents-API read/write, factored out of the original cmdAdd so the bug ledger and
-// the findings ledger below share exactly one write path (same auth, same independent reread verify).
+// the findings ledger previously shared this path; its public writes are now refused below.
 async function fetchFile(token, path) {
   const r = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}?ref=main`, { headers: ghHeaders(token) });
   if (r.status === 404) return { content: null, sha: null };
@@ -98,6 +97,8 @@ async function fetchFile(token, path) {
 }
 
 async function putFile(token, path, newContent, sha, message) {
+  // Until a private findings destination is verified, never write this public ledger.
+  if (path === "FINDINGS-LEDGER.md") throw new Error("public_findings_writes_disabled");
   const putRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`, {
     method: "PUT",
     headers: { ...ghHeaders(token), "Content-Type": "application/json" },
@@ -230,18 +231,17 @@ async function cmdList() {
 // reconcile against what is still open instead of re-discovering (or re-forgetting) the same gap.
 // This is the exact recurrence class the bug ledger above exists for, applied to a different kind
 // of record: a finding has a MUTABLE lifecycle (open, then fixed or wontfix), where a regression
-// entry above is an immutable historical fact once written. So findings live in their own
-// git-tracked file, FINDINGS-LEDGER.md (this same repo), instead of mixed into
-// REGRESSION-LEDGER.md's append-only format.
+// entry above is an immutable historical fact once written. Findings were stored in the public
+// FINDINGS-LEDGER.md; new writes there are disabled until a private destination is verified.
 //
 // Reuses, unchanged: pat()/ghHeaders()/tokenWorks()/fleetBotToken() (auth), and the generic
-// fetchFile()/putFile()/verifyCommitLanded() helpers above (factored out of the original cmdAdd so
-// both ledgers share one write path). No new dependency, no new auth scheme, no Cosmos, no second
-// storage backend.
+// fetchFile() for existing reads. The public findings write path is refused before credentials and
+// again by putFile(); this does not install a private storage backend or cover other writers.
 //
 // Schema: { id, severity: critical|high|medium|low, source_audit_doc, title,
 //           status: open|fixed|wontfix, fix_commit, verified_by, opened, closed }
 //
+// Public finding add/close are disabled. Read-only verbs remain available.
 // Verbs:
 //   node ledger.mjs finding add --severity <critical|high|medium|low> --source-audit-doc "<path>"
 //        --title "<one-line>" [--id <id>] [--status open|fixed|wontfix] [--fix-commit <sha>]
@@ -256,6 +256,7 @@ async function cmdList() {
 export const SEVERITIES = new Set(["critical", "high", "medium", "low"]);
 export const FINDING_STATUSES = new Set(["open", "fixed", "wontfix"]);
 const FINDINGS_PATH = "FINDINGS-LEDGER.md";
+const PUBLIC_FINDINGS_WRITES_DISABLED = true;
 // The separator is a pipe, not an em dash, purely so the header line has one unambiguous token
 // boundary before the free-text title (the title itself may contain punctuation).
 const FINDING_HEADER_RE = /^### finding:([A-Za-z0-9_.\-]+) severity:(critical|high|medium|low) status:(open|fixed|wontfix) \| (.+)$/;
@@ -275,16 +276,13 @@ accepted as wontfix. Exists so a finding raised in one session cannot quietly va
 and so any future audit or "PR done" step can reconcile against what is still open instead of
 re-discovering (or re-forgetting) the same gap.
 
-Extends regression-ledger (REGRESSION-LEDGER.md, same skill, same GitHub Contents API write plus
-independent reread verify pattern), kept as a separate file because a finding's status changes over
-time (open, then fixed or wontfix), unlike a regression entry, which is an immutable historical
-record once written.
+Historically extended regression-ledger in a separate public file because a finding's status changes
+over time, unlike an immutable regression entry. Public finding writes are currently disabled.
 
 **Before reporting an audit clean or a PR done, run \`node ledger.mjs finding check\`** (optionally
 scoped to a finding id or a source audit doc substring). Any open critical or high severity finding
-means the work is not actually done yet, say so plainly rather than reporting it clean. File a new
-finding with \`node ledger.mjs finding add\`, close one with
-\`node ledger.mjs finding close <id> --status fixed|wontfix\`.
+means the work is not actually done yet, say so plainly rather than reporting it clean. Public
+finding add and close are disabled pending a verified private destination.
 
 `;
 
@@ -411,6 +409,7 @@ export async function addFinding(fields) {
     assertFindingStatus(status);
     if (!fields.source_audit_doc) throw new Error("source_audit_doc is required");
     if (!fields.title) throw new Error("title is required");
+    if (PUBLIC_FINDINGS_WRITES_DISABLED) return { ok: false, error: "public_findings_writes_disabled" };
     const token = await pat();
     const { content, sha } = await fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);
@@ -445,6 +444,7 @@ export async function closeFinding(id, fields = {}) {
     const status = fields.status || "fixed";
     assertFindingStatus(status);
     if (status === "open") throw new Error('status for close must be "fixed" or "wontfix", not "open"');
+    if (PUBLIC_FINDINGS_WRITES_DISABLED) return { ok: false, error: "public_findings_writes_disabled" };
     const token = await pat();
     const { content, sha } = await fetchFile(token, FINDINGS_PATH);
     const existing = parseFindings(content);

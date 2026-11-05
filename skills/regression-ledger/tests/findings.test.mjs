@@ -174,25 +174,27 @@ test("closeFinding rejects an attempt to close back to status open, before touch
 
 // ---- fail-open contract: a network failure must never throw into the caller ----
 
-test("addFinding fails open (returns ok:false, never throws) when the network is unreachable", async () => {
+test("addFinding refuses public writes before credential or network access", async () => {
   const originalFetch = global.fetch;
-  global.fetch = async () => { throw new Error("network disabled for this test"); };
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("unexpected network access"); };
   try {
     const res = await addFinding({ severity: "high", source_audit_doc: "x.md", title: "x" });
-    assert.equal(res.ok, false);
-    assert.equal(typeof res.error, "string");
+    assert.deepEqual(res, { ok: false, error: "public_findings_writes_disabled" });
+    assert.equal(calls, 0);
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test("closeFinding fails open when the network is unreachable", async () => {
+test("closeFinding refuses public writes before credential or network access", async () => {
   const originalFetch = global.fetch;
-  global.fetch = async () => { throw new Error("network disabled for this test"); };
+  let calls = 0;
+  global.fetch = async () => { calls++; throw new Error("unexpected network access"); };
   try {
     const res = await closeFinding("FND-doesnt-matter", { status: "fixed" });
-    assert.equal(res.ok, false);
-    assert.equal(typeof res.error, "string");
+    assert.deepEqual(res, { ok: false, error: "public_findings_writes_disabled" });
+    assert.equal(calls, 0);
   } finally {
     global.fetch = originalFetch;
   }
