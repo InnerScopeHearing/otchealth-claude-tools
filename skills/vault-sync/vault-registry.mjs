@@ -15,6 +15,8 @@
 // Usage: node skills/vault-sync/vault-registry.mjs            # write the registry into the commons
 //        node skills/vault-sync/vault-registry.mjs --print    # also print the table to stdout
 //        node skills/vault-sync/vault-registry.mjs --dry      # build but do not upload
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { ssmListDetailed } from "../kb-memory/aws-secret.mjs";
 import { cPut } from "../kb-memory/commons-store.mjs";
 
@@ -131,5 +133,11 @@ async function main() {
 
 // Only run the live registry regeneration when invoked as a script; importing (e.g. from a test) must
 // not touch AWS. Standard ESM main-module guard.
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = (() => {
+  try {
+    if (!process.argv[1]) return false;
+    return import.meta.url === pathToFileURL(process.argv[1]).href ||
+      import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch { return false; }
+})();
 if (isMain) main().catch((e) => { console.error("FATAL", e.message); process.exit(1); });
