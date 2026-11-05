@@ -19,7 +19,8 @@
 // never echoed). Pair with the orchestration in the SKILL.md to stage + index it.
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname } from "node:path";
 
 const argv = process.argv.slice(2);
@@ -29,7 +30,7 @@ const DATE = val("--date", new Date().toISOString().slice(0, 10));
 const DAYS = parseInt(val("--days", "0"), 10) || 0; // 0 = single day (--date); >0 = trailing window
 const OUT = val("--out", `journal/${DATE}.md`);
 const ALLOW_DEGRADED = argv.includes("--allow-degraded");
-const GH = new URL("../github-app/gh-app.mjs", import.meta.url).pathname;
+const GH = fileURLToPath(new URL("../github-app/gh-app.mjs", import.meta.url));
 
 function ghGraphqlOnce(query) { // gh-app.mjs `graphql` reads the query from STDIN; lean fields keep the response small
   try {
@@ -102,5 +103,11 @@ async function main() {
 }
 
 // Standard ESM main-module guard so a test can import digestQueryOk() without shelling out to GitHub.
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isMain = (() => {
+  try {
+    if (!process.argv[1]) return false;
+    return import.meta.url === pathToFileURL(process.argv[1]).href ||
+      import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch { return false; }
+})();
 if (isMain) main();
