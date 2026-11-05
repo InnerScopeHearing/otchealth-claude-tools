@@ -96,8 +96,9 @@ open finding is `critical` or `high` severity; `medium`/`low` opens are surfaced
 session-end summary, should run this check for the relevant source doc (or with no argument for the
 fleet-wide view) and say so plainly if it comes back non-clean, rather than declaring victory over an
 unreconciled finding. The current checker can return `{ ok:false, clean:true }` when the ledger is
-unavailable, and its CLI can exit zero in that case. Treat that as unverified; do not rely on
-`clean` or the exit code alone. Its parser is not a complete corruption detector.
+unavailable, and its CLI can exit zero in that case. A missing ledger can also be reported clean.
+Treat both as unverified; do not rely on `clean` or the exit code alone. Its parser is not a
+complete corruption detector.
 
 ### Relationship to decision-clock
 
