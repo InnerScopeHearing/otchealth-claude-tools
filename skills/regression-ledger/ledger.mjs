@@ -477,7 +477,7 @@ export async function reconcileOpenFindings(tagOrSource) {
     if (!/^# Findings Ledger(?:\r?\n|$)/.test(content.trimStart())) throw new Error('findings ledger header invalid');
     for (const line of content.split("\n")) {
       const header = line.replace(/\r$/, "");
-      const findingHeading = /^\s*(?:[>*+\-]\s*)*#+\s*finding\b/i.test(header);
+      const findingHeading = /^\s*(?:(?:[>*+\-]|\d+[.)])\s*)*#+\s*finding\b/i.test(header);
       const resemblesRecord = /\bfinding\s*[:\-]|\bfinding\s+FND\b|\bfinding\s*$|\b(?:severity|status)\s*:/i.test(header);
       if (findingHeading && resemblesRecord && !FINDING_HEADER_RE.test(header)) throw new Error('malformed findings header');
     }

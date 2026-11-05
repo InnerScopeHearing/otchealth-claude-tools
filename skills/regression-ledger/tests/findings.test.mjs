@@ -344,6 +344,8 @@ test("incomplete findings and unknown scopes never produce a clean result", asyn
     ["# Findings Ledger\n\n    ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
     ["# Findings Ledger\n\n\t### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", "synthetic-audit"],
     ["# Findings Ledger\n\n> ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n1. ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
+    ["# Findings Ledger\n\n> 2) ### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", "synthetic-audit"],
     ["# Findings Ledger\n\n####### finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
     ["# Findings Ledger\n\n" + canonical + "\n- **Source audit doc** synthetic-audit\n", "synthetic-audit"],
     ["# Findings Ledger\n\n## finding:FND-synthetic severity:high status:open | synthetic\n- **Source audit doc:** synthetic-audit\n", undefined],
