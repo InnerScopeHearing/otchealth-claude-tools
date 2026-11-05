@@ -48,6 +48,8 @@
  */
 import { readFileSync, writeFileSync, fchmodSync, openSync, closeSync, constants as fsConstants } from "node:fs";
 import { createInterface } from "node:readline";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { decrypt } from "./crypto-envelope.mjs";
 import { ssmPutParameterFull } from "../kb-memory/aws-secret.mjs";
 
@@ -173,6 +175,15 @@ async function main() {
   }
 
   if (rest.includes("--to-ssm")) {
+    // Older exports may have called incomplete metadata "full", so even that label
+    // is a report, not proof that the original tier and key can be restored.
+    if (data.restoreFidelity === "degraded") {
+      console.error("[secrets-dr-restore] WARNING: archive reports degraded restore metadata; verify parameter tiers and keys before restoring.");
+    } else if (data.restoreFidelity === "full") {
+      console.error("[secrets-dr-restore] Archive reports full metadata, but older full labels may be incomplete; verify parameter tiers and keys before restoring.");
+    } else {
+      console.error("[secrets-dr-restore] WARNING: archive restore metadata fidelity is unknown; verify parameter tiers and keys before restoring.");
+    }
     const dryRun = rest.includes("--dry-run");
     const plan = planSsmRestore(names, data.paramMeta);
     if (dryRun) {
@@ -221,8 +232,8 @@ async function main() {
 // ran the full CLI body, printed the usage banner, and called process.exit(2) -- killing the entire
 // test process, caught live writing tests/secrets-dr-restore-to-ssm.test.mjs for this same change.
 // Adding the guard changes nothing about real CLI invocation (`node secrets-dr-restore.mjs <file>
-// ...` still runs main() exactly as before, since import.meta.url equals argv[1] in that case) and
+// ...` still runs main() exactly as before, using a normalized file URL for Windows and paths with spaces) and
 // does not affect tests/secrets-dr-restore.test.mjs, which already runs this file as a subprocess.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main();
 }
